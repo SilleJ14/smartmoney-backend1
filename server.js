@@ -41,13 +41,18 @@ const CONFIG = {
   minScoreToBuy: Number(process.env.MIN_SCORE_TO_BUY || 85),
   replaceWeakestMinScoreGap: Number(process.env.REPLACE_SCORE_GAP || 7),
 
-  tradePercentPerPosition: Number(process.env.TRADE_PERCENT_PER_POSITION || 10),
+  // ✅ TOTAL bot exposure across all 5 trades
+  // 10% total account exposure / 5 trades = about 2% per trade
+  maxBotExposurePercent: Number(process.env.MAX_BOT_EXPOSURE_PERCENT || 10),
 
-  takeProfitPercent: Number(process.env.TAKE_PROFIT_PERCENT || 8),
-  stopLossPercent: Number(process.env.STOP_LOSS_PERCENT || 4),
-  trailingStopPercent: Number(process.env.TRAILING_STOP_PERCENT || 2),
+  takeProfitPercent: Number(process.env.TAKE_PROFIT_PERCENT || 6),
+  stopLossPercent: Number(process.env.STOP_LOSS_PERCENT || 1),
+  trailingStopPercent: Number(process.env.TRAILING_STOP_PERCENT || 1),
 
-  dailyLossLimitPercent: Number(process.env.DAILY_LOSS_LIMIT_PERCENT || 5),
+  dailyLossLimitPercent: Number(process.env.DAILY_LOSS_LIMIT_PERCENT || 2.4),
+
+  profitLockTriggerPercent: Number(process.env.PROFIT_LOCK_TRIGGER_PERCENT || 2),
+  profitLockProtectPercent: Number(process.env.PROFIT_LOCK_PROTECT_PERCENT || 50),
 
   moversTop: Number(process.env.MOVERS_TOP || 100),
   minVolume: Number(process.env.MIN_VOLUME || 100000),
@@ -66,9 +71,15 @@ let engineState = {
   failedOrders: [],
   skippedSymbols: [],
   pendingExits: [],
+
   dailyStartEquity: null,
+  dailyPeakEquity: null,
+  profitLockFloorEquity: null,
+
   dailyLossLocked: false,
+  profitLocked: false,
   marketOpen: false,
+
   highWaterMarks: {},
   aiEntryScores: {},
 };
@@ -112,16 +123,31 @@ function saveSkippedSymbol(symbol, reason) {
   engineState.skippedSymbols = engineState.skippedSymbols.slice(0, 150);
 }
 
-function getDynamicTradeAmount(account) {
+function getBotExposure(openPositions = []) {
+  return openPositions.reduce((sum, position) => {
+    return sum + Math.abs(Number(position.market_value || 0));
+  }, 0);
+}
+
+function getDynamicTradeAmount(account, openBotPositions = []) {
   const cash = Number(account?.cash || 0);
+  const equity = Number(account?.equity || 0);
   const buyingPower = Number(account?.buying_power || 0);
 
-  if (!cash || cash <= 0) return 0;
+  if (!cash || cash <= 0 || !equity || equity <= 0) return 0;
 
-  const tradePercent = CONFIG.tradePercentPerPosition / 100;
-  const tradeAmount = cash * tradePercent;
+  const maxBotBudget = equity * (CONFIG.maxBotExposurePercent / 100);
+  const currentBotExposure = getBotExposure(openBotPositions);
+  const remainingBotBudget = maxBotBudget - currentBotExposure;
 
-  return Math.max(1, Math.min(tradeAmount, cash, buyingPower || cash));
+  if (remainingBotBudget <= 0) return 0;
+
+  const perTradeMax = maxBotBudget / CONFIG.maxOpenTrades;
+
+  return Math.max(
+    1,
+    Math.min(perTradeMax, remainingBotBudget, cash, buyingPower || cash)
+  );
 }
 
 function alpacaHeaders() {
@@ -551,33 +577,6 @@ async function closePosition(symbol) {
   });
 }
 
-async function checkDailyLoss(account) {
-  const equity = Number(account.equity || 0);
-
-  if (!engineState.dailyStartEquity) {
-    engineState.dailyStartEquity = equity;
-    return false;
-  }
-
-  const lossPercent =
-    ((engineState.dailyStartEquity - equity) / engineState.dailyStartEquity) *
-    100;
-
-  if (lossPercent >= CONFIG.dailyLossLimitPercent) {
-    engineState.dailyLossLocked = true;
-    autoTradingEnabled = false;
-
-    saveRecentOrder("DAILY_LOSS_LOCKED", "ACCOUNT", {
-      lossPercent,
-      dailyLossLimitPercent: CONFIG.dailyLossLimitPercent,
-    });
-
-    return true;
-  }
-
-  return false;
-}
-
 function addPendingExit(symbol, qty, reason, extra = {}) {
   const normalizedSymbol = normalizeSymbol(symbol);
 
@@ -596,6 +595,131 @@ function addPendingExit(symbol, qty, reason, extra = {}) {
   });
 
   engineState.pendingExits = engineState.pendingExits.slice(0, 100);
+}
+
+async function forceCloseAllPositions(reason, marketOpen) {
+  const positions = await getPositions();
+
+  for (const pos of positions) {
+    const symbol = normalizeSymbol(pos.symbol);
+    const qty = Number(pos.qty);
+
+    if (!qty || qty <= 0) continue;
+
+    if (!marketOpen) {
+      addPendingExit(symbol, qty, reason, {
+        message: "Market closed. Exit queued for next market open.",
+      });
+
+      saveRecentOrder("FORCE_CLOSE_PENDING_MARKET_CLOSED", symbol, {
+        qty,
+        reason,
+      });
+
+      continue;
+    }
+
+    try {
+      const order = await placeMarketSell(symbol, qty, reason);
+
+      saveRecentOrder("FORCE_CLOSE_EXECUTED", symbol, {
+        qty,
+        reason,
+        order,
+      });
+
+      delete engineState.highWaterMarks[symbol];
+      delete engineState.aiEntryScores[symbol];
+    } catch (err) {
+      saveFailedOrder("FORCE_CLOSE_FAILED", symbol, err.message, {
+        qty,
+        reason,
+      });
+    }
+  }
+}
+
+async function checkDailyLossAndProfitLock(account, marketOpen) {
+  const equity = Number(account.equity || 0);
+
+  if (!engineState.dailyStartEquity) {
+    engineState.dailyStartEquity = equity;
+    engineState.dailyPeakEquity = equity;
+    return false;
+  }
+
+  engineState.dailyPeakEquity = Math.max(
+    Number(engineState.dailyPeakEquity || engineState.dailyStartEquity),
+    equity
+  );
+
+  const dailyStart = Number(engineState.dailyStartEquity || equity);
+  const dailyPeak = Number(engineState.dailyPeakEquity || equity);
+
+  const lossPercent = ((dailyStart - equity) / dailyStart) * 100;
+  const profitPercent = ((equity - dailyStart) / dailyStart) * 100;
+  const peakProfitPercent = ((dailyPeak - dailyStart) / dailyStart) * 100;
+
+  if (lossPercent >= CONFIG.dailyLossLimitPercent && !engineState.dailyLossLocked) {
+    engineState.dailyLossLocked = true;
+    autoTradingEnabled = false;
+
+    saveRecentOrder("DAILY_LOSS_LOCKED", "ACCOUNT", {
+      equity,
+      dailyStart,
+      lossPercent,
+      dailyLossLimitPercent: CONFIG.dailyLossLimitPercent,
+    });
+
+    await forceCloseAllPositions("DAILY_LOSS_LIMIT", marketOpen);
+
+    return true;
+  }
+
+  if (
+    peakProfitPercent >= CONFIG.profitLockTriggerPercent &&
+    !engineState.profitLockFloorEquity
+  ) {
+    const profitDollars = dailyPeak - dailyStart;
+    const protectedProfit =
+      profitDollars * (CONFIG.profitLockProtectPercent / 100);
+
+    engineState.profitLockFloorEquity = dailyStart + protectedProfit;
+
+    saveRecentOrder("PROFIT_LOCK_ACTIVATED", "ACCOUNT", {
+      dailyStart,
+      dailyPeak,
+      profitDollars,
+      protectedProfit,
+      profitLockFloorEquity: engineState.profitLockFloorEquity,
+      profitLockTriggerPercent: CONFIG.profitLockTriggerPercent,
+      profitLockProtectPercent: CONFIG.profitLockProtectPercent,
+    });
+  }
+
+  if (
+    engineState.profitLockFloorEquity &&
+    equity <= Number(engineState.profitLockFloorEquity) &&
+    !engineState.profitLocked
+  ) {
+    engineState.profitLocked = true;
+    autoTradingEnabled = false;
+
+    saveRecentOrder("PROFIT_LOCK_HIT", "ACCOUNT", {
+      equity,
+      dailyStart,
+      dailyPeak,
+      profitPercent,
+      peakProfitPercent,
+      profitLockFloorEquity: engineState.profitLockFloorEquity,
+    });
+
+    await forceCloseAllPositions("PROFIT_LOCK_EXIT", marketOpen);
+
+    return true;
+  }
+
+  return false;
 }
 
 async function executePendingExits() {
@@ -658,8 +782,8 @@ async function autoExitPositions(marketOpen) {
 
     let reason = "AI_EXIT";
 
-    if (shouldStopLoss) reason = "STOP_LOSS";
-    else if (shouldTrailingExit) reason = "TRAILING_STOP";
+    if (shouldStopLoss) reason = "STOP_LOSS_1_PERCENT";
+    else if (shouldTrailingExit) reason = "TRAILING_STOP_1_PERCENT";
     else if (shouldTakeProfit) reason = "TAKE_PROFIT";
 
     if (!marketOpen) {
@@ -704,16 +828,13 @@ async function autoExitPositions(marketOpen) {
         dropFromHigh,
         profitPercent: unrealizedPercent,
       });
-
-      console.log(`Exit failed for ${symbol}:`, err.message);
     }
   }
 }
 
-async function replaceWeakestIfBetter(signals, positions) {
+async function replaceWeakestIfBetter(signals, positions, aiOwnedSymbols) {
   if (positions.length < CONFIG.maxOpenTrades) return false;
 
-  const aiOwnedSymbols = await getAiOwnedSymbols();
   const aiEntryScores = await getAiEntryScores();
 
   const aiPositions = positions.filter((p) =>
@@ -777,10 +898,16 @@ async function replaceWeakestIfBetter(signals, positions) {
     setTimeout(async () => {
       try {
         const account = await getAccount();
-        const tradeAmount = getDynamicTradeAmount(account);
+        const freshPositions = await getPositions();
+        const freshAiOwnedSymbols = await getAiOwnedSymbols();
+        const freshAiPositions = freshPositions.filter((p) =>
+          freshAiOwnedSymbols.has(normalizeSymbol(p.symbol))
+        );
+
+        const tradeAmount = getDynamicTradeAmount(account, freshAiPositions);
 
         if (tradeAmount <= 0) {
-          saveFailedOrder("ROTATION_BUY_FAILED", topCandidate.symbol, "No cash available");
+          saveFailedOrder("ROTATION_BUY_FAILED", topCandidate.symbol, "Bot budget used up or no cash available");
           return;
         }
 
@@ -795,18 +922,14 @@ async function replaceWeakestIfBetter(signals, positions) {
           score: topCandidate.score,
           replacedSymbol: weakestSymbol,
           tradeAmount,
+          maxBotExposurePercent: CONFIG.maxBotExposurePercent,
           buyOrder,
         });
       } catch (err) {
-        saveFailedOrder(
-          "ROTATION_BUY_FAILED",
-          topCandidate.symbol,
-          err.message,
-          {
-            replacedSymbol: weakestSymbol,
-            score: topCandidate.score,
-          }
-        );
+        saveFailedOrder("ROTATION_BUY_FAILED", topCandidate.symbol, err.message, {
+          replacedSymbol: weakestSymbol,
+          score: topCandidate.score,
+        });
       }
     }, 2500);
 
@@ -823,14 +946,20 @@ async function replaceWeakestIfBetter(signals, positions) {
 
 async function autoBuySignals(signals) {
   const positions = await getPositions();
+  const aiOwnedSymbols = await getAiOwnedSymbols();
+
   const openSymbols = new Set(positions.map((p) => normalizeSymbol(p.symbol)));
 
-  if (positions.length >= CONFIG.maxOpenTrades) {
-    await replaceWeakestIfBetter(signals, positions);
+  const aiPositions = positions.filter((p) =>
+    aiOwnedSymbols.has(normalizeSymbol(p.symbol))
+  );
+
+  if (aiPositions.length >= CONFIG.maxOpenTrades) {
+    await replaceWeakestIfBetter(signals, positions, aiOwnedSymbols);
     return;
   }
 
-  const openSlots = CONFIG.maxOpenTrades - positions.length;
+  const openSlots = CONFIG.maxOpenTrades - aiPositions.length;
 
   const buyCandidates = signals
     .filter((s) => s.score >= CONFIG.minScoreToBuy)
@@ -842,13 +971,26 @@ async function autoBuySignals(signals) {
   for (const stock of buyCandidates) {
     try {
       const account = await getAccount();
-      const tradeAmount = getDynamicTradeAmount(account);
+      const freshPositions = await getPositions();
+      const freshAiOwnedSymbols = await getAiOwnedSymbols();
+
+      const freshAiPositions = freshPositions.filter((p) =>
+        freshAiOwnedSymbols.has(normalizeSymbol(p.symbol))
+      );
+
+      const tradeAmount = getDynamicTradeAmount(account, freshAiPositions);
 
       if (tradeAmount <= 0) {
-        saveFailedOrder("AUTO_BUY_FAILED", stock.symbol, "No cash available", {
-          price: stock.current,
-          score: stock.score,
-        });
+        saveFailedOrder(
+          "AUTO_BUY_FAILED",
+          stock.symbol,
+          "Bot budget used up or no cash available",
+          {
+            price: stock.current,
+            score: stock.score,
+            maxBotExposurePercent: CONFIG.maxBotExposurePercent,
+          }
+        );
         continue;
       }
 
@@ -859,7 +1001,7 @@ async function autoBuySignals(signals) {
         score: stock.score,
         percentChange: stock.percentChange,
         tradeAmount,
-        tradePercent: CONFIG.tradePercentPerPosition,
+        maxBotExposurePercent: CONFIG.maxBotExposurePercent,
         order,
       });
     } catch (err) {
@@ -867,8 +1009,6 @@ async function autoBuySignals(signals) {
         price: stock.current,
         score: stock.score,
       });
-
-      console.log(`Buy failed for ${stock.symbol}:`, err.message);
     }
   }
 }
@@ -890,7 +1030,7 @@ async function engineTick() {
 
     engineState.marketOpen = marketOpen;
 
-    await checkDailyLoss(account);
+    const riskLocked = await checkDailyLossAndProfitLock(account, marketOpen);
 
     if (marketOpen) {
       await executePendingExits();
@@ -903,7 +1043,13 @@ async function engineTick() {
     engineState.lastSignals = signals;
     engineState.lastScanAt = new Date().toISOString();
 
-    if (autoTradingEnabled && !engineState.dailyLossLocked && marketOpen) {
+    if (
+      autoTradingEnabled &&
+      !engineState.dailyLossLocked &&
+      !engineState.profitLocked &&
+      !riskLocked &&
+      marketOpen
+    ) {
       await autoBuySignals(signals);
     }
 
@@ -940,6 +1086,12 @@ app.get("/debug", async (req, res) => {
     const account = await getAccount();
     const clock = await getClock();
     const movers = await getTopMovers();
+    const positions = await getPositions();
+    const aiOwnedSymbols = await getAiOwnedSymbols();
+
+    const aiPositions = positions.filter((p) =>
+      aiOwnedSymbols.has(normalizeSymbol(p.symbol))
+    );
 
     res.json({
       ok: true,
@@ -948,6 +1100,16 @@ app.get("/debug", async (req, res) => {
       moversCount: movers.length,
       firstMovers: movers.slice(0, 30),
       config: CONFIG,
+      risk: {
+        equity: Number(account.equity || 0),
+        cash: Number(account.cash || 0),
+        maxBotBudget:
+          Number(account.equity || 0) * (CONFIG.maxBotExposurePercent / 100),
+        currentBotExposure: getBotExposure(aiPositions),
+        perTradeMax:
+          (Number(account.equity || 0) * (CONFIG.maxBotExposurePercent / 100)) /
+          CONFIG.maxOpenTrades,
+      },
       engineState,
     });
   } catch (err) {
@@ -963,6 +1125,12 @@ app.get("/status", async (req, res) => {
   try {
     const account = await getAccount();
     const clock = await getClock();
+    const positions = await getPositions();
+    const aiOwnedSymbols = await getAiOwnedSymbols();
+
+    const aiPositions = positions.filter((p) =>
+      aiOwnedSymbols.has(normalizeSymbol(p.symbol))
+    );
 
     res.json({
       online: true,
@@ -970,6 +1138,15 @@ app.get("/status", async (req, res) => {
       config: CONFIG,
       account,
       clock,
+      risk: {
+        maxBotExposurePercent: CONFIG.maxBotExposurePercent,
+        maxBotBudget:
+          Number(account.equity || 0) * (CONFIG.maxBotExposurePercent / 100),
+        currentBotExposure: getBotExposure(aiPositions),
+        perTradeMax:
+          (Number(account.equity || 0) * (CONFIG.maxBotExposurePercent / 100)) /
+          CONFIG.maxOpenTrades,
+      },
       engineState,
     });
   } catch (err) {
@@ -1003,6 +1180,7 @@ app.get("/positions", async (req, res) => {
       allAlpacaPositions: positions,
       highWaterMarks: engineState.highWaterMarks,
       aiEntryScores: engineState.aiEntryScores,
+      currentBotExposure: getBotExposure(aiPositions),
     });
   } catch (err) {
     res.status(500).json({ error: err.message });
@@ -1039,6 +1217,12 @@ app.post("/auto-trading/on", (req, res) => {
   if (engineState.dailyLossLocked) {
     return res.status(403).json({
       message: "Auto trading locked because daily loss limit was reached",
+    });
+  }
+
+  if (engineState.profitLocked) {
+    return res.status(403).json({
+      message: "Auto trading locked because profit lock was hit",
     });
   }
 
@@ -1090,10 +1274,13 @@ app.post("/close-position", async (req, res) => {
 
 app.post("/reset-daily-lock", (req, res) => {
   engineState.dailyLossLocked = false;
+  engineState.profitLocked = false;
   engineState.dailyStartEquity = null;
+  engineState.dailyPeakEquity = null;
+  engineState.profitLockFloorEquity = null;
 
   res.json({
-    message: "Daily lock reset",
+    message: "Daily/profit lock reset",
     engineState,
   });
 });
@@ -1101,7 +1288,6 @@ app.post("/reset-daily-lock", (req, res) => {
 app.listen(PORT, "0.0.0.0", async () => {
   console.log(`SmartMoney Pro backend running on port ${PORT}`);
   console.log(`Auto trading enabled: ${autoTradingEnabled}`);
-
   console.log("Running first SmartMoney Pro scan on startup...");
   await engineTick();
 });
