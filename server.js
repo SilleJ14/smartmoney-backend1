@@ -4,6 +4,7 @@ import dotenv from "dotenv";
 import cron from "node-cron";
 
 dotenv.config();
+
 console.log("ENV CHECK:", {
   ALPACA_KEY: process.env.ALPACA_KEY ? "FOUND" : "MISSING",
   ALPACA_SECRET: process.env.ALPACA_SECRET ? "FOUND" : "MISSING",
@@ -11,7 +12,6 @@ console.log("ENV CHECK:", {
 });
 
 const app = express();
-
 
 app.use(cors());
 app.use(express.json());
@@ -37,7 +37,7 @@ const CONFIG = {
   minStockPrice: Number(process.env.MIN_STOCK_PRICE || 10),
   maxStockPrice: Number(process.env.MAX_STOCK_PRICE || 500),
 
-  minScoreToBuy: Number(process.env.MIN_SCORE_TO_BUY || 85),
+  minScoreToBuy: Number(process.env.MIN_SCORE_TO_BUY || 90),
 
   baseTradeAmount: Number(process.env.BASE_TRADE_AMOUNT || 100),
   midTradeAmount: Number(process.env.MID_TRADE_AMOUNT || 150),
@@ -48,7 +48,11 @@ const CONFIG = {
   trailingStopPercent: Number(process.env.TRAILING_STOP_PERCENT || 2),
 
   dailyLossLimitPercent: Number(process.env.DAILY_LOSS_LIMIT_PERCENT || 5),
-  moversTop: Number(process.env.MOVERS_TOP || 50),
+
+  moversTop: Number(process.env.MOVERS_TOP || 100),
+  minVolume: Number(process.env.MIN_VOLUME || 300000),
+  maxPercentChange: Number(process.env.MAX_PERCENT_CHANGE || 35),
+  maxSignalsToReturn: Number(process.env.MAX_SIGNALS_TO_RETURN || 40),
 };
 
 let engineState = {
@@ -66,13 +70,6 @@ let engineState = {
 };
 
 const sellingNow = new Set();
-
-function getDynamicTradeAmount(score) {
-  if (score >= 95) return CONFIG.highTradeAmount;
-  if (score >= 90) return CONFIG.midTradeAmount;
-  if (score >= CONFIG.minScoreToBuy) return CONFIG.baseTradeAmount;
-  return 0;
-}
 
 function normalizeSymbol(symbol) {
   return String(symbol || "").trim().toUpperCase();
@@ -108,7 +105,14 @@ function saveSkippedSymbol(symbol, reason) {
     at: new Date().toISOString(),
   });
 
-  engineState.skippedSymbols = engineState.skippedSymbols.slice(0, 50);
+  engineState.skippedSymbols = engineState.skippedSymbols.slice(0, 100);
+}
+
+function getDynamicTradeAmount(score) {
+  if (score >= 97) return CONFIG.highTradeAmount;
+  if (score >= 93) return CONFIG.midTradeAmount;
+  if (score >= CONFIG.minScoreToBuy) return CONFIG.baseTradeAmount;
+  return 0;
 }
 
 function alpacaHeaders() {
@@ -259,6 +263,7 @@ async function finnhubQuote(symbol) {
     low: Number(data.l || 0),
     open: Number(data.o || 0),
     previousClose: Number(data.pc || 0),
+    volume: Number(data.v || data.volume || 0),
   };
 }
 
@@ -266,16 +271,54 @@ function scoreStock(q) {
   let score = 0;
 
   if (q.current >= CONFIG.minStockPrice && q.current <= CONFIG.maxStockPrice) {
-    score += 25;
+    score += 20;
   }
 
-  if (q.percentChange > 0) score += 20;
-  if (q.percentChange >= 1) score += 15;
-  if (q.percentChange >= 3) score += 15;
-  if (q.current > q.open) score += 15;
-  if (q.current > q.previousClose) score += 10;
+  if (q.percentChange > 0) score += 15;
+  if (q.percentChange >= 1) score += 10;
+  if (q.percentChange >= 2 && q.percentChange <= 20) score += 20;
+  if (q.percentChange > 20 && q.percentChange <= CONFIG.maxPercentChange)
+    score += 8;
+
+  if (q.current > q.open) score += 20;
+  if (q.current > q.previousClose) score += 15;
+
+  if (q.current >= q.low && q.high > q.low) {
+    const closeNearHigh = ((q.current - q.low) / (q.high - q.low)) * 100;
+    if (closeNearHigh >= 70) score += 10;
+  }
+
+  if (q.volume >= CONFIG.minVolume) score += 10;
 
   return Math.min(score, 100);
+}
+
+function passesQualityFilters(q) {
+  if (!q.current || q.current <= 0) {
+    return { ok: false, reason: "No valid price" };
+  }
+
+  if (q.current < CONFIG.minStockPrice || q.current > CONFIG.maxStockPrice) {
+    return { ok: false, reason: `Price outside range: $${q.current}` };
+  }
+
+  if (q.percentChange <= 0) {
+    return { ok: false, reason: "No positive momentum" };
+  }
+
+  if (q.percentChange > CONFIG.maxPercentChange) {
+    return { ok: false, reason: `Too extended: ${q.percentChange.toFixed(2)}%` };
+  }
+
+  if (q.open > 0 && q.current < q.open) {
+    return { ok: false, reason: "Below open price" };
+  }
+
+  if (q.previousClose > 0 && q.current < q.previousClose) {
+    return { ok: false, reason: "Below previous close" };
+  }
+
+  return { ok: true };
 }
 
 async function getAccount() {
@@ -312,21 +355,44 @@ async function getAiOwnedSymbols() {
 }
 
 async function getTopMovers() {
-  const top = Math.min(Math.max(CONFIG.moversTop, 1), 50);
+  try {
+    const top = Math.min(Math.max(CONFIG.moversTop, 1), 100);
 
-  const data = await alpacaDataRequest(
-    `/v1beta1/screener/stocks/movers?top=${top}`
+    const data = await alpacaDataRequest(
+      `/v1beta1/screener/stocks/movers?top=${top}`
+    );
+
+    const gainers = Array.isArray(data.gainers) ? data.gainers : [];
+    const losers = Array.isArray(data.losers) ? data.losers : [];
+
+    const symbols = [...gainers, ...losers]
+      .map((item) => item.symbol)
+      .filter(Boolean)
+      .filter(isNormalStockSymbol);
+
+    const uniqueSymbols = [...new Set(symbols)];
+
+    if (uniqueSymbols.length > 0) {
+      return uniqueSymbols;
+    }
+
+    console.log("No Alpaca movers found. Using Alpaca assets fallback...");
+  } catch (err) {
+    console.log("Alpaca movers failed. Using assets fallback:", err.message);
+  }
+
+  const assets = await alpacaTradingRequest(
+    "/v2/assets?status=active&asset_class=us_equity"
   );
 
-  const gainers = Array.isArray(data.gainers) ? data.gainers : [];
-  const losers = Array.isArray(data.losers) ? data.losers : [];
+  const fallbackSymbols = assets
+    .filter((asset) => asset.tradable === true)
+    .filter((asset) => asset.fractionable === true)
+    .map((asset) => asset.symbol)
+    .filter(isNormalStockSymbol)
+    .slice(0, 250);
 
-  const symbols = [...gainers, ...losers]
-    .map((item) => item.symbol)
-    .filter(Boolean)
-    .filter(isNormalStockSymbol);
-
-  return [...new Set(symbols)];
+  return [...new Set(fallbackSymbols)];
 }
 
 async function scanMarket() {
@@ -334,6 +400,8 @@ async function scanMarket() {
   const results = [];
 
   engineState.skippedSymbols = [];
+
+  console.log(`Scanning ${symbols.length} symbols...`);
 
   for (const symbol of symbols) {
     try {
@@ -345,27 +413,34 @@ async function scanMarket() {
       }
 
       const quote = await finnhubQuote(symbol);
+      const quality = passesQualityFilters(quote);
 
-      if (
-        quote.current >= CONFIG.minStockPrice &&
-        quote.current <= CONFIG.maxStockPrice
-      ) {
-        results.push({
-          ...quote,
-          score: scoreStock(quote),
-        });
-      } else {
-        saveSkippedSymbol(symbol, `Price outside range: $${quote.current}`);
+      if (!quality.ok) {
+        saveSkippedSymbol(symbol, quality.reason);
+        continue;
       }
+
+      const score = scoreStock(quote);
+
+      results.push({
+        ...quote,
+        score,
+        qualifiedToBuy: score >= CONFIG.minScoreToBuy,
+      });
     } catch (err) {
       saveSkippedSymbol(symbol, err.message);
       console.log(`Skipped ${symbol}: ${err.message}`);
     }
   }
 
+  console.log(`Scan finished. Found ${results.length} stocks.`);
+
   return results
-    .sort((a, b) => b.score - a.score)
-    .slice(0, CONFIG.maxOpenTrades);
+    .sort((a, b) => {
+      if (b.score !== a.score) return b.score - a.score;
+      return b.percentChange - a.percentChange;
+    })
+    .slice(0, CONFIG.maxSignalsToReturn);
 }
 
 async function placeMarketBuy(symbol, dollars) {
@@ -582,6 +657,7 @@ async function autoBuySignals(signals) {
 
   const buyCandidates = signals
     .filter((s) => s.score >= CONFIG.minScoreToBuy)
+    .filter((s) => s.qualifiedToBuy === true)
     .filter((s) => !openSymbols.has(normalizeSymbol(s.symbol)))
     .filter((s) => isNormalStockSymbol(s.symbol))
     .slice(0, openSlots);
@@ -597,6 +673,7 @@ async function autoBuySignals(signals) {
       saveRecentOrder("AUTO_BUY", stock.symbol, {
         price: stock.current,
         score: stock.score,
+        percentChange: stock.percentChange,
         tradeAmount,
         order,
       });
@@ -672,6 +749,29 @@ app.get("/", (req, res) => {
     config: CONFIG,
     engineState,
   });
+});
+
+app.get("/debug", async (req, res) => {
+  try {
+    const account = await getAccount();
+    const clock = await getClock();
+    const movers = await getTopMovers();
+
+    res.json({
+      ok: true,
+      accountStatus: account.status,
+      marketOpen: clock.is_open,
+      moversCount: movers.length,
+      firstMovers: movers.slice(0, 20),
+      engineState,
+    });
+  } catch (err) {
+    res.status(500).json({
+      ok: false,
+      error: err.message,
+      engineState,
+    });
+  }
 });
 
 app.get("/status", async (req, res) => {
@@ -807,7 +907,10 @@ app.post("/reset-daily-lock", (req, res) => {
   });
 });
 
-app.listen(PORT, () => {
+app.listen(PORT, "0.0.0.0", async () => {
   console.log(`SmartMoney backend running on port ${PORT}`);
   console.log(`Auto trading enabled: ${autoTradingEnabled}`);
+
+  console.log("Running first SmartMoney scan on startup...");
+  await engineTick();
 });
