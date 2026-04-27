@@ -41,9 +41,7 @@ const CONFIG = {
   minScoreToBuy: Number(process.env.MIN_SCORE_TO_BUY || 85),
   replaceWeakestMinScoreGap: Number(process.env.REPLACE_SCORE_GAP || 7),
 
-  baseTradeAmount: Number(process.env.BASE_TRADE_AMOUNT || 100),
-  midTradeAmount: Number(process.env.MID_TRADE_AMOUNT || 150),
-  highTradeAmount: Number(process.env.HIGH_TRADE_AMOUNT || 200),
+  tradePercentPerPosition: Number(process.env.TRADE_PERCENT_PER_POSITION || 10),
 
   takeProfitPercent: Number(process.env.TAKE_PROFIT_PERCENT || 8),
   stopLossPercent: Number(process.env.STOP_LOSS_PERCENT || 4),
@@ -114,11 +112,16 @@ function saveSkippedSymbol(symbol, reason) {
   engineState.skippedSymbols = engineState.skippedSymbols.slice(0, 150);
 }
 
-function getDynamicTradeAmount(score) {
-  if (score >= 95) return CONFIG.highTradeAmount;
-  if (score >= 90) return CONFIG.midTradeAmount;
-  if (score >= CONFIG.minScoreToBuy) return CONFIG.baseTradeAmount;
-  return 0;
+function getDynamicTradeAmount(account) {
+  const cash = Number(account?.cash || 0);
+  const buyingPower = Number(account?.buying_power || 0);
+
+  if (!cash || cash <= 0) return 0;
+
+  const tradePercent = CONFIG.tradePercentPerPosition / 100;
+  const tradeAmount = cash * tradePercent;
+
+  return Math.max(1, Math.min(tradeAmount, cash, buyingPower || cash));
 }
 
 function alpacaHeaders() {
@@ -773,7 +776,13 @@ async function replaceWeakestIfBetter(signals, positions) {
 
     setTimeout(async () => {
       try {
-        const tradeAmount = getDynamicTradeAmount(topCandidate.score);
+        const account = await getAccount();
+        const tradeAmount = getDynamicTradeAmount(account);
+
+        if (tradeAmount <= 0) {
+          saveFailedOrder("ROTATION_BUY_FAILED", topCandidate.symbol, "No cash available");
+          return;
+        }
 
         const buyOrder = await placeMarketBuy(
           topCandidate.symbol,
@@ -831,11 +840,18 @@ async function autoBuySignals(signals) {
     .slice(0, Math.min(openSlots, CONFIG.topAutoTradeCandidates));
 
   for (const stock of buyCandidates) {
-    const tradeAmount = getDynamicTradeAmount(stock.score);
-
-    if (tradeAmount <= 0) continue;
-
     try {
+      const account = await getAccount();
+      const tradeAmount = getDynamicTradeAmount(account);
+
+      if (tradeAmount <= 0) {
+        saveFailedOrder("AUTO_BUY_FAILED", stock.symbol, "No cash available", {
+          price: stock.current,
+          score: stock.score,
+        });
+        continue;
+      }
+
       const order = await placeMarketBuy(stock.symbol, tradeAmount, stock.score);
 
       saveRecentOrder("AUTO_BUY", stock.symbol, {
@@ -843,13 +859,13 @@ async function autoBuySignals(signals) {
         score: stock.score,
         percentChange: stock.percentChange,
         tradeAmount,
+        tradePercent: CONFIG.tradePercentPerPosition,
         order,
       });
     } catch (err) {
       saveFailedOrder("AUTO_BUY_FAILED", stock.symbol, err.message, {
         price: stock.current,
         score: stock.score,
-        tradeAmount,
       });
 
       console.log(`Buy failed for ${stock.symbol}:`, err.message);
