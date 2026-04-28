@@ -12,7 +12,6 @@ console.log("ENV CHECK:", {
 });
 
 const app = express();
-
 app.use(cors());
 app.use(express.json());
 
@@ -41,25 +40,36 @@ const CONFIG = {
   minScoreToBuy: Number(process.env.MIN_SCORE_TO_BUY || 85),
   replaceWeakestMinScoreGap: Number(process.env.REPLACE_SCORE_GAP || 7),
 
-  // ✅ TOTAL bot exposure across all 5 trades
-  // 10% total account exposure / 5 trades = about 2% per trade
   maxBotExposurePercent: Number(process.env.MAX_BOT_EXPOSURE_PERCENT || 10),
 
-  takeProfitPercent: Number(process.env.TAKE_PROFIT_PERCENT || 6),
-  stopLossPercent: Number(process.env.STOP_LOSS_PERCENT || 1),
-  trailingStopPercent: Number(process.env.TRAILING_STOP_PERCENT || 1),
+  takeProfitPercent: Number(process.env.TAKE_PROFIT_PERCENT || 8),
+  stopLossPercent: Number(process.env.STOP_LOSS_PERCENT || 4),
+  trailingStopPercent: Number(process.env.TRAILING_STOP_PERCENT || 2),
 
-  dailyLossLimitPercent: Number(process.env.DAILY_LOSS_LIMIT_PERCENT || 2.4),
+  dailyLossLimitPercent: Number(process.env.DAILY_LOSS_LIMIT_PERCENT || 5),
 
   profitLockTriggerPercent: Number(process.env.PROFIT_LOCK_TRIGGER_PERCENT || 2),
   profitLockProtectPercent: Number(process.env.PROFIT_LOCK_PROTECT_PERCENT || 50),
 
-  moversTop: Number(process.env.MOVERS_TOP || 100),
+  moversTop: Number(process.env.MOVERS_TOP || 50),
   minVolume: Number(process.env.MIN_VOLUME || 100000),
   maxPercentChange: Number(process.env.MAX_PERCENT_CHANGE || 60),
   maxSignalsToReturn: Number(process.env.MAX_SIGNALS_TO_RETURN || 40),
 
   topAutoTradeCandidates: Number(process.env.TOP_AUTO_TRADE_CANDIDATES || 5),
+
+  // ✅ ADVANCED FILTERS
+  enableAdvancedFilters: process.env.ENABLE_ADVANCED_FILTERS !== "false",
+  minVolumeSpikeRatio: Number(process.env.MIN_VOLUME_SPIKE_RATIO || 1.25),
+  minCloseNearHighPercent: Number(process.env.MIN_CLOSE_NEAR_HIGH_PERCENT || 70),
+  fakeBreakoutMaxHighPullbackPercent: Number(
+    process.env.FAKE_BREAKOUT_MAX_HIGH_PULLBACK_PERCENT || 3
+  ),
+  maxGapUpPercent: Number(process.env.MAX_GAP_UP_PERCENT || 15),
+  requireAboveVwap: process.env.REQUIRE_ABOVE_VWAP !== "false",
+
+  enableNewsRiskFilter: process.env.ENABLE_NEWS_RISK_FILTER === "true",
+  newsLookbackDays: Number(process.env.NEWS_LOOKBACK_DAYS || 3),
 };
 
 let engineState = {
@@ -302,6 +312,188 @@ async function finnhubQuote(symbol) {
   };
 }
 
+async function getRecentBars(symbol, timeframe = "5Min", limit = 30) {
+  const data = await alpacaDataRequest(
+    `/v2/stocks/${encodeURIComponent(
+      symbol
+    )}/bars?timeframe=${encodeURIComponent(
+      timeframe
+    )}&limit=${limit}&adjustment=raw`
+  );
+
+  return Array.isArray(data.bars) ? data.bars : [];
+}
+
+function calculateBarStats(bars = []) {
+  if (!bars.length) {
+    return {
+      avgVolume: 0,
+      lastVolume: 0,
+      volumeSpikeRatio: 0,
+      vwap: 0,
+      latestClose: 0,
+      latestHigh: 0,
+      latestLow: 0,
+      highOfBars: 0,
+    };
+  }
+
+  const totalVolume = bars.reduce((sum, b) => sum + Number(b.v || 0), 0);
+  const avgVolume = totalVolume / bars.length;
+
+  let vwapNumerator = 0;
+  let vwapVolume = 0;
+
+  for (const b of bars) {
+    const high = Number(b.h || 0);
+    const low = Number(b.l || 0);
+    const close = Number(b.c || 0);
+    const volume = Number(b.v || 0);
+    const typicalPrice = (high + low + close) / 3;
+
+    vwapNumerator += typicalPrice * volume;
+    vwapVolume += volume;
+  }
+
+  const latest = bars[bars.length - 1];
+
+  return {
+    avgVolume,
+    lastVolume: Number(latest.v || 0),
+    volumeSpikeRatio: avgVolume > 0 ? Number(latest.v || 0) / avgVolume : 0,
+    vwap: vwapVolume > 0 ? vwapNumerator / vwapVolume : 0,
+    latestClose: Number(latest.c || 0),
+    latestHigh: Number(latest.h || 0),
+    latestLow: Number(latest.l || 0),
+    highOfBars: Math.max(...bars.map((b) => Number(b.h || 0))),
+  };
+}
+
+async function getNewsRisk(symbol) {
+  if (!CONFIG.enableNewsRiskFilter) {
+    return {
+      risk: false,
+      reason: "News risk filter disabled",
+      headlines: [],
+    };
+  }
+
+  const today = new Date();
+  const from = new Date();
+
+  from.setDate(today.getDate() - CONFIG.newsLookbackDays);
+
+  const toDate = today.toISOString().slice(0, 10);
+  const fromDate = from.toISOString().slice(0, 10);
+
+  const url = `https://finnhub.io/api/v1/company-news?symbol=${encodeURIComponent(
+    symbol
+  )}&from=${fromDate}&to=${toDate}&token=${FINNHUB_API_KEY}`;
+
+  try {
+    const res = await fetch(url);
+    const data = await res.json();
+
+    if (!res.ok || !Array.isArray(data)) {
+      return {
+        risk: false,
+        reason: "News check failed, allowed",
+        headlines: [],
+      };
+    }
+
+    const riskyWords = [
+      "offering",
+      "dilution",
+      "bankruptcy",
+      "investigation",
+      "sec",
+      "lawsuit",
+      "fraud",
+      "delisting",
+      "downgrade",
+      "short report",
+      "halt",
+      "halted",
+      "reverse split",
+    ];
+
+    const riskyNews = data.filter((item) => {
+      const text = `${item.headline || ""} ${item.summary || ""}`.toLowerCase();
+      return riskyWords.some((word) => text.includes(word));
+    });
+
+    return {
+      risk: riskyNews.length > 0,
+      reason:
+        riskyNews.length > 0
+          ? "Risky news detected"
+          : "No major risky news detected",
+      headlines: riskyNews.slice(0, 3).map((item) => item.headline),
+    };
+  } catch {
+    return {
+      risk: false,
+      reason: "News check error, allowed",
+      headlines: [],
+    };
+  }
+}
+
+async function getAdvancedConfirmations(q) {
+  const bars = await getRecentBars(q.symbol, "5Min", 30);
+  const stats = calculateBarStats(bars);
+
+  const closeNearHighPercent =
+    q.high > q.low ? ((q.current - q.low) / (q.high - q.low)) * 100 : 0;
+
+  const gapUpPercent =
+    q.previousClose > 0
+      ? ((q.open - q.previousClose) / q.previousClose) * 100
+      : 0;
+
+  const pullbackFromHighPercent =
+    q.high > 0 ? ((q.high - q.current) / q.high) * 100 : 0;
+
+  const volumeSpike =
+    stats.volumeSpikeRatio >= CONFIG.minVolumeSpikeRatio ||
+    q.volume >= CONFIG.minVolume;
+
+  const aboveVwap = stats.vwap > 0 ? q.current >= stats.vwap : true;
+
+  const closeNearHigh =
+    closeNearHighPercent >= CONFIG.minCloseNearHighPercent;
+
+  const fakeBreakout =
+    q.percentChange > 5 &&
+    pullbackFromHighPercent > CONFIG.fakeBreakoutMaxHighPullbackPercent;
+
+  const gapTooHigh = gapUpPercent > CONFIG.maxGapUpPercent;
+
+  const newsRisk = await getNewsRisk(q.symbol);
+
+  return {
+    barsFound: bars.length,
+    avgVolume: Math.round(stats.avgVolume),
+    lastVolume: Math.round(stats.lastVolume),
+    volumeSpikeRatio: Number(stats.volumeSpikeRatio.toFixed(2)),
+    vwap: Number(stats.vwap.toFixed(4)),
+    closeNearHighPercent: Number(closeNearHighPercent.toFixed(2)),
+    gapUpPercent: Number(gapUpPercent.toFixed(2)),
+    pullbackFromHighPercent: Number(pullbackFromHighPercent.toFixed(2)),
+
+    volumeSpike,
+    aboveVwap,
+    closeNearHigh,
+    fakeBreakout,
+    gapTooHigh,
+
+    newsRisk: newsRisk.risk,
+    newsRiskReason: newsRisk.reason,
+    riskyNewsHeadlines: newsRisk.headlines,
+  };
+}
+
 function scoreStock(q) {
   let score = 0;
 
@@ -312,6 +504,7 @@ function scoreStock(q) {
   if (q.percentChange > 0) score += 12;
   if (q.percentChange >= 1) score += 10;
   if (q.percentChange >= 2 && q.percentChange <= 20) score += 20;
+
   if (q.percentChange > 20 && q.percentChange <= CONFIG.maxPercentChange) {
     score += 10;
   }
@@ -328,7 +521,19 @@ function scoreStock(q) {
 
   if (q.volume >= CONFIG.minVolume) score += 10;
 
-  return Math.min(100, Math.round(score));
+  if (q.confirmations) {
+    if (q.confirmations.volumeSpike) score += 12;
+    if (q.confirmations.aboveVwap) score += 10;
+    if (q.confirmations.closeNearHigh) score += 10;
+    if (!q.confirmations.fakeBreakout) score += 8;
+    if (!q.confirmations.gapTooHigh) score += 6;
+
+    if (q.confirmations.fakeBreakout) score -= 25;
+    if (q.confirmations.gapTooHigh) score -= 20;
+    if (q.confirmations.newsRisk) score -= 30;
+  }
+
+  return Math.min(100, Math.max(0, Math.round(score)));
 }
 
 function passesQualityFilters(q) {
@@ -357,6 +562,47 @@ function passesQualityFilters(q) {
 
   if (q.previousClose > 0 && q.current < q.previousClose) {
     return { ok: false, reason: "Below previous close" };
+  }
+
+  if (CONFIG.enableAdvancedFilters && q.confirmations) {
+    if (!q.confirmations.volumeSpike) {
+      return {
+        ok: false,
+        reason: `No volume spike. Ratio: ${q.confirmations.volumeSpikeRatio}`,
+      };
+    }
+
+    if (CONFIG.requireAboveVwap && !q.confirmations.aboveVwap) {
+      return { ok: false, reason: "Below VWAP confirmation" };
+    }
+
+    if (!q.confirmations.closeNearHigh) {
+      return {
+        ok: false,
+        reason: `Not closing near high: ${q.confirmations.closeNearHighPercent}%`,
+      };
+    }
+
+    if (q.confirmations.fakeBreakout) {
+      return {
+        ok: false,
+        reason: `Fake breakout risk. Pulled back ${q.confirmations.pullbackFromHighPercent}% from high`,
+      };
+    }
+
+    if (q.confirmations.gapTooHigh) {
+      return {
+        ok: false,
+        reason: `Gap-up too high: ${q.confirmations.gapUpPercent}%`,
+      };
+    }
+
+    if (q.confirmations.newsRisk) {
+      return {
+        ok: false,
+        reason: `News risk: ${q.confirmations.newsRiskReason}`,
+      };
+    }
   }
 
   return { ok: true };
@@ -464,6 +710,7 @@ async function scanMarket() {
   engineState.skippedSymbols = [];
 
   console.log(`Scanning ${symbols.length} symbols...`);
+  console.log("Advanced filters enabled:", CONFIG.enableAdvancedFilters);
 
   for (const symbol of symbols) {
     try {
@@ -475,6 +722,12 @@ async function scanMarket() {
       }
 
       const quote = await finnhubQuote(symbol);
+
+      if (CONFIG.enableAdvancedFilters) {
+        console.log("ADVANCED FILTER RUNNING:", symbol);
+        quote.confirmations = await getAdvancedConfirmations(quote);
+      }
+
       const quality = passesQualityFilters(quote);
 
       if (!quality.ok) {
@@ -660,7 +913,10 @@ async function checkDailyLossAndProfitLock(account, marketOpen) {
   const profitPercent = ((equity - dailyStart) / dailyStart) * 100;
   const peakProfitPercent = ((dailyPeak - dailyStart) / dailyStart) * 100;
 
-  if (lossPercent >= CONFIG.dailyLossLimitPercent && !engineState.dailyLossLocked) {
+  if (
+    lossPercent >= CONFIG.dailyLossLimitPercent &&
+    !engineState.dailyLossLocked
+  ) {
     engineState.dailyLossLocked = true;
     autoTradingEnabled = false;
 
@@ -782,8 +1038,8 @@ async function autoExitPositions(marketOpen) {
 
     let reason = "AI_EXIT";
 
-    if (shouldStopLoss) reason = "STOP_LOSS_1_PERCENT";
-    else if (shouldTrailingExit) reason = "TRAILING_STOP_1_PERCENT";
+    if (shouldStopLoss) reason = "STOP_LOSS";
+    else if (shouldTrailingExit) reason = "TRAILING_STOP";
     else if (shouldTakeProfit) reason = "TAKE_PROFIT";
 
     if (!marketOpen) {
@@ -867,7 +1123,9 @@ async function replaceWeakestIfBetter(signals, positions, aiOwnedSymbols) {
 
   const weakestSymbol = normalizeSymbol(weakest.symbol);
   const weakestScore =
-    aiEntryScores[weakestSymbol] || engineState.aiEntryScores[weakestSymbol] || 0;
+    aiEntryScores[weakestSymbol] ||
+    engineState.aiEntryScores[weakestSymbol] ||
+    0;
 
   const scoreGap = topCandidate.score - weakestScore;
 
@@ -900,6 +1158,7 @@ async function replaceWeakestIfBetter(signals, positions, aiOwnedSymbols) {
         const account = await getAccount();
         const freshPositions = await getPositions();
         const freshAiOwnedSymbols = await getAiOwnedSymbols();
+
         const freshAiPositions = freshPositions.filter((p) =>
           freshAiOwnedSymbols.has(normalizeSymbol(p.symbol))
         );
@@ -907,7 +1166,11 @@ async function replaceWeakestIfBetter(signals, positions, aiOwnedSymbols) {
         const tradeAmount = getDynamicTradeAmount(account, freshAiPositions);
 
         if (tradeAmount <= 0) {
-          saveFailedOrder("ROTATION_BUY_FAILED", topCandidate.symbol, "Bot budget used up or no cash available");
+          saveFailedOrder(
+            "ROTATION_BUY_FAILED",
+            topCandidate.symbol,
+            "Bot budget used up or no cash available"
+          );
           return;
         }
 
@@ -920,6 +1183,7 @@ async function replaceWeakestIfBetter(signals, positions, aiOwnedSymbols) {
         saveRecentOrder("ROTATED_IN_STRONGER_POSITION", topCandidate.symbol, {
           price: topCandidate.current,
           score: topCandidate.score,
+          confirmations: topCandidate.confirmations || null,
           replacedSymbol: weakestSymbol,
           tradeAmount,
           maxBotExposurePercent: CONFIG.maxBotExposurePercent,
@@ -1000,6 +1264,7 @@ async function autoBuySignals(signals) {
         price: stock.current,
         score: stock.score,
         percentChange: stock.percentChange,
+        confirmations: stock.confirmations || null,
         tradeAmount,
         maxBotExposurePercent: CONFIG.maxBotExposurePercent,
         order,
@@ -1288,6 +1553,13 @@ app.post("/reset-daily-lock", (req, res) => {
 app.listen(PORT, "0.0.0.0", async () => {
   console.log(`SmartMoney Pro backend running on port ${PORT}`);
   console.log(`Auto trading enabled: ${autoTradingEnabled}`);
+  console.log("Advanced filters config:", {
+    enableAdvancedFilters: CONFIG.enableAdvancedFilters,
+    minVolumeSpikeRatio: CONFIG.minVolumeSpikeRatio,
+    minCloseNearHighPercent: CONFIG.minCloseNearHighPercent,
+    requireAboveVwap: CONFIG.requireAboveVwap,
+    enableNewsRiskFilter: CONFIG.enableNewsRiskFilter,
+  });
   console.log("Running first SmartMoney Pro scan on startup...");
   await engineTick();
 });
