@@ -9,6 +9,8 @@ dotenv.config({ path: path.resolve(process.cwd(), ".env") });
 console.log("ENV CHECK:", {
   ALPACA_KEY: process.env.ALPACA_KEY ? "FOUND" : "MISSING",
   ALPACA_SECRET: process.env.ALPACA_SECRET ? "FOUND" : "MISSING",
+  ALPACA_LIVE_SECRET: process.env.ALPACA_SECRET ? "FOUND" : "MISSING",
+  ALPACA_LIVE_KEY: process.env.ALPACA_SECRET ? "FOUND" : "MISSING",
   FINNHUB_API_KEY: process.env.FINNHUB_API_KEY ? "FOUND" : "MISSING",
 });
 
@@ -1586,6 +1588,27 @@ app.post("/auto-trading/on", (req, res) => {
   res.json({
     message: "Auto trading enabled",
     autoTradingEnabled,
+  });
+});
+app.post("/mode", (req, res) => {
+  const { mode } = req.body;
+
+  const validModes = ["paper_stock", "live_stock", "live_crypto"];
+
+  if (!validModes.includes(mode)) {
+    return res.status(400).json({
+      error: "Invalid mode",
+      validModes,
+    });
+  }
+
+  TRADING_MODE = mode;
+
+  console.log("MODE SWITCHED:", TRADING_MODE);
+
+  res.json({
+    message: "Trading mode updated",
+    mode: TRADING_MODE,
   });
 });
 
