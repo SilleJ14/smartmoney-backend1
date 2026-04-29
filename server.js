@@ -1375,8 +1375,6 @@ async function engineTick() {
     }
 
     const account = await getAccount();
-
-    const account = await getAccount();
     const clock = await getClock();
     const marketOpen = Boolean(clock.is_open);
 
