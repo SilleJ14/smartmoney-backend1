@@ -205,9 +205,11 @@ function getDynamicTradeAmount(account, openBotPositions = []) {
 }
 
 function alpacaHeaders() {
+  const { key, secret } = getAlpacaKeys();
+
   return {
-    "APCA-API-KEY-ID": ALPACA_KEY_ID,
-    "APCA-API-SECRET-KEY": ALPACA_SECRET_KEY,
+    "APCA-API-KEY-ID": key,
+    "APCA-API-SECRET-KEY": secret,
     "Content-Type": "application/json",
   };
 }
@@ -1359,7 +1361,6 @@ async function autoBuySignals(signals) {
     }
   }
 }
-
 async function engineTick() {
   if (engineState.running) return;
 
@@ -1367,9 +1368,13 @@ async function engineTick() {
   engineState.lastError = null;
 
   try {
-    if (!ALPACA_KEY_ID || !ALPACA_SECRET_KEY || !FINNHUB_API_KEY) {
+    const { key, secret } = getAlpacaKeys();
+
+    if (!key || !secret || !FINNHUB_API_KEY) {
       throw new Error("Missing API keys in environment variables");
     }
+
+    const account = await getAccount();
 
     const account = await getAccount();
     const clock = await getClock();
