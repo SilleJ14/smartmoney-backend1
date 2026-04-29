@@ -18,12 +18,44 @@ app.use(express.json());
 
 const PORT = Number(process.env.PORT || 10000);
 
-const ALPACA_KEY_ID = process.env.ALPACA_KEY;
-const ALPACA_SECRET_KEY = process.env.ALPACA_SECRET;
 const FINNHUB_API_KEY = process.env.FINNHUB_API_KEY;
 
-const ALPACA_TRADING_BASE_URL =
-  process.env.ALPACA_BASE_URL || "https://paper-api.alpaca.markets";
+// 🔥 NEW: Trading Mode
+let TRADING_MODE = "paper_stock";
+// options: paper_stock, live_stock, live_crypto
+
+function getAlpacaKeys() {
+  if (TRADING_MODE === "paper_stock") {
+    return {
+      key: process.env.ALPACA_PAPER_KEY,
+      secret: process.env.ALPACA_PAPER_SECRET,
+    };
+  }
+
+  if (TRADING_MODE === "live_stock" || TRADING_MODE === "live_crypto") {
+    return {
+      key: process.env.ALPACA_LIVE_KEY,
+      secret: process.env.ALPACA_LIVE_SECRET,
+    };
+  }
+
+  return {
+    key: process.env.ALPACA_PAPER_KEY,
+    secret: process.env.ALPACA_PAPER_SECRET,
+  };
+}
+
+function getTradingBaseUrl() {
+  if (TRADING_MODE === "paper_stock") {
+    return "https://paper-api.alpaca.markets";
+  }
+
+  if (TRADING_MODE === "live_stock" || TRADING_MODE === "live_crypto") {
+    return "https://api.alpaca.markets";
+  }
+
+  return "https://paper-api.alpaca.markets";
+}
 
 const ALPACA_DATA_BASE_URL =
   process.env.ALPACA_DATA_BASE_URL || "https://data.alpaca.markets";
@@ -32,11 +64,12 @@ let autoTradingEnabled = process.env.AUTO_TRADING === "true";
 
 const AI_ORDER_PREFIX = "SM_AI";
 
+
 const CONFIG = {
   maxOpenTrades: Number(process.env.MAX_OPEN_TRADES || 5),
 
   minStockPrice: Number(process.env.MIN_STOCK_PRICE || 0.5),
-  maxStockPrice: Number(process.env.MAX_STOCK_PRICE || 50),
+  maxStockPrice: Number(process.env.MAX_STOCK_PRICE || 100),
 
   minScoreToBuy: Number(process.env.MIN_SCORE_TO_BUY || 75),
   replaceWeakestMinScoreGap: Number(process.env.REPLACE_SCORE_GAP || 5),
@@ -71,7 +104,7 @@ const CONFIG = {
   minVolumeSpikeRatio: Number(process.env.MIN_VOLUME_SPIKE_RATIO || 0.5),
   minCloseNearHighPercent: Number(process.env.MIN_CLOSE_NEAR_HIGH_PERCENT || 35),
   fakeBreakoutMaxHighPullbackPercent: Number(
-    process.env.FAKE_BREAKOUT_MAX_HIGH_PULLBACK_PERCENT || 3
+    process.env.FAKE_BREAKOUT_MAX_HIGH_PULLBACK_PERCENT || 2
   ),
   maxGapUpPercent: Number(process.env.MAX_GAP_UP_PERCENT || 30),
 
@@ -178,9 +211,9 @@ function alpacaHeaders() {
     "Content-Type": "application/json",
   };
 }
-
 async function alpacaTradingRequest(path, options = {}) {
-  const res = await fetch(`${ALPACA_TRADING_BASE_URL}${path}`, {
+  const baseUrl = getTradingBaseUrl();
+  const res = await fetch(`${baseUrl}${path}`, {
     ...options,
     headers: {
       ...alpacaHeaders(),
@@ -1448,7 +1481,8 @@ app.get("/status", async (req, res) => {
     );
 
     res.json({
-      online: true,
+  online: true,
+  mode: TRADING_MODE,
       autoTradingEnabled,
       config: CONFIG,
       account,
