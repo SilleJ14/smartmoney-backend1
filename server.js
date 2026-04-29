@@ -2,8 +2,9 @@ import express from "express";
 import cors from "cors";
 import dotenv from "dotenv";
 import cron from "node-cron";
+import path from "path";
 
-dotenv.config();
+dotenv.config({ path: path.resolve(process.cwd(), ".env") });
 
 console.log("ENV CHECK:", {
   ALPACA_KEY: process.env.ALPACA_KEY ? "FOUND" : "MISSING",
@@ -15,7 +16,7 @@ const app = express();
 app.use(cors());
 app.use(express.json());
 
-const PORT = Number(process.env.PORT || 5000);
+const PORT = Number(process.env.PORT || 10000);
 
 const ALPACA_KEY_ID = process.env.ALPACA_KEY;
 const ALPACA_SECRET_KEY = process.env.ALPACA_SECRET;
@@ -34,39 +35,48 @@ const AI_ORDER_PREFIX = "SM_AI";
 const CONFIG = {
   maxOpenTrades: Number(process.env.MAX_OPEN_TRADES || 5),
 
-  minStockPrice: Number(process.env.MIN_STOCK_PRICE || 10),
-  maxStockPrice: Number(process.env.MAX_STOCK_PRICE || 500),
+  minStockPrice: Number(process.env.MIN_STOCK_PRICE || 0.5),
+  maxStockPrice: Number(process.env.MAX_STOCK_PRICE || 50),
 
-  minScoreToBuy: Number(process.env.MIN_SCORE_TO_BUY || 85),
-  replaceWeakestMinScoreGap: Number(process.env.REPLACE_SCORE_GAP || 7),
+  minScoreToBuy: Number(process.env.MIN_SCORE_TO_BUY || 75),
+  replaceWeakestMinScoreGap: Number(process.env.REPLACE_SCORE_GAP || 5),
 
-  maxBotExposurePercent: Number(process.env.MAX_BOT_EXPOSURE_PERCENT || 10),
+  maxBotExposurePercent: Number(process.env.MAX_BOT_EXPOSURE_PERCENT || 5),
 
-  takeProfitPercent: Number(process.env.TAKE_PROFIT_PERCENT || 8),
-  stopLossPercent: Number(process.env.STOP_LOSS_PERCENT || 4),
-  trailingStopPercent: Number(process.env.TRAILING_STOP_PERCENT || 2),
+  // EXIT SETTINGS
+  takeProfitPercent: Number(process.env.TAKE_PROFIT_PERCENT || 6),
+  stopLossPercent: Number(process.env.STOP_LOSS_PERCENT || 1),
+  trailingStopPercent: Number(process.env.TRAILING_STOP_PERCENT || 1),
 
-  dailyLossLimitPercent: Number(process.env.DAILY_LOSS_LIMIT_PERCENT || 5),
+  // RUNNER STRATEGY
+  runnerTriggerPercent: Number(process.env.RUNNER_TRIGGER_PERCENT || 6),
+  runnerTrailingStopPercent: Number(
+    process.env.RUNNER_TRAILING_STOP_PERCENT || 1
+  ),
+
+  dailyLossLimitPercent: Number(process.env.DAILY_LOSS_LIMIT_PERCENT || 2.4),
 
   profitLockTriggerPercent: Number(process.env.PROFIT_LOCK_TRIGGER_PERCENT || 2),
   profitLockProtectPercent: Number(process.env.PROFIT_LOCK_PROTECT_PERCENT || 50),
 
   moversTop: Number(process.env.MOVERS_TOP || 50),
-  minVolume: Number(process.env.MIN_VOLUME || 100000),
+  minVolume: Number(process.env.MIN_VOLUME || 25000),
   maxPercentChange: Number(process.env.MAX_PERCENT_CHANGE || 60),
   maxSignalsToReturn: Number(process.env.MAX_SIGNALS_TO_RETURN || 40),
 
   topAutoTradeCandidates: Number(process.env.TOP_AUTO_TRADE_CANDIDATES || 5),
 
-  // ✅ ADVANCED FILTERS
-  enableAdvancedFilters: process.env.ENABLE_ADVANCED_FILTERS !== "false",
-  minVolumeSpikeRatio: Number(process.env.MIN_VOLUME_SPIKE_RATIO || 1.25),
-  minCloseNearHighPercent: Number(process.env.MIN_CLOSE_NEAR_HIGH_PERCENT || 70),
+  // ADVANCED FILTERS (FIXED)
+  enableAdvancedFilters: process.env.ENABLE_ADVANCED_FILTERS === "true",
+  minVolumeSpikeRatio: Number(process.env.MIN_VOLUME_SPIKE_RATIO || 0.5),
+  minCloseNearHighPercent: Number(process.env.MIN_CLOSE_NEAR_HIGH_PERCENT || 35),
   fakeBreakoutMaxHighPullbackPercent: Number(
     process.env.FAKE_BREAKOUT_MAX_HIGH_PULLBACK_PERCENT || 3
   ),
-  maxGapUpPercent: Number(process.env.MAX_GAP_UP_PERCENT || 15),
-  requireAboveVwap: process.env.REQUIRE_ABOVE_VWAP !== "false",
+  maxGapUpPercent: Number(process.env.MAX_GAP_UP_PERCENT || 30),
+
+  // 🔥 IMPORTANT FIX
+  requireAboveVwap: process.env.REQUIRE_ABOVE_VWAP === "true",
 
   enableNewsRiskFilter: process.env.ENABLE_NEWS_RISK_FILTER === "true",
   newsLookbackDays: Number(process.env.NEWS_LOOKBACK_DAYS || 3),
@@ -92,6 +102,8 @@ let engineState = {
 
   highWaterMarks: {},
   aiEntryScores: {},
+
+  runnerPositions: {},
 };
 
 const sellingNow = new Set();
@@ -99,7 +111,6 @@ const sellingNow = new Set();
 function normalizeSymbol(symbol) {
   return String(symbol || "").trim().toUpperCase();
 }
-
 function saveFailedOrder(type, symbol, reason, extra = {}) {
   engineState.failedOrders.unshift({
     type,
@@ -268,7 +279,6 @@ async function isAssetBuyEligible(symbol) {
     return { ok: false, reason: err.message };
   }
 }
-
 async function isAssetSellEligible(symbol) {
   try {
     const asset = await getAsset(symbol);
@@ -438,9 +448,7 @@ async function getNewsRisk(symbol) {
       headlines: [],
     };
   }
-}
-
-async function getAdvancedConfirmations(q) {
+}async function getAdvancedConfirmations(q) {
   const bars = await getRecentBars(q.symbol, "5Min", 30);
   const stats = calculateBarStats(bars);
 
@@ -606,9 +614,7 @@ function passesQualityFilters(q) {
   }
 
   return { ok: true };
-}
-
-async function getAccount() {
+}async function getAccount() {
   return alpacaTradingRequest("/v2/account");
 }
 
@@ -814,9 +820,7 @@ async function placeMarketSell(symbol, qty, reason = "AI_EXIT") {
   } finally {
     setTimeout(() => sellingNow.delete(normalizedSymbol), 10000);
   }
-}
-
-async function closePosition(symbol) {
+}async function closePosition(symbol) {
   const normalizedSymbol = normalizeSymbol(symbol);
 
   const assetCheck = await isAssetSellEligible(normalizedSymbol);
@@ -883,6 +887,7 @@ async function forceCloseAllPositions(reason, marketOpen) {
 
       delete engineState.highWaterMarks[symbol];
       delete engineState.aiEntryScores[symbol];
+      delete engineState.runnerPositions[symbol];
     } catch (err) {
       saveFailedOrder("FORCE_CLOSE_FAILED", symbol, err.message, {
         qty,
@@ -1000,6 +1005,10 @@ async function executePendingExits() {
       engineState.pendingExits = engineState.pendingExits.filter(
         (item) => normalizeSymbol(item.symbol) !== normalizeSymbol(exit.symbol)
       );
+
+      delete engineState.highWaterMarks[normalizeSymbol(exit.symbol)];
+      delete engineState.aiEntryScores[normalizeSymbol(exit.symbol)];
+      delete engineState.runnerPositions[normalizeSymbol(exit.symbol)];
     } catch (err) {
       saveFailedOrder("PENDING_EXIT_FAILED", exit.symbol, err.message, exit);
     }
@@ -1029,18 +1038,52 @@ async function autoExitPositions(marketOpen) {
     const dropFromHigh =
       highWater > 0 ? ((highWater - currentPrice) / highWater) * 100 : 0;
 
-    const shouldTakeProfit = unrealizedPercent >= CONFIG.takeProfitPercent;
-    const shouldStopLoss = unrealizedPercent <= -CONFIG.stopLossPercent;
-    const shouldTrailingExit =
-      unrealizedPercent > 0 && dropFromHigh >= CONFIG.trailingStopPercent;
+    const alreadyRunner = Boolean(engineState.runnerPositions[symbol]);
+    const shouldActivateRunner =
+      unrealizedPercent >= CONFIG.runnerTriggerPercent;
 
-    if (!shouldTakeProfit && !shouldStopLoss && !shouldTrailingExit) continue;
+    if (shouldActivateRunner && !alreadyRunner) {
+      engineState.runnerPositions[symbol] = {
+        activatedAt: new Date().toISOString(),
+        activatedProfitPercent: unrealizedPercent,
+        activatedPrice: currentPrice,
+        highWater,
+      };
+
+      saveRecentOrder("RUNNER_ACTIVATED", symbol, {
+        qty,
+        price: currentPrice,
+        profitPercent: unrealizedPercent,
+        runnerTriggerPercent: CONFIG.runnerTriggerPercent,
+        runnerTrailingStopPercent: CONFIG.runnerTrailingStopPercent,
+      });
+    }
+
+    const isRunner = Boolean(engineState.runnerPositions[symbol]);
+
+    const shouldStopLoss = unrealizedPercent <= -CONFIG.stopLossPercent;
+
+    const shouldNormalTrailingExit =
+      !isRunner &&
+      unrealizedPercent > 0 &&
+      dropFromHigh >= CONFIG.trailingStopPercent;
+
+    const shouldRunnerTrailingExit =
+      isRunner && dropFromHigh >= CONFIG.runnerTrailingStopPercent;
+
+    if (
+      !shouldStopLoss &&
+      !shouldNormalTrailingExit &&
+      !shouldRunnerTrailingExit
+    ) {
+      continue;
+    }
 
     let reason = "AI_EXIT";
 
     if (shouldStopLoss) reason = "STOP_LOSS";
-    else if (shouldTrailingExit) reason = "TRAILING_STOP";
-    else if (shouldTakeProfit) reason = "TAKE_PROFIT";
+    else if (shouldRunnerTrailingExit) reason = "RUNNER_TRAILING_STOP";
+    else if (shouldNormalTrailingExit) reason = "TRAILING_STOP";
 
     if (!marketOpen) {
       addPendingExit(symbol, qty, reason, {
@@ -1048,6 +1091,7 @@ async function autoExitPositions(marketOpen) {
         highWater,
         dropFromHigh,
         profitPercent: unrealizedPercent,
+        isRunner,
       });
 
       saveRecentOrder("EXIT_PENDING_MARKET_CLOSED", symbol, {
@@ -1057,6 +1101,7 @@ async function autoExitPositions(marketOpen) {
         dropFromHigh,
         profitPercent: unrealizedPercent,
         reason,
+        isRunner,
       });
 
       continue;
@@ -1071,11 +1116,13 @@ async function autoExitPositions(marketOpen) {
         highWater,
         dropFromHigh,
         profitPercent: unrealizedPercent,
+        isRunner,
         order,
       });
 
       delete engineState.highWaterMarks[symbol];
       delete engineState.aiEntryScores[symbol];
+      delete engineState.runnerPositions[symbol];
     } catch (err) {
       saveFailedOrder(`${reason}_FAILED`, symbol, err.message, {
         qty,
@@ -1083,6 +1130,7 @@ async function autoExitPositions(marketOpen) {
         highWater,
         dropFromHigh,
         profitPercent: unrealizedPercent,
+        isRunner,
       });
     }
   }
@@ -1152,6 +1200,7 @@ async function replaceWeakestIfBetter(signals, positions, aiOwnedSymbols) {
 
     delete engineState.highWaterMarks[weakestSymbol];
     delete engineState.aiEntryScores[weakestSymbol];
+    delete engineState.runnerPositions[weakestSymbol];
 
     setTimeout(async () => {
       try {
@@ -1372,7 +1421,8 @@ app.get("/debug", async (req, res) => {
           Number(account.equity || 0) * (CONFIG.maxBotExposurePercent / 100),
         currentBotExposure: getBotExposure(aiPositions),
         perTradeMax:
-          (Number(account.equity || 0) * (CONFIG.maxBotExposurePercent / 100)) /
+          (Number(account.equity || 0) *
+            (CONFIG.maxBotExposurePercent / 100)) /
           CONFIG.maxOpenTrades,
       },
       engineState,
@@ -1409,7 +1459,8 @@ app.get("/status", async (req, res) => {
           Number(account.equity || 0) * (CONFIG.maxBotExposurePercent / 100),
         currentBotExposure: getBotExposure(aiPositions),
         perTradeMax:
-          (Number(account.equity || 0) * (CONFIG.maxBotExposurePercent / 100)) /
+          (Number(account.equity || 0) *
+            (CONFIG.maxBotExposurePercent / 100)) /
           CONFIG.maxOpenTrades,
       },
       engineState,
@@ -1445,6 +1496,7 @@ app.get("/positions", async (req, res) => {
       allAlpacaPositions: positions,
       highWaterMarks: engineState.highWaterMarks,
       aiEntryScores: engineState.aiEntryScores,
+      runnerPositions: engineState.runnerPositions,
       currentBotExposure: getBotExposure(aiPositions),
     });
   } catch (err) {
@@ -1462,6 +1514,7 @@ app.get("/orders", async (req, res) => {
       backendOrders: engineState.recentOrders,
       failedOrders: engineState.failedOrders,
       pendingExits: engineState.pendingExits,
+      runnerPositions: engineState.runnerPositions,
     });
   } catch (err) {
     res.status(500).json({ error: err.message });
@@ -1525,6 +1578,7 @@ app.post("/close-position", async (req, res) => {
 
     delete engineState.highWaterMarks[normalizedSymbol];
     delete engineState.aiEntryScores[normalizedSymbol];
+    delete engineState.runnerPositions[normalizedSymbol];
 
     res.json({
       message: `Close position submitted for ${normalizedSymbol}`,
@@ -1553,6 +1607,7 @@ app.post("/reset-daily-lock", (req, res) => {
 app.listen(PORT, "0.0.0.0", async () => {
   console.log(`SmartMoney Pro backend running on port ${PORT}`);
   console.log(`Auto trading enabled: ${autoTradingEnabled}`);
+
   console.log("Advanced filters config:", {
     enableAdvancedFilters: CONFIG.enableAdvancedFilters,
     minVolumeSpikeRatio: CONFIG.minVolumeSpikeRatio,
@@ -1560,6 +1615,15 @@ app.listen(PORT, "0.0.0.0", async () => {
     requireAboveVwap: CONFIG.requireAboveVwap,
     enableNewsRiskFilter: CONFIG.enableNewsRiskFilter,
   });
+
+  console.log("Runner strategy config:", {
+    runnerTriggerPercent: CONFIG.runnerTriggerPercent,
+    runnerTrailingStopPercent: CONFIG.runnerTrailingStopPercent,
+    takeProfitPercent: CONFIG.takeProfitPercent,
+    stopLossPercent: CONFIG.stopLossPercent,
+    trailingStopPercent: CONFIG.trailingStopPercent,
+  });
+
   console.log("Running first SmartMoney Pro scan on startup...");
   await engineTick();
 });
