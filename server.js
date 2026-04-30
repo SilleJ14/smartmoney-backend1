@@ -1753,13 +1753,28 @@ if (cryptoPositions.length >= maxCryptoPositions) {
 }
 
 const openSlots = maxCryptoPositions - cryptoPositions.length;
-const tradeAmount = Math.min(cash / Math.max(openSlots, 1), 10);
+const baseTradeAmount = getDynamicTradeAmount(account, cryptoPositions);
 
-if (tradeAmount < 5) {
-    saveFailedOrder("AUTO_CRYPTO_BUY_SKIPPED", "CRYPTO", "Not enough cash");
-    return;
-  }
+const bestCandidateScore = Math.max(
+  ...signals
+    .filter((s) => s.qualifiedToBuy === true)
+    .map((s) => Number(s.score || 0)),
+  0
+);
 
+let scoreMultiplier = 0.5;
+
+if (bestCandidateScore >= 95) scoreMultiplier = 1;
+else if (bestCandidateScore >= 90) scoreMultiplier = 0.85;
+else if (bestCandidateScore >= 85) scoreMultiplier = 0.7;
+else if (bestCandidateScore >= 75) scoreMultiplier = 0.55;
+
+const tradeAmount = baseTradeAmount * scoreMultiplier;
+
+if (tradeAmount < 1) {
+  saveFailedOrder("AUTO_CRYPTO_BUY_SKIPPED", "CRYPTO", "Not enough budget");
+  return;
+}
   const buyCandidates = signals
   .filter((s) => s.qualifiedToBuy === true)
   .filter((s) => Number(s.score || 0) >= 75)
