@@ -1812,7 +1812,7 @@ if (tradeAmount < 1) {
 }
   const buyCandidates = signals
   .filter((s) => s.qualifiedToBuy === true)
-  .filter((s) => Number(s.score || 0) >= 75)
+  .filter((s) => Number(s.score || 0) >= 85)
   .filter((s) => {
   const sym = normalizeSymbol(s.symbol);
   const lastSold = engineState.lastSoldAt[sym] || 0;
