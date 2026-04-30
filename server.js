@@ -1304,7 +1304,70 @@ async function autoExitPositions(marketOpen) {
     }
   }
 }
+async function autoExitCryptoPositions() {
+  if (TRADING_MODE !== "live_crypto") return;
 
+  const positions = await getPositions();
+
+  for (const pos of positions) {
+    const symbol = normalizeSymbol(pos.symbol);
+
+    if (!symbol.includes("/")) continue;
+
+    const qty = Number(pos.qty);
+    const currentPrice = Number(pos.current_price);
+    const profitPercent = Number(pos.unrealized_plpc) * 100;
+
+    if (!qty || qty <= 0 || !currentPrice) continue;
+
+    const previousHigh = Number(engineState.highWaterMarks[symbol] || 0);
+    const highWater = Math.max(previousHigh, currentPrice);
+    engineState.highWaterMarks[symbol] = highWater;
+
+    const dropFromHigh =
+      highWater > 0 ? ((highWater - currentPrice) / highWater) * 100 : 0;
+
+    const TAKE_PROFIT = 3;
+    const STOP_LOSS = -1;
+    const TRAILING_STOP = 1;
+
+    const shouldTakeProfit = profitPercent >= TAKE_PROFIT;
+    const shouldStopLoss = profitPercent <= STOP_LOSS;
+    const shouldTrailingStop =
+      profitPercent > 0 && dropFromHigh >= TRAILING_STOP;
+
+    if (!shouldTakeProfit && !shouldStopLoss && !shouldTrailingStop) continue;
+
+    let reason = "CRYPTO_EXIT";
+
+    if (shouldStopLoss) reason = "CRYPTO_STOP_LOSS";
+    else if (shouldTrailingStop) reason = "CRYPTO_TRAILING_STOP";
+    else if (shouldTakeProfit) reason = "CRYPTO_TAKE_PROFIT";
+
+    try {
+      const order = await placeCryptoMarketSell(symbol, qty, reason);
+
+      saveRecentOrder("AUTO_CRYPTO_SELL", symbol, {
+        qty,
+        currentPrice,
+        profitPercent,
+        highWater,
+        dropFromHigh,
+        reason,
+        order,
+      });
+
+      delete engineState.highWaterMarks[symbol];
+    } catch (err) {
+      saveFailedOrder("AUTO_CRYPTO_SELL_FAILED", symbol, err.message, {
+        qty,
+        currentPrice,
+        profitPercent,
+        reason,
+      });
+    }
+  }
+}
 async function replaceWeakestIfBetter(signals, positions, aiOwnedSymbols) {
   if (positions.length < CONFIG.maxOpenTrades) return false;
 
@@ -1562,17 +1625,21 @@ async function engineTick() {
       await executePendingExits();
     }
 
-    await autoExitPositions(marketOpen);
+await autoExitPositions(marketOpen);
 
-    const signals =
+if (TRADING_MODE === "live_crypto") {
+  await autoExitCryptoPositions();
+}
+
+const signals =
   TRADING_MODE === "live_crypto"
     ? await scanCryptoMarket()
     : await scanMarket();
 
-    engineState.lastSignals = signals;
-    engineState.lastScanAt = new Date().toISOString();
+engineState.lastSignals = signals;
+engineState.lastScanAt = new Date().toISOString();
 
-    if (
+if (
   autoTradingEnabled &&
   !engineState.dailyLossLocked &&
   !engineState.profitLocked &&
@@ -1580,10 +1647,10 @@ async function engineTick() {
   (marketOpen || TRADING_MODE === "live_crypto")
 ) {
   if (TRADING_MODE === "live_crypto") {
-  await autoBuyCryptoSignals(signals);
-} else {
-  await autoBuySignals(signals);
-}
+    await autoBuyCryptoSignals(signals);
+  } else {
+    await autoBuySignals(signals);
+  }
 }
 
     if (autoTradingEnabled && !marketOpen) {
