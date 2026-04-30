@@ -690,6 +690,110 @@ async function getPositions() {
 async function getOrders() {
   return alpacaTradingRequest("/v2/orders?status=all&limit=100&direction=desc");
 }
+// ===== CRYPTO FUNCTIONS START =====
+
+async function getCryptoAssets() {
+  const assets = await alpacaTradingRequest(
+    "/v2/assets?status=active&asset_class=crypto"
+  );
+
+  return assets
+    .filter((asset) => asset.tradable === true)
+    .map((asset) => asset.symbol)
+    .filter(Boolean);
+}
+
+async function getCryptoLatestQuote(symbol) {
+  const data = await alpacaDataRequest(
+    `/v1beta3/crypto/us/latest/quotes?symbols=${encodeURIComponent(symbol)}`
+  );
+
+  const quote = data?.quotes?.[symbol];
+
+  if (!quote) {
+    throw new Error(`No crypto quote found for ${symbol}`);
+  }
+
+  const price = Number(quote.ap || quote.bp || 0);
+
+  if (!price || price <= 0) {
+    throw new Error(`Invalid crypto price for ${symbol}`);
+  }
+
+  return {
+    symbol,
+    current: price,
+    bid: Number(quote.bp || 0),
+    ask: Number(quote.ap || 0),
+    assetClass: "crypto",
+  };
+}
+
+async function scanCryptoMarket() {
+  if (TRADING_MODE !== "live_crypto") {
+    throw new Error("Crypto scanner is only available in live_crypto mode");
+  }
+
+  const symbols = await getCryptoAssets();
+  const results = [];
+
+  for (const symbol of symbols) {
+    try {
+      const quote = await getCryptoLatestQuote(symbol);
+
+      results.push({
+        ...quote,
+        qualifiedToBuy: true,
+      });
+    } catch (err) {
+      saveSkippedSymbol(symbol, err.message);
+    }
+  }
+
+  return results.sort((a, b) => b.current - a.current);
+}
+
+async function placeCryptoMarketBuy(symbol, dollars) {
+  if (TRADING_MODE !== "live_crypto") {
+    throw new Error("Crypto buying is only allowed in live_crypto mode");
+  }
+
+  return alpacaTradingRequest("/v2/orders", {
+    method: "POST",
+    body: JSON.stringify({
+      symbol: normalizeSymbol(symbol),
+      notional: Number(dollars.toFixed(2)),
+      side: "buy",
+      type: "market",
+      time_in_force: "gtc",
+      client_order_id: `${AI_ORDER_PREFIX}_CRYPTO_BUY_${normalizeSymbol(
+        symbol
+      )}_${Date.now()}`,
+    }),
+  });
+}
+
+async function placeCryptoMarketSell(symbol, qty, reason = "CRYPTO_EXIT") {
+  if (TRADING_MODE !== "live_crypto") {
+    throw new Error("Crypto selling is only allowed in live_crypto mode");
+  }
+
+  return alpacaTradingRequest("/v2/orders", {
+    method: "POST",
+    body: JSON.stringify({
+      symbol: normalizeSymbol(symbol),
+      qty: String(qty),
+      side: "sell",
+      type: "market",
+      time_in_force: "gtc",
+      client_order_id: `${AI_ORDER_PREFIX}_${reason}_${normalizeSymbol(
+        symbol
+      )}_${Date.now()}`,
+    }),
+  });
+}
+
+// ===== CRYPTO FUNCTIONS END =====
 
 async function getClock() {
   return alpacaTradingRequest("/v2/clock");
@@ -1391,6 +1495,48 @@ async function autoBuySignals(signals) {
     }
   }
 }
+// ===== CRYPTO AUTO BUY START =====
+
+async function autoBuyCryptoSignals(signals) {
+  if (TRADING_MODE !== "live_crypto") return;
+
+  const account = await getAccount();
+  const positions = await getPositions();
+  const openSymbols = new Set(positions.map((p) => normalizeSymbol(p.symbol)));
+
+  const cash = Number(account.cash || 0);
+  const tradeAmount = Math.min(cash, 10);
+
+  if (tradeAmount < 5) {
+    saveFailedOrder("AUTO_CRYPTO_BUY_SKIPPED", "CRYPTO", "Not enough cash");
+    return;
+  }
+
+  const buyCandidates = signals
+    .filter((s) => s.qualifiedToBuy === true)
+    .filter((s) => !openSymbols.has(normalizeSymbol(s.symbol)))
+    .slice(0, 1);
+
+  for (const crypto of buyCandidates) {
+    try {
+      const order = await placeCryptoMarketBuy(crypto.symbol, tradeAmount);
+
+      saveRecentOrder("AUTO_CRYPTO_BUY", crypto.symbol, {
+        price: crypto.current,
+        tradeAmount,
+        order,
+      });
+    } catch (err) {
+      saveFailedOrder("AUTO_CRYPTO_BUY_FAILED", crypto.symbol, err.message);
+    }
+  }
+}
+
+// ===== CRYPTO AUTO BUY END =====
+
+
+// 👇 THIS LINE MUST STAY BELOW
+async function engineTick() {
 async function engineTick() {
   if (engineState.running) return;
 
@@ -1418,20 +1564,27 @@ async function engineTick() {
 
     await autoExitPositions(marketOpen);
 
-    const signals = await scanMarket();
+    const signals =
+  TRADING_MODE === "live_crypto"
+    ? await scanCryptoMarket()
+    : await scanMarket();
 
     engineState.lastSignals = signals;
     engineState.lastScanAt = new Date().toISOString();
 
     if (
-      autoTradingEnabled &&
-      !engineState.dailyLossLocked &&
-      !engineState.profitLocked &&
-      !riskLocked &&
-      marketOpen
-    ) {
-      await autoBuySignals(signals);
-    }
+  autoTradingEnabled &&
+  !engineState.dailyLossLocked &&
+  !engineState.profitLocked &&
+  !riskLocked &&
+  (marketOpen || TRADING_MODE === "live_crypto")
+) {
+  if (TRADING_MODE === "live_crypto") {
+  await autoBuyCryptoSignals(signals);
+} else {
+  await autoBuySignals(signals);
+}
+}
 
     if (autoTradingEnabled && !marketOpen) {
       saveRecentOrder("BUY_SKIPPED_MARKET_CLOSED", "ALL", {
@@ -1550,6 +1703,30 @@ app.get("/signals", (req, res) => {
     skippedSymbols: engineState.skippedSymbols,
   });
 });
+// ===== CRYPTO ROUTE START =====
+
+app.get("/crypto-signals", async (req, res) => {
+  try {
+    if (TRADING_MODE !== "live_crypto") {
+      return res.status(403).json({
+        error: "Crypto is live trade only. Switch to live_crypto mode.",
+        mode: TRADING_MODE,
+      });
+    }
+
+    const signals = await scanCryptoMarket();
+
+    res.json({
+      mode: TRADING_MODE,
+      liveOnly: true,
+      signals,
+    });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// ===== CRYPTO ROUTE END =====
 
 app.get("/positions", async (req, res) => {
   try {
