@@ -99,7 +99,7 @@ const CONFIG = {
   maxOpenTrades: Number(process.env.MAX_OPEN_TRADES || 5),
 
   minStockPrice: Number(process.env.MIN_STOCK_PRICE || 1),
-  maxStockPrice: Number(process.env.MAX_STOCK_PRICE || 0),
+  maxStockPrice: 0,
 
   minScoreToBuy: Number(process.env.MIN_SCORE_TO_BUY || 85),
   replaceWeakestMinScoreGap: Number(process.env.REPLACE_SCORE_GAP || 5),
