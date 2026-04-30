@@ -40,7 +40,12 @@ app.post("/alpaca-keys", (req, res) => {
     message: "Alpaca keys saved",
   });
 });
-
+app.get("/alpaca-keys-test", (req, res) => {
+  res.json({
+    ok: true,
+    message: "Alpaca keys route is live",
+  });
+});
 const PORT = Number(process.env.PORT || 10000);
 
 const FINNHUB_API_KEY = process.env.FINNHUB_API_KEY;
@@ -52,21 +57,21 @@ let TRADING_MODE = "paper_stock";
 function getAlpacaKeys() {
   if (TRADING_MODE === "paper_stock") {
     return {
-      key: process.env.ALPACA_PAPER_KEY,
-      secret: process.env.ALPACA_PAPER_SECRET,
+      key: runtimeAlpacaKeys.paperKey || process.env.ALPACA_PAPER_KEY,
+      secret: runtimeAlpacaKeys.paperSecret || process.env.ALPACA_PAPER_SECRET,
     };
   }
 
   if (TRADING_MODE === "live_stock" || TRADING_MODE === "live_crypto") {
     return {
-      key: process.env.ALPACA_LIVE_KEY,
-      secret: process.env.ALPACA_LIVE_SECRET,
+      key: runtimeAlpacaKeys.liveKey || process.env.ALPACA_LIVE_KEY,
+      secret: runtimeAlpacaKeys.liveSecret || process.env.ALPACA_LIVE_SECRET,
     };
   }
 
   return {
-    key: process.env.ALPACA_PAPER_KEY,
-    secret: process.env.ALPACA_PAPER_SECRET,
+    key: runtimeAlpacaKeys.paperKey || process.env.ALPACA_PAPER_KEY,
+    secret: runtimeAlpacaKeys.paperSecret || process.env.ALPACA_PAPER_SECRET,
   };
 }
 
@@ -1448,6 +1453,8 @@ cron.schedule("* * * * *", async () => {
 
 app.get("/", (req, res) => {
   res.json({
+
+
     app: "SmartMoney Pro Backend",
     status: "online",
     autoTradingEnabled,
