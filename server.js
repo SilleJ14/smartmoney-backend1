@@ -98,10 +98,10 @@ const AI_ORDER_PREFIX = "SM_AI";
 const CONFIG = {
   maxOpenTrades: Number(process.env.MAX_OPEN_TRADES || 5),
 
-  minStockPrice: Number(process.env.MIN_STOCK_PRICE || 0.1),
-  maxStockPrice: Number(process.env.MAX_STOCK_PRICE || 50),
+  minStockPrice: Number(process.env.MIN_STOCK_PRICE || 1),
+  maxStockPrice: Number(process.env.MAX_STOCK_PRICE || 0),
 
-  minScoreToBuy: Number(process.env.MIN_SCORE_TO_BUY || 75),
+  minScoreToBuy: Number(process.env.MIN_SCORE_TO_BUY || 85),
   replaceWeakestMinScoreGap: Number(process.env.REPLACE_SCORE_GAP || 5),
 
   maxBotExposurePercent: Number(process.env.MAX_BOT_EXPOSURE_PERCENT || 5),
@@ -656,10 +656,12 @@ function passesQualityFilters(q) {
   if (Math.abs(q.percentChange) < 0.5) {
     return { ok: false, reason: "No meaningful movement" };
   }
-  if (q.current < CONFIG.minStockPrice || q.current > CONFIG.maxStockPrice) {
-    return { ok: false, reason: `Price outside range: $${q.current}` };
-  }
-
+  if (
+  q.current < CONFIG.minStockPrice ||
+  (CONFIG.maxStockPrice > 0 && q.current > CONFIG.maxStockPrice)
+) {
+  return { ok: false, reason: `Price outside range: $${q.current}` };
+}
   if (q.percentChange <= 0) {
     return { ok: false, reason: "No positive momentum" };
   }
