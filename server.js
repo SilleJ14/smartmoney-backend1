@@ -756,6 +756,7 @@ async function getCryptoLatestQuote(symbol) {
   };
 }
 
+<<<<<<< HEAD
 async function getCryptoRecentBars(symbol, timeframe = "5Min", limit = 30) {
   const data = await alpacaDataRequest(
     `/v1beta3/crypto/us/bars?symbols=${encodeURIComponent(
@@ -801,6 +802,8 @@ function scoreCrypto(quote, bars = []) {
   return Math.min(100, Math.max(0, Math.round(score)));
 }
 
+=======
+>>>>>>> e1b43f1 (crypto integration complete)
 async function scanCryptoMarket() {
   if (TRADING_MODE !== "live_crypto") {
     throw new Error("Crypto scanner is only available in live_crypto mode");
@@ -809,6 +812,7 @@ async function scanCryptoMarket() {
   const symbols = await getCryptoAssets();
   const results = [];
 
+<<<<<<< HEAD
   engineState.skippedSymbols = [];
 
   for (const symbol of symbols) {
@@ -822,13 +826,26 @@ async function scanCryptoMarket() {
         score,
         barsFound: bars.length,
         qualifiedToBuy: score >= 65,
+=======
+  for (const symbol of symbols) {
+    try {
+      const quote = await getCryptoLatestQuote(symbol);
+
+      results.push({
+        ...quote,
+        qualifiedToBuy: true,
+>>>>>>> e1b43f1 (crypto integration complete)
       });
     } catch (err) {
       saveSkippedSymbol(symbol, err.message);
     }
   }
 
+<<<<<<< HEAD
   return results.sort((a, b) => b.score - a.score);
+=======
+  return results.sort((a, b) => b.current - a.current);
+>>>>>>> e1b43f1 (crypto integration complete)
 }
 
 async function placeCryptoMarketBuy(symbol, dollars) {
@@ -1406,7 +1423,11 @@ async function autoExitCryptoPositions() {
   for (const pos of positions) {
     const symbol = normalizeSymbol(pos.symbol);
 
+<<<<<<< HEAD
     if (!symbol.endsWith("USD")) continue;
+=======
+    if (!symbol.includes("/")) continue;
+>>>>>>> e1b43f1 (crypto integration complete)
 
     const qty = Number(pos.qty);
     const currentPrice = Number(pos.current_price);
@@ -1452,7 +1473,10 @@ async function autoExitCryptoPositions() {
       });
 
       delete engineState.highWaterMarks[symbol];
+<<<<<<< HEAD
         engineState.lastSoldAt[symbol] = Date.now();
+=======
+>>>>>>> e1b43f1 (crypto integration complete)
     } catch (err) {
       saveFailedOrder("AUTO_CRYPTO_SELL_FAILED", symbol, err.message, {
         qty,
@@ -1653,6 +1677,7 @@ async function autoBuySignals(signals) {
     }
   }
 }
+<<<<<<< HEAD
 async function rotateWeakCryptoIfBetter(signals, positions) {
   if (TRADING_MODE !== "live_crypto") return false;
 
@@ -1738,6 +1763,8 @@ async function rotateWeakCryptoIfBetter(signals, positions) {
     return false;
   }
 }
+=======
+>>>>>>> e1b43f1 (crypto integration complete)
 // ===== CRYPTO AUTO BUY START =====
 
 async function autoBuyCryptoSignals(signals) {
@@ -1746,6 +1773,7 @@ async function autoBuyCryptoSignals(signals) {
   const account = await getAccount();
   const positions = await getPositions();
   const openSymbols = new Set(positions.map((p) => normalizeSymbol(p.symbol)));
+<<<<<<< HEAD
 const cash = Number(account.cash || 0);
 const maxCryptoPositions = 3;
 
@@ -1799,6 +1827,21 @@ if (tradeAmount < 1) {
   return !openSymbols.has(sym) && Date.now() - lastSold > 120000;
 })
   .slice(0, openSlots);
+=======
+
+  const cash = Number(account.cash || 0);
+  const tradeAmount = Math.min(cash, 10);
+
+  if (tradeAmount < 5) {
+    saveFailedOrder("AUTO_CRYPTO_BUY_SKIPPED", "CRYPTO", "Not enough cash");
+    return;
+  }
+
+  const buyCandidates = signals
+    .filter((s) => s.qualifiedToBuy === true)
+    .filter((s) => !openSymbols.has(normalizeSymbol(s.symbol)))
+    .slice(0, 1);
+>>>>>>> e1b43f1 (crypto integration complete)
 
   for (const crypto of buyCandidates) {
     try {
