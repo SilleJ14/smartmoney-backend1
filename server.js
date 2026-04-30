@@ -1147,10 +1147,24 @@ async function forceCloseAllPositions(reason, marketOpen) {
 
 async function checkDailyLossAndProfitLock(account, marketOpen) {
   const equity = Number(account.equity || 0);
+  const currentMode = TRADING_MODE || "paper_stock";
+
+  if (engineState.lastMode !== currentMode) {
+    engineState.dailyStartEquity = equity;
+    engineState.dailyPeakEquity = equity;
+    engineState.profitLockFloorEquity = null;
+    engineState.dailyLossLocked = false;
+    engineState.profitLocked = false;
+    engineState.lastMode = currentMode;
+
+    console.log("🔄 Daily baseline reset due to mode change:", currentMode);
+    return false;
+  }
 
   if (!engineState.dailyStartEquity) {
     engineState.dailyStartEquity = equity;
     engineState.dailyPeakEquity = equity;
+    engineState.lastMode = currentMode;
     return false;
   }
 
