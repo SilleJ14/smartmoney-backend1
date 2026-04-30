@@ -1609,6 +1609,91 @@ async function autoBuySignals(signals) {
     }
   }
 }
+async function rotateWeakCryptoIfBetter(signals, positions) {
+  if (TRADING_MODE !== "live_crypto") return false;
+
+  const cryptoPositions = positions.filter((p) =>
+    normalizeSymbol(p.symbol).includes("/")
+  );
+
+  if (cryptoPositions.length < 3) return false;
+
+  const openSymbols = new Set(
+    cryptoPositions.map((p) => normalizeSymbol(p.symbol))
+  );
+
+  const topCandidate = signals
+    .filter((s) => s.qualifiedToBuy === true)
+    .filter((s) => Number(s.score || 0) >= 75)
+    .filter((s) => !openSymbols.has(normalizeSymbol(s.symbol)))
+    .sort((a, b) => Number(b.score || 0) - Number(a.score || 0))[0];
+
+  if (!topCandidate) return false;
+
+  const weakest = cryptoPositions.reduce((weak, pos) => {
+    const weakProfit = Number(weak.unrealized_plpc || 0);
+    const posProfit = Number(pos.unrealized_plpc || 0);
+    return posProfit < weakProfit ? pos : weak;
+  });
+
+  const weakestSymbol = normalizeSymbol(weakest.symbol);
+  const weakestQty = Number(weakest.qty);
+
+  if (!weakestQty || weakestQty <= 0) return false;
+
+  try {
+    const sellOrder = await placeCryptoMarketSell(
+      weakestSymbol,
+      weakestQty,
+      `CRYPTO_ROTATE_TO_${normalizeSymbol(topCandidate.symbol)}`
+    );
+
+    saveRecentOrder("CRYPTO_ROTATED_OUT", weakestSymbol, {
+      replacementSymbol: topCandidate.symbol,
+      replacementScore: topCandidate.score,
+      weakestProfitPercent: Number(weakest.unrealized_plpc || 0) * 100,
+      sellOrder,
+    });
+
+    delete engineState.highWaterMarks[weakestSymbol];
+
+    setTimeout(async () => {
+      try {
+        const account = await getAccount();
+        const cash = Number(account.cash || 0);
+        const tradeAmount = Math.min(cash, 10);
+
+        if (tradeAmount < 5) {
+          saveFailedOrder(
+            "CRYPTO_ROTATION_BUY_SKIPPED",
+            topCandidate.symbol,
+            "Not enough cash after rotation"
+          );
+          return;
+        }
+
+        const buyOrder = await placeCryptoMarketBuy(
+          topCandidate.symbol,
+          tradeAmount
+        );
+
+        saveRecentOrder("CRYPTO_ROTATED_IN", topCandidate.symbol, {
+          score: topCandidate.score,
+          tradeAmount,
+          replacedSymbol: weakestSymbol,
+          buyOrder,
+        });
+      } catch (err) {
+        saveFailedOrder("CRYPTO_ROTATION_BUY_FAILED", topCandidate.symbol, err.message);
+      }
+    }, 2500);
+
+    return true;
+  } catch (err) {
+    saveFailedOrder("CRYPTO_ROTATION_SELL_FAILED", weakestSymbol, err.message);
+    return false;
+  }
+}
 // ===== CRYPTO AUTO BUY START =====
 
 async function autoBuyCryptoSignals(signals) {
@@ -1625,10 +1710,15 @@ const cryptoPositions = positions.filter((p) =>
 );
 
 if (cryptoPositions.length >= maxCryptoPositions) {
-  saveRecentOrder("AUTO_CRYPTO_BUY_SKIPPED", "CRYPTO", {
-    reason: "Max crypto positions reached",
-    maxCryptoPositions,
-  });
+  const rotated = await rotateWeakCryptoIfBetter(signals, positions);
+
+  if (!rotated) {
+    saveRecentOrder("AUTO_CRYPTO_BUY_SKIPPED", "CRYPTO", {
+      reason: "Max crypto positions reached, no stronger rotation found",
+      maxCryptoPositions,
+    });
+  }
+
   return;
 }
 
