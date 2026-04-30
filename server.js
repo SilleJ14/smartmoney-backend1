@@ -167,6 +167,7 @@ let engineState = {
   aiEntryScores: {},
 
   runnerPositions: {},
+  lastSoldAt: {},
 };
 
 const sellingNow = new Set();
@@ -1106,6 +1107,7 @@ async function forceCloseAllPositions(reason, marketOpen) {
       });
 
       delete engineState.highWaterMarks[symbol];
+
       delete engineState.aiEntryScores[symbol];
       delete engineState.runnerPositions[symbol];
     } catch (err) {
@@ -1341,6 +1343,7 @@ async function autoExitPositions(marketOpen) {
       });
 
       delete engineState.highWaterMarks[symbol];
+      engineState.lastSoldAt[symbol] = Date.now();
       delete engineState.aiEntryScores[symbol];
       delete engineState.runnerPositions[symbol];
     } catch (err) {
@@ -1363,7 +1366,7 @@ async function autoExitCryptoPositions() {
   for (const pos of positions) {
     const symbol = normalizeSymbol(pos.symbol);
 
-    if (!symbol.includes("/")) continue;
+    if (!symbol.endsWith("USD")) continue;
 
     const qty = Number(pos.qty);
     const currentPrice = Number(pos.current_price);
@@ -1409,6 +1412,7 @@ async function autoExitCryptoPositions() {
       });
 
       delete engineState.highWaterMarks[symbol];
+        engineState.lastSoldAt[symbol] = Date.now();
     } catch (err) {
       saveFailedOrder("AUTO_CRYPTO_SELL_FAILED", symbol, err.message, {
         qty,
@@ -1613,7 +1617,7 @@ async function rotateWeakCryptoIfBetter(signals, positions) {
   if (TRADING_MODE !== "live_crypto") return false;
 
   const cryptoPositions = positions.filter((p) =>
-    normalizeSymbol(p.symbol).includes("/")
+    normalizeSymbol(p.symbol).endsWith("USD")
   );
 
   if (cryptoPositions.length < 3) return false;
@@ -1624,7 +1628,7 @@ async function rotateWeakCryptoIfBetter(signals, positions) {
 
   const topCandidate = signals
     .filter((s) => s.qualifiedToBuy === true)
-    .filter((s) => Number(s.score || 0) >= 75)
+    .filter((s) => Number(s.score || 0) >= 85)
     .filter((s) => !openSymbols.has(normalizeSymbol(s.symbol)))
     .sort((a, b) => Number(b.score || 0) - Number(a.score || 0))[0];
 
@@ -1733,7 +1737,12 @@ if (tradeAmount < 5) {
   const buyCandidates = signals
   .filter((s) => s.qualifiedToBuy === true)
   .filter((s) => Number(s.score || 0) >= 75)
-  .filter((s) => !openSymbols.has(normalizeSymbol(s.symbol)))
+  .filter((s) => {
+  const sym = normalizeSymbol(s.symbol);
+  const lastSold = engineState.lastSoldAt[sym] || 0;
+
+  return !openSymbols.has(sym) && Date.now() - lastSold > 120000;
+})
   .slice(0, openSlots);
 
   for (const crypto of buyCandidates) {
