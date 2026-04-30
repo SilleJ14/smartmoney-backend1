@@ -596,8 +596,14 @@ async function getNewsRisk(symbol) {
 
 function scoreStock(q) {
   let score = 0;
+  // 🔥 LARGE CAP / INSTITUTIONAL BIAS
+if (q.current >= 5) score += 5;        // avoid penny stocks
+if (q.volume >= 1000000) score += 10; // strong liquidity = institutions
 
-  if (q.current >= CONFIG.minStockPrice && q.current <= CONFIG.maxStockPrice) {
+  if (
+  q.current >= CONFIG.minStockPrice &&
+  (CONFIG.maxStockPrice <= 0 || q.current <= CONFIG.maxStockPrice)
+) {
     score += 18;
   }
 
@@ -641,6 +647,15 @@ function passesQualityFilters(q) {
     return { ok: false, reason: "No valid price" };
   }
 
+  // 🔥 LIQUIDITY FILTER (CRITICAL)
+  if (q.volume < 500000) {
+    return { ok: false, reason: "Low volume (<500k)" };
+  }
+
+  // 🔥 REMOVE DEAD / SLOW STOCKS
+  if (Math.abs(q.percentChange) < 0.5) {
+    return { ok: false, reason: "No meaningful movement" };
+  }
   if (q.current < CONFIG.minStockPrice || q.current > CONFIG.maxStockPrice) {
     return { ok: false, reason: `Price outside range: $${q.current}` };
   }
@@ -756,7 +771,6 @@ async function getCryptoLatestQuote(symbol) {
   };
 }
 
-<<<<<<< HEAD
 async function getCryptoRecentBars(symbol, timeframe = "5Min", limit = 30) {
   const data = await alpacaDataRequest(
     `/v1beta3/crypto/us/bars?symbols=${encodeURIComponent(
@@ -802,8 +816,6 @@ function scoreCrypto(quote, bars = []) {
   return Math.min(100, Math.max(0, Math.round(score)));
 }
 
-=======
->>>>>>> e1b43f1 (crypto integration complete)
 async function scanCryptoMarket() {
   if (TRADING_MODE !== "live_crypto") {
     throw new Error("Crypto scanner is only available in live_crypto mode");
@@ -812,7 +824,6 @@ async function scanCryptoMarket() {
   const symbols = await getCryptoAssets();
   const results = [];
 
-<<<<<<< HEAD
   engineState.skippedSymbols = [];
 
   for (const symbol of symbols) {
@@ -826,26 +837,13 @@ async function scanCryptoMarket() {
         score,
         barsFound: bars.length,
         qualifiedToBuy: score >= 65,
-=======
-  for (const symbol of symbols) {
-    try {
-      const quote = await getCryptoLatestQuote(symbol);
-
-      results.push({
-        ...quote,
-        qualifiedToBuy: true,
->>>>>>> e1b43f1 (crypto integration complete)
       });
     } catch (err) {
       saveSkippedSymbol(symbol, err.message);
     }
   }
 
-<<<<<<< HEAD
   return results.sort((a, b) => b.score - a.score);
-=======
-  return results.sort((a, b) => b.current - a.current);
->>>>>>> e1b43f1 (crypto integration complete)
 }
 
 async function placeCryptoMarketBuy(symbol, dollars) {
@@ -975,14 +973,18 @@ async function getTopMovers() {
 
 async function scanMarket() {
   const symbols = await getTopMovers();
+
+  // 🔥 LIMIT UNIVERSE (ADD THIS)
+  const limitedSymbols = symbols.slice(0, 150);
+
   const results = [];
 
   engineState.skippedSymbols = [];
 
-  console.log(`Scanning ${symbols.length} symbols...`);
+  console.log(`Scanning ${limitedSymbols.length} of ${symbols.length} symbols...`);
   console.log("Advanced filters enabled:", CONFIG.enableAdvancedFilters);
 
-  for (const symbol of symbols) {
+  for (const symbol of limitedSymbols) {
     try {
       const assetCheck = await isAssetBuyEligible(symbol);
 
@@ -1423,11 +1425,7 @@ async function autoExitCryptoPositions() {
   for (const pos of positions) {
     const symbol = normalizeSymbol(pos.symbol);
 
-<<<<<<< HEAD
     if (!symbol.endsWith("USD")) continue;
-=======
-    if (!symbol.includes("/")) continue;
->>>>>>> e1b43f1 (crypto integration complete)
 
     const qty = Number(pos.qty);
     const currentPrice = Number(pos.current_price);
@@ -1473,10 +1471,7 @@ async function autoExitCryptoPositions() {
       });
 
       delete engineState.highWaterMarks[symbol];
-<<<<<<< HEAD
         engineState.lastSoldAt[symbol] = Date.now();
-=======
->>>>>>> e1b43f1 (crypto integration complete)
     } catch (err) {
       saveFailedOrder("AUTO_CRYPTO_SELL_FAILED", symbol, err.message, {
         qty,
@@ -1677,7 +1672,6 @@ async function autoBuySignals(signals) {
     }
   }
 }
-<<<<<<< HEAD
 async function rotateWeakCryptoIfBetter(signals, positions) {
   if (TRADING_MODE !== "live_crypto") return false;
 
@@ -1763,8 +1757,6 @@ async function rotateWeakCryptoIfBetter(signals, positions) {
     return false;
   }
 }
-=======
->>>>>>> e1b43f1 (crypto integration complete)
 // ===== CRYPTO AUTO BUY START =====
 
 async function autoBuyCryptoSignals(signals) {
@@ -1773,7 +1765,6 @@ async function autoBuyCryptoSignals(signals) {
   const account = await getAccount();
   const positions = await getPositions();
   const openSymbols = new Set(positions.map((p) => normalizeSymbol(p.symbol)));
-<<<<<<< HEAD
 const cash = Number(account.cash || 0);
 const maxCryptoPositions = 3;
 
@@ -1827,21 +1818,6 @@ if (tradeAmount < 1) {
   return !openSymbols.has(sym) && Date.now() - lastSold > 120000;
 })
   .slice(0, openSlots);
-=======
-
-  const cash = Number(account.cash || 0);
-  const tradeAmount = Math.min(cash, 10);
-
-  if (tradeAmount < 5) {
-    saveFailedOrder("AUTO_CRYPTO_BUY_SKIPPED", "CRYPTO", "Not enough cash");
-    return;
-  }
-
-  const buyCandidates = signals
-    .filter((s) => s.qualifiedToBuy === true)
-    .filter((s) => !openSymbols.has(normalizeSymbol(s.symbol)))
-    .slice(0, 1);
->>>>>>> e1b43f1 (crypto integration complete)
 
   for (const crypto of buyCandidates) {
     try {
@@ -2138,38 +2114,64 @@ app.post("/auto-trading/on", (req, res) => {
     autoTradingEnabled,
   });
 });
+app.get("/config", (req, res) => {
+  res.json({
+    message: "Current remote config",
+    config: CONFIG,
+  });
+});
+app.get("/config", (req, res) => {
+  res.json({
+    message: "Current remote config",
+    config: CONFIG,
+  });
+});
+
 app.post("/config", (req, res) => {
-  const {
-    minScoreToBuy,
-    maxBotExposurePercent,
-    stopLossPercent,
-    trailingStopPercent,
-    takeProfitPercent,
-    maxOpenTrades,
-  } = req.body;
+  const allowedConfigKeys = [
+    "minScoreToBuy",
+    "maxBotExposurePercent",
+    "stopLossPercent",
+    "trailingStopPercent",
+    "takeProfitPercent",
+    "maxOpenTrades",
+    "runnerTriggerPercent",
+    "runnerTrailingStopPercent",
+    "dailyLossLimitPercent",
+    "profitLockTriggerPercent",
+    "profitLockProtectPercent",
+    "moversTop",
+    "minVolume",
+    "maxPercentChange",
+    "maxSignalsToReturn",
+    "topAutoTradeCandidates",
+    "enableAdvancedFilters",
+    "minVolumeSpikeRatio",
+    "minCloseNearHighPercent",
+    "fakeBreakoutMaxHighPullbackPercent",
+    "maxGapUpPercent",
+    "requireAboveVwap",
+    "enableNewsRiskFilter",
+    "newsLookbackDays"
+  ];
 
-  if (minScoreToBuy !== undefined) {
-    CONFIG.minScoreToBuy = Number(minScoreToBuy);
-  }
+  for (const key of allowedConfigKeys) {
+    if (req.body[key] === undefined) continue;
 
-  if (maxBotExposurePercent !== undefined) {
-    CONFIG.maxBotExposurePercent = Number(maxBotExposurePercent);
-  }
+    if (typeof CONFIG[key] === "boolean") {
+      CONFIG[key] = Boolean(req.body[key]);
+    } else {
+      const value = Number(req.body[key]);
 
-  if (stopLossPercent !== undefined) {
-    CONFIG.stopLossPercent = Number(stopLossPercent);
-  }
+      if (!Number.isFinite(value)) {
+        return res.status(400).json({
+          error: `Invalid number for ${key}`,
+          received: req.body[key],
+        });
+      }
 
-  if (trailingStopPercent !== undefined) {
-    CONFIG.trailingStopPercent = Number(trailingStopPercent);
-  }
-
-  if (takeProfitPercent !== undefined) {
-    CONFIG.takeProfitPercent = Number(takeProfitPercent);
-  }
-
-  if (maxOpenTrades !== undefined) {
-    CONFIG.maxOpenTrades = Number(maxOpenTrades);
+      CONFIG[key] = value;
+    }
   }
 
   res.json({
