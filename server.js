@@ -9,14 +9,37 @@ dotenv.config({ path: path.resolve(process.cwd(), ".env") });
 console.log("ENV CHECK:", {
   ALPACA_KEY: process.env.ALPACA_KEY ? "FOUND" : "MISSING",
   ALPACA_SECRET: process.env.ALPACA_SECRET ? "FOUND" : "MISSING",
-  ALPACA_LIVE_SECRET: process.env.ALPACA_SECRET ? "FOUND" : "MISSING",
-  ALPACA_LIVE_KEY: process.env.ALPACA_SECRET ? "FOUND" : "MISSING",
+  ALPACA_LIVE_SECRET: process.env.ALPACA_SECRET_KEY ? "FOUND" : "MISSING",
+  ALPACA_LIVE_KEY: process.env.ALPACA_LIVE_KEY? "FOUND" : "MISSING",
   FINNHUB_API_KEY: process.env.FINNHUB_API_KEY ? "FOUND" : "MISSING",
 });
 
 const app = express();
 app.use(cors());
 app.use(express.json());
+
+let runtimeAlpacaKeys = {
+  paperKey: process.env.ALPACA_PAPER_KEY || "",
+  paperSecret: process.env.ALPACA_PAPER_SECRET || "",
+  liveKey: process.env.ALPACA_LIVE_KEY || "",
+  liveSecret: process.env.ALPACA_LIVE_SECRET || "",
+};
+
+app.post("/alpaca-keys", (req, res) => {
+  const { paperKey, paperSecret, liveKey, liveSecret } = req.body;
+
+  runtimeAlpacaKeys = {
+    paperKey: paperKey || runtimeAlpacaKeys.paperKey,
+    paperSecret: paperSecret || runtimeAlpacaKeys.paperSecret,
+    liveKey: liveKey || runtimeAlpacaKeys.liveKey,
+    liveSecret: liveSecret || runtimeAlpacaKeys.liveSecret,
+  };
+
+  res.json({
+    success: true,
+    message: "Alpaca keys saved",
+  });
+});
 
 const PORT = Number(process.env.PORT || 10000);
 
@@ -70,8 +93,8 @@ const AI_ORDER_PREFIX = "SM_AI";
 const CONFIG = {
   maxOpenTrades: Number(process.env.MAX_OPEN_TRADES || 5),
 
-  minStockPrice: Number(process.env.MIN_STOCK_PRICE || 0.5),
-  maxStockPrice: Number(process.env.MAX_STOCK_PRICE || 100),
+  minStockPrice: Number(process.env.MIN_STOCK_PRICE || 0.1),
+  maxStockPrice: Number(process.env.MAX_STOCK_PRICE || 50),
 
   minScoreToBuy: Number(process.env.MIN_SCORE_TO_BUY || 75),
   replaceWeakestMinScoreGap: Number(process.env.REPLACE_SCORE_GAP || 5),
@@ -80,16 +103,16 @@ const CONFIG = {
 
   // EXIT SETTINGS
   takeProfitPercent: Number(process.env.TAKE_PROFIT_PERCENT || 6),
-  stopLossPercent: Number(process.env.STOP_LOSS_PERCENT || 1),
-  trailingStopPercent: Number(process.env.TRAILING_STOP_PERCENT || 1),
+  stopLossPercent: Number(process.env.STOP_LOSS_PERCENT || 0.5),
+  trailingStopPercent: Number(process.env.TRAILING_STOP_PERCENT || 0.5),
 
   // RUNNER STRATEGY
   runnerTriggerPercent: Number(process.env.RUNNER_TRIGGER_PERCENT || 6),
   runnerTrailingStopPercent: Number(
-    process.env.RUNNER_TRAILING_STOP_PERCENT || 1
+    process.env.RUNNER_TRAILING_STOP_PERCENT || 0.5
   ),
 
-  dailyLossLimitPercent: Number(process.env.DAILY_LOSS_LIMIT_PERCENT || 2.4),
+  dailyLossLimitPercent: Number(process.env.DAILY_LOSS_LIMIT_PERCENT || 2),
 
   profitLockTriggerPercent: Number(process.env.PROFIT_LOCK_TRIGGER_PERCENT || 2),
   profitLockProtectPercent: Number(process.env.PROFIT_LOCK_PROTECT_PERCENT || 50),
