@@ -168,9 +168,35 @@ let engineState = {
 
   runnerPositions: {},
   lastSoldAt: {},
+  peaksByMode: {},
 };
 
 const sellingNow = new Set();
+
+function updateAccountPeaks(account) {
+  const mode = TRADING_MODE || "paper_stock";
+  const equity = Number(account?.equity || 0);
+  const cash = Number(account?.cash || 0);
+
+  if (!engineState.peaksByMode[mode]) {
+    engineState.peaksByMode[mode] = {
+      peakEquity: equity,
+      peakCash: cash,
+    };
+  }
+
+  engineState.peaksByMode[mode].peakEquity = Math.max(
+    Number(engineState.peaksByMode[mode].peakEquity || 0),
+    equity
+  );
+
+  engineState.peaksByMode[mode].peakCash = Math.max(
+    Number(engineState.peaksByMode[mode].peakCash || 0),
+    cash
+  );
+
+  return engineState.peaksByMode[mode];
+}
 
 function normalizeSymbol(symbol) {
   return String(symbol || "").trim().toUpperCase();
@@ -1892,6 +1918,8 @@ app.get("/debug", async (req, res) => {
 app.get("/status", async (req, res) => {
   try {
     const account = await getAccount();
+    const peaks = updateAccountPeaks(account);
+  
     const clock = await getClock();
     const positions = await getPositions();
     const aiOwnedSymbols = await getAiOwnedSymbols();
@@ -1905,18 +1933,27 @@ app.get("/status", async (req, res) => {
   mode: TRADING_MODE,
       autoTradingEnabled,
       config: CONFIG,
-      account,
+      account: {
+  ...account,
+  peakEquity: peaks.peakEquity,
+  peakCash: peaks.peakCash,
+},
       clock,
       risk: {
-        maxBotExposurePercent: CONFIG.maxBotExposurePercent,
-        maxBotBudget:
-          Number(account.equity || 0) * (CONFIG.maxBotExposurePercent / 100),
-        currentBotExposure: getBotExposure(aiPositions),
-        perTradeMax:
-          (Number(account.equity || 0) *
-            (CONFIG.maxBotExposurePercent / 100)) /
-          CONFIG.maxOpenTrades,
-      },
+  maxBotExposurePercent: CONFIG.maxBotExposurePercent,
+  maxBotBudget:
+    Number(account.equity || 0) * (CONFIG.maxBotExposurePercent / 100),
+  currentBotExposure: getBotExposure(aiPositions),
+  perTradeMax:
+    (Number(account.equity || 0) *
+      (CONFIG.maxBotExposurePercent / 100)) /
+    CONFIG.maxOpenTrades,
+
+  currentEquity: Number(account.equity || 0),
+  currentCash: Number(account.cash || 0),
+  peakEquity: peaks.peakEquity,
+  peakCash: peaks.peakCash,
+},
       engineState,
     });
   } catch (err) {
