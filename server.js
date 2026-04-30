@@ -2095,6 +2095,45 @@ app.post("/auto-trading/on", (req, res) => {
     autoTradingEnabled,
   });
 });
+app.post("/config", (req, res) => {
+  const {
+    minScoreToBuy,
+    maxBotExposurePercent,
+    stopLossPercent,
+    trailingStopPercent,
+    takeProfitPercent,
+    maxOpenTrades,
+  } = req.body;
+
+  if (minScoreToBuy !== undefined) {
+    CONFIG.minScoreToBuy = Number(minScoreToBuy);
+  }
+
+  if (maxBotExposurePercent !== undefined) {
+    CONFIG.maxBotExposurePercent = Number(maxBotExposurePercent);
+  }
+
+  if (stopLossPercent !== undefined) {
+    CONFIG.stopLossPercent = Number(stopLossPercent);
+  }
+
+  if (trailingStopPercent !== undefined) {
+    CONFIG.trailingStopPercent = Number(trailingStopPercent);
+  }
+
+  if (takeProfitPercent !== undefined) {
+    CONFIG.takeProfitPercent = Number(takeProfitPercent);
+  }
+
+  if (maxOpenTrades !== undefined) {
+    CONFIG.maxOpenTrades = Number(maxOpenTrades);
+  }
+
+  res.json({
+    message: "Remote config updated",
+    config: CONFIG,
+  });
+});
 app.post("/mode", (req, res) => {
   const { mode } = req.body;
 
