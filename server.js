@@ -1536,7 +1536,7 @@ async function autoBuyCryptoSignals(signals) {
 
 
 // 👇 THIS LINE MUST STAY BELOW
-async function engineTick() {
+
 async function engineTick() {
   if (engineState.running) return;
 
