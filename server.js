@@ -175,7 +175,7 @@ let engineState = {
 };
 
 const sellingNow = new Set();
-
+const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
 function updateAccountPeaks(account) {
   const mode = TRADING_MODE || "paper_stock";
   const equity = Number(account?.equity || 0);
@@ -997,7 +997,7 @@ async function getTopMovers() {
 async function scanMarket() {
   const symbols = await getTopMovers();
 
-  const maxSymbolsToScan = Number(process.env.MAX_SYMBOLS_TO_SCAN || 300);
+  const maxSymbolsToScan = Number(process.env.MAX_SYMBOLS_TO_SCAN || 100);
 
   // 🔥 Dynamic scan size from Render env
   const limitedSymbols = symbols.slice(0, maxSymbolsToScan);
@@ -1009,6 +1009,7 @@ async function scanMarket() {
   console.log("Advanced filters enabled:", CONFIG.enableAdvancedFilters);
 
   for (const symbol of limitedSymbols) {
+    await sleep(1200);
     try {
       const assetCheck = await isAssetBuyEligible(symbol);
 
