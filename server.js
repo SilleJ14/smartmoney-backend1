@@ -3,8 +3,10 @@ import cors from "cors";
 import dotenv from "dotenv";
 import cron from "node-cron";
 import path from "path";
+import fs from "fs";
 
 dotenv.config({ path: path.resolve(process.cwd(), ".env") });
+const CONFIG_FILE = path.resolve(process.cwd(), "runtime-config.json");
 
 console.log("ENV CHECK:", {
   ALPACA_KEY: process.env.ALPACA_KEY ? "FOUND" : "MISSING",
