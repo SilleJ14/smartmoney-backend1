@@ -124,6 +124,7 @@ const CONFIG = {
 
   moversTop: Number(process.env.MOVERS_TOP || 50),
   minVolume: Number(process.env.MIN_VOLUME || 25000),
+  minScanVolume: Number(process.env.MIN_SCAN_VOLUME || 500000),
   maxPercentChange: Number(process.env.MAX_PERCENT_CHANGE || 60),
   maxSignalsToReturn: Number(process.env.MAX_SIGNALS_TO_RETURN || 40),
 
@@ -648,9 +649,12 @@ function passesQualityFilters(q) {
   }
 
   // 🔥 LIQUIDITY FILTER (CRITICAL)
-  if (q.volume < 500000) {
-    return { ok: false, reason: "Low volume (<500k)" };
-  }
+  if (q.volume < CONFIG.minScanVolume) {
+  return {
+    ok: false,
+    reason: `Low volume (<${CONFIG.minScanVolume})`,
+  };
+}
 
   // 🔥 REMOVE DEAD / SLOW STOCKS
   if (Math.abs(q.percentChange) < 0.5) {
@@ -933,6 +937,8 @@ async function getAiEntryScores() {
 }
 
 async function getTopMovers() {
+  let moverSymbols = [];
+
   try {
     const top = Math.min(Math.max(CONFIG.moversTop, 1), 100);
 
@@ -943,21 +949,29 @@ async function getTopMovers() {
     const gainers = Array.isArray(data.gainers) ? data.gainers : [];
     const losers = Array.isArray(data.losers) ? data.losers : [];
 
-    const symbols = [...gainers, ...losers]
+    moverSymbols = [...gainers, ...losers]
       .map((item) => item.symbol)
       .filter(Boolean)
+      .map(normalizeSymbol)
       .filter(isNormalStockSymbol);
 
-    const uniqueSymbols = [...new Set(symbols)];
+    moverSymbols = [...new Set(moverSymbols)];
 
-    if (uniqueSymbols.length > 0) {
-      return uniqueSymbols;
-    }
-
-    console.log("No Alpaca movers found. Using Alpaca assets fallback...");
+    console.log(`Alpaca movers found: ${moverSymbols.length}`);
   } catch (err) {
     console.log("Alpaca movers failed. Using assets fallback:", err.message);
   }
+
+  const minSymbolsNeeded = Number(process.env.MIN_SYMBOLS_NEEDED || 150);
+  const maxAssetsFallback = Number(process.env.MAX_ASSETS_FALLBACK || 300);
+
+  if (moverSymbols.length >= minSymbolsNeeded) {
+    return moverSymbols;
+  }
+
+  console.log(
+    `Only ${moverSymbols.length} movers found. Adding Alpaca assets fallback...`
+  );
 
   const assets = await alpacaTradingRequest(
     "/v2/assets?status=active&asset_class=us_equity"
@@ -967,18 +981,24 @@ async function getTopMovers() {
     .filter((asset) => asset.tradable === true)
     .filter((asset) => asset.fractionable === true)
     .map((asset) => asset.symbol)
+    .filter(Boolean)
+    .map(normalizeSymbol)
     .filter(isNormalStockSymbol)
-    .slice(0, 300);
+    .slice(0, maxAssetsFallback);
 
-  return [...new Set(fallbackSymbols)];
-}
+  const combinedSymbols = [...new Set([...moverSymbols, ...fallbackSymbols])];
 
+  console.log(`Combined scan symbols: ${combinedSymbols.length}`);
+
+  return combinedSymbols;
+}a
 async function scanMarket() {
-    const symbols = await getTopMovers();
+  const symbols = await getTopMovers();
 
-  // 🔥 LIMIT UNIVERSE (ADD THIS)
-  const limitedSymbols = symbols.slice(0, 150);
+  const maxSymbolsToScan = Number(process.env.MAX_SYMBOLS_TO_SCAN || 300);
 
+  // 🔥 Dynamic scan size from Render env
+  const limitedSymbols = symbols.slice(0, maxSymbolsToScan);
   const results = [];
 
   engineState.skippedSymbols = [];
@@ -1928,7 +1948,11 @@ app.get("/debug", async (req, res) => {
   try {
     const account = await getAccount();
     const clock = await getClock();
-    const movers = await getTopMovers();
+
+    const symbols = await getTopMovers();
+    const maxSymbolsToScan = Number(process.env.MAX_SYMBOLS_TO_SCAN || 300);
+    const limitedSymbols = symbols.slice(0, maxSymbolsToScan);
+
     const positions = await getPositions();
     const aiOwnedSymbols = await getAiOwnedSymbols();
 
@@ -1940,8 +1964,16 @@ app.get("/debug", async (req, res) => {
       ok: true,
       accountStatus: account.status,
       marketOpen: clock.is_open,
-      moversCount: movers.length,
-      firstMovers: movers.slice(0, 30),
+
+      symbolsCount: symbols.length,
+      maxSymbolsToScan,
+      symbolsThatWouldScan: limitedSymbols.length,
+      firstSymbols: limitedSymbols.slice(0, 30),
+
+      lastSignalsCount: engineState.lastSignals.length,
+      skippedSymbolsCount: engineState.skippedSymbols.length,
+      recentSkippedSymbols: engineState.skippedSymbols.slice(0, 20),
+
       config: CONFIG,
       risk: {
         equity: Number(account.equity || 0),
