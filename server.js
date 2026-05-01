@@ -991,7 +991,7 @@ async function getTopMovers() {
   console.log(`Combined scan symbols: ${combinedSymbols.length}`);
 
   return combinedSymbols;
-}a
+}
 async function scanMarket() {
   const symbols = await getTopMovers();
 
