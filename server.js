@@ -103,7 +103,7 @@ const CONFIG = {
   minStockPrice: Number(process.env.MIN_STOCK_PRICE || 1),
   maxStockPrice: 0,
 
-  minScoreToBuy: Number(process.env.MIN_SCORE_TO_BUY || 85),
+  minScoreToBuy: Number(process.env.MIN_SCORE_TO_BUY || 80),
   replaceWeakestMinScoreGap: Number(process.env.REPLACE_SCORE_GAP || 5),
 
   maxBotExposurePercent: Number(process.env.MAX_BOT_EXPOSURE_PERCENT || 5),
