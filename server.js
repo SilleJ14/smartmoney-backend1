@@ -133,7 +133,7 @@ const CONFIG = {
   topAutoTradeCandidates: Number(process.env.TOP_AUTO_TRADE_CANDIDATES || 5),
 
   // ADVANCED FILTERS (FIXED)
-  enableAdvancedFilters: process.env.ENABLE_ADVANCED_FILTERS === "true",
+  enableAdvancedFilters: process.env.ENABLE_ADVANCED_FILTERS === "false",
   minVolumeSpikeRatio: Number(process.env.MIN_VOLUME_SPIKE_RATIO || 0.5),
   minCloseNearHighPercent: Number(process.env.MIN_CLOSE_NEAR_HIGH_PERCENT || 35),
   fakeBreakoutMaxHighPullbackPercent: Number(
@@ -144,7 +144,7 @@ const CONFIG = {
   // 🔥 IMPORTANT FIX
   requireAboveVwap: process.env.REQUIRE_ABOVE_VWAP === "true",
 
-  enableNewsRiskFilter: process.env.ENABLE_NEWS_RISK_FILTER === "true",
+  enableNewsRiskFilter: process.env.ENABLE_NEWS_RISK_FILTER === "false",
   newsLookbackDays: Number(process.env.NEWS_LOOKBACK_DAYS || 3),
 };
 
