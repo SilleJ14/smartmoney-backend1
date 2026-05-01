@@ -974,7 +974,7 @@ async function getTopMovers() {
 }
 
 async function scanMarket() {
-  const symbols = await getTopMovers();
+    const symbols = await getTopMovers();
 
   // 🔥 LIMIT UNIVERSE (ADD THIS)
   const limitedSymbols = symbols.slice(0, 150);
@@ -2122,15 +2122,12 @@ app.get("/config", (req, res) => {
     config: CONFIG,
   });
 });
-app.get("/config", (req, res) => {
-  res.json({
-    message: "Current remote config",
-    config: CONFIG,
-  });
-});
+
 
 app.post("/config", (req, res) => {
   const allowedConfigKeys = [
+    "minStockPrice",
+"maxStockPrice",
     "minScoreToBuy",
     "maxBotExposurePercent",
     "stopLossPercent",
