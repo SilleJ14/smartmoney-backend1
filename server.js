@@ -126,7 +126,7 @@ const CONFIG = {
 
   moversTop: Number(process.env.MOVERS_TOP || 50),
   minVolume: Number(process.env.MIN_VOLUME || 25000),
-  minScanVolume: Number(process.env.MIN_SCAN_VOLUME || 30000),
+  minScanVolume: Number(process.env.MIN_SCAN_VOLUME || 25000),
   maxPercentChange: Number(process.env.MAX_PERCENT_CHANGE || 60),
   maxSignalsToReturn: Number(process.env.MAX_SIGNALS_TO_RETURN || 40),
 
