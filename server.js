@@ -199,13 +199,31 @@ let engineState = {
   tradeMemory: {},
   aiEntryScores: {},
 
-  runnerPositions: {},
+   runnerPositions: {},
   lastSoldAt: {},
   peaksByMode: {},
+  cachedPositions: [],
 };
 
 const sellingNow = new Set();
 const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
+async function runInBatches(items, batchSize, worker) {
+  const results = [];
+
+  for (let i = 0; i < items.length; i += batchSize) {
+    const batch = items.slice(i, i + batchSize);
+
+    const batchResults = await Promise.all(
+      batch.map((item) => worker(item))
+    );
+
+    results.push(...batchResults.filter(Boolean));
+
+    await sleep(500);
+  }
+
+  return results;
+}
 function updateAccountPeaks(account) {
   const mode = TRADING_MODE || "paper_stock";
   const equity = Number(account?.equity || 0);
@@ -316,7 +334,7 @@ function getBotExposure(openPositions = []) {
   }, 0);
 }
 
-function getDynamicTradeAmount(account, openBotPositions = []) {
+function getDynamicTradeAmount(account, openBotPositions = [], signalScore = 80) {
   const cash = Number(account?.cash || 0);
   const equity = Number(account?.equity || 0);
   const buyingPower = Number(account?.buying_power || 0);
@@ -330,10 +348,20 @@ function getDynamicTradeAmount(account, openBotPositions = []) {
   if (remainingBotBudget <= 0) return 0;
 
   const perTradeMax = maxBotBudget / CONFIG.maxOpenTrades;
+    const scoreMultiplier =
+    signalScore >= 95
+      ? 1
+      : signalScore >= 90
+      ? 0.8
+      : signalScore >= 85
+      ? 0.6
+      : 0.4;
 
-  return Math.max(
+  const scoreAdjustedTradeMax = perTradeMax * scoreMultiplier;
+
+    return Math.max(
     1,
-    Math.min(perTradeMax, remainingBotBudget, cash, buyingPower || cash)
+    Math.min(scoreAdjustedTradeMax, remainingBotBudget, cash, buyingPower || cash)
   );
 }
 
@@ -641,9 +669,13 @@ async function getAdvancedConfirmations(q) {
   const closeNearHigh =
     closeNearHighPercent >= CONFIG.minCloseNearHighPercent;
 
+
   const fakeBreakout =
     q.percentChange > 5 &&
-    pullbackFromHighPercent > CONFIG.fakeBreakoutMaxHighPullbackPercent;
+    pullbackFromHighPercent >
+      (engineState.marketOpen
+        ? CONFIG.fakeBreakoutMaxHighPullbackPercent * 1.5
+        : CONFIG.fakeBreakoutMaxHighPullbackPercent);
 
   const gapTooHigh = gapUpPercent > CONFIG.maxGapUpPercent;
 
@@ -760,6 +792,21 @@ function passesQualityFilters(q) {
 
   if (q.previousClose > 0 && q.current < q.previousClose) {
     return { ok: false, reason: "Below previous close" };
+  }
+    const marketIsOpen = engineState.marketOpen === true;
+
+  if (!marketIsOpen && q.percentChange > 25) {
+    return {
+      ok: false,
+      reason: `After-hours move too extended: ${q.percentChange.toFixed(2)}%`,
+    };
+  }
+
+  if (!marketIsOpen && q.confirmations?.pullbackFromHighPercent > 1.5) {
+    return {
+      ok: false,
+      reason: `After-hours pullback risk: ${q.confirmations.pullbackFromHighPercent}%`,
+    };
   }
 
    if (CONFIG.enableAdvancedFilters && q.confirmations) {
@@ -1082,58 +1129,59 @@ async function scanMarket() {
 
   // 🔥 Dynamic scan size from Render env
   const limitedSymbols = symbols.slice(0, maxSymbolsToScan);
-  const results = [];
 
   engineState.skippedSymbols = [];
 
   console.log(`Scanning ${limitedSymbols.length} of ${symbols.length} symbols...`);
   console.log("Advanced filters enabled:", CONFIG.enableAdvancedFilters);
 
-  for (const symbol of limitedSymbols) {
-    await sleep(1200);
+   const batchSize = 5; // safe for now (can increase later)
+
+  const results = await runInBatches(limitedSymbols, batchSize, async (symbol) => {
     try {
       const assetCheck = await isAssetBuyEligible(symbol);
 
       if (!assetCheck.ok) {
         saveSkippedSymbol(symbol, assetCheck.reason);
-        continue;
+        return null;
       }
-const quote = await finnhubQuote(symbol);
 
-const bars = await getRecentBars(symbol, "5Min", 30);
-const barStats = calculateBarStats(bars);
+      const quote = await finnhubQuote(symbol);
 
-quote.volume = Math.max(
-  Number(quote.volume || 0),
-  Number(barStats.lastVolume || 0)
-);
+      const bars = await getRecentBars(symbol, "5Min", 30);
+      const barStats = calculateBarStats(bars);
 
-quote.barVolume = Number(barStats.lastVolume || 0);
-quote.avgBarVolume = Math.round(Number(barStats.avgVolume || 0));
+      quote.volume = Math.max(
+        Number(quote.volume || 0),
+        Number(barStats.lastVolume || 0)
+      );
 
-if (CONFIG.enableAdvancedFilters) {
-  console.log("ADVANCED FILTER RUNNING:", symbol);
-  quote.confirmations = await getAdvancedConfirmations(quote);
-}
+      quote.barVolume = Number(barStats.lastVolume || 0);
+      quote.avgBarVolume = Math.round(Number(barStats.avgVolume || 0));
+
+      if (CONFIG.enableAdvancedFilters) {
+        quote.confirmations = await getAdvancedConfirmations(quote);
+      }
+
       const quality = passesQualityFilters(quote);
 
       if (!quality.ok) {
         saveSkippedSymbol(symbol, quality.reason);
-        continue;
+        return null;
       }
 
       const score = scoreStock(quote);
 
-      results.push({
+      return {
         ...quote,
         score,
         qualifiedToBuy: score >= CONFIG.minScoreToBuy,
-      });
+      };
     } catch (err) {
       saveSkippedSymbol(symbol, err.message);
-      console.log(`Skipped ${symbol}: ${err.message}`);
+      return null;
     }
-  }
+  });
 
   console.log(`Scan finished. Found ${results.length} stocks.`);
 
@@ -1412,7 +1460,7 @@ async function executePendingExits() {
 }
 
 async function autoExitPositions(marketOpen) {
-  const positions = await getPositions();
+    const positions = engineState.cachedPositions || (await getPositions());
   const aiOwnedSymbols = await getAiOwnedSymbols();
 
   for (const pos of positions) {
@@ -1464,11 +1512,20 @@ async function autoExitPositions(marketOpen) {
     const isRunner = Boolean(engineState.runnerPositions[symbol]);
 
     const shouldStopLoss = unrealizedPercent <= -CONFIG.stopLossPercent;
+    const shouldProtectProfit =
+      unrealizedPercent >= 2 &&
+      dropFromHigh >= 0.8;
+const shouldStopLoss = unrealizedPercent <= -CONFIG.stopLossPercent;
 
-    const shouldNormalTrailingExit =
-      !isRunner &&
-      unrealizedPercent > 0 &&
-      dropFromHigh >= CONFIG.trailingStopPercent;
+const shouldProtectProfit =
+  !isRunner &&
+  unrealizedPercent >= 2 &&
+  dropFromHigh >= 0.8;
+
+const shouldNormalTrailingExit =
+  !isRunner &&
+  unrealizedPercent > 0 &&
+  dropFromHigh >= CONFIG.trailingStopPercent;
 
         const dynamicRunnerTrailingStopPercent =
       unrealizedPercent >= 15
@@ -1479,8 +1536,9 @@ async function autoExitPositions(marketOpen) {
 
     const shouldRunnerTrailingExit =
       isRunner && dropFromHigh >= dynamicRunnerTrailingStopPercent;
-    if (
+       if (
       !shouldStopLoss &&
+      !shouldProtectProfit &&
       !shouldNormalTrailingExit &&
       !shouldRunnerTrailingExit
     ) {
@@ -1489,8 +1547,9 @@ async function autoExitPositions(marketOpen) {
 
     let reason = "AI_EXIT";
 
-    if (shouldStopLoss) reason = "STOP_LOSS";
+        if (shouldStopLoss) reason = "STOP_LOSS";
     else if (shouldRunnerTrailingExit) reason = "RUNNER_TRAILING_STOP";
+    else if (shouldProtectProfit) reason = "PROFIT_PROTECTION";
     else if (shouldNormalTrailingExit) reason = "TRAILING_STOP";
 
     if (!marketOpen) {
@@ -1690,15 +1749,20 @@ async function replaceWeakestIfBetter(signals, positions, aiOwnedSymbols) {
 
     setTimeout(async () => {
       try {
-        const account = await getAccount();
-        const freshPositions = await getPositions();
+        const account = engineState.cachedAccount || (await getAccount());
+        const freshPositions =
+          engineState.cachedPositions || (await getPositions());
         const freshAiOwnedSymbols = await getAiOwnedSymbols();
 
         const freshAiPositions = freshPositions.filter((p) =>
           freshAiOwnedSymbols.has(normalizeSymbol(p.symbol))
         );
 
-        const tradeAmount = getDynamicTradeAmount(account, freshAiPositions);
+   const tradeAmount = getDynamicTradeAmount(
+   account,
+   freshAiPositions,
+   topCandidate.score
+ );
 
         if (tradeAmount <= 0) {
           saveFailedOrder(
@@ -1763,11 +1827,28 @@ async function autoBuySignals(signals) {
   const buyCandidates = signals
     .filter((s) => s.score >= CONFIG.minScoreToBuy)
     .filter((s) => s.qualifiedToBuy === true)
+    .filter((s) => Number(s.percentChange || 0) >= 1.5)
+    .filter((s) => Number(s.percentChange || 0) <= 25)
+    .filter((s) => s.confirmations?.fakeBreakout !== true)
+    .filter((s) => s.confirmations?.gapTooHigh !== true)
     .filter((s) => !openSymbols.has(normalizeSymbol(s.symbol)))
     .filter((s) => isNormalStockSymbol(s.symbol))
+    .sort((a, b) => Number(b.score || 0) - Number(a.score || 0))
     .slice(0, Math.min(openSlots, CONFIG.topAutoTradeCandidates));
 
 for (const stock of buyCandidates) {
+    const pullback = Number(
+    stock.confirmations?.pullbackFromHighPercent || 0
+  );
+
+  // Skip weak pullbacks
+  if (pullback > 3) {
+    saveRecentOrder("BUY_SKIPPED_PULLBACK", stock.symbol, {
+      pullback,
+      message: "Skipped — too much pullback from high",
+    });
+    continue;
+  }
   const symbol = normalizeSymbol(stock.symbol);
 
   // 🧠 STOCK TRADE MEMORY FILTER
@@ -1792,17 +1873,21 @@ for (const stock of buyCandidates) {
     });
     continue;
   }
-
   try {
-    const account = await getAccount();
-    const freshPositions = await getPositions();
+    const account = engineState.cachedAccount || (await getAccount());
+    const freshPositions =
+      engineState.cachedPositions || (await getPositions());
     const freshAiOwnedSymbols = await getAiOwnedSymbols();
 
     const freshAiPositions = freshPositions.filter((p) =>
       freshAiOwnedSymbols.has(normalizeSymbol(p.symbol))
     );
 
-    const tradeAmount = getDynamicTradeAmount(account, freshAiPositions);
+  const tradeAmount = getDynamicTradeAmount(
+    account,
+    freshAiPositions,
+    stock.score
+  );
 
     if (tradeAmount <= 0) {
       saveFailedOrder(
@@ -2037,6 +2122,8 @@ async function engineTick() {
 
   engineState.running = true;
   engineState.lastError = null;
+  engineState.cachedPositions = await getPositions();
+  engineState.cachedAccount = await getAccount();
 
   try {
     const { key, secret } = getAlpacaKeys();
