@@ -762,17 +762,18 @@ function passesQualityFilters(q) {
     return { ok: false, reason: "Below previous close" };
   }
 
-  if (CONFIG.enableAdvancedFilters && q.confirmations) {
-        if (
-      !q.confirmations.volumeSpike &&
-      q.confirmations.barsFound > 0
-    ) {
+   if (CONFIG.enableAdvancedFilters && q.confirmations) {
+    const hasValidVolumeData =
+      q.confirmations.barsFound > 0 &&
+      q.confirmations.volumeSpikeRatio > 0;
+
+    // Only enforce volume rule if data is valid
+    if (hasValidVolumeData && !q.confirmations.volumeSpike) {
       return {
         ok: false,
         reason: `No volume spike. Ratio: ${q.confirmations.volumeSpikeRatio}`,
       };
     }
-
     if (CONFIG.requireAboveVwap && !q.confirmations.aboveVwap) {
       return { ok: false, reason: "Below VWAP confirmation" };
     }
