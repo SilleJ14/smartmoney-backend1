@@ -651,12 +651,12 @@ function passesQualityFilters(q) {
   }
 
   // 🔥 LIQUIDITY FILTER (CRITICAL)
-  if (q.volume < CONFIG.minScanVolume) {
+ if (CONFIG.minScanVolume > 0 && q.volume < CONFIG.minScanVolume) {
   return {
     ok: false,
     reason: `Low volume (<${CONFIG.minScanVolume})`,
   };
-}
+
 
   // 🔥 REMOVE DEAD / SLOW STOCKS
   if (Math.abs(q.percentChange) < 0.5) {
