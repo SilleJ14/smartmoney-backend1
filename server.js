@@ -1479,22 +1479,25 @@ async function autoExitCryptoPositions() {
     const dropFromHigh =
       highWater > 0 ? ((highWater - currentPrice) / highWater) * 100 : 0;
 
-    const TAKE_PROFIT = 3;
-    const STOP_LOSS = -1;
-    const TRAILING_STOP = 1;
+const TAKE_PROFIT_ACTIVATE = 3;
+const HARD_STOP_LOSS = -1.2;
+const TRAILING_STOP = 1;
+const MIN_PROFIT_TO_TRAIL = 1.5;
 
-    const shouldTakeProfit = profitPercent >= TAKE_PROFIT;
-    const shouldStopLoss = profitPercent <= STOP_LOSS;
-    const shouldTrailingStop =
-      profitPercent > 0 && dropFromHigh >= TRAILING_STOP;
+const trailingActive = profitPercent >= TAKE_PROFIT_ACTIVATE;
+const shouldStopLoss = profitPercent <= HARD_STOP_LOSS;
+const shouldTrailingStop =
+  trailingActive &&
+  profitPercent >= MIN_PROFIT_TO_TRAIL &&
+  dropFromHigh >= TRAILING_STOP;
 
-    if (!shouldTakeProfit && !shouldStopLoss && !shouldTrailingStop) continue;
+if (!shouldStopLoss && !shouldTrailingStop) continue;
 
     let reason = "CRYPTO_EXIT";
 
     if (shouldStopLoss) reason = "CRYPTO_STOP_LOSS";
     else if (shouldTrailingStop) reason = "CRYPTO_TRAILING_STOP";
-    else if (shouldTakeProfit) reason = "CRYPTO_TAKE_PROFIT";
+  
 
     try {
       const order = await placeCryptoMarketSell(symbol, qty, reason);
@@ -1667,6 +1670,49 @@ async function autoBuySignals(signals) {
     .slice(0, Math.min(openSlots, CONFIG.topAutoTradeCandidates));
 
   for (const stock of buyCandidates) {
+    const symbol = normalizeSymbol(stock.symbol);
+
+// 🧠 COOLDOWN PROTECTION — no rebuy for 30 minutes after selling
+const lastSoldAt = Number(engineState.lastSoldAt?.[symbol] || 0);
+const minutesSinceSold = lastSoldAt
+  ? (Date.now() - lastSoldAt) / 1000 / 60
+  : Infinity;
+
+if (minutesSinceSold < 30) {
+  saveRecentOrder("CRYPTO_BUY_SKIPPED_COOLDOWN", symbol, {
+    minutesSinceSold: Number(minutesSinceSold.toFixed(1)),
+    message: "Skipped crypto rebuy during cooldown.",
+  });
+  continue;
+}
+
+// 🧠 LIQUID COIN FILTER
+const allowedCryptoSymbols = new Set([
+  "BTCUSD",
+  "ETHUSD",
+  "SOLUSD",
+  "DOGEUSD",
+  "ADAUSD",
+  "AVAXUSD",
+  "LINKUSD",
+  "LTCUSD",
+]);
+
+if (!allowedCryptoSymbols.has(symbol)) {
+  saveRecentOrder("CRYPTO_BUY_SKIPPED_SYMBOL_FILTER", symbol, {
+    message: "Skipped low-quality crypto pair.",
+  });
+  continue;
+}
+
+// 🧠 STRONGER CRYPTO ENTRY FILTER
+if (stock.score < 85) {
+  saveRecentOrder("CRYPTO_BUY_SKIPPED_LOW_SCORE", symbol, {
+    score: stock.score,
+    message: "Score too weak for crypto mode.",
+  });
+  continue;
+}
     try {
       const account = await getAccount();
       const freshPositions = await getPositions();
