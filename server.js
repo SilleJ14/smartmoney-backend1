@@ -1017,10 +1017,9 @@ async function scanMarket() {
         saveSkippedSymbol(symbol, assetCheck.reason);
         continue;
       }
+const quote = await finnhubQuote(symbol);
 
-      const quote = await finnhubQuote(symbol);
-
-      const bars = await getRecentBars(symbol, "5Min", 30);
+const bars = await getRecentBars(symbol, "5Min", 30);
 const barStats = calculateBarStats(bars);
 
 quote.volume = Math.max(
