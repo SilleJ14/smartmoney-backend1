@@ -161,7 +161,8 @@ const CONFIG = {
   topAutoTradeCandidates: Number(process.env.TOP_AUTO_TRADE_CANDIDATES || 5),
 
   // ADVANCED FILTERS (FIXED)
-  enableAdvancedFilters: process.env.ENABLE_ADVANCED_FILTERS === "false",
+    // ADVANCED FILTERS
+  enableAdvancedFilters: process.env.ENABLE_ADVANCED_FILTERS !== "false",
   minVolumeSpikeRatio: Number(process.env.MIN_VOLUME_SPIKE_RATIO || 0.5),
   minCloseNearHighPercent: Number(process.env.MIN_CLOSE_NEAR_HIGH_PERCENT || 35),
   fakeBreakoutMaxHighPullbackPercent: Number(
@@ -172,7 +173,7 @@ const CONFIG = {
   // 🔥 IMPORTANT FIX
   requireAboveVwap: process.env.REQUIRE_ABOVE_VWAP === "true",
 
-  enableNewsRiskFilter: process.env.ENABLE_NEWS_RISK_FILTER === "false",
+   enableNewsRiskFilter: process.env.ENABLE_NEWS_RISK_FILTER === "true",
   newsLookbackDays: Number(process.env.NEWS_LOOKBACK_DAYS || 3),
 };
 
@@ -1442,6 +1443,12 @@ async function autoExitPositions(marketOpen) {
       };
 
       saveRecentOrder("RUNNER_ACTIVATED", symbol, {
+       dynamicRunnerTrailingStopPercent:
+        unrealizedPercent >= 15
+         ? 2
+         : unrealizedPercent >= 10
+         ? 1.5
+        : CONFIG.runnerTrailingStopPercent,
         qty,
         price: currentPrice,
         profitPercent: unrealizedPercent,
@@ -1459,9 +1466,15 @@ async function autoExitPositions(marketOpen) {
       unrealizedPercent > 0 &&
       dropFromHigh >= CONFIG.trailingStopPercent;
 
-    const shouldRunnerTrailingExit =
-      isRunner && dropFromHigh >= CONFIG.runnerTrailingStopPercent;
+        const dynamicRunnerTrailingStopPercent =
+      unrealizedPercent >= 15
+        ? 2
+        : unrealizedPercent >= 10
+        ? 1.5
+        : CONFIG.runnerTrailingStopPercent;
 
+    const shouldRunnerTrailingExit =
+      isRunner && dropFromHigh >= dynamicRunnerTrailingStopPercent;
     if (
       !shouldStopLoss &&
       !shouldNormalTrailingExit &&
@@ -1486,6 +1499,7 @@ async function autoExitPositions(marketOpen) {
       });
 
       saveRecentOrder("EXIT_PENDING_MARKET_CLOSED", symbol, {
+        dynamicRunnerTrailingStopPercent,
         qty,
         price: currentPrice,
         highWater,
@@ -1502,6 +1516,7 @@ async function autoExitPositions(marketOpen) {
       const order = await placeMarketSell(symbol, qty, reason);
 
  saveRecentOrder(reason, symbol, {
+  dynamicRunnerTrailingStopPercent,
   qty,
   price: currentPrice,
   highWater,
@@ -1521,6 +1536,7 @@ rememberTradeResult(symbol, {
       delete engineState.runnerPositions[symbol];
     } catch (err) {
       saveFailedOrder(`${reason}_FAILED`, symbol, err.message, {
+        dynamicRunnerTrailingStopPercent,
         qty,
         price: currentPrice,
         highWater,
