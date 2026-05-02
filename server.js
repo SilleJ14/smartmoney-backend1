@@ -536,14 +536,15 @@ async function getNewsRisk(symbol) {
           : "No major risky news detected",
       headlines: riskyNews.slice(0, 3).map((item) => item.headline),
     };
-  } catch {
-    return {
-      risk: false,
-      reason: "News check error, allowed",
-      headlines: [],
-    };
-  }
-}async function getAdvancedConfirmations(q) {
+ } catch {
+  return {
+    risk: false,
+    reason: "News check error, allowed",
+    headlines: [],
+  };
+}
+}
+async function getAdvancedConfirmations(q) {
   const bars = await getRecentBars(q.symbol, "5Min", 30);
   const stats = calculateBarStats(bars);
 
@@ -644,30 +645,31 @@ if (q.volume >= 1000000) score += 10; // strong liquidity = institutions
 
   return Math.min(100, Math.max(0, Math.round(score)));
 }
-
 function passesQualityFilters(q) {
   if (!q.current || q.current <= 0) {
     return { ok: false, reason: "No valid price" };
   }
 
-  // 🔥 LIQUIDITY FILTER (CRITICAL)
+  // 🔥 LIQUIDITY FILTER
  if (CONFIG.minScanVolume > 0 && q.volume < CONFIG.minScanVolume) {
   return {
     ok: false,
     reason: `Low volume (<${CONFIG.minScanVolume})`,
   };
-
+}
 
   // 🔥 REMOVE DEAD / SLOW STOCKS
   if (Math.abs(q.percentChange) < 0.5) {
     return { ok: false, reason: "No meaningful movement" };
   }
+
   if (
-  q.current < CONFIG.minStockPrice ||
-  (CONFIG.maxStockPrice > 0 && q.current > CONFIG.maxStockPrice)
-) {
-  return { ok: false, reason: `Price outside range: $${q.current}` };
-}
+    q.current < CONFIG.minStockPrice ||
+    (CONFIG.maxStockPrice > 0 && q.current > CONFIG.maxStockPrice)
+  ) {
+    return { ok: false, reason: `Price outside range: $${q.current}` };
+  }
+
   if (q.percentChange <= 0) {
     return { ok: false, reason: "No positive momentum" };
   }
@@ -729,6 +731,7 @@ function passesQualityFilters(q) {
   }
 
   return { ok: true };
+}
 async function getAccount() {
   return alpacaTradingRequest("/v2/account");
 }
@@ -738,7 +741,9 @@ async function getPositions() {
 }
 
 async function getOrders() {
-  return alpacaTradingRequest("/v2/orders?status=all&limit=100&direction=desc");
+  return alpacaTradingRequest(
+    "/v2/orders?status=all&limit=100&direction=desc"
+  );
 }
 // ===== CRYPTO FUNCTIONS START =====
 
