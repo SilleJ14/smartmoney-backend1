@@ -729,7 +729,7 @@ function passesQualityFilters(q) {
   }
 
   return { ok: true };
-}async function getAccount() {
+async function getAccount() {
   return alpacaTradingRequest("/v2/account");
 }
 
