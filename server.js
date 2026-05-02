@@ -902,10 +902,9 @@ function scoreCrypto(quote, bars = []) {
 }
 
 async function scanCryptoMarket() {
-  if (TRADING_MODE !== "live_crypto") {
-    throw new Error("Crypto scanner is only available in live_crypto mode");
-  }
-
+ if (TRADING_MODE !== "live_crypto" && TRADING_MODE !== "live_stock") {
+  throw new Error("Crypto scanner is only available in live modes");
+}
   const symbols = await getCryptoAssets();
   const results = [];
 
@@ -932,9 +931,9 @@ async function scanCryptoMarket() {
 }
 
 async function placeCryptoMarketBuy(symbol, dollars) {
-  if (TRADING_MODE !== "live_crypto") {
-    throw new Error("Crypto buying is only allowed in live_crypto mode");
-  }
+ if (TRADING_MODE !== "live_crypto" && TRADING_MODE !== "live_stock") {
+  throw new Error("Crypto buying is only allowed in live modes");
+}
 
   return alpacaTradingRequest("/v2/orders", {
     method: "POST",
@@ -952,9 +951,9 @@ async function placeCryptoMarketBuy(symbol, dollars) {
 }
 
 async function placeCryptoMarketSell(symbol, qty, reason = "CRYPTO_EXIT") {
-  if (TRADING_MODE !== "live_crypto") {
-    throw new Error("Crypto selling is only allowed in live_crypto mode");
-  }
+  if (TRADING_MODE !== "live_crypto" && TRADING_MODE !== "live_stock") {
+  throw new Error("Crypto selling is only allowed in live modes");
+}
 
   return alpacaTradingRequest("/v2/orders", {
     method: "POST",
@@ -1533,7 +1532,7 @@ rememberTradeResult(symbol, {
   }
 }
 async function autoExitCryptoPositions() {
-  if (TRADING_MODE !== "live_crypto") return;
+  if (TRADING_MODE !== "live_crypto" && TRADING_MODE !== "live_stock") return;
 
   const positions = await getPositions();
 
@@ -1906,7 +1905,7 @@ async function rotateWeakCryptoIfBetter(signals, positions) {
 // ===== CRYPTO AUTO BUY START =====
 
 async function autoBuyCryptoSignals(signals) {
-  if (TRADING_MODE !== "live_crypto") return;
+ if (TRADING_MODE !== "live_crypto" && TRADING_MODE !== "live_stock") return;
 
   const account = await getAccount();
   const positions = await getPositions();
@@ -2040,29 +2039,51 @@ async function engineTick() {
 
 await autoExitPositions(marketOpen);
 
-if (TRADING_MODE === "live_crypto") {
+const cryptoEnabled =
+  TRADING_MODE === "live_crypto" || TRADING_MODE === "live_stock";
+
+if (cryptoEnabled) {
   await autoExitCryptoPositions();
 }
 
-const signals =
-  TRADING_MODE === "live_crypto"
-    ? await scanCryptoMarket()
-    : await scanMarket();
+let stockSignals = [];
+let cryptoSignals = [];
+
+if (TRADING_MODE === "live_crypto") {
+  cryptoSignals = await scanCryptoMarket();
+} else if (TRADING_MODE === "live_stock") {
+  if (marketOpen) {
+    stockSignals = await scanMarket();
+  }
+
+  cryptoSignals = await scanCryptoMarket();
+} else {
+  stockSignals = await scanMarket();
+}
+
+const signals = [...stockSignals, ...cryptoSignals];
 
 engineState.lastSignals = signals;
+engineState.lastStockSignals = stockSignals;
+engineState.lastCryptoSignals = cryptoSignals;
 engineState.lastScanAt = new Date().toISOString();
 
 if (
   autoTradingEnabled &&
   !engineState.dailyLossLocked &&
   !engineState.profitLocked &&
-  !riskLocked &&
-  (marketOpen || TRADING_MODE === "live_crypto")
+  !riskLocked
 ) {
   if (TRADING_MODE === "live_crypto") {
-    await autoBuyCryptoSignals(signals);
-  } else {
-    await autoBuySignals(signals);
+    await autoBuyCryptoSignals(cryptoSignals);
+  } else if (TRADING_MODE === "live_stock") {
+    if (marketOpen) {
+      await autoBuySignals(stockSignals);
+    }
+
+    await autoBuyCryptoSignals(cryptoSignals);
+  } else if (marketOpen) {
+    await autoBuySignals(stockSignals);
   }
 }
 
@@ -2258,9 +2279,38 @@ app.get("/orders", async (req, res) => {
   try {
     const orders = await getOrders();
 
+    const aiOrders = orders.filter(isAiOrder);
+
+    const activeStatuses = new Set([
+      "new",
+      "accepted",
+      "pending_new",
+      "partially_filled",
+      "pending_replace",
+      "pending_cancel",
+    ]);
+
+    const closedStatuses = new Set([
+      "filled",
+      "canceled",
+      "expired",
+      "rejected",
+      "replaced",
+    ]);
+
+    const activeOrders = aiOrders.filter((order) =>
+      activeStatuses.has(String(order.status || "").toLowerCase())
+    );
+
+    const closedOrders = aiOrders.filter((order) =>
+      closedStatuses.has(String(order.status || "").toLowerCase())
+    );
+
     res.json({
       alpacaOrders: orders,
-      aiAlpacaOrders: orders.filter(isAiOrder),
+      aiAlpacaOrders: aiOrders,
+      activeOrders,
+      closedOrders,
       backendOrders: engineState.recentOrders,
       failedOrders: engineState.failedOrders,
       pendingExits: engineState.pendingExits,
@@ -2270,7 +2320,6 @@ app.get("/orders", async (req, res) => {
     res.status(500).json({ error: err.message });
   }
 });
-
 app.post("/scan-now", async (req, res) => {
   await engineTick();
 
