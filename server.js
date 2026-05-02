@@ -361,13 +361,13 @@ async function isAssetBuyEligible(symbol) {
       return { ok: false, reason: "Asset is not active" };
     }
 
-  //  if (asset.tradable !== true) {
-   //   return { ok: false, reason: "Asset is not tradable on Alpaca" };
-   // }
+   if (asset.tradable !== true) {
+    return { ok: false, reason: "Asset is not tradable on Alpaca" };
+   }
 
-    if (asset.fractionable !== true) {
-      return { ok: false, reason: "Asset is not fractionable" };
-    }
+   // if (asset.fractionable !== true) {
+    //  return { ok: false, reason: "Asset is not fractionable" };
+    //}
 
     return { ok: true, asset };
   } catch (err) {
@@ -964,8 +964,8 @@ async function getTopMovers() {
     console.log("Alpaca movers failed. Using assets fallback:", err.message);
   }
 
-  const minSymbolsNeeded = Number(process.env.MIN_SYMBOLS_NEEDED || 150);
-  const maxAssetsFallback = Number(process.env.MAX_ASSETS_FALLBACK || 300);
+  const minSymbolsNeeded = Number(process.env.MIN_SYMBOLS_NEEDED || 1);
+  const maxAssetsFallback = Number(process.env.MAX_ASSETS_FALLBACK || 0);
 
   if (moverSymbols.length >= minSymbolsNeeded) {
     return moverSymbols;
