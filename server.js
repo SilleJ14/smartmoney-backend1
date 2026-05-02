@@ -763,7 +763,10 @@ function passesQualityFilters(q) {
   }
 
   if (CONFIG.enableAdvancedFilters && q.confirmations) {
-    if (!q.confirmations.volumeSpike) {
+        if (
+      !q.confirmations.volumeSpike &&
+      q.confirmations.barsFound > 0
+    ) {
       return {
         ok: false,
         reason: `No volume spike. Ratio: ${q.confirmations.volumeSpikeRatio}`,
