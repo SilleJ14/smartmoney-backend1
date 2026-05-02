@@ -1020,11 +1020,21 @@ async function scanMarket() {
 
       const quote = await finnhubQuote(symbol);
 
-      if (CONFIG.enableAdvancedFilters) {
-        console.log("ADVANCED FILTER RUNNING:", symbol);
-        quote.confirmations = await getAdvancedConfirmations(quote);
-      }
+      const bars = await getRecentBars(symbol, "5Min", 30);
+const barStats = calculateBarStats(bars);
 
+quote.volume = Math.max(
+  Number(quote.volume || 0),
+  Number(barStats.lastVolume || 0)
+);
+
+quote.barVolume = Number(barStats.lastVolume || 0);
+quote.avgBarVolume = Math.round(Number(barStats.avgVolume || 0));
+
+if (CONFIG.enableAdvancedFilters) {
+  console.log("ADVANCED FILTER RUNNING:", symbol);
+  quote.confirmations = await getAdvancedConfirmations(quote);
+}
       const quality = passesQualityFilters(quote);
 
       if (!quality.ok) {
