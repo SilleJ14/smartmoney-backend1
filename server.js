@@ -167,6 +167,7 @@ let engineState = {
   marketOpen: false,
 
   highWaterMarks: {},
+  tradeMemory: {},
   aiEntryScores: {},
 
   runnerPositions: {},
@@ -215,7 +216,50 @@ function saveFailedOrder(type, symbol, reason, extra = {}) {
 
   engineState.failedOrders = engineState.failedOrders.slice(0, 100);
 }
+function rememberTradeResult(symbol, result) {
+  const normalized = normalizeSymbol(symbol);
 
+  if (!engineState.tradeMemory) {
+    engineState.tradeMemory = {};
+  }
+
+  const current = engineState.tradeMemory[normalized] || {
+    losses: 0,
+    wins: 0,
+    lastLossAt: 0,
+    lastWinAt: 0,
+    lastReason: "",
+  };
+
+  if (result.profitPercent < 0) {
+    current.losses += 1;
+    current.lastLossAt = Date.now();
+    current.lastReason = result.reason || "LOSS";
+  } else {
+    current.wins += 1;
+    current.lastWinAt = Date.now();
+    current.lastReason = result.reason || "WIN";
+  }
+
+  engineState.tradeMemory[normalized] = current;
+}
+
+function shouldSkipFromTradeMemory(symbol) {
+  const normalized = normalizeSymbol(symbol);
+  const memory = engineState.tradeMemory?.[normalized];
+
+  if (!memory) return false;
+
+  const minutesSinceLoss = memory.lastLossAt
+    ? (Date.now() - memory.lastLossAt) / 1000 / 60
+    : Infinity;
+
+  if (memory.losses >= 2 && minutesSinceLoss < 240) {
+    return true;
+  }
+
+  return false;
+}
 function saveRecentOrder(type, symbol, extra = {}) {
   engineState.recentOrders.unshift({
     type,
@@ -868,7 +912,7 @@ async function placeCryptoMarketBuy(symbol, dollars) {
     method: "POST",
     body: JSON.stringify({
       symbol: normalizeSymbol(symbol),
-      notional: Number(dollars.toFixed(2)),
+      notional: Math.max(25, Number(dollars.toFixed(2))),
       side: "buy",
       type: "market",
       time_in_force: "gtc",
@@ -1430,16 +1474,20 @@ async function autoExitPositions(marketOpen) {
     try {
       const order = await placeMarketSell(symbol, qty, reason);
 
-      saveRecentOrder(reason, symbol, {
-        qty,
-        price: currentPrice,
-        highWater,
-        dropFromHigh,
-        profitPercent: unrealizedPercent,
-        isRunner,
-        order,
-      });
+ saveRecentOrder(reason, symbol, {
+  qty,
+  price: currentPrice,
+  highWater,
+  dropFromHigh,
+  profitPercent: unrealizedPercent,
+  isRunner,
+  order,
+});
 
+rememberTradeResult(symbol, {
+  profitPercent: unrealizedPercent,
+  reason,
+});
       delete engineState.highWaterMarks[symbol];
       engineState.lastSoldAt[symbol] = Date.now();
       delete engineState.aiEntryScores[symbol];
@@ -1511,7 +1559,10 @@ if (!shouldStopLoss && !shouldTrailingStop) continue;
         reason,
         order,
       });
-
+rememberTradeResult(symbol, {
+  profitPercent,
+  reason,
+});
       delete engineState.highWaterMarks[symbol];
         engineState.lastSoldAt[symbol] = Date.now();
     } catch (err) {
@@ -1669,93 +1720,75 @@ async function autoBuySignals(signals) {
     .filter((s) => isNormalStockSymbol(s.symbol))
     .slice(0, Math.min(openSlots, CONFIG.topAutoTradeCandidates));
 
-  for (const stock of buyCandidates) {
-    const symbol = normalizeSymbol(stock.symbol);
+for (const stock of buyCandidates) {
+  const symbol = normalizeSymbol(stock.symbol);
 
-// 🧠 COOLDOWN PROTECTION — no rebuy for 30 minutes after selling
-const lastSoldAt = Number(engineState.lastSoldAt?.[symbol] || 0);
-const minutesSinceSold = lastSoldAt
-  ? (Date.now() - lastSoldAt) / 1000 / 60
-  : Infinity;
-
-if (minutesSinceSold < 30) {
-  saveRecentOrder("CRYPTO_BUY_SKIPPED_COOLDOWN", symbol, {
-    minutesSinceSold: Number(minutesSinceSold.toFixed(1)),
-    message: "Skipped crypto rebuy during cooldown.",
-  });
-  continue;
-}
-
-// 🧠 LIQUID COIN FILTER
-const allowedCryptoSymbols = new Set([
-  "BTCUSD",
-  "ETHUSD",
-  "SOLUSD",
-  "DOGEUSD",
-  "ADAUSD",
-  "AVAXUSD",
-  "LINKUSD",
-  "LTCUSD",
-]);
-
-if (!allowedCryptoSymbols.has(symbol)) {
-  saveRecentOrder("CRYPTO_BUY_SKIPPED_SYMBOL_FILTER", symbol, {
-    message: "Skipped low-quality crypto pair.",
-  });
-  continue;
-}
-
-// 🧠 STRONGER CRYPTO ENTRY FILTER
-if (stock.score < 85) {
-  saveRecentOrder("CRYPTO_BUY_SKIPPED_LOW_SCORE", symbol, {
-    score: stock.score,
-    message: "Score too weak for crypto mode.",
-  });
-  continue;
-}
-    try {
-      const account = await getAccount();
-      const freshPositions = await getPositions();
-      const freshAiOwnedSymbols = await getAiOwnedSymbols();
-
-      const freshAiPositions = freshPositions.filter((p) =>
-        freshAiOwnedSymbols.has(normalizeSymbol(p.symbol))
-      );
-
-      const tradeAmount = getDynamicTradeAmount(account, freshAiPositions);
-
-      if (tradeAmount <= 0) {
-        saveFailedOrder(
-          "AUTO_BUY_FAILED",
-          stock.symbol,
-          "Bot budget used up or no cash available",
-          {
-            price: stock.current,
-            score: stock.score,
-            maxBotExposurePercent: CONFIG.maxBotExposurePercent,
-          }
-        );
-        continue;
-      }
-
-      const order = await placeMarketBuy(stock.symbol, tradeAmount, stock.score);
-
-      saveRecentOrder("AUTO_BUY", stock.symbol, {
-        price: stock.current,
-        score: stock.score,
-        percentChange: stock.percentChange,
-        confirmations: stock.confirmations || null,
-        tradeAmount,
-        maxBotExposurePercent: CONFIG.maxBotExposurePercent,
-        order,
-      });
-    } catch (err) {
-      saveFailedOrder("AUTO_BUY_FAILED", stock.symbol, err.message, {
-        price: stock.current,
-        score: stock.score,
-      });
-    }
+  // 🧠 STOCK TRADE MEMORY FILTER
+  if (shouldSkipFromTradeMemory(symbol)) {
+    saveRecentOrder("BUY_SKIPPED_TRADE_MEMORY", symbol, {
+      message: "Skipped because this stock recently produced repeated losses.",
+      memory: engineState.tradeMemory?.[symbol],
+    });
+    continue;
   }
+
+  // 🧠 STOCK COOLDOWN — no rebuy for 30 minutes after selling
+  const lastSoldAt = Number(engineState.lastSoldAt?.[symbol] || 0);
+  const minutesSinceSold = lastSoldAt
+    ? (Date.now() - lastSoldAt) / 1000 / 60
+    : Infinity;
+
+  if (minutesSinceSold < 30) {
+    saveRecentOrder("BUY_SKIPPED_COOLDOWN", symbol, {
+      minutesSinceSold: Number(minutesSinceSold.toFixed(1)),
+      message: "Skipped stock rebuy during cooldown.",
+    });
+    continue;
+  }
+
+  try {
+    const account = await getAccount();
+    const freshPositions = await getPositions();
+    const freshAiOwnedSymbols = await getAiOwnedSymbols();
+
+    const freshAiPositions = freshPositions.filter((p) =>
+      freshAiOwnedSymbols.has(normalizeSymbol(p.symbol))
+    );
+
+    const tradeAmount = getDynamicTradeAmount(account, freshAiPositions);
+
+    if (tradeAmount <= 0) {
+      saveFailedOrder(
+        "AUTO_BUY_FAILED",
+        stock.symbol,
+        "Bot budget used up or no cash available",
+        {
+          price: stock.current,
+          score: stock.score,
+          maxBotExposurePercent: CONFIG.maxBotExposurePercent,
+        }
+      );
+      continue;
+    }
+
+    const order = await placeMarketBuy(stock.symbol, tradeAmount, stock.score);
+
+    saveRecentOrder("AUTO_BUY", stock.symbol, {
+      price: stock.current,
+      score: stock.score,
+      percentChange: stock.percentChange,
+      confirmations: stock.confirmations || null,
+      tradeAmount,
+      maxBotExposurePercent: CONFIG.maxBotExposurePercent,
+      order,
+    });
+  } catch (err) {
+    saveFailedOrder("AUTO_BUY_FAILED", stock.symbol, err.message, {
+      price: stock.current,
+      score: stock.score,
+    });
+  }
+}
 }
 async function rotateWeakCryptoIfBetter(signals, positions) {
   if (TRADING_MODE !== "live_crypto") return false;
@@ -1854,7 +1887,7 @@ const cash = Number(account.cash || 0);
 const maxCryptoPositions = 3;
 
 const cryptoPositions = positions.filter((p) =>
-  normalizeSymbol(p.symbol).includes("/")
+  normalizeSymbol(p.symbol).endsWith("USD")
 );
 
 if (cryptoPositions.length >= maxCryptoPositions) {
@@ -1905,6 +1938,34 @@ if (tradeAmount < 1) {
   .slice(0, openSlots);
 
   for (const crypto of buyCandidates) {
+    const symbol = normalizeSymbol(crypto.symbol);
+
+// 🧠 APPROVED CRYPTO LIST
+const allowedCryptoSymbols = new Set([
+  "BTCUSD",
+  "ETHUSD",
+  "SOLUSD",
+  "DOGEUSD",
+  "ADAUSD",
+  "AVAXUSD",
+  "LINKUSD",
+  "LTCUSD",
+]);
+
+if (!allowedCryptoSymbols.has(symbol)) {
+  saveRecentOrder("CRYPTO_SKIPPED_SYMBOL_FILTER", symbol, {
+    message: "Skipped non-approved crypto pair",
+  });
+  continue;
+}
+
+// 🧠 TRADE MEMORY FILTER
+if (shouldSkipFromTradeMemory(symbol)) {
+  saveRecentOrder("CRYPTO_SKIPPED_TRADE_MEMORY", symbol, {
+    memory: engineState.tradeMemory?.[symbol],
+  });
+  continue;
+}
     try {
       const order = await placeCryptoMarketBuy(crypto.symbol, tradeAmount);
 
