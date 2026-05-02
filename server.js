@@ -52,9 +52,37 @@ const PORT = Number(process.env.PORT || 10000);
 
 const FINNHUB_API_KEY = process.env.FINNHUB_API_KEY;
 
-// 🔥 NEW: Trading Mode
-let TRADING_MODE = "paper_stock";
-// options: paper_stock, live_stock, live_crypto
+function loadRuntimeConfig() {
+  try {
+    if (!fs.existsSync(CONFIG_FILE)) return {};
+    return JSON.parse(fs.readFileSync(CONFIG_FILE, "utf8"));
+  } catch {
+    return {};
+  }
+}
+
+function saveRuntimeConfig(updates = {}) {
+  const current = loadRuntimeConfig();
+  const next = {
+    ...current,
+    ...updates,
+    updatedAt: new Date().toISOString(),
+  };
+
+  fs.writeFileSync(CONFIG_FILE, JSON.stringify(next, null, 2));
+  return next;
+}
+
+const runtimeConfig = loadRuntimeConfig();
+
+// 🔥 Trading Mode (PERSISTED)
+let TRADING_MODE =
+  runtimeConfig.tradingMode ||
+  process.env.TRADING_MODE ||
+  "paper_stock";
+  let tradingModeLocked =
+  runtimeConfig.tradingModeLocked === true ||
+  process.env.TRADING_MODE_LOCKED === "true";
 
 function getAlpacaKeys() {
   if (TRADING_MODE === "paper_stock") {
@@ -2137,6 +2165,7 @@ app.get("/status", async (req, res) => {
     res.json({
   online: true,
   mode: TRADING_MODE,
+  tradingModeLocked,
       autoTradingEnabled,
       config: CONFIG,
       account: {
@@ -2338,6 +2367,13 @@ app.post("/mode", (req, res) => {
   const { mode } = req.body;
 
   const validModes = ["paper_stock", "live_stock", "live_crypto"];
+  if (tradingModeLocked) {
+  return res.status(403).json({
+    error: "Trading mode is locked",
+    mode: TRADING_MODE,
+    message: "Unlock trading mode before changing it.",
+  });
+}
 
   if (!validModes.includes(mode)) {
     return res.status(400).json({
@@ -2346,25 +2382,37 @@ app.post("/mode", (req, res) => {
     });
   }
 
-  TRADING_MODE = mode;
+ TRADING_MODE = mode;
+saveRuntimeConfig({ tradingMode: TRADING_MODE });
 
-  console.log("MODE SWITCHED:", TRADING_MODE);
-
+console.log("MODE SWITCHED:", TRADING_MODE);
   res.json({
     message: "Trading mode updated",
     mode: TRADING_MODE,
   });
 });
 
-app.post("/auto-trading/off", (req, res) => {
-  autoTradingEnabled = false;
+app.post("/mode-lock/on", (req, res) => {
+  tradingModeLocked = true;
+  saveRuntimeConfig({ tradingModeLocked });
 
   res.json({
-    message: "Auto trading disabled",
-    autoTradingEnabled,
+    message: "Trading mode locked",
+    mode: TRADING_MODE,
+    tradingModeLocked,
   });
 });
 
+app.post("/mode-lock/off", (req, res) => {
+  tradingModeLocked = false;
+  saveRuntimeConfig({ tradingModeLocked });
+
+  res.json({
+    message: "Trading mode unlocked",
+    mode: TRADING_MODE,
+    tradingModeLocked,
+  });
+});
 app.post("/close-position", async (req, res) => {
   const { symbol } = req.body;
 
