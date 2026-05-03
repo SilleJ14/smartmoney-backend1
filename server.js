@@ -203,6 +203,7 @@ let engineState = {
   lastSoldAt: {},
   peaksByMode: {},
   cachedPositions: [],
+  aiManagedSymbols: [],
 };
 
 const sellingNow = new Set();
@@ -252,6 +253,14 @@ function updateAccountPeaks(account) {
 function normalizeSymbol(symbol) {
   return String(symbol || "").trim().toUpperCase();
 }
+
+function markAiManagedSymbol(symbol) {
+  const clean = normalizeSymbol(symbol);
+  if (!engineState.aiManagedSymbols.includes(clean)) {
+    engineState.aiManagedSymbols.push(clean);
+  }
+}
+
 function saveFailedOrder(type, symbol, reason, extra = {}) {
   engineState.failedOrders.unshift({
     type,
@@ -1464,14 +1473,17 @@ async function autoExitPositions(marketOpen) {
     const positions = engineState.cachedPositions || (await getPositions());
   const aiOwnedSymbols = await getAiOwnedSymbols();
 
-  for (const pos of positions) {
-    const symbol = normalizeSymbol(pos.symbol);
+for (const pos of positions) {
+  const symbol = normalizeSymbol(pos.symbol);
 
-    if (!aiOwnedSymbols.has(symbol)) continue;
+  const isAiOwned = aiOwnedSymbols.has(symbol);
+  const isManualManaged = engineState.aiManagedSymbols?.includes(symbol);
 
-    const qty = Number(pos.qty);
-    const currentPrice = Number(pos.current_price);
-    const unrealizedPercent = Number(pos.unrealized_plpc) * 100;
+  if (!isAiOwned && !isManualManaged) continue;
+
+  const qty = Number(pos.qty);
+  const currentPrice = Number(pos.current_price);
+  const unrealizedPercent = Number(pos.unrealized_plpc) * 100;
 
     if (!qty || !currentPrice) continue;
 
@@ -1611,6 +1623,7 @@ async function autoExitCryptoPositions() {
   const positions = await getPositions();
 
   for (const pos of positions) {
+
     const symbol = normalizeSymbol(pos.symbol);
 
     if (!symbol.endsWith("USD")) continue;
@@ -2323,6 +2336,43 @@ app.get("/status", async (req, res) => {
   }
 });
 
+app.get("/stock-quote/:symbol", async (req, res) => {
+  try {
+    const symbol = normalizeSymbol(req.params.symbol);
+    const q = await finnhubQuote(symbol);
+
+    if (!q || !q.current) {
+      return res.status(404).json({
+        ok: false,
+        error: "No quote found",
+        symbol,
+      });
+    }
+
+    res.json({
+      ok: true,
+      stock: {
+        symbol,
+        current: q.current,
+        price: q.current,
+        previousClose: q.previousClose,
+        changePercent: q.previousClose
+          ? ((q.current - q.previousClose) / q.previousClose) * 100
+          : 0,
+        percentChange: q.percentChange,
+        source: "manual_search",
+        autoTradeAllowed: false,
+        manuallyBuyable: true,
+      },
+    });
+  } catch (err) {
+    res.status(500).json({
+      ok: false,
+      error: err.message,
+    });
+  }
+});
+
 app.get("/signals", (req, res) => {
   res.json({
     lastScanAt: engineState.lastScanAt,
@@ -2564,6 +2614,53 @@ app.post("/mode-lock/off", (req, res) => {
     tradingModeLocked,
   });
 });
+
+app.post("/manual-buy-stock", async (req, res) => {
+  try {
+    const { symbol, dollars } = req.body;
+
+    const cleanSymbol = normalizeSymbol(symbol);
+    const amount = Number(dollars);
+
+    if (!cleanSymbol) throw new Error("Missing symbol");
+    if (!amount || amount < 1) throw new Error("Invalid dollar amount");
+
+    const order = await alpacaTradingRequest("/v2/orders", {
+      method: "POST",
+      body: JSON.stringify({
+        symbol: cleanSymbol,
+        notional: Number(amount.toFixed(2)),
+        side: "buy",
+        type: "market",
+        time_in_force: "day",
+        client_order_id: `${AI_ORDER_PREFIX}_MANUAL_BUY_${cleanSymbol}_${Date.now()}`,
+      }),
+    });
+
+    markAiManagedSymbol(cleanSymbol);
+
+    saveRecentOrder("MANUAL_BUY_AI_MANAGED", cleanSymbol, {
+      dollars: amount,
+      order,
+      message: "Manual buy placed. Bot can manage exit.",
+    });
+
+    res.json({
+      ok: true,
+      message: `${cleanSymbol} manual buy placed. Bot can manage exit.`,
+      symbol: cleanSymbol,
+      dollars: amount,
+      aiManagedSymbols: engineState.aiManagedSymbols,
+      order,
+    });
+  } catch (err) {
+    res.status(500).json({
+      ok: false,
+      error: err.message,
+    });
+  }
+});
+
 app.post("/close-position", async (req, res) => {
   const { symbol } = req.body;
 
