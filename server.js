@@ -2340,6 +2340,7 @@ app.get("/stock-quote/:symbol", async (req, res) => {
   try {
     const symbol = normalizeSymbol(req.params.symbol);
     const q = await finnhubQuote(symbol);
+    const asset = await getAsset(symbol).catch(() => null);
 
     if (!q || !q.current) {
       return res.status(404).json({
@@ -2363,6 +2364,8 @@ app.get("/stock-quote/:symbol", async (req, res) => {
         source: "manual_search",
         autoTradeAllowed: false,
         manuallyBuyable: true,
+        fractionable: asset?.fractionable === true,
+assetClass: asset?.asset_class || "us_equity",
       },
     });
   } catch (err) {
@@ -2633,25 +2636,59 @@ app.post("/mode-lock/off", (req, res) => {
 
 app.post("/manual-buy-stock", async (req, res) => {
   try {
-    const { symbol, dollars } = req.body;
+   const { symbol, dollars, shares, buyMode } = req.body;
 
     const cleanSymbol = normalizeSymbol(symbol);
     const amount = Number(dollars);
+    const shareAmount = Number(shares || 0);
+const mode = String(buyMode || "dollars");
+const asset = await getAsset(cleanSymbol);
+const fractionable = asset?.fractionable === true;
 
     if (!cleanSymbol) throw new Error("Missing symbol");
     if (!amount || amount < 1) throw new Error("Invalid dollar amount");
 
-    const order = await alpacaTradingRequest("/v2/orders", {
-      method: "POST",
-      body: JSON.stringify({
-        symbol: cleanSymbol,
-        notional: Number(amount.toFixed(2)),
-        side: "buy",
-        type: "market",
-        time_in_force: "day",
-        client_order_id: `${AI_ORDER_PREFIX}_MANUAL_BUY_${cleanSymbol}_${Date.now()}`,
-      }),
-    });
+   const orderBody = {
+  symbol: cleanSymbol,
+  side: "buy",
+  type: "market",
+  time_in_force: "day",
+  client_order_id: `${AI_ORDER_PREFIX}_MANUAL_BUY_${cleanSymbol}_${Date.now()}`,
+};
+
+if (mode === "shares") {
+  if (!shareAmount || shareAmount <= 0) {
+    throw new Error("Invalid share amount");
+  }
+
+  orderBody.qty = fractionable
+    ? String(shareAmount)
+    : String(Math.floor(shareAmount));
+} else {
+  if (!amount || amount < 1) {
+    throw new Error("Invalid dollar amount");
+  }
+
+  if (fractionable) {
+    orderBody.notional = Number(amount.toFixed(2));
+  } else {
+    const q = await finnhubQuote(cleanSymbol);
+    const estimatedShares = Math.floor(amount / Number(q.current || 0));
+
+    if (!estimatedShares || estimatedShares < 1) {
+      throw new Error(
+        `${cleanSymbol} is not fractionable. Enter enough dollars for at least 1 whole share or use share mode.`
+      );
+    }
+
+    orderBody.qty = String(estimatedShares);
+  }
+}
+
+const order = await alpacaTradingRequest("/v2/orders", {
+  method: "POST",
+  body: JSON.stringify(orderBody),
+});
     
     console.log("MANUAL BUY ORDER:", order);
 
