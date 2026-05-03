@@ -2636,16 +2636,19 @@ app.post("/manual-buy-stock", async (req, res) => {
         client_order_id: `${AI_ORDER_PREFIX}_MANUAL_BUY_${cleanSymbol}_${Date.now()}`,
       }),
     });
+    
+    console.log("MANUAL BUY ORDER:", order);
+
+    if (!order || !order.id) {
+      return res.json({
+        ok: false,
+        error: "Order not created",
+      });
+    }
 
     markAiManagedSymbol(cleanSymbol);
 
-    saveRecentOrder("MANUAL_BUY_AI_MANAGED", cleanSymbol, {
-      dollars: amount,
-      order,
-      message: "Manual buy placed. Bot can manage exit.",
-    });
-
-    res.json({
+    return res.json({
       ok: true,
       message: `${cleanSymbol} manual buy placed. Bot can manage exit.`,
       symbol: cleanSymbol,
@@ -2653,6 +2656,8 @@ app.post("/manual-buy-stock", async (req, res) => {
       aiManagedSymbols: engineState.aiManagedSymbols,
       order,
     });
+
+// LINE AFTER
   } catch (err) {
     res.status(500).json({
       ok: false,
