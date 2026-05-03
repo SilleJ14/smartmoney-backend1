@@ -1249,7 +1249,8 @@ async function placeMarketSell(symbol, qty, reason = "AI_EXIT") {
   } finally {
     setTimeout(() => sellingNow.delete(normalizedSymbol), 10000);
   }
-}async function closePosition(symbol) {
+}
+async function closePosition(symbol) {
   const normalizedSymbol = normalizeSymbol(symbol);
 
   const assetCheck = await isAssetSellEligible(normalizedSymbol);
@@ -1515,12 +1516,6 @@ async function autoExitPositions(marketOpen) {
     const shouldProtectProfit =
       unrealizedPercent >= 2 &&
       dropFromHigh >= 0.8;
-const shouldStopLoss = unrealizedPercent <= -CONFIG.stopLossPercent;
-
-const shouldProtectProfit =
-  !isRunner &&
-  unrealizedPercent >= 2 &&
-  dropFromHigh >= 0.8;
 
 const shouldNormalTrailingExit =
   !isRunner &&
