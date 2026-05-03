@@ -2401,6 +2401,22 @@ app.get("/crypto-signals", async (req, res) => {
   } catch (err) {
     res.status(500).json({ error: err.message });
   }
+});app.get("/all-positions-test", async (req, res) => {
+  try {
+    const positions = await getPositions();
+
+    res.json({
+      ok: true,
+      count: positions.length,
+      positions,
+      aiManagedSymbols: engineState.aiManagedSymbols,
+    });
+  } catch (err) {
+    res.status(500).json({
+      ok: false,
+      error: err.message,
+    });
+  }
 });
 
 // ===== CRYPTO ROUTE END =====
