@@ -131,7 +131,7 @@ const CONFIG = {
   minStockPrice: Number(process.env.MIN_STOCK_PRICE || 1),
   maxStockPrice: 0,
 
-  minScoreToBuy: Number(process.env.MIN_SCORE_TO_BUY || 80),
+  minScoreToBuy: Number(process.env.MIN_SCORE_TO_BUY || 70),
   replaceWeakestMinScoreGap: Number(process.env.REPLACE_SCORE_GAP || 5),
 
   maxBotExposurePercent: Number(process.env.MAX_BOT_EXPOSURE_PERCENT || 5),
@@ -2165,17 +2165,16 @@ let stockSignals = [];
 let cryptoSignals = [];
 
 if (TRADING_MODE === "live_crypto") {
+  stockSignals = [];
   cryptoSignals = await scanCryptoMarket();
 } else if (TRADING_MODE === "live_stock") {
-  if (marketOpen) {
-    stockSignals = await scanMarket();
-  }
-
-  cryptoSignals = await scanCryptoMarket();
-} else {
   stockSignals = await scanMarket();
+  cryptoSignals = [];
+} else {
+  // paper_stock or default
+  stockSignals = await scanMarket();
+  cryptoSignals = [];
 }
-
 const signals = [...stockSignals, ...cryptoSignals];
 
 engineState.lastSignals = signals;
