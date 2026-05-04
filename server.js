@@ -2024,7 +2024,7 @@ async function autoBuyCryptoSignals(signals) {
   const positions = await getPositions();
   const openSymbols = new Set(positions.map((p) => normalizeSymbol(p.symbol)));
 const cash = Number(account.cash || 0);
-const maxCryptoPositions = 3;
+const maxCryptoPositions = 5;
 
 const cryptoPositions = positions.filter((p) =>
   normalizeSymbol(p.symbol).endsWith("USD")
@@ -2068,7 +2068,7 @@ if (tradeAmount < 1) {
 }
   const buyCandidates = signals
   .filter((s) => s.qualifiedToBuy === true)
-  .filter((s) => Number(s.score || 0) >= 85)
+  .filter((s) => Number(s.score || 0) >= 70)
   .filter((s) => {
   const sym = normalizeSymbol(s.symbol);
   const lastSold = engineState.lastSoldAt[sym] || 0;
