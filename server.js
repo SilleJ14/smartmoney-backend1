@@ -153,10 +153,10 @@ const CONFIG = {
   profitLockProtectPercent: Number(process.env.PROFIT_LOCK_PROTECT_PERCENT || 50),
 
   moversTop: Number(process.env.MOVERS_TOP || 50),
-  minVolume: Number(process.env.MIN_VOLUME || 5000),
-  minScanVolume: Number(process.env.MIN_SCAN_VOLUME || 5000),
-  maxPercentChange: Number(process.env.MAX_PERCENT_CHANGE || 60),
-  maxSignalsToReturn: Number(process.env.MAX_SIGNALS_TO_RETURN || 40),
+  minVolume: Number(process.env.MIN_VOLUME || 1000),
+  minScanVolume: Number(process.env.MIN_SCAN_VOLUME || 1000),
+  maxPercentChange: Number(process.env.MAX_PERCENT_CHANGE || 80),
+  maxSignalsToReturn: Number(process.env.MAX_SIGNALS_TO_RETURN || 80),
 
   topAutoTradeCandidates: Number(process.env.TOP_AUTO_TRADE_CANDIDATES || 5),
 
@@ -164,7 +164,7 @@ const CONFIG = {
     // ADVANCED FILTERS
   enableAdvancedFilters: process.env.ENABLE_ADVANCED_FILTERS !== "false",
   minVolumeSpikeRatio: Number(process.env.MIN_VOLUME_SPIKE_RATIO || 0.5),
-  minCloseNearHighPercent: Number(process.env.MIN_CLOSE_NEAR_HIGH_PERCENT || 35),
+  minCloseNearHighPercent: Number(process.env.MIN_CLOSE_NEAR_HIGH_PERCENT || 25),
   fakeBreakoutMaxHighPullbackPercent: Number(
     process.env.FAKE_BREAKOUT_MAX_HIGH_PULLBACK_PERCENT || 2
   ),
