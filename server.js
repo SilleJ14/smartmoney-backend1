@@ -831,7 +831,7 @@ function passesQualityFilters(q) {
 }
 
   // 🔥 REMOVE DEAD / SLOW STOCKS
-  if (Math.abs(q.percentChange) < 0.5) {
+  if (Math.abs(q.percentChange) < 1.5) {
     return { ok: false, reason: "No meaningful movement" };
   }
 
