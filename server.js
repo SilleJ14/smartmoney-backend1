@@ -128,7 +128,7 @@ const AI_ORDER_PREFIX = "SM_AI";
 const CONFIG = {
   maxOpenTrades: Number(process.env.MAX_OPEN_TRADES || 5),
 
-  minStockPrice: Number(process.env.MIN_STOCK_PRICE || 1),
+  minStockPrice: Number(process.env.MIN_STOCK_PRICE || 2),
   maxStockPrice: 0,
 
   minScoreToBuy: Number(process.env.MIN_SCORE_TO_BUY || 70),
@@ -449,8 +449,7 @@ function isNormalStockSymbol(symbol) {
   if (s.includes(".") || s.includes("-") || s.includes("/") || s.includes("^"))
     return false;
   if (s.length > 5) return false;
-
-  const badEndings = ["W", "WS", "WT", "R", "RT", "U", "UN", "P", "PR"];
+const badEndings = ["W", "WS", "WT", "R", "RT", "U", "UN", "P", "PR", "Z"];
 
   for (const ending of badEndings) {
     if (s.endsWith(ending) && s.length >= 4) return false;
