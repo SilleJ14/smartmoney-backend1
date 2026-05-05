@@ -526,7 +526,66 @@ async function finnhubQuote(symbol) {
     volume: Number(data.v || data.volume || 0),
   };
 }
+async function getCombinedStockQuote(symbol) {
+  let finnhub = null;
+  let finnhubError = "";
 
+  try {
+    finnhub = await finnhubQuote(symbol);
+  } catch (err) {
+    finnhubError = err.message;
+  }
+
+  const bars = await getRecentBars(symbol, "5Min", 30);
+  const barStats = calculateBarStats(bars);
+
+  const latestBar = bars[bars.length - 1] || {};
+  const firstBar = bars[0] || {};
+
+  const alpacaCurrent = Number(latestBar.c || 0);
+  const alpacaOpen = Number(firstBar.o || latestBar.o || 0);
+  const alpacaHigh = Math.max(...bars.map((b) => Number(b.h || 0)), 0);
+  const alpacaLow = Math.min(
+    ...bars.map((b) => Number(b.l || Infinity))
+  );
+
+  const safeAlpacaLow = Number.isFinite(alpacaLow) ? alpacaLow : 0;
+
+  const current = Number(finnhub?.current || alpacaCurrent || 0);
+  const open = Number(finnhub?.open || alpacaOpen || 0);
+  const previousClose = Number(finnhub?.previousClose || alpacaOpen || 0);
+
+  const percentChange =
+    Number(finnhub?.percentChange || 0) ||
+    (previousClose > 0 ? ((current - previousClose) / previousClose) * 100 : 0);
+
+  const volume = Math.max(
+    Number(finnhub?.volume || 0),
+    Number(barStats.lastVolume || 0),
+    Number(barStats.avgVolume || 0)
+  );
+
+  if (!current || current <= 0) {
+    throw new Error(finnhubError || `No valid price from Finnhub or Alpaca for ${symbol}`);
+  }
+
+  return {
+    symbol,
+    current,
+    price: current,
+    change: Number(finnhub?.change || 0),
+    percentChange,
+    high: Number(finnhub?.high || alpacaHigh || current),
+    low: Number(finnhub?.low || safeAlpacaLow || current),
+    open,
+    previousClose,
+    volume,
+    barVolume: Number(barStats.lastVolume || 0),
+    avgBarVolume: Math.round(Number(barStats.avgVolume || 0)),
+    volumeRatio: Number(barStats.volumeSpikeRatio || 0),
+    dataSource: finnhub ? "Finnhub + Alpaca" : "Alpaca fallback",
+  };
+}
 async function getRecentBars(symbol, timeframe = "5Min", limit = 30) {
   const data = await alpacaDataRequest(
     `/v2/stocks/${encodeURIComponent(
@@ -1102,7 +1161,7 @@ async function getTopMovers() {
   }
 
   const minSymbolsNeeded = Number(process.env.MIN_SYMBOLS_NEEDED || 1);
-  const maxAssetsFallback = Number(process.env.MAX_ASSETS_FALLBACK || 0);
+  const maxAssetsFallback = Number(process.env.MAX_ASSETS_FALLBACK || 300);
 
   if (moverSymbols.length >= minSymbolsNeeded) {
     return moverSymbols;
@@ -1125,7 +1184,9 @@ async function getTopMovers() {
     .filter(isNormalStockSymbol)
     .slice(0, maxAssetsFallback);
 
-  const combinedSymbols = [...new Set([...moverSymbols, ...fallbackSymbols])];
+  const combinedSymbols = [
+    ...new Set([...moverSymbols, ...fallbackSymbols]),
+  ];
 
   console.log(`Combined scan symbols: ${combinedSymbols.length}`);
 
@@ -1155,18 +1216,7 @@ async function scanMarket() {
         return null;
       }
 
-      const quote = await finnhubQuote(symbol);
-
-      const bars = await getRecentBars(symbol, "5Min", 30);
-      const barStats = calculateBarStats(bars);
-
-      quote.volume = Math.max(
-        Number(quote.volume || 0),
-        Number(barStats.lastVolume || 0)
-      );
-
-      quote.barVolume = Number(barStats.lastVolume || 0);
-      quote.avgBarVolume = Math.round(Number(barStats.avgVolume || 0));
+        const quote = await getCombinedStockQuote(symbol);
 
       if (CONFIG.enableAdvancedFilters) {
         quote.confirmations = await getAdvancedConfirmations(quote);
