@@ -153,8 +153,8 @@ const CONFIG = {
   profitLockProtectPercent: Number(process.env.PROFIT_LOCK_PROTECT_PERCENT || 50),
 
   moversTop: Number(process.env.MOVERS_TOP || 50),
-  minVolume: Number(process.env.MIN_VOLUME || 25000),
-  minScanVolume: Number(process.env.MIN_SCAN_VOLUME || 0),
+  minVolume: Number(process.env.MIN_VOLUME || 1000),
+  minScanVolume: Number(process.env.MIN_SCAN_VOLUME || 10000),
   maxPercentChange: Number(process.env.MAX_PERCENT_CHANGE || 80),
   maxSignalsToReturn: Number(process.env.MAX_SIGNALS_TO_RETURN || 80),
 
