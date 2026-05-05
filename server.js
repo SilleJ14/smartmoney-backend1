@@ -863,14 +863,14 @@ function passesQualityFilters(q) {
   }
     const marketIsOpen = engineState.marketOpen === true;
 
-  if (!marketIsOpen && q.percentChange > 25) {
+if (!marketIsOpen && q.percentChange > 60) {
     return {
       ok: false,
       reason: `After-hours move too extended: ${q.percentChange.toFixed(2)}%`,
     };
   }
 
-  if (!marketIsOpen && q.confirmations?.pullbackFromHighPercent > 1.5) {
+  if (!marketIsOpen && q.confirmations?.pullbackFromHighPercent > 5) {
     return {
       ok: false,
       reason: `After-hours pullback risk: ${q.confirmations.pullbackFromHighPercent}%`,
