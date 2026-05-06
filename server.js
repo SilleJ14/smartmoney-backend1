@@ -9,9 +9,7 @@ dotenv.config({ path: path.resolve(process.cwd(), ".env") });
 const CONFIG_FILE = path.resolve(process.cwd(), "runtime-config.json");
 
 console.log("ENV CHECK:", {
-  ALPACA_KEY: process.env.ALPACA_KEY ? "FOUND" : "MISSING",
-  ALPACA_SECRET: process.env.ALPACA_SECRET ? "FOUND" : "MISSING",
-  ALPACA_LIVE_SECRET: process.env.ALPACA_SECRET_KEY ? "FOUND" : "MISSING",
+  ALPACA_LIVE_SECRET: process.env.ALPACA_LIVE_SECRET ? "FOUND" : "MISSING",
   ALPACA_LIVE_KEY: process.env.ALPACA_LIVE_KEY? "FOUND" : "MISSING",
   FINNHUB_API_KEY: process.env.FINNHUB_API_KEY ? "FOUND" : "MISSING",
 });
@@ -21,18 +19,14 @@ app.use(cors());
 app.use(express.json());
 
 let runtimeAlpacaKeys = {
-  paperKey: process.env.ALPACA_PAPER_KEY || "",
-  paperSecret: process.env.ALPACA_PAPER_SECRET || "",
   liveKey: process.env.ALPACA_LIVE_KEY || "",
   liveSecret: process.env.ALPACA_LIVE_SECRET || "",
 };
 
 app.post("/alpaca-keys", (req, res) => {
-  const { paperKey, paperSecret, liveKey, liveSecret } = req.body;
+  const { liveKey, liveSecret } = req.body;
 
   runtimeAlpacaKeys = {
-    paperKey: paperKey || runtimeAlpacaKeys.paperKey,
-    paperSecret: paperSecret || runtimeAlpacaKeys.paperSecret,
     liveKey: liveKey || runtimeAlpacaKeys.liveKey,
     liveSecret: liveSecret || runtimeAlpacaKeys.liveSecret,
   };
@@ -79,42 +73,26 @@ const runtimeConfig = loadRuntimeConfig();
 let TRADING_MODE =
   runtimeConfig.tradingMode ||
   process.env.TRADING_MODE ||
-  "paper_stock";
+  "smart";
   let tradingModeLocked =
   runtimeConfig.tradingModeLocked === true ||
   process.env.TRADING_MODE_LOCKED === "true";
 
-function getAlpacaKeys() {
-  if (TRADING_MODE === "paper_stock") {
-    return {
-      key: runtimeAlpacaKeys.paperKey || process.env.ALPACA_PAPER_KEY,
-      secret: runtimeAlpacaKeys.paperSecret || process.env.ALPACA_PAPER_SECRET,
-    };
+  function getEffectiveTradingMode(marketOpen) {
+  if (TRADING_MODE === "smart") {
+    return marketOpen ? "live_stock" : "live_crypto";
   }
-
-  if (TRADING_MODE === "live_stock" || TRADING_MODE === "live_crypto") {
-    return {
-      key: runtimeAlpacaKeys.liveKey || process.env.ALPACA_LIVE_KEY,
-      secret: runtimeAlpacaKeys.liveSecret || process.env.ALPACA_LIVE_SECRET,
-    };
-  }
-
-  return {
-    key: runtimeAlpacaKeys.paperKey || process.env.ALPACA_PAPER_KEY,
-    secret: runtimeAlpacaKeys.paperSecret || process.env.ALPACA_PAPER_SECRET,
-  };
+  return TRADING_MODE;
 }
 
+function getAlpacaKeys() {
+  return {
+    key: runtimeAlpacaKeys.liveKey || process.env.ALPACA_LIVE_KEY,
+    secret: runtimeAlpacaKeys.liveSecret || process.env.ALPACA_LIVE_SECRET,
+  };
+}
 function getTradingBaseUrl() {
-  if (TRADING_MODE === "paper_stock") {
-    return "https://paper-api.alpaca.markets";
-  }
-
-  if (TRADING_MODE === "live_stock" || TRADING_MODE === "live_crypto") {
-    return "https://api.alpaca.markets";
-  }
-
-  return "https://paper-api.alpaca.markets";
+  return "https://api.alpaca.markets";
 }
 
 const ALPACA_DATA_BASE_URL =
@@ -226,7 +204,7 @@ async function runInBatches(items, batchSize, worker) {
   return results;
 }
 function updateAccountPeaks(account) {
-  const mode = TRADING_MODE || "paper_stock";
+const mode = TRADING_MODE;
   const equity = Number(account?.equity || 0);
   const cash = Number(account?.cash || 0);
 
@@ -1021,9 +999,10 @@ function scoreCrypto(quote, bars = []) {
 }
 
 async function scanCryptoMarket() {
- if (TRADING_MODE !== "live_crypto" && TRADING_MODE !== "live_stock") {
-  throw new Error("Crypto scanner is only available in live modes");
-}
+  if (!["live_crypto", "live_stock", "smart"].includes(TRADING_MODE)) {
+    throw new Error("Crypto scanner is only available in live modes");
+  }
+
   const symbols = await getCryptoAssets();
   const results = [];
 
@@ -1050,7 +1029,7 @@ async function scanCryptoMarket() {
 }
 
 async function placeCryptoMarketBuy(symbol, dollars) {
- if (TRADING_MODE !== "live_crypto" && TRADING_MODE !== "live_stock") {
+if (!["live_crypto", "live_stock", "smart"].includes(TRADING_MODE)){
   throw new Error("Crypto buying is only allowed in live modes");
 }
 
@@ -1070,7 +1049,7 @@ async function placeCryptoMarketBuy(symbol, dollars) {
 }
 
 async function placeCryptoMarketSell(symbol, qty, reason = "CRYPTO_EXIT") {
-  if (TRADING_MODE !== "live_crypto" && TRADING_MODE !== "live_stock") {
+ if (!["live_crypto", "live_stock", "smart"].includes(TRADING_MODE)) {
   throw new Error("Crypto selling is only allowed in live modes");
 }
 
@@ -1388,7 +1367,7 @@ async function forceCloseAllPositions(reason, marketOpen) {
 
 async function checkDailyLossAndProfitLock(account, marketOpen) {
   const equity = Number(account.equity || 0);
-  const currentMode = TRADING_MODE || "paper_stock";
+const currentMode = TRADING_MODE;
 
   if (engineState.lastMode !== currentMode) {
     engineState.dailyStartEquity = equity;
@@ -1667,8 +1646,7 @@ rememberTradeResult(symbol, {
   }
 }
 async function autoExitCryptoPositions() {
-  if (TRADING_MODE !== "live_crypto" && TRADING_MODE !== "live_stock") return;
-
+ if (!["live_crypto", "live_stock", "smart"].includes(TRADING_MODE)) return;
   const positions = await getPositions();
 
   for (const pos of positions) {
@@ -1980,7 +1958,7 @@ for (const stock of buyCandidates) {
 }
 }
 async function rotateWeakCryptoIfBetter(signals, positions) {
-  if (TRADING_MODE !== "live_crypto") return false;
+  if (!["live_crypto", "smart"].includes(TRADING_MODE)) return false;
 
   const cryptoPositions = positions.filter((p) =>
     normalizeSymbol(p.symbol).endsWith("USD")
@@ -2067,7 +2045,7 @@ async function rotateWeakCryptoIfBetter(signals, positions) {
 // ===== CRYPTO AUTO BUY START =====
 
 async function autoBuyCryptoSignals(signals) {
- if (TRADING_MODE !== "live_crypto" && TRADING_MODE !== "live_stock") return;
+if (!["live_crypto", "live_stock", "smart"].includes(TRADING_MODE)) return;
 
   const account = await getAccount();
   const positions = await getPositions();
@@ -2192,8 +2170,16 @@ async function engineTick() {
     const account = await getAccount();
     const clock = await getClock();
     const marketOpen = Boolean(clock.is_open);
-
+    const effectiveMode = getEffectiveTradingMode(marketOpen);
+    engineState.effectiveMode = effectiveMode;
     engineState.marketOpen = marketOpen;
+
+console.log("SMART MODE:", {
+  selected: TRADING_MODE,
+  effective: effectiveMode,
+  marketOpen,
+});
+
 
     const riskLocked = await checkDailyLossAndProfitLock(account, marketOpen);
 
@@ -2202,10 +2188,8 @@ async function engineTick() {
     }
 
 await autoExitPositions(marketOpen);
-
 const cryptoEnabled =
-  TRADING_MODE === "live_crypto" || TRADING_MODE === "live_stock";
-
+  effectiveMode === "live_crypto";
 if (cryptoEnabled) {
   await autoExitCryptoPositions();
 }
@@ -2213,17 +2197,14 @@ if (cryptoEnabled) {
 let stockSignals = [];
 let cryptoSignals = [];
 
-if (TRADING_MODE === "live_crypto") {
-  stockSignals = [];
+if (effectiveMode === "live_crypto") {
   cryptoSignals = await scanCryptoMarket();
-} else if (TRADING_MODE === "live_stock") {
-  stockSignals = await scanMarket();
-  cryptoSignals = [];
-} else {
-  // paper_stock or default
-  stockSignals = await scanMarket();
-  cryptoSignals = [];
 }
+
+if (effectiveMode === "live_stock") {
+  stockSignals = await scanMarket();
+}
+
 const signals = [...stockSignals, ...cryptoSignals];
 
 engineState.lastSignals = signals;
@@ -2237,24 +2218,20 @@ if (
   !engineState.profitLocked &&
   !riskLocked
 ) {
-  if (TRADING_MODE === "live_crypto") {
+  if (effectiveMode === "live_crypto") {
     await autoBuyCryptoSignals(cryptoSignals);
-  } else if (TRADING_MODE === "live_stock") {
-    if (marketOpen) {
-      await autoBuySignals(stockSignals);
-    }
+  }
 
-    await autoBuyCryptoSignals(cryptoSignals);
-  } else if (marketOpen) {
+  if (effectiveMode === "live_stock" && marketOpen) {
     await autoBuySignals(stockSignals);
   }
 }
 
-    if (autoTradingEnabled && !marketOpen) {
-      saveRecentOrder("BUY_SKIPPED_MARKET_CLOSED", "ALL", {
-        message: "Market closed. No new buys were placed.",
-      });
-    }
+   if (autoTradingEnabled && !marketOpen && TRADING_MODE !== "smart") {
+  saveRecentOrder("BUY_SKIPPED_MARKET_CLOSED", "ALL", {
+    message: "Market closed. Stock buys skipped.",
+  });
+}
   } catch (err) {
     engineState.lastError = err.message;
     console.error("Engine error:", err.message);
@@ -2349,6 +2326,7 @@ app.get("/status", async (req, res) => {
     res.json({
   online: true,
   mode: TRADING_MODE,
+  effectiveMode: engineState.effectiveMode,
   tradingModeLocked,
       autoTradingEnabled,
       config: CONFIG,
@@ -2435,9 +2413,9 @@ app.get("/signals", (req, res) => {
 
 app.get("/crypto-signals", async (req, res) => {
   try {
-    if (TRADING_MODE !== "live_crypto") {
+    if (!["live_crypto", "smart"].includes(TRADING_MODE)) {
       return res.status(403).json({
-        error: "Crypto is live trade only. Switch to live_crypto mode.",
+        error: "Crypto signals are available in live_crypto or smart mode.",
         mode: TRADING_MODE,
       });
     }
@@ -2634,7 +2612,7 @@ app.post("/config", (req, res) => {
 app.post("/mode", (req, res) => {
   const { mode } = req.body;
 
-  const validModes = ["paper_stock", "live_stock", "live_crypto"];
+const validModes = ["smart", "live_stock", "live_crypto"];
   if (tradingModeLocked) {
   return res.status(403).json({
     error: "Trading mode is locked",
