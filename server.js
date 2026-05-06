@@ -1721,11 +1721,11 @@ for (const pos of positions) {
   const symbol = normalizeSymbol(pos.symbol);
     if (symbol.includes("/") || symbol.endsWith("USD")) continue;
 
+  
   const isAiOwned = aiOwnedSymbols.has(symbol);
   const isManualManaged = engineState.aiManagedSymbols?.includes(symbol);
 
-  if (!isAiOwned && !isManualManaged) continue;
-
+  
   const qty = Number(pos.qty);
   const currentPrice = Number(pos.current_price);
   const unrealizedPercent = Number(pos.unrealized_plpc) * 100;
