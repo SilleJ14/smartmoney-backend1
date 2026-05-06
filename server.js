@@ -746,6 +746,75 @@ async function getAdvancedConfirmations(q) {
     riskyNewsHeadlines: newsRisk.headlines,
   };
 }
+function scoreStock(q) {
+  let score = 0;
+
+  // 🔥 LARGE CAP / INSTITUTIONAL BIAS
+  if (q.current >= 5) score += 5;
+  if (q.volume >= 1000000) score += 10;
+
+  if (
+    q.current >= CONFIG.minStockPrice &&
+    (CONFIG.maxStockPrice <= 0 || q.current <= CONFIG.maxStockPrice)
+  ) {
+    score += 18;
+  }
+
+  if (q.percentChange > 0) score += 12;
+  if (q.percentChange >= 1) score += 10;
+  if (q.percentChange >= 2 && q.percentChange <= 20) score += 20;
+
+  if (q.percentChange > 20 && q.percentChange <= CONFIG.maxPercentChange) {
+    score += 10;
+  }
+
+  if (q.open > 0 && q.current > q.open) score += 15;
+  if (q.previousClose > 0 && q.current > q.previousClose) score += 15;
+
+  if (q.high > q.low && q.current > 0) {
+    const closeNearHigh = ((q.current - q.low) / (q.high - q.low)) * 100;
+
+    if (closeNearHigh >= 85) score += 10;
+    else if (closeNearHigh >= 70) score += 6;
+  }
+
+  if (q.volume >= CONFIG.minVolume) score += 10;
+
+  // 📈 RSI / EMA / MACD TECHNICAL SCORING
+  if (q.technicals) {
+    const rsi = Number(q.technicals.rsi || 0);
+    const ema9 = Number(q.technicals.ema9 || 0);
+    const ema20 = Number(q.technicals.ema20 || 0);
+    const macd = Number(q.technicals.macd || 0);
+    const macdSignal = Number(q.technicals.macdSignal || 0);
+
+    if (rsi >= 45 && rsi <= 70) score += 12;
+    else if (rsi > 70 && rsi <= 80) score += 5;
+    else if (rsi > 80) score -= 10;
+    else if (rsi < 35) score -= 10;
+
+    if (ema9 > ema20) score += 12;
+    if (q.current > ema9 && ema9 > ema20) score += 10;
+
+    if (macd > macdSignal) score += 12;
+    if (macd > 0 && macdSignal > 0) score += 6;
+  }
+
+  if (q.confirmations) {
+    if (q.confirmations.volumeSpike) score += 12;
+    if (q.confirmations.aboveVwap) score += 10;
+    if (q.confirmations.closeNearHigh) score += 10;
+    if (!q.confirmations.fakeBreakout) score += 8;
+    if (!q.confirmations.gapTooHigh) score += 6;
+
+    if (q.confirmations.fakeBreakout) score -= 25;
+    if (q.confirmations.gapTooHigh) score -= 20;
+    if (q.confirmations.newsRisk) score -= 30;
+  }
+
+  return Math.min(100, Math.max(0, Math.round(score)));
+}
+
 function calculateEMA(values = [], period = 9) {
   if (values.length < period) return 0;
 
@@ -1344,7 +1413,10 @@ function addPendingExit(symbol, qty, reason, extra = {}) {
   });
 
   engineState.pendingExits = engineState.pendingExits.slice(0, 100);
-}function minutesUntil(dateString) {
+}
+
+
+function minutesUntil(dateString) {
   const target = new Date(dateString).getTime();
   const now = Date.now();
 
@@ -1369,7 +1441,43 @@ async function autoCloseStocksAfterMarketClose(marketOpen) {
 
   engineState.lastStockCloseAllAt = todayKey;
 
-  await forceCloseAllPositions("STOCK_CLOSE_5_MIN_AFTER_MARKET_CLOSE", true);
+  const positions = await getPositions();
+
+  for (const pos of positions) {
+    const symbol = normalizeSymbol(pos.symbol);
+
+    // Skip crypto pairs
+    if (symbol.includes("/") || symbol.endsWith("USD")) continue;
+
+    const qty = Number(pos.qty);
+
+    if (!qty || qty <= 0) continue;
+
+    try {
+      const order = await placeMarketSell(
+        symbol,
+        qty,
+        "STOCK_CLOSE_5_MIN_AFTER_MARKET_CLOSE"
+      );
+
+      saveRecentOrder("STOCK_CLOSED_AFTER_MARKET_CLOSE", symbol, {
+        qty,
+        minutesAfterClose: Number(minutesAfterClose.toFixed(2)),
+        order,
+      });
+
+      delete engineState.highWaterMarks[symbol];
+      delete engineState.aiEntryScores[symbol];
+      delete engineState.runnerPositions[symbol];
+    } catch (err) {
+      saveFailedOrder(
+        "STOCK_CLOSE_AFTER_MARKET_CLOSE_FAILED",
+        symbol,
+        err.message,
+        { qty }
+      );
+    }
+  }
 }
 
 async function autoCloseCryptoBeforeMarketOpen(clock) {
@@ -1433,9 +1541,11 @@ async function forceCloseAllPositions(reason, marketOpen) {
 
     if (!qty || qty <= 0) continue;
 
-    if (!marketOpen) {
+    const isCrypto = symbol.includes("/") || symbol.endsWith("USD");
+
+    if (!marketOpen && !isCrypto) {
       addPendingExit(symbol, qty, reason, {
-        message: "Market closed. Exit queued for next market open.",
+        message: "Market closed. Stock exit queued for next market open.",
       });
 
       saveRecentOrder("FORCE_CLOSE_PENDING_MARKET_CLOSED", symbol, {
@@ -1447,22 +1557,25 @@ async function forceCloseAllPositions(reason, marketOpen) {
     }
 
     try {
-      const order = await placeMarketSell(symbol, qty, reason);
+      const order = isCrypto
+        ? await placeCryptoMarketSell(symbol, qty, reason)
+        : await placeMarketSell(symbol, qty, reason);
 
       saveRecentOrder("FORCE_CLOSE_EXECUTED", symbol, {
         qty,
         reason,
+        assetClass: isCrypto ? "crypto" : "stock",
         order,
       });
 
       delete engineState.highWaterMarks[symbol];
-
       delete engineState.aiEntryScores[symbol];
       delete engineState.runnerPositions[symbol];
     } catch (err) {
       saveFailedOrder("FORCE_CLOSE_FAILED", symbol, err.message, {
         qty,
         reason,
+        assetClass: isCrypto ? "crypto" : "stock",
       });
     }
   }
@@ -1606,6 +1719,7 @@ async function autoExitPositions(marketOpen) {
 
 for (const pos of positions) {
   const symbol = normalizeSymbol(pos.symbol);
+    if (symbol.includes("/") || symbol.endsWith("USD")) continue;
 
   const isAiOwned = aiOwnedSymbols.has(symbol);
   const isManualManaged = engineState.aiManagedSymbols?.includes(symbol);
@@ -2082,7 +2196,7 @@ async function rotateWeakCryptoIfBetter(signals, positions) {
     normalizeSymbol(p.symbol).endsWith("USD")
   );
 
-  if (cryptoPositions.length < 3) return false;
+   if (cryptoPositions.length < CONFIG.maxOpenTrades) return false;
 
   const openSymbols = new Set(
     cryptoPositions.map((p) => normalizeSymbol(p.symbol))
@@ -2169,7 +2283,7 @@ if (!["live_crypto", "live_stock", "smart"].includes(TRADING_MODE)) return;
   const positions = await getPositions();
   const openSymbols = new Set(positions.map((p) => normalizeSymbol(p.symbol)));
 const cash = Number(account.cash || 0);
-const maxCryptoPositions = 5;
+const maxCryptoPositions = CONFIG.maxOpenTrades;
 
 const cryptoPositions = positions.filter((p) =>
   normalizeSymbol(p.symbol).endsWith("USD")
