@@ -70,10 +70,9 @@ function saveRuntimeConfig(updates = {}) {
 const runtimeConfig = loadRuntimeConfig();
 
 // 🔥 Trading Mode (PERSISTED)
-let TRADING_MODE =
-  runtimeConfig.tradingMode ||
-  process.env.TRADING_MODE ||
-  "smart";
+let TRADING_MODE = "smart";
+saveRuntimeConfig({ tradingMode: "smart" });
+
   let tradingModeLocked =
   runtimeConfig.tradingModeLocked === true ||
   process.env.TRADING_MODE_LOCKED === "true";
@@ -104,7 +103,7 @@ const AI_ORDER_PREFIX = "SM_AI";
 
 
 const CONFIG = {
-  maxOpenTrades: Number(process.env.MAX_OPEN_TRADES || 5),
+  maxOpenTrades: Number(process.env.MAX_OPEN_TRADES || 2),
 
   minStockPrice: Number(process.env.MIN_STOCK_PRICE || 1),
   maxStockPrice: 0,
@@ -112,7 +111,7 @@ const CONFIG = {
   minScoreToBuy: Number(process.env.MIN_SCORE_TO_BUY || 70),
   replaceWeakestMinScoreGap: Number(process.env.REPLACE_SCORE_GAP || 5),
 
-  maxBotExposurePercent: Number(process.env.MAX_BOT_EXPOSURE_PERCENT || 5),
+  maxBotExposurePercent: Number(process.env.MAX_BOT_EXPOSURE_PERCENT || 2),
 
   // EXIT SETTINGS
   takeProfitPercent: Number(process.env.TAKE_PROFIT_PERCENT || 6),
@@ -747,53 +746,77 @@ async function getAdvancedConfirmations(q) {
     riskyNewsHeadlines: newsRisk.headlines,
   };
 }
+function calculateEMA(values = [], period = 9) {
+  if (values.length < period) return 0;
 
-function scoreStock(q) {
-  let score = 0;
-  // 🔥 LARGE CAP / INSTITUTIONAL BIAS
-if (q.current >= 5) score += 5;        // avoid penny stocks
-if (q.volume >= 1000000) score += 10; // strong liquidity = institutions
+  const multiplier = 2 / (period + 1);
 
-  if (
-  q.current >= CONFIG.minStockPrice &&
-  (CONFIG.maxStockPrice <= 0 || q.current <= CONFIG.maxStockPrice)
-) {
-    score += 18;
+  let ema =
+    values.slice(0, period).reduce((a, b) => a + b, 0) / period;
+
+  for (let i = period; i < values.length; i++) {
+    ema = (values[i] - ema) * multiplier + ema;
   }
 
-  if (q.percentChange > 0) score += 12;
-  if (q.percentChange >= 1) score += 10;
-  if (q.percentChange >= 2 && q.percentChange <= 20) score += 20;
+  return ema;
+}
 
-  if (q.percentChange > 20 && q.percentChange <= CONFIG.maxPercentChange) {
-    score += 10;
+function calculateRSI(closes = [], period = 14) {
+  if (closes.length < period + 1) return 50;
+
+  let gains = 0;
+  let losses = 0;
+
+  for (let i = 1; i <= period; i++) {
+    const diff = closes[i] - closes[i - 1];
+
+    if (diff >= 0) gains += diff;
+    else losses += Math.abs(diff);
   }
 
-  if (q.open > 0 && q.current > q.open) score += 15;
-  if (q.previousClose > 0 && q.current > q.previousClose) score += 15;
+  if (losses === 0) return 100;
 
-  if (q.high > q.low && q.current > 0) {
-    const closeNearHigh = ((q.current - q.low) / (q.high - q.low)) * 100;
+  const rs = gains / losses;
 
-    if (closeNearHigh >= 85) score += 10;
-    else if (closeNearHigh >= 70) score += 6;
+  return 100 - 100 / (1 + rs);
+}
+
+function calculateMACD(closes = []) {
+  if (closes.length < 26) {
+    return {
+      macd: 0,
+      signal: 0,
+    };
   }
 
-  if (q.volume >= CONFIG.minVolume) score += 10;
+  const ema12 = calculateEMA(closes, 12);
+  const ema26 = calculateEMA(closes, 26);
 
-  if (q.confirmations) {
-    if (q.confirmations.volumeSpike) score += 12;
-    if (q.confirmations.aboveVwap) score += 10;
-    if (q.confirmations.closeNearHigh) score += 10;
-    if (!q.confirmations.fakeBreakout) score += 8;
-    if (!q.confirmations.gapTooHigh) score += 6;
+  const macd = ema12 - ema26;
 
-    if (q.confirmations.fakeBreakout) score -= 25;
-    if (q.confirmations.gapTooHigh) score -= 20;
-    if (q.confirmations.newsRisk) score -= 30;
-  }
+  return {
+    macd,
+    signal: macd * 0.8,
+  };
+}
 
-  return Math.min(100, Math.max(0, Math.round(score)));
+function calculateTechnicals(bars = []) {
+  const closes = bars.map((b) => Number(b.c || 0)).filter(Boolean);
+
+  const ema9 = calculateEMA(closes, 9);
+  const ema20 = calculateEMA(closes, 20);
+
+  const rsi = calculateRSI(closes, 14);
+
+  const macdData = calculateMACD(closes);
+
+  return {
+    ema9,
+    ema20,
+    rsi,
+    macd: macdData.macd,
+    macdSignal: macdData.signal,
+  };
 }
 function passesQualityFilters(q) {
   if (!q.current || q.current <= 0) {
@@ -1194,12 +1217,14 @@ async function scanMarket() {
         return null;
       }
 
-        const quote = await getCombinedStockQuote(symbol);
+             const quote = await getCombinedStockQuote(symbol);
+
+      const technicalBars = await getRecentBars(symbol, "5Min", 60);
+      quote.technicals = calculateTechnicals(technicalBars);
 
       if (CONFIG.enableAdvancedFilters) {
         quote.confirmations = await getAdvancedConfirmations(quote);
       }
-
       const quality = passesQualityFilters(quote);
 
       if (!quality.ok) {
@@ -1863,6 +1888,21 @@ async function autoBuySignals(signals) {
     .filter((s) => s.score >= CONFIG.minScoreToBuy)
     .filter((s) => s.qualifiedToBuy === true)
     .filter((s) => Number(s.percentChange || 0) >= 1.5)
+        .filter((s) => {
+      const tech = s.technicals || {};
+
+      const rsi = Number(tech.rsi || 0);
+      const ema9 = Number(tech.ema9 || 0);
+      const ema20 = Number(tech.ema20 || 0);
+      const macd = Number(tech.macd || 0);
+      const macdSignal = Number(tech.macdSignal || 0);
+
+      return (
+        rsi >= 50 &&
+        ema9 > ema20 &&
+        macd > macdSignal
+      );
+    })
     .filter((s) => Number(s.percentChange || 0) <= 25)
     .filter((s) => s.confirmations?.fakeBreakout !== true)
     .filter((s) => s.confirmations?.gapTooHigh !== true)
