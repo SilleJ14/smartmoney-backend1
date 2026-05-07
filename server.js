@@ -1303,14 +1303,11 @@ async function scanMarket() {
 
       const score = scoreStock(quote);
 
-      return {
-        ...quote,
-        score,
-        qualifiedToBuy:
-  q.assetClass === "crypto"
-    ? score >= 45
-    : score >= CONFIG.minScoreToBuy,
-      };
+     return {
+  ...quote,
+  score,
+  qualifiedToBuy: score >= CONFIG.minScoreToBuy,
+};
     } catch (err) {
       saveSkippedSymbol(symbol, err.message);
       return null;
