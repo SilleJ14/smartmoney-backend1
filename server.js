@@ -1423,46 +1423,90 @@ function minutesUntil(dateString) {
   return (target - now) / 1000 / 60;
 }
 
-async function autoCloseStocksAfterMarketClose(marketOpen) {
-  if (marketOpen) return;
+async function flattenStocksAndCryptoBeforeMarketClose(clock) {
+  if (!clock?.is_open || !clock?.next_close) return false;
 
-  const now = Date.now();
-  const marketClosedAt = Number(engineState.marketClosedAt || 0);
-
-  if (!marketClosedAt) return;
-
-  const minutesAfterClose = (now - marketClosedAt) / 1000 / 60;
-
-  if (minutesAfterClose < 5) return;
-
+  const minsUntilClose = minutesUntil(clock.next_close);
   const todayKey = new Date().toISOString().slice(0, 10);
 
-  if (engineState.lastStockCloseAllAt === todayKey) return;
+  if (minsUntilClose > 60 || minsUntilClose <= 0) return false;
 
-  engineState.lastStockCloseAllAt = todayKey;
+  engineState.stockTradingStoppedForDay = true;
+  engineState.cryptoTradingStoppedForDay = true;
 
+  if (engineState.lastFlattenAllBeforeCloseAt === todayKey) {
+    return true;
+  }
+
+  engineState.lastFlattenAllBeforeCloseAt = todayKey;
+
+  // Cancel all open orders first
+  try {
+    const orders = await getOrders();
+
+    const openOrders = orders.filter((order) => {
+      const status = String(order.status || "").toLowerCase();
+
+      return (
+        status === "new" ||
+        status === "accepted" ||
+        status === "partially_filled" ||
+        status === "pending_new"
+      );
+    });
+
+    for (const order of openOrders) {
+      try {
+        await alpacaTradingRequest(`/v2/orders/${order.id}`, {
+          method: "DELETE",
+        });
+
+        saveRecentOrder("ORDER_CANCELLED_1_HOUR_BEFORE_CLOSE", order.symbol, {
+          orderId: order.id,
+          status: order.status,
+          minutesUntilClose: Number(minsUntilClose.toFixed(2)),
+        });
+      } catch (err) {
+        saveFailedOrder(
+          "ORDER_CANCEL_1_HOUR_BEFORE_CLOSE_FAILED",
+          order.symbol,
+          err.message,
+          { orderId: order.id }
+        );
+      }
+    }
+  } catch (err) {
+    saveFailedOrder("ORDER_CANCEL_SCAN_1_HOUR_BEFORE_CLOSE_FAILED", "ALL", err.message);
+  }
+
+  // Sell all filled/open positions: stocks and crypto
   const positions = await getPositions();
 
   for (const pos of positions) {
     const symbol = normalizeSymbol(pos.symbol);
-
-    // Skip crypto pairs
-    if (symbol.includes("/") || symbol.endsWith("USD")) continue;
-
     const qty = Number(pos.qty);
 
     if (!qty || qty <= 0) continue;
 
-    try {
-      const order = await placeMarketSell(
-        symbol,
-        qty,
-        "STOCK_CLOSE_5_MIN_AFTER_MARKET_CLOSE"
-      );
+    const isCrypto = symbol.includes("/") || symbol.endsWith("USD");
 
-      saveRecentOrder("STOCK_CLOSED_AFTER_MARKET_CLOSE", symbol, {
+    try {
+      const order = isCrypto
+        ? await placeCryptoMarketSell(
+            symbol,
+            qty,
+            "CRYPTO_FLATTEN_1_HOUR_BEFORE_MARKET_CLOSE"
+          )
+        : await placeMarketSell(
+            symbol,
+            qty,
+            "STOCK_FLATTEN_1_HOUR_BEFORE_MARKET_CLOSE"
+          );
+
+      saveRecentOrder("POSITION_CLOSED_1_HOUR_BEFORE_CLOSE", symbol, {
         qty,
-        minutesAfterClose: Number(minutesAfterClose.toFixed(2)),
+        assetClass: isCrypto ? "crypto" : "stock",
+        minutesUntilClose: Number(minsUntilClose.toFixed(2)),
         order,
       });
 
@@ -1471,13 +1515,18 @@ async function autoCloseStocksAfterMarketClose(marketOpen) {
       delete engineState.runnerPositions[symbol];
     } catch (err) {
       saveFailedOrder(
-        "STOCK_CLOSE_AFTER_MARKET_CLOSE_FAILED",
+        "POSITION_CLOSE_1_HOUR_BEFORE_CLOSE_FAILED",
         symbol,
         err.message,
-        { qty }
+        {
+          qty,
+          assetClass: isCrypto ? "crypto" : "stock",
+        }
       );
     }
   }
+
+  return true;
 }
 
 async function autoCloseCryptoBeforeMarketOpen(clock) {
@@ -1487,13 +1536,14 @@ async function autoCloseCryptoBeforeMarketOpen(clock) {
 
   const minsUntilOpen = minutesUntil(nextOpen);
 
-  if (minsUntilOpen > 5 || minsUntilOpen <= 0) return;
+  if (minsUntilOpen > 60 || minsUntilOpen <= 0) return;
 
   const todayKey = new Date().toISOString().slice(0, 10);
 
   if (engineState.lastCryptoCloseAllBeforeOpenAt === todayKey) return;
 
   engineState.lastCryptoCloseAllBeforeOpenAt = todayKey;
+  engineState.cryptoTradingStoppedForDay = true;
 
   const positions = await getPositions();
 
@@ -2403,15 +2453,30 @@ async function engineTick() {
     const clock = await getClock();
     const marketOpen = Boolean(clock.is_open);
     const effectiveMode = getEffectiveTradingMode(marketOpen);
+    const todayKey = new Date().toISOString().slice(0, 10);
+
+if (engineState.lastTradingDayKey !== todayKey) {
+  engineState.lastTradingDayKey = todayKey;
+  engineState.stockTradingStoppedForDay = false;
+  engineState.cryptoTradingStoppedForDay = false;
+
+  saveRecentOrder("TRADING_FLAGS_RESET_FOR_NEW_DAY", "SYSTEM", {
+    todayKey,
+  });
+}
     engineState.effectiveMode = effectiveMode;
     engineState.marketOpen = marketOpen;
-        if (engineState.lastMarketOpen === true && marketOpen === false) {
-      engineState.marketClosedAt = Date.now();
+    if (engineState.lastMarketOpen === true && marketOpen === false) {
+  engineState.marketClosedAt = Date.now();
 
-      saveRecentOrder("MARKET_CLOSED_DETECTED", "MARKET", {
-        marketClosedAt: new Date(engineState.marketClosedAt).toISOString(),
-      });
-    }
+  // Stock session ended, crypto session can start again
+  engineState.cryptoTradingStoppedForDay = false;
+
+  saveRecentOrder("MARKET_CLOSED_DETECTED", "MARKET", {
+    marketClosedAt: new Date(engineState.marketClosedAt).toISOString(),
+    cryptoTradingStoppedForDay: false,
+  });
+}
 
     engineState.lastMarketOpen = marketOpen;
 
@@ -2424,15 +2489,19 @@ console.log("SMART MODE:", {
 
     const riskLocked = await checkDailyLossAndProfitLock(account, marketOpen);
 
-    if (marketOpen) {
-      await executePendingExits();
-    }
-await autoCloseStocksAfterMarketClose(marketOpen);
+ if (marketOpen) {
+  await executePendingExits();
+}
+
+const tradingStoppedForDay =
+  await flattenStocksAndCryptoBeforeMarketClose(clock);
+
 await autoCloseCryptoBeforeMarketOpen(clock);
 
 await autoExitPositions(marketOpen);
-const cryptoEnabled =
-  effectiveMode === "live_crypto";
+
+const cryptoEnabled = effectiveMode === "live_crypto";
+
 if (cryptoEnabled) {
   await autoExitCryptoPositions();
 }
@@ -2461,16 +2530,25 @@ if (
   !engineState.profitLocked &&
   !riskLocked
 ) {
-  if (effectiveMode === "live_crypto") {
+  if (
+    effectiveMode === "live_crypto" &&
+    !tradingStoppedForDay &&
+    !engineState.cryptoTradingStoppedForDay
+  ) {
     await autoBuyCryptoSignals(cryptoSignals);
   }
 
-  if (effectiveMode === "live_stock" && marketOpen) {
+  if (
+    effectiveMode === "live_stock" &&
+    marketOpen &&
+    !tradingStoppedForDay &&
+    !engineState.stockTradingStoppedForDay
+  ) {
     await autoBuySignals(stockSignals);
   }
 }
 
-   if (autoTradingEnabled && !marketOpen && TRADING_MODE !== "smart") {
+if (autoTradingEnabled && !marketOpen && TRADING_MODE !== "smart") {
   saveRecentOrder("BUY_SKIPPED_MARKET_CLOSED", "ALL", {
     message: "Market closed. Stock buys skipped.",
   });
@@ -2755,6 +2833,9 @@ app.get("/orders", async (req, res) => {
       failedOrders: engineState.failedOrders,
       pendingExits: engineState.pendingExits,
       runnerPositions: engineState.runnerPositions,
+      effectiveMode: engineState.effectiveMode,
+      stockTradingStoppedForDay: engineState.stockTradingStoppedForDay,
+      cryptoTradingStoppedForDay: engineState.cryptoTradingStoppedForDay,
     });
   } catch (err) {
     res.status(500).json({ error: err.message });
