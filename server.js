@@ -1110,7 +1110,7 @@ async function scanCryptoMarket() {
         ...quote,
         score,
         barsFound: bars.length,
-        qualifiedToBuy: score >= 65,
+        qualifiedToBuy: score >= 45,
       });
     } catch (err) {
       saveSkippedSymbol(symbol, err.message);
@@ -1306,7 +1306,10 @@ async function scanMarket() {
       return {
         ...quote,
         score,
-        qualifiedToBuy: score >= CONFIG.minScoreToBuy,
+        qualifiedToBuy:
+  q.assetClass === "crypto"
+    ? score >= 45
+    : score >= CONFIG.minScoreToBuy,
       };
     } catch (err) {
       saveSkippedSymbol(symbol, err.message);
@@ -1392,8 +1395,10 @@ async function closePosition(symbol) {
 
   return alpacaTradingRequest(`/v2/positions/${normalizedSymbol}`, {
     method: "DELETE",
+
   });
 }
+
 
 function addPendingExit(symbol, qty, reason, extra = {}) {
   const normalizedSymbol = normalizeSymbol(symbol);
@@ -1402,7 +1407,9 @@ function addPendingExit(symbol, qty, reason, extra = {}) {
     (exit) => normalizeSymbol(exit.symbol) === normalizedSymbol
   );
 
-  if (alreadyPending) return;
+  if (alreadyPending) {
+    return false;
+  }
 
   engineState.pendingExits.unshift({
     symbol: normalizedSymbol,
@@ -1413,8 +1420,9 @@ function addPendingExit(symbol, qty, reason, extra = {}) {
   });
 
   engineState.pendingExits = engineState.pendingExits.slice(0, 100);
-}
 
+  return true;
+}
 
 function minutesUntil(dateString) {
   const target = new Date(dateString).getTime();
