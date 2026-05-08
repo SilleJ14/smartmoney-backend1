@@ -4216,17 +4216,23 @@ engineState.analyticsSnapshots =
   engineState.analyticsSnapshots.slice(0, 300);
     saveEngineState("SCAN_COMPLETED");
 
+       const marketStressLocked =
+      engineState.marketStressLevel >= 25;
+
+    const volatilityLocked =
+      engineState.marketVolatility >= 18;
+
     if (
       autoTradingEnabled &&
       !engineState.dailyLossLocked &&
       !engineState.profitLocked &&
       !marketStressLocked &&
+      !volatilityLocked &&
       !riskLocked
     ) {
       if (
         effectiveMode === "live_crypto" &&
         !tradingStoppedForDay &&
-        !marketStressLocked &&
         !engineState.cryptoTradingStoppedForDay
       ) {
         await autoBuyCryptoSignals(cryptoSignals);
@@ -4236,27 +4242,23 @@ engineState.analyticsSnapshots =
         effectiveMode === "live_stock" &&
         marketOpen &&
         !tradingStoppedForDay &&
-        !marketStressLocked &&
-        !volatilityLocked &&
         !engineState.stockTradingStoppedForDay
       ) {
         await autoBuySignals(stockSignals);
-        engineState.aiDecisionHistory.unshift({
-  timestamp: new Date().toISOString(),
-  type: "AUTO_BUY_EXECUTED",
-  signalCount: stockSignals.length,
-  tradingMode: TRADING_MODE,
-  effectiveMode,
-});
 
-engineState.aiDecisionHistory =
-  engineState.aiDecisionHistory.slice(0, 300);
+        engineState.aiDecisionHistory.unshift({
+          timestamp: new Date().toISOString(),
+          type: "AUTO_BUY_EXECUTED",
+          signalCount: stockSignals.length,
+          tradingMode: TRADING_MODE,
+          effectiveMode,
+        });
+
+        engineState.aiDecisionHistory =
+          engineState.aiDecisionHistory.slice(0, 300);
       }
     }
-const marketStressLocked =
-  engineState.marketStressLevel >= 25;
-  const volatilityLocked =
-  engineState.marketVolatility >= 18;
+
     if (autoTradingEnabled && !marketOpen && TRADING_MODE !== "smart") {
       saveRecentOrder("BUY_SKIPPED_MARKET_CLOSED", "ALL", {
         message: "Market closed. Stock buys skipped.",
@@ -4268,11 +4270,10 @@ const marketStressLocked =
     console.error("Engine error:", err.message);
   } finally {
     engineState.lastTickDurationMs =
-  Date.now() - engineState.lastTickStartedAt;
-  engineState.lastEngineStopReason = "ENGINE_TICK_COMPLETED";
-  engineState.engineFreezeDetected = false;
-  engineState.lastTickDurationMs =
-  Date.now() - engineState.lastTickStartedAt;
+      Date.now() - engineState.lastTickStartedAt;
+
+    engineState.lastEngineStopReason = "ENGINE_TICK_COMPLETED";
+    engineState.engineFreezeDetected = false;
     engineState.running = false;
   }
 }
