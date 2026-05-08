@@ -405,6 +405,83 @@ function estimateSectorIntelligence(q) {
     sectorRole,
   };
 }
+function calculatePortfolioHeatEngine(signal, openBotPositions = []) {
+  const symbol = normalizeSymbol(signal.symbol);
+  const estimatedSector = signal.estimatedSector || "General Market";
+
+  const openPositions = Array.isArray(openBotPositions) ? openBotPositions : [];
+
+  const openSymbols = openPositions
+    .map((position) => normalizeSymbol(position.symbol))
+    .filter(Boolean);
+
+  const duplicateSymbolRisk = openSymbols.includes(symbol);
+
+  const sameSectorPositions = openPositions.filter((position) => {
+    const positionSymbol = normalizeSymbol(position.symbol);
+
+    const estimatedPositionSector = estimateSectorIntelligence({
+      symbol: positionSymbol,
+      current: Number(position.current_price || position.avg_entry_price || 0),
+      price: Number(position.current_price || position.avg_entry_price || 0),
+      volume: 0,
+      percentChange: 0,
+      confirmations: {},
+    }).estimatedSector;
+
+    return estimatedPositionSector === estimatedSector;
+  });
+
+  const openPositionCount = openPositions.length;
+  const sameSectorCount = sameSectorPositions.length;
+
+  const concentrationRiskScore = clampScore(
+    100 -
+      openPositionCount * 12 -
+      sameSectorCount * 18 -
+      (duplicateSymbolRisk ? 40 : 0)
+  );
+
+  const correlationRiskScore = clampScore(
+    100 -
+      sameSectorCount * 22 -
+      (estimatedSector === "Speculative Small Cap" ? 20 : 0) -
+      (duplicateSymbolRisk ? 35 : 0)
+  );
+
+  const portfolioHeatScore = clampScore(
+    concentrationRiskScore * 0.55 + correlationRiskScore * 0.45
+  );
+
+  const portfolioHeatLabel =
+    portfolioHeatScore >= 80
+      ? "Low Portfolio Heat"
+      : portfolioHeatScore >= 65
+      ? "Moderate Portfolio Heat"
+      : portfolioHeatScore >= 50
+      ? "Elevated Portfolio Heat"
+      : "High Portfolio Heat";
+
+  const correlationAction =
+    duplicateSymbolRisk
+      ? "Block Duplicate Symbol"
+      : portfolioHeatScore >= 65
+      ? "Allow Allocation"
+      : portfolioHeatScore >= 50
+      ? "Reduce Allocation"
+      : "Avoid Additional Exposure";
+
+  return {
+    portfolioHeatScore,
+    portfolioHeatLabel,
+    correlationRiskScore,
+    concentrationRiskScore,
+    sameSectorOpenPositions: sameSectorCount,
+    totalOpenBotPositions: openPositionCount,
+    duplicateSymbolRisk,
+    correlationAction,
+  };
+}
 function calculateAiPortfolioManagerDecision(signal, account, openBotPositions = [], regime = {}) {
   const equity = Number(account?.equity || 0);
   const cash = Number(account?.cash || 0);
@@ -419,7 +496,7 @@ function calculateAiPortfolioManagerDecision(signal, account, openBotPositions =
   const wealthBuilderScore = Number(signal.wealthBuilderScore || signal.dividendScore || 0);
   const portfolioScore = Number(signal.portfolioScore || 0);
   const institutionalRiskScore = Number(signal.institutionalRiskScore || riskScore || 0);
-
+  const portfolioHeat = calculatePortfolioHeatEngine(signal, openBotPositions);
   const currentBotExposure = getBotExposure(openBotPositions);
   const maxBotBudget = equity * (CONFIG.maxBotExposurePercent / 100);
   const remainingBotBudget = Math.max(0, maxBotBudget - currentBotExposure);
@@ -436,9 +513,10 @@ function calculateAiPortfolioManagerDecision(signal, account, openBotPositions =
   );
 
   const portfolioFitScore = clampScore(
-    portfolioScore * 0.45 +
-      institutionalRiskScore * 0.35 +
-      wealthBuilderScore * 0.2
+    portfolioScore * 0.35 +
+      institutionalRiskScore * 0.25 +
+      wealthBuilderScore * 0.15 +
+      portfolioHeat.portfolioHeatScore * 0.25
   );
 
   const aiConvictionScore = clampScore(
@@ -469,7 +547,13 @@ function calculateAiPortfolioManagerDecision(signal, account, openBotPositions =
       : institutionalRiskScore >= 50
       ? 0.45
       : 0.2;
-
+      
+  const heatMultiplier =
+    portfolioHeat.correlationAction === "Allow Allocation"
+      ? 1
+      : portfolioHeat.correlationAction === "Reduce Allocation"
+      ? 0.5
+      : 0;
   const roleMultiplier =
     signal.portfolioRole === "Core Position Candidate"
       ? 1
@@ -487,6 +571,7 @@ function calculateAiPortfolioManagerDecision(signal, account, openBotPositions =
       convictionMultiplier *
       riskMultiplier *
       roleMultiplier *
+      heatMultiplier *
       regimeMultiplier
     ).toFixed(2)
   );
@@ -494,7 +579,12 @@ function calculateAiPortfolioManagerDecision(signal, account, openBotPositions =
   const recommendedTradeAmount = Math.max(
     0,
     Math.min(
-      basePerTradeMax * convictionMultiplier * riskMultiplier * roleMultiplier * regimeMultiplier,
+        basePerTradeMax *
+        convictionMultiplier *
+        riskMultiplier *
+        roleMultiplier *
+        heatMultiplier *
+        regimeMultiplier,
       remainingBotBudget,
       cash,
       buyingPower || cash
@@ -502,7 +592,11 @@ function calculateAiPortfolioManagerDecision(signal, account, openBotPositions =
   );
 
   const aiPortfolioAction =
-    recommendedTradeAmount <= 0
+    portfolioHeat.correlationAction === "Block Duplicate Symbol"
+      ? "Blocked Duplicate"
+      : portfolioHeat.correlationAction === "Avoid Additional Exposure"
+      ? "Portfolio Heat Too High"
+      : recommendedTradeAmount <= 0
       ? "No Capital Available"
       : aiConvictionScore >= 80 && institutionalRiskScore >= 65
       ? "Deploy Capital"
@@ -516,6 +610,14 @@ function calculateAiPortfolioManagerDecision(signal, account, openBotPositions =
     portfolioFitScore,
     aiAllocationPercentOfBotBudget,
     recommendedTradeAmount: Number(recommendedTradeAmount.toFixed(2)),
+    portfolioHeatScore: portfolioHeat.portfolioHeatScore,
+    portfolioHeatLabel: portfolioHeat.portfolioHeatLabel,
+    correlationRiskScore: portfolioHeat.correlationRiskScore,
+    concentrationRiskScore: portfolioHeat.concentrationRiskScore,
+    sameSectorOpenPositions: portfolioHeat.sameSectorOpenPositions,
+    totalOpenBotPositions: portfolioHeat.totalOpenBotPositions,
+    duplicateSymbolRisk: portfolioHeat.duplicateSymbolRisk,
+    correlationAction: portfolioHeat.correlationAction,
     aiPortfolioAction,
     portfolioManagerReason:
       `${aiPortfolioAction} • Conviction ${aiConvictionScore}/100 • ` +
