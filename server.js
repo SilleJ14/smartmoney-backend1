@@ -332,6 +332,79 @@ function getBotExposure(openPositions = []) {
     return sum + Math.abs(Number(position.market_value || 0));
   }, 0);
 }
+function estimateSectorIntelligence(q) {
+  const symbol = normalizeSymbol(q.symbol);
+  const price = Number(q.current || q.price || 0);
+  const volume = Number(q.volume || 0);
+  const percentChange = Number(q.percentChange || 0);
+  const confirmations = q.confirmations || {};
+
+  const techLike = ["AI", "NET", "HUBS", "UPWK", "FROG", "RKLB", "RXT"];
+  const healthcareLike = ["AMPH", "SRTS", "AMN"];
+  const industrialLike = ["KODK", "CORD", "ALTG"];
+  const speculativeLike = ["TEAD", "FLUX", "KMLI", "SNDQ", "NETG"];
+
+  let estimatedSector = "General Market";
+  if (techLike.includes(symbol)) estimatedSector = "Technology / Innovation";
+  if (healthcareLike.includes(symbol)) estimatedSector = "Healthcare";
+  if (industrialLike.includes(symbol)) estimatedSector = "Industrial";
+  if (speculativeLike.includes(symbol) || price < 5) estimatedSector = "Speculative Small Cap";
+
+  const sectorMomentumScore = clampScore(
+    50 +
+      (percentChange > 0 && percentChange <= 20 ? 15 : 0) -
+      (percentChange > 40 ? 20 : 0) +
+      (confirmations.closeNearHigh ? 10 : 0)
+  );
+
+  const sectorRiskScore = clampScore(
+    75 -
+      (estimatedSector === "Speculative Small Cap" ? 25 : 0) -
+      (confirmations.fakeBreakout ? 30 : 0) -
+      (confirmations.newsRisk ? 25 : 0) -
+      (volume < 25000 ? 10 : 0)
+  );
+
+  const sectorLiquidityScore = clampScore(
+    40 +
+      (volume >= 1000000 ? 35 : volume >= 250000 ? 25 : volume >= 25000 ? 15 : -10) +
+      (price >= 5 ? 10 : -10)
+  );
+
+  const sectorLeadershipScore = clampScore(
+    45 +
+      (percentChange >= 2 && percentChange <= 20 ? 15 : 0) +
+      (volume >= 250000 ? 10 : 0) +
+      (confirmations.aboveVwap ? 8 : 0) -
+      (percentChange > 50 ? 20 : 0)
+  );
+
+  const sectorScore = clampScore(
+    sectorMomentumScore * 0.3 +
+      sectorRiskScore * 0.3 +
+      sectorLiquidityScore * 0.2 +
+      sectorLeadershipScore * 0.2
+  );
+
+  const sectorRole =
+    sectorScore >= 80
+      ? "Sector Leader"
+      : sectorScore >= 65
+      ? "Strong Sector Candidate"
+      : sectorScore >= 50
+      ? "Sector Watchlist"
+      : "Sector Risk Candidate";
+
+  return {
+    estimatedSector,
+    sectorScore,
+    sectorMomentumScore,
+    sectorRiskScore,
+    sectorLiquidityScore,
+    sectorLeadershipScore,
+    sectorRole,
+  };
+}
 function calculateAiPortfolioManagerDecision(signal, account, openBotPositions = [], regime = {}) {
   const equity = Number(account?.equity || 0);
   const cash = Number(account?.cash || 0);
@@ -1639,6 +1712,7 @@ function calculateInstitutionalScores(q) {
   const moat = calculateMoatEngine(q);
   const wealth = calculateDividendWealthEngine(q);
   const portfolio = calculatePortfolioConstructionEngine(q);
+  const sector = estimateSectorIntelligence(q);
   const advancedRisk = calculateAdvancedRiskEngine(q);
   const technicalScore = clampScore(
     45 +
@@ -1694,7 +1768,8 @@ function calculateInstitutionalScores(q) {
       earningsScore * 0.05 +
       moatScore * 0.04 +
       dividendScore * 0.02 +
-      portfolioScore * 0.04
+            portfolioScore * 0.04 +
+      sector.sectorScore * 0.03
   );
 
   const autoTradeApproved =
@@ -1766,6 +1841,13 @@ function calculateInstitutionalScores(q) {
     portfolioRiskContributionScore: portfolio.portfolioRiskContributionScore,
     portfolioRole: portfolio.portfolioRole,
     suggestedAllocationTier: portfolio.suggestedAllocationTier,
+    estimatedSector: sector.estimatedSector,
+    sectorScore: sector.sectorScore,
+    sectorMomentumScore: sector.sectorMomentumScore,
+    sectorRiskScore: sector.sectorRiskScore,
+    sectorLiquidityScore: sector.sectorLiquidityScore,
+    sectorLeadershipScore: sector.sectorLeadershipScore,
+    sectorRole: sector.sectorRole,
     institutionalScore,
     aiConfidence: institutionalScore,
     riskLevel: getRiskLevel(riskScore),
