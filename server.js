@@ -854,6 +854,74 @@ function getSuggestedHoldTime(score) {
   return "Watch only";
 }
 
+function calculateEarningsIntelligenceEngine(q) {
+  const percentChange = Number(q.percentChange || 0);
+  const volume = Number(q.volume || 0);
+  const confirmations = q.confirmations || {};
+  const technicals = q.technicals || {};
+
+  const volumeRatio = Number(confirmations.volumeSpikeRatio || q.volumeRatio || 0);
+  const rsi = Number(technicals.rsi || 50);
+
+  const revenueQualityScore = clampScore(
+    50 +
+      (percentChange > 0 && percentChange <= 12 ? 15 : 0) +
+      (volume >= 25000 ? 10 : -10)
+  );
+
+  const guidanceScore = clampScore(
+    50 +
+      (percentChange > 2 && percentChange <= 15 ? 15 : 0) -
+      (percentChange > 25 ? 20 : 0)
+  );
+
+  const marginExpansionScore = clampScore(
+    50 +
+      (percentChange > 0 && percentChange <= 10 ? 10 : 0) -
+      (rsi > 80 ? 10 : 0)
+  );
+
+  const epsSurpriseQualityScore = clampScore(
+    50 +
+      (volumeRatio >= 1.3 ? 15 : 0) +
+      (percentChange > 0 ? 10 : -10) -
+      (confirmations.fakeBreakout ? 25 : 0)
+  );
+
+  const institutionalEarningsSentiment = clampScore(
+    50 +
+      (volumeRatio >= 1.5 ? 15 : 0) +
+      (confirmations.closeNearHigh ? 10 : 0) +
+      (confirmations.aboveVwap ? 10 : 0) -
+      (confirmations.newsRisk ? 25 : 0)
+  );
+
+  const earningsCashFlowStrength = clampScore(
+    50 +
+      (volume >= 100000 ? 15 : volume >= 25000 ? 8 : -10) -
+      (percentChange > 30 ? 15 : 0)
+  );
+
+  const earningsScore = clampScore(
+    revenueQualityScore * 0.18 +
+      guidanceScore * 0.18 +
+      marginExpansionScore * 0.16 +
+      epsSurpriseQualityScore * 0.16 +
+      institutionalEarningsSentiment * 0.17 +
+      earningsCashFlowStrength * 0.15
+  );
+
+  return {
+    earningsScore,
+    revenueQualityScore,
+    guidanceScore,
+    marginExpansionScore,
+    epsSurpriseQualityScore,
+    institutionalEarningsSentiment,
+    earningsCashFlowStrength,
+  };
+}
+
 function calculateFundamentalDcfEngine(q) {
   const price = Number(q.current || q.price || 0);
   const volume = Number(q.volume || 0);
@@ -1129,6 +1197,7 @@ function calculateInstitutionalScores(q) {
   const macd = Number(technicals.macd || 0);
   const macdSignal = Number(technicals.macdSignal || 0);
   const dcf = calculateFundamentalDcfEngine(q);
+  const earnings = calculateEarningsIntelligenceEngine(q);
   const edge = calculateStatisticalEdge(q);
   const technicalScore = clampScore(
     45 +
@@ -1164,7 +1233,7 @@ function calculateInstitutionalScores(q) {
 
   const fundamentalScore = dcf.fundamentalScore;
 
-  const earningsScore = clampScore(50);
+  const earningsScore = earnings.earningsScore;
   const moatScore = clampScore(q.current >= 10 ? 60 : 45);
   const dividendScore = clampScore(45);
   const portfolioScore = clampScore(70);
@@ -1211,6 +1280,12 @@ function calculateInstitutionalScores(q) {
     marginScore: dcf.marginScore,
     debtRiskScore: dcf.debtRiskScore,
     earningsScore,
+    revenueQualityScore: earnings.revenueQualityScore,
+    guidanceScore: earnings.guidanceScore,
+    marginExpansionScore: earnings.marginExpansionScore,
+    epsSurpriseQualityScore: earnings.epsSurpriseQualityScore,
+    institutionalEarningsSentiment: earnings.institutionalEarningsSentiment,
+    earningsCashFlowStrength: earnings.earningsCashFlowStrength,
     moatScore,
     dividendScore,
     portfolioScore,
