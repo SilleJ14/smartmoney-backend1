@@ -3531,17 +3531,16 @@ async function replaceWeakestIfBetter(signals, positions, aiOwnedSymbols) {
           tradeAmount,
           topCandidate.score
         );
-
-        saveRecentOrder("ROTATED_IN_STRONGER_POSITION", topCandidate.symbol, {
-          price: topCandidate.current,
-          score: topCandidate.score,
-          confirmations: topCandidate.confirmations || null,
-          replacedSymbol: weakestSymbol,
-          tradeAmount,
-          maxBotExposurePercent: CONFIG.maxBotExposurePercent,
-          portfolioManager,
-          buyOrder,
-        });
+      saveRecentOrder("AUTO_BUY_INSTITUTIONAL_ALLOCATOR", stock.symbol, {
+        price: stock.current,
+        score: stock.score,
+        confirmations: stock.confirmations || null,
+        tradeAmount,
+        maxBotExposurePercent: CONFIG.maxBotExposurePercent,
+        portfolioManager: refreshedPortfolioManager,
+        buyOrder,
+      });
+      
       } catch (err) {
         saveFailedOrder("ROTATION_BUY_FAILED", topCandidate.symbol, err.message, {
           replacedSymbol: weakestSymbol,
@@ -3625,10 +3624,10 @@ async function autoBuySignals(signals) {
       portfolioManager.aiPortfolioAction === "Watch Only" ||
       portfolioManager.aiPortfolioAction === "No Capital Available"
     ) {
-      saveRecentOrder("BUY_SKIPPED_AI_PORTFOLIO_MANAGER", stock.symbol, {
-        ...portfolioManager,
-        message: "Skipped by AI Portfolio Manager",
-      });
+    saveRecentOrder("BUY_SKIPPED_AI_PORTFOLIO_MANAGER", stock.symbol, {
+  portfolioManager,
+  message: "Skipped by AI Portfolio Manager",
+});
       continue;
     }
     const pullback = Number(
@@ -3676,30 +3675,28 @@ async function autoBuySignals(signals) {
       const freshAiPositions = freshPositions.filter((p) =>
         freshAiOwnedSymbols.has(normalizeSymbol(p.symbol))
       );
-      const adaptiveExposureMultiplier =
-  engineState.marketVolatility >= 10
-    ? 0.5
-    : engineState.marketVolatility >= 6
-    ? 0.75
-    : 1;
-      const baseTradeAmount = getDynamicTradeAmount(
-        account,
-        aiPositions,
-        stock.score
-      );
-const confidenceMultiplier =
-  stock.score >= 95
-    ? 1.4
-    : stock.score >= 90
-    ? 1.2
-    : stock.score >= 85
-    ? 1
-    : 0.75;
-    const tradeAmount =
-  baseTradeAmount *
-  Number(regime.exposureMultiplier || 1) *
-  adaptiveExposureMultiplier *
-  confidenceMultiplier;
+      const refreshedPortfolioManager = calculateAiPortfolioManagerDecision(
+  stock,
+  account,
+  aiPositions,
+  regime
+);
+
+const tradeAmount = Number(
+  refreshedPortfolioManager.recommendedTradeAmount || 0
+);
+
+engineState.aiDecisionHistory.unshift({
+  type: "INSTITUTIONAL_PORTFOLIO_ALLOCATOR",
+  symbol: stock.symbol,
+  at: new Date().toISOString(),
+  score: stock.score,
+  tradeAmount,
+  portfolioManager: refreshedPortfolioManager,
+});
+
+engineState.aiDecisionHistory = engineState.aiDecisionHistory.slice(0, 500);
+saveEngineState("INSTITUTIONAL_PORTFOLIO_ALLOCATOR_DECISION");
 
       if (tradeAmount <= 0) {
         saveFailedOrder(
@@ -3714,23 +3711,21 @@ const confidenceMultiplier =
         );
         continue;
       }
+const buyOrder = await placeMarketBuy(
+  stock.symbol,
+  tradeAmount,
+  stock.score
+);
 
-      const buyOrder = await placeMarketBuy(
-        topCandidate.symbol,
-        tradeAmount,
-        topCandidate.score
-      );
-
-      saveRecentOrder("ROTATED_IN_STRONGER_POSITION", topCandidate.symbol, {
-        price: topCandidate.current,
-        score: topCandidate.score,
-        confirmations: topCandidate.confirmations || null,
-        replacedSymbol: weakestSymbol,
-        tradeAmount,
-        maxBotExposurePercent: CONFIG.maxBotExposurePercent,
-        portfolioManager,
-        buyOrder,
-      });
+saveRecentOrder("AUTO_BUY_INSTITUTIONAL_ALLOCATOR", stock.symbol, {
+  price: stock.current,
+  score: stock.score,
+  confirmations: stock.confirmations || null,
+  tradeAmount,
+  maxBotExposurePercent: CONFIG.maxBotExposurePercent,
+  portfolioManager: refreshedPortfolioManager,
+  buyOrder,
+});
     } catch (err) {
       saveFailedOrder("AUTO_BUY_FAILED", stock.symbol, err.message, {
         price: stock.current,
