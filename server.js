@@ -332,6 +332,123 @@ function getBotExposure(openPositions = []) {
     return sum + Math.abs(Number(position.market_value || 0));
   }, 0);
 }
+function calculateAiPortfolioManagerDecision(signal, account, openBotPositions = [], regime = {}) {
+  const equity = Number(account?.equity || 0);
+  const cash = Number(account?.cash || 0);
+  const buyingPower = Number(account?.buying_power || 0);
+
+  const institutionalScore = Number(signal.institutionalScore || signal.score || 0);
+  const riskScore = Number(signal.riskScore || 0);
+  const statisticalScore = Number(signal.statisticalScore || 0);
+  const fundamentalScore = Number(signal.fundamentalScore || 0);
+  const earningsScore = Number(signal.earningsScore || 0);
+  const moatScore = Number(signal.moatScore || 0);
+  const wealthBuilderScore = Number(signal.wealthBuilderScore || signal.dividendScore || 0);
+  const portfolioScore = Number(signal.portfolioScore || 0);
+  const institutionalRiskScore = Number(signal.institutionalRiskScore || riskScore || 0);
+
+  const currentBotExposure = getBotExposure(openBotPositions);
+  const maxBotBudget = equity * (CONFIG.maxBotExposurePercent / 100);
+  const remainingBotBudget = Math.max(0, maxBotBudget - currentBotExposure);
+  const basePerTradeMax = maxBotBudget / Math.max(1, CONFIG.maxOpenTrades);
+
+  const opportunityQualityScore = clampScore(
+    institutionalScore * 0.3 +
+      statisticalScore * 0.18 +
+      riskScore * 0.18 +
+      fundamentalScore * 0.1 +
+      earningsScore * 0.08 +
+      moatScore * 0.08 +
+      wealthBuilderScore * 0.08
+  );
+
+  const portfolioFitScore = clampScore(
+    portfolioScore * 0.45 +
+      institutionalRiskScore * 0.35 +
+      wealthBuilderScore * 0.2
+  );
+
+  const aiConvictionScore = clampScore(
+    opportunityQualityScore * 0.55 + portfolioFitScore * 0.45
+  );
+
+  const regimeMultiplier =
+    Number(regime.exposureMultiplier || 0) > 0
+      ? Number(regime.exposureMultiplier || 1)
+      : 0;
+
+  const convictionMultiplier =
+    aiConvictionScore >= 90
+      ? 1
+      : aiConvictionScore >= 80
+      ? 0.8
+      : aiConvictionScore >= 70
+      ? 0.6
+      : aiConvictionScore >= 60
+      ? 0.4
+      : 0.25;
+
+  const riskMultiplier =
+    institutionalRiskScore >= 80
+      ? 1
+      : institutionalRiskScore >= 65
+      ? 0.75
+      : institutionalRiskScore >= 50
+      ? 0.45
+      : 0.2;
+
+  const roleMultiplier =
+    signal.portfolioRole === "Core Position Candidate"
+      ? 1
+      : signal.portfolioRole === "Strong Portfolio Fit"
+      ? 0.85
+      : signal.portfolioRole === "Satellite Position"
+      ? 0.65
+      : signal.portfolioRole === "Small Tactical Position"
+      ? 0.45
+      : 0.25;
+
+  const aiAllocationPercentOfBotBudget = Number(
+    (
+      CONFIG.maxBotExposurePercent *
+      convictionMultiplier *
+      riskMultiplier *
+      roleMultiplier *
+      regimeMultiplier
+    ).toFixed(2)
+  );
+
+  const recommendedTradeAmount = Math.max(
+    0,
+    Math.min(
+      basePerTradeMax * convictionMultiplier * riskMultiplier * roleMultiplier * regimeMultiplier,
+      remainingBotBudget,
+      cash,
+      buyingPower || cash
+    )
+  );
+
+  const aiPortfolioAction =
+    recommendedTradeAmount <= 0
+      ? "No Capital Available"
+      : aiConvictionScore >= 80 && institutionalRiskScore >= 65
+      ? "Deploy Capital"
+      : aiConvictionScore >= 65
+      ? "Small Tactical Allocation"
+      : "Watch Only";
+
+  return {
+    aiConvictionScore,
+    opportunityQualityScore,
+    portfolioFitScore,
+    aiAllocationPercentOfBotBudget,
+    recommendedTradeAmount: Number(recommendedTradeAmount.toFixed(2)),
+    aiPortfolioAction,
+    portfolioManagerReason:
+      `${aiPortfolioAction} • Conviction ${aiConvictionScore}/100 • ` +
+      `Risk ${institutionalRiskScore}/100 • Fit ${portfolioFitScore}/100`,
+  };
+}
 
 function getDynamicTradeAmount(account, openBotPositions = [], signalScore = 80) {
   const cash = Number(account?.cash || 0);
@@ -2091,11 +2208,19 @@ async function scanMarket() {
         score,
       });
 
+     const portfolioManager = calculateAiPortfolioManagerDecision(
+        institutional,
+        engineState.cachedAccount || {},
+        engineState.cachedPositions || [],
+        engineState.marketRegime || detectMarketRegime([])
+      );
+
       return {
         ...quote,
         score: institutional.institutionalScore,
         legacyMomentumScore: score,
         ...institutional,
+        ...portfolioManager,
         qualifiedToBuy: institutional.decisionLevel !== "Visible Stock",
       };
     } catch (err) {
@@ -2855,11 +2980,14 @@ async function replaceWeakestIfBetter(signals, positions, aiOwnedSymbols) {
           freshAiOwnedSymbols.has(normalizeSymbol(p.symbol))
         );
 
-   const tradeAmount = getDynamicTradeAmount(
-   account,
-   freshAiPositions,
-   topCandidate.score
- );
+   const portfolioManager = calculateAiPortfolioManagerDecision(
+     topCandidate,
+     account,
+     freshAiPositions,
+     engineState.marketRegime || detectMarketRegime([])
+   );
+
+   const tradeAmount = portfolioManager.recommendedTradeAmount;
 
         if (tradeAmount <= 0) {
           saveFailedOrder(
@@ -2883,6 +3011,7 @@ async function replaceWeakestIfBetter(signals, positions, aiOwnedSymbols) {
           replacedSymbol: weakestSymbol,
           tradeAmount,
           maxBotExposurePercent: CONFIG.maxBotExposurePercent,
+          portfolioManager,
           buyOrder,
         });
       } catch (err) {
@@ -2943,6 +3072,24 @@ async function autoBuySignals(signals) {
     .slice(0, Math.min(openSlots, CONFIG.topAutoTradeCandidates));
 
 for (const stock of buyCandidates) {
+
+      const portfolioManager = calculateAiPortfolioManagerDecision(
+      stock,
+      engineState.cachedAccount || (await getAccount()),
+      aiPositions,
+      regime
+    );
+
+    if (
+      portfolioManager.aiPortfolioAction === "Watch Only" ||
+      portfolioManager.aiPortfolioAction === "No Capital Available"
+    ) {
+      saveRecentOrder("BUY_SKIPPED_AI_PORTFOLIO_MANAGER", stock.symbol, {
+        ...portfolioManager,
+        message: "Skipped by AI Portfolio Manager",
+      });
+      continue;
+    }
     const pullback = Number(
     stock.confirmations?.pullbackFromHighPercent || 0
   );
@@ -3010,17 +3157,22 @@ for (const stock of buyCandidates) {
       continue;
     }
 
-    const order = await placeMarketBuy(stock.symbol, tradeAmount, stock.score);
+     const buyOrder = await placeMarketBuy(
+          topCandidate.symbol,
+          tradeAmount,
+          topCandidate.score
+        );
 
-    saveRecentOrder("AUTO_BUY", stock.symbol, {
-      price: stock.current,
-      score: stock.score,
-      percentChange: stock.percentChange,
-      confirmations: stock.confirmations || null,
-      tradeAmount,
-      maxBotExposurePercent: CONFIG.maxBotExposurePercent,
-      order,
-    });
+        saveRecentOrder("ROTATED_IN_STRONGER_POSITION", topCandidate.symbol, {
+          price: topCandidate.current,
+          score: topCandidate.score,
+          confirmations: topCandidate.confirmations || null,
+          replacedSymbol: weakestSymbol,
+          tradeAmount,
+          maxBotExposurePercent: CONFIG.maxBotExposurePercent,
+          portfolioManager,
+          buyOrder,
+        });
   } catch (err) {
     saveFailedOrder("AUTO_BUY_FAILED", stock.symbol, err.message, {
       price: stock.current,
