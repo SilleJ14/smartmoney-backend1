@@ -140,10 +140,54 @@ function saveEngineState(reason = "STATE_UPDATE") {
       lastSoldAt: engineState.lastSoldAt || {},
       peaksByMode: engineState.peaksByMode || {},
       aiManagedSymbols: engineState.aiManagedSymbols || [],
-
+institutionalWatchlist:
+  engineState.institutionalWatchlist || [],
+  analyticsSnapshots:
+  (engineState.analyticsSnapshots || []).slice(0, 300),
+  apiHealth: engineState.apiHealth || {},
+  apiFailureCounts:
+  engineState.apiFailureCounts || {},
+  apiCooldowns:
+  engineState.apiCooldowns || {},
+  signalHistory:
+  (engineState.signalHistory || []).slice(0, 200),
+marketRegimeHistory:
+  (engineState.marketRegimeHistory || []).slice(0, 200),
+sectorStrengthHistory:
+  (engineState.sectorStrengthHistory || []).slice(0, 200),
+signalQualityHistory:
+  (engineState.signalQualityHistory || []).slice(0, 200),
+marketBreadthHistory:
+  (engineState.marketBreadthHistory || []).slice(0, 200),
+marketMomentumHistory:
+  (engineState.marketMomentumHistory || []).slice(0, 200),
+marketVolatilityHistory:
+  (engineState.marketVolatilityHistory || []).slice(0, 200),
+institutionalExposureHistory:
+  (engineState.institutionalExposureHistory || []).slice(0, 200),
+aiDecisionHistory:
+  (engineState.aiDecisionHistory || []).slice(0, 500),
       recentOrders: (engineState.recentOrders || []).slice(0, 100),
       failedOrders: (engineState.failedOrders || []).slice(0, 100),
       skippedSymbols: (engineState.skippedSymbols || []).slice(0, 150),
+      lastScanAt: engineState.lastScanAt,
+lastHeartbeatAt: engineState.lastHeartbeatAt,
+lastTickStartedAt: engineState.lastTickStartedAt,
+lastTickDurationMs: engineState.lastTickDurationMs,
+lastSuccessfulCycleAt: engineState.lastSuccessfulCycleAt,
+lastEngineStopReason: engineState.lastEngineStopReason,
+totalEngineTicks: engineState.totalEngineTicks,
+
+marketOpen: engineState.marketOpen,
+marketStressLevel: engineState.marketStressLevel,
+marketMomentumScore: engineState.marketMomentumScore,
+marketVolatility: engineState.marketVolatility,
+marketBreadth: engineState.marketBreadth,
+marketRegime: engineState.marketRegime,
+institutionalExposureMode: engineState.institutionalExposureMode,
+
+engineFreezeDetected: engineState.engineFreezeDetected,
+engineFreezeCount: engineState.engineFreezeCount,
       pendingExits: engineState.pendingExits || [],
     };
 
@@ -258,9 +302,35 @@ const CONFIG = {
 // LINE BEFORE
 let engineState = {
   running: false,
+
   lastScanAt: null,
+  lastHeartbeatAt: null,
+
+  lastTickStartedAt: null,
+  lastTickDurationMs: null,
+  lastScanDurationMs: null,
+  lastSuccessfulCycleAt: null,
+lastEngineStopReason: null,
+engineFreezeDetected: false,
+engineFreezeCount: 0,
+  totalEngineTicks: 0,
+
   lastError: null,
+
+  marketOpen: false,
+  marketStressLevel: 0,
+  averageSignalScore: 0,
+  marketMomentumScore: 0,
+  marketVolatility: 0,
+  institutionalExposureMode: "NORMAL",
+  marketBreadth: {
+  advancing: 0,
+  declining: 0,
+},
+  dailyDateKey: null,
+
   lastSignals: [],
+
   recentOrders: [],
   failedOrders: [],
   skippedSymbols: [],
@@ -272,8 +342,6 @@ let engineState = {
 
   dailyLossLocked: false,
   profitLocked: false,
-  marketOpen: false,
-  dailyDateKey: null,
 
   highWaterMarks: {},
   tradeMemory: {},
@@ -281,9 +349,29 @@ let engineState = {
 
   runnerPositions: {},
   lastSoldAt: {},
+  symbolCooldowns: {},
+  cooldownMinutes: 30,
   peaksByMode: {},
+
   cachedPositions: [],
-  aiManagedSymbols: [],
+  cachedAccount: null,
+
+  aiManagedSymbols: [], 
+  institutionalWatchlist: [],
+  analyticsSnapshots: [],
+  analyticsSnapshots: [],
+  apiHealth: {},
+  apiFailureCounts: {},
+  apiCooldowns: {},
+  signalHistory: [],
+marketRegimeHistory: [],
+sectorStrengthHistory: [],
+signalQualityHistory: [],
+marketBreadthHistory: [],
+marketMomentumHistory: [],
+marketVolatilityHistory: [],
+institutionalExposureHistory: [],
+aiDecisionHistory: [],
 };
 
 engineState = {
@@ -795,6 +883,13 @@ function alpacaHeaders() {
     "Content-Type": "application/json",
   };
 }
+function markApiHealth(name, ok, error = "") {
+  engineState.apiHealth[name] = {
+    ok,
+    error,
+    checkedAt: new Date().toISOString(),
+  };
+}
 async function alpacaTradingRequest(path, options = {}) {
   const baseUrl = getTradingBaseUrl();
   const res = await fetch(`${baseUrl}${path}`, {
@@ -815,16 +910,28 @@ async function alpacaTradingRequest(path, options = {}) {
   }
 
   if (!res.ok) {
-    throw new Error(
-      data?.message ||
+  engineState.apiFailureCounts.alpacaTrading =
+    (engineState.apiFailureCounts.alpacaTrading || 0) + 1;
+engineState.apiCooldowns.alpacaTrading =
+  Date.now() + 1000 * 60 * 2;
+  markApiHealth(
+    "alpacaTrading",
+    false,
+    data?.message ||
+      data?.error ||
+      `HTTP ${res.status}`
+  );
+
+  throw new Error(
+    data?.message ||
       data?.error ||
       `Alpaca trading error ${res.status}: ${JSON.stringify(data)}`
-    );
-  }
-
-  return data;
+  );
 }
+markApiHealth("alpacaTrading", true);
+  return data;
 
+}
 async function alpacaDataRequest(path, options = {}) {
   const res = await fetch(`${ALPACA_DATA_BASE_URL}${path}`, {
     ...options,
@@ -914,14 +1021,48 @@ async function isAssetSellEligible(symbol) {
 }
 
 async function finnhubQuote(symbol) {
+  if (
+  engineState.apiCooldowns.finnhubQuote &&
+  Date.now() <
+    engineState.apiCooldowns.finnhubQuote
+) {
+  throw new Error(
+    "Finnhub quote API cooling down"
+  );
+}
+if (
+  engineState.apiCooldowns.finnhubQuote &&
+  Date.now() <
+    engineState.apiCooldowns.finnhubQuote
+) {
+  throw new Error(
+    "Finnhub quote API cooling down"
+  );
+}
   const url = `https://finnhub.io/api/v1/quote?symbol=${encodeURIComponent(
     symbol
   )}&token=${FINNHUB_API_KEY}`;
 
   const res = await fetch(url);
+
+  markApiHealth("finnhubQuote", true);
+
   const data = await res.json();
 
   if (!res.ok || !data || typeof data.c !== "number") {
+    engineState.apiFailureCounts.finnhubQuote =
+      (engineState.apiFailureCounts.finnhubQuote || 0) + 1;
+engineState.apiCooldowns.finnhubNews =
+  Date.now() + 1000 * 60;
+    markApiHealth(
+      "finnhubQuote",
+      false,
+      `Quote failed for ${symbol}`
+    );
+engineState.apiFailureCounts.finnhubQuote =
+  (engineState.apiFailureCounts.finnhubQuote || 0) + 1;
+
+markApiHealth("finnhubQuote", false, `Quote failed for ${symbol}`);
     throw new Error(`Finnhub quote failed for ${symbol}`);
   }
 
@@ -1060,7 +1201,7 @@ async function getNewsRisk(symbol) {
       risk: false,
       reason: "News risk filter disabled",
       headlines: [],
-    };
+    }
   }
 
   const today = new Date();
@@ -1070,16 +1211,51 @@ async function getNewsRisk(symbol) {
 
   const toDate = today.toISOString().slice(0, 10);
   const fromDate = from.toISOString().slice(0, 10);
+  if (
+  engineState.apiCooldowns.finnhubNews &&
+  Date.now() <
+    engineState.apiCooldowns.finnhubNews
+) {
+  return {
+    risk: false,
+    reason: "News API cooling down",
+    headlines: [],
+  };
+}
 
+if (
+  engineState.apiCooldowns.finnhubNews &&
+  Date.now() <
+    engineState.apiCooldowns.finnhubNews
+) {
+  return {
+    risk: false,
+    reason: "News API cooling down",
+    headlines: [],
+  };
+}
   const url = `https://finnhub.io/api/v1/company-news?symbol=${encodeURIComponent(
     symbol
   )}&from=${fromDate}&to=${toDate}&token=${FINNHUB_API_KEY}`;
 
   try {
     const res = await fetch(url);
+
+    markApiHealth("finnhubNews", true);
+
     const data = await res.json();
 
     if (!res.ok || !Array.isArray(data)) {
+      engineState.apiFailureCounts.finnhubNews =
+        (engineState.apiFailureCounts.finnhubNews || 0) + 1;
+engineState.apiCooldowns.finnhubNews =
+  Date.now() + 1000 * 60;
+      markApiHealth(
+        "finnhubNews",
+        false,
+        `News failed for ${symbol}`
+      );
+
       return {
         risk: false,
         reason: "News check failed, allowed",
@@ -1104,8 +1280,13 @@ async function getNewsRisk(symbol) {
     ];
 
     const riskyNews = data.filter((item) => {
-      const text = `${item.headline || ""} ${item.summary || ""}`.toLowerCase();
-      return riskyWords.some((word) => text.includes(word));
+      const text = `${item.headline || ""} ${
+        item.summary || ""
+      }`.toLowerCase();
+
+      return riskyWords.some((word) =>
+        text.includes(word)
+      );
     });
 
     return {
@@ -1114,9 +1295,20 @@ async function getNewsRisk(symbol) {
         riskyNews.length > 0
           ? "Risky news detected"
           : "No major risky news detected",
-      headlines: riskyNews.slice(0, 3).map((item) => item.headline),
+      headlines: riskyNews
+        .slice(0, 3)
+        .map((item) => item.headline),
     };
   } catch {
+    engineState.apiFailureCounts.finnhubNews =
+      (engineState.apiFailureCounts.finnhubNews || 0) + 1;
+
+    markApiHealth(
+      "finnhubNews",
+      false,
+      `News exception for ${symbol}`
+    );
+
     return {
       risk: false,
       reason: "News check error, allowed",
@@ -3403,6 +3595,19 @@ async function autoBuySignals(signals) {
     .filter((s) => s.confirmations?.fakeBreakout !== true)
     .filter((s) => s.confirmations?.newsRisk !== true)
     .filter((s) => !openSymbols.has(normalizeSymbol(s.symbol)))
+  .filter((s) => {
+  const cooldown =
+    engineState.symbolCooldowns[
+      normalizeSymbol(s.symbol)
+    ];
+
+  if (!cooldown) return true;
+
+  return (
+    Date.now() - new Date(cooldown).getTime() >
+    engineState.cooldownMinutes * 60 * 1000
+  );
+})  
     .filter((s) => !shouldSkipFromTradeMemory(s.symbol))
     .filter((s) => isNormalStockSymbol(s.symbol))
     .slice(0, Math.min(openSlots, CONFIG.topAutoTradeCandidates));
@@ -3471,13 +3676,30 @@ async function autoBuySignals(signals) {
       const freshAiPositions = freshPositions.filter((p) =>
         freshAiOwnedSymbols.has(normalizeSymbol(p.symbol))
       );
+      const adaptiveExposureMultiplier =
+  engineState.marketVolatility >= 10
+    ? 0.5
+    : engineState.marketVolatility >= 6
+    ? 0.75
+    : 1;
       const baseTradeAmount = getDynamicTradeAmount(
         account,
         aiPositions,
         stock.score
       );
-
-      const tradeAmount = baseTradeAmount * Number(regime.exposureMultiplier || 1);
+const confidenceMultiplier =
+  stock.score >= 95
+    ? 1.4
+    : stock.score >= 90
+    ? 1.2
+    : stock.score >= 85
+    ? 1
+    : 0.75;
+    const tradeAmount =
+  baseTradeAmount *
+  Number(regime.exposureMultiplier || 1) *
+  adaptiveExposureMultiplier *
+  confidenceMultiplier;
 
       if (tradeAmount <= 0) {
         saveFailedOrder(
@@ -3716,9 +3938,15 @@ async function engineTick() {
   if (engineState.running) return;
 
   engineState.running = true;
+  engineState.engineFreezeDetected = false;
+  engineState.lastHeartbeatAt = new Date().toISOString();
+  engineState.totalEngineTicks =
+  (engineState.totalEngineTicks || 0) + 1;
+  engineState.lastTickStartedAt = Date.now();
   engineState.lastError = null;
   engineState.cachedPositions = await getPositions();
   engineState.cachedAccount = await getAccount();
+  engineState.lastSuccessfulCycleAt = new Date().toISOString();
 
   try {
     const { key, secret } = getAlpacaKeys();
@@ -3794,25 +4022,211 @@ async function engineTick() {
     if (effectiveMode === "live_stock") {
       stockSignals = await scanMarket();
     }
+const scanStartedAt = Date.now();
 
-    const signals = [...stockSignals, ...cryptoSignals];
+engineState.marketBreadth = {
+  advancing: stockSignals.filter(
+    (s) => Number(s.percentChange || 0) > 0
+  ).length,
+
+  declining: stockSignals.filter(
+    (s) => Number(s.percentChange || 0) < 0
+  ).length,
+};
+
+engineState.marketStressLevel =
+  stockSignals.filter(
+    (s) => Number(s.percentChange || 0) <= -10
+  ).length;
+
+engineState.marketMomentumScore =
+  stockSignals.reduce(
+    (sum, s) =>
+      sum + Number(s.percentChange || 0),
+    0
+  ) / Math.max(1, stockSignals.length);
+
+engineState.marketVolatility =
+  stockSignals.reduce(
+    (sum, s) =>
+      sum + Math.abs(Number(s.percentChange || 0)),
+    0
+  ) / Math.max(1, stockSignals.length);
+
+engineState.institutionalExposureMode =
+  engineState.marketVolatility >= 12
+    ? "DEFENSIVE"
+    : engineState.marketMomentumScore >= 8
+    ? "AGGRESSIVE"
+    : "NORMAL";
+
+    stockSignals.forEach((signal) => {
+  signal.institutionalGrade =
+    signal.score >= 95
+      ? "ELITE"
+      : signal.score >= 90
+      ? "HIGH"
+      : signal.score >= 85
+      ? "GOOD"
+      : "NORMAL";
+});
+
+const signals = [...stockSignals, ...cryptoSignals];
 
     engineState.marketRegime = detectMarketRegime(stockSignals);
+    engineState.marketRegimeHistory.unshift({
+  timestamp: new Date().toISOString(),
+  regime: engineState.marketRegime,
+});
+
+engineState.marketRegimeHistory =
+  engineState.marketRegimeHistory.slice(0, 200);
+  signals.sort(
+  (a, b) => Number(b.score || 0) - Number(a.score || 0)
+);
     engineState.lastSignals = signals;
+    engineState.lastSuccessfulCycleAt =
+  new Date().toISOString();
+  engineState.marketMomentumScore =
+  stockSignals.reduce(
+    (sum, s) =>
+      sum + Number(s.percentChange || 0),
+    0
+  ) / Math.max(1, stockSignals.length);
+  engineState.averageSignalScore =
+  signals.reduce(
+    (sum, s) => sum + Number(s.score || 0),
+    0
+  ) / Math.max(1, signals.length);
     engineState.lastStockSignals = stockSignals;
     engineState.lastCryptoSignals = cryptoSignals;
     engineState.lastScanAt = new Date().toISOString();
+    engineState.signalHistory.unshift({
+  timestamp: new Date().toISOString(),
+  signalCount: signals.length,
+  topSignals: signals.slice(0, 10),
+  averageTopScore:
+  signals.slice(0, 10).reduce(
+    (sum, s) => sum + Number(s.score || 0),
+    0
+  ) / Math.max(1, signals.slice(0, 10).length),
+});
+
+engineState.signalHistory =
+  engineState.signalHistory.slice(0, 200);
+  engineState.aiDecisionHistory.unshift({
+  timestamp: new Date().toISOString(),
+  marketRegime: engineState.marketRegime,
+  marketStressLevel:
+    engineState.marketStressLevel,
+  totalSignals: signals.length,
+  stockSignals: stockSignals.length,
+  cryptoSignals: cryptoSignals.length,
+});
+
+engineState.aiDecisionHistory =
+  engineState.aiDecisionHistory.slice(0, 500);
+  engineState.sectorStrengthHistory.unshift({
+  timestamp: new Date().toISOString(),
+  topStockSignals: stockSignals
+    .slice(0, 10)
+    .map((s) => ({
+      symbol: s.symbol,
+      score: s.score,
+      sector: s.sector || "UNKNOWN",
+    })),
+});
+
+engineState.sectorStrengthHistory =
+  engineState.sectorStrengthHistory.slice(0, 200);
+  engineState.lastScanDurationMs =
+  Date.now() - scanStartedAt;
+  engineState.signalQualityHistory.unshift({
+  timestamp: new Date().toISOString(),
+  averageSignalScore:
+    engineState.averageSignalScore,
+  signalCount: signals.length,
+});
+
+engineState.signalQualityHistory =
+  engineState.signalQualityHistory.slice(0, 200);
+  engineState.marketBreadthHistory.unshift({
+  timestamp: new Date().toISOString(),
+  breadth: engineState.marketBreadth,
+});
+
+engineState.marketBreadthHistory =
+  engineState.marketBreadthHistory.slice(0, 200);
+  engineState.marketMomentumHistory.unshift({
+  timestamp: new Date().toISOString(),
+  score: engineState.marketMomentumScore,
+});
+
+engineState.marketMomentumHistory =
+  engineState.marketMomentumHistory.slice(0, 200);
+  engineState.marketVolatilityHistory.unshift({
+  timestamp: new Date().toISOString(),
+  volatility: engineState.marketVolatility,
+});
+
+engineState.marketVolatilityHistory =
+  engineState.marketVolatilityHistory.slice(0, 200);
+  engineState.institutionalExposureHistory.unshift({
+  timestamp: new Date().toISOString(),
+  mode: engineState.institutionalExposureMode,
+  volatility: engineState.marketVolatility,
+  momentum: engineState.marketMomentumScore,
+  stress: engineState.marketStressLevel,
+});
+
+engineState.institutionalExposureHistory =
+  engineState.institutionalExposureHistory.slice(0, 200);
+  engineState.institutionalWatchlist =
+  signals
+    .filter((s) => Number(s.score || 0) >= 85)
+    .slice(0, 25)
+    .map((s) => ({
+      symbol: s.symbol,
+      score: s.score,
+      price: s.current,
+      percentChange: s.percentChange,
+      institutionalGrade:
+  s.institutionalGrade,
+      updatedAt: new Date().toISOString(),
+    }));
+    engineState.analyticsSnapshots.unshift({
+  timestamp: new Date().toISOString(),
+  marketRegime: engineState.marketRegime,
+  institutionalExposureMode:
+    engineState.institutionalExposureMode,
+  marketStressLevel:
+    engineState.marketStressLevel,
+  marketMomentumScore:
+    engineState.marketMomentumScore,
+  marketVolatility:
+    engineState.marketVolatility,
+  averageSignalScore:
+    engineState.averageSignalScore,
+  signalCount: signals.length,
+  stockSignalCount: stockSignals.length,
+  cryptoSignalCount: cryptoSignals.length,
+});
+
+engineState.analyticsSnapshots =
+  engineState.analyticsSnapshots.slice(0, 300);
     saveEngineState("SCAN_COMPLETED");
 
     if (
       autoTradingEnabled &&
       !engineState.dailyLossLocked &&
       !engineState.profitLocked &&
+      !marketStressLocked &&
       !riskLocked
     ) {
       if (
         effectiveMode === "live_crypto" &&
         !tradingStoppedForDay &&
+        !marketStressLocked &&
         !engineState.cryptoTradingStoppedForDay
       ) {
         await autoBuyCryptoSignals(cryptoSignals);
@@ -3822,12 +4236,27 @@ async function engineTick() {
         effectiveMode === "live_stock" &&
         marketOpen &&
         !tradingStoppedForDay &&
+        !marketStressLocked &&
+        !volatilityLocked &&
         !engineState.stockTradingStoppedForDay
       ) {
         await autoBuySignals(stockSignals);
+        engineState.aiDecisionHistory.unshift({
+  timestamp: new Date().toISOString(),
+  type: "AUTO_BUY_EXECUTED",
+  signalCount: stockSignals.length,
+  tradingMode: TRADING_MODE,
+  effectiveMode,
+});
+
+engineState.aiDecisionHistory =
+  engineState.aiDecisionHistory.slice(0, 300);
       }
     }
-
+const marketStressLocked =
+  engineState.marketStressLevel >= 25;
+  const volatilityLocked =
+  engineState.marketVolatility >= 18;
     if (autoTradingEnabled && !marketOpen && TRADING_MODE !== "smart") {
       saveRecentOrder("BUY_SKIPPED_MARKET_CLOSED", "ALL", {
         message: "Market closed. Stock buys skipped.",
@@ -3835,16 +4264,40 @@ async function engineTick() {
     }
   } catch (err) {
     engineState.lastError = err.message;
+    engineState.lastEngineStopReason = "ENGINE_ERROR";
     console.error("Engine error:", err.message);
   } finally {
+    engineState.lastTickDurationMs =
+  Date.now() - engineState.lastTickStartedAt;
+  engineState.lastEngineStopReason = "ENGINE_TICK_COMPLETED";
+  engineState.engineFreezeDetected = false;
+  engineState.lastTickDurationMs =
+  Date.now() - engineState.lastTickStartedAt;
     engineState.running = false;
   }
 }
 
-cron.schedule("* * * * *", async () => {
-  console.log("Running SmartMoney Pro engine...");
-  await engineTick();
-});
+setInterval(() => {
+  if (
+    engineState.running &&
+    engineState.lastTickStartedAt &&
+    Date.now() - engineState.lastTickStartedAt > 1000 * 60 * 5
+  ) {
+    engineState.engineFreezeDetected = true;
+
+    engineState.engineFreezeCount =
+      (engineState.engineFreezeCount || 0) + 1;
+
+    engineState.running = false;
+
+    engineState.lastEngineStopReason =
+      "ENGINE_FREEZE_RECOVERY";
+
+    saveEngineState("ENGINE_FREEZE_RECOVERY");
+  }
+}, 30000);
+
+
 
 app.get("/", (req, res) => {
   res.json({
@@ -3854,6 +4307,10 @@ app.get("/", (req, res) => {
     status: "online",
     autoTradingEnabled,
     config: CONFIG,
+    freshness: getEngineFreshness(),
+    marketStressLevel:
+  engineState.marketStressLevel,
+  apiHealth: engineState.apiHealth || {},
     engineState,
   });
 });
@@ -3948,6 +4405,55 @@ app.get("/infra-status", (req, res) => {
       });
     }
   });
+
+app.get("/health", async (req, res) => {
+  try {
+    const clock = await getClock().catch((err) => ({
+      error: err.message,
+    }));
+
+    res.json({
+      online: true,
+      service: "SmartMoney Backend",
+      mode: TRADING_MODE,
+      autoTradingEnabled,
+
+      env: {
+        hasFinnhubKey: Boolean(process.env.FINNHUB_API_KEY),
+        hasLiveAlpacaKey: Boolean(process.env.ALPACA_LIVE_KEY),
+        hasLiveAlpacaSecret: Boolean(process.env.ALPACA_LIVE_SECRET),
+      },
+
+      engine: {
+        running: engineState.running,
+        lastScanAt: engineState.lastScanAt,
+        lastHeartbeatAt: engineState.lastHeartbeatAt,
+        uptimeSeconds: Math.floor(process.uptime()),
+        lastTickDurationMs: engineState.lastTickDurationMs,
+        lastScanDurationMs:
+  engineState.lastScanDurationMs,
+        lastTickStartedAt: engineState.lastTickStartedAt,
+        engineFreezeDetected: engineState.engineFreezeDetected,
+engineFreezeCount: engineState.engineFreezeCount,
+        totalEngineTicks: engineState.totalEngineTicks,
+        lastError: engineState.lastError,
+
+        dailyLossLocked: engineState.dailyLossLocked,
+        profitLocked: engineState.profitLocked,
+      },
+
+      clock,
+      serverTime: Date.now(),
+      timestamp: new Date().toISOString(),
+    });
+  } catch (err) {
+    res.status(500).json({
+      online: false,
+      error: err.message,
+      timestamp: new Date().toISOString(),
+    });
+  }
+});
 
   app.get("/status", async (req, res) => {
     try {
@@ -4159,6 +4665,59 @@ app.get("/infra-status", (req, res) => {
       res.status(500).json({ error: err.message });
     }
   });
+  app.get("/telemetry", async (req, res) => {
+  res.json({
+    engine: {
+      running: engineState.running,
+      marketOpen: engineState.marketOpen,
+      lastScanAt: engineState.lastScanAt,
+      lastHeartbeatAt: engineState.lastHeartbeatAt,
+      lastSuccessfulCycleAt:
+        engineState.lastSuccessfulCycleAt,
+      lastTickDurationMs:
+        engineState.lastTickDurationMs,
+      totalEngineTicks:
+        engineState.totalEngineTicks,
+      engineFreezeDetected:
+        engineState.engineFreezeDetected,
+      engineFreezeCount:
+        engineState.engineFreezeCount,
+      lastEngineStopReason:
+        engineState.lastEngineStopReason,
+    },
+
+    freshness: getEngineFreshness(),
+
+    marketRegime: engineState.marketRegime,
+    marketStressLevel:
+  engineState.marketStressLevel,
+  averageSignalScore:
+  engineState.averageSignalScore,
+  confidenceWeightedMode:
+  engineState.averageSignalScore >= 90,
+  marketBreadth:
+  engineState.marketBreadth,
+  marketMomentumScore:
+  engineState.marketMomentumScore,
+  marketVolatility:
+  engineState.marketVolatility,
+  institutionalExposureMode:
+  engineState.institutionalExposureMode,
+institutionalWatchlist:
+  engineState.institutionalWatchlist,
+  analyticsSnapshots:
+  engineState.analyticsSnapshots?.slice(0, 20) || [],
+  apiHealth: engineState.apiHealth || {},
+    recentSignals:
+
+      engineState.signalHistory?.slice(0, 20) || [],
+      activeCooldowns:
+  Object.keys(engineState.symbolCooldowns || {}),
+
+    recentRegimes:
+      engineState.marketRegimeHistory?.slice(0, 20) || [],
+  });
+});
   app.post("/scan-now", async (req, res) => {
     await engineTick();
 
@@ -4418,7 +4977,8 @@ app.get("/infra-status", (req, res) => {
       saveRecentOrder("MANUAL_CLOSE", normalizedSymbol, {
         result,
       });
-
+      engineState.symbolCooldowns[normalizedSymbol] =
+       new Date().toISOString();
       delete engineState.highWaterMarks[normalizedSymbol];
       delete engineState.aiEntryScores[normalizedSymbol];
       delete engineState.runnerPositions[normalizedSymbol];
@@ -4474,5 +5034,11 @@ saveRecentOrder("MANUAL_DAILY_LOCK_RESET", "ACCOUNT", {
     });
 
     console.log("Running first SmartMoney Pro scan on startup...");
+    if (
+  engineState.running ||
+  engineState.engineFreezeDetected
+) {
+  return;
+}
     await engineTick();
   });
