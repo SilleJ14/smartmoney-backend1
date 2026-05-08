@@ -1543,12 +1543,10 @@ function calculateInstitutionalScores(q) {
   );
   
   const blendedRiskScore = clampScore(
-    riskScore * 0.55 + advancedRisk.institutionalRiskScore * 0.45
-  );
-    const blendedRiskScore = clampScore(
     riskScore * 0.55 +
       advancedRisk.institutionalRiskScore * 0.45
   );
+
   const statisticalScore = edge.statisticalEdgeScore;
 
   const regime = engineState.marketRegime || detectMarketRegime([]);
