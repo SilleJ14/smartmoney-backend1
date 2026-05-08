@@ -1184,6 +1184,81 @@ function detectMarketRegime(stockSignals = []) {
     riskMessage: "Weak or choppy conditions. Exposure reduced.",
   };
 }
+function calculateAdvancedRiskEngine(q) {
+  const price = Number(q.current || q.price || 0);
+  const volume = Number(q.volume || 0);
+  const percentChange = Number(q.percentChange || 0);
+  const confirmations = q.confirmations || {};
+  const technicals = q.technicals || {};
+
+  const rsi = Number(technicals.rsi || 50);
+  const volumeRatio = Number(confirmations.volumeSpikeRatio || q.volumeRatio || 0);
+
+  const drawdownRiskScore = clampScore(
+    80 -
+      (percentChange > 20 ? 25 : 0) -
+      (percentChange > 40 ? 20 : 0) -
+      (confirmations.fakeBreakout ? 30 : 0) -
+      (confirmations.gapTooHigh ? 20 : 0)
+  );
+
+  const volatilityShockScore = clampScore(
+    75 -
+      (Math.abs(percentChange) > 15 ? 15 : 0) -
+      (Math.abs(percentChange) > 30 ? 20 : 0) -
+      (rsi > 80 ? 15 : 0) -
+      (volumeRatio > 5 ? 10 : 0)
+  );
+
+  const liquidityStressScore = clampScore(
+    40 +
+      (volume >= 1000000 ? 35 : volume >= 250000 ? 25 : volume >= 25000 ? 15 : -15) +
+      (price >= 5 ? 10 : -10)
+  );
+
+  const downsideExposureScore = clampScore(
+    80 -
+      (percentChange < -20 ? 20 : 0) -
+      (percentChange > 30 ? 20 : 0) -
+      (confirmations.newsRisk ? 30 : 0) -
+      (!confirmations.aboveVwap ? 10 : 0)
+  );
+
+  const crashSurvivabilityScore = clampScore(
+    50 +
+      (liquidityStressScore >= 70 ? 15 : 0) +
+      (drawdownRiskScore >= 70 ? 15 : 0) +
+      (price >= 10 ? 10 : 0) -
+      (confirmations.fakeBreakout ? 25 : 0)
+  );
+
+  const institutionalRiskScore = clampScore(
+    drawdownRiskScore * 0.22 +
+      volatilityShockScore * 0.2 +
+      liquidityStressScore * 0.2 +
+      downsideExposureScore * 0.2 +
+      crashSurvivabilityScore * 0.18
+  );
+
+  const institutionalRiskLabel =
+    institutionalRiskScore >= 80
+      ? "Institutional Risk"
+      : institutionalRiskScore >= 65
+      ? "Controlled Risk"
+      : institutionalRiskScore >= 50
+      ? "Elevated Risk"
+      : "High Stress Risk";
+
+  return {
+    institutionalRiskScore,
+    drawdownRiskScore,
+    volatilityShockScore,
+    liquidityStressScore,
+    downsideExposureScore,
+    crashSurvivabilityScore,
+    institutionalRiskLabel,
+  };
+}
 function calculatePortfolioConstructionEngine(q) {
   const price = Number(q.current || q.price || 0);
   const volume = Number(q.volume || 0);
@@ -1447,6 +1522,7 @@ function calculateInstitutionalScores(q) {
   const moat = calculateMoatEngine(q);
   const wealth = calculateDividendWealthEngine(q);
   const portfolio = calculatePortfolioConstructionEngine(q);
+  const advancedRisk = calculateAdvancedRiskEngine(q);
   const technicalScore = clampScore(
     45 +
       (momentum > 0 ? 10 : -10) +
@@ -1464,6 +1540,14 @@ function calculateInstitutionalScores(q) {
       (confirmations.newsRisk ? 30 : 0) -
       (momentum > 25 ? 15 : 0) -
       (volumeRatio < 0.8 ? 10 : 0)
+  );
+  
+  const blendedRiskScore = clampScore(
+    riskScore * 0.55 + advancedRisk.institutionalRiskScore * 0.45
+  );
+    const blendedRiskScore = clampScore(
+    riskScore * 0.55 +
+      advancedRisk.institutionalRiskScore * 0.45
   );
   const statisticalScore = edge.statisticalEdgeScore;
 
@@ -1488,7 +1572,7 @@ function calculateInstitutionalScores(q) {
 
   const institutionalScore = clampScore(
     technicalScore * 0.25 +
-      riskScore * 0.2 +
+      blendedRiskScore * 0.2 +
       statisticalScore * 0.2 +
       macroScore * 0.1 +
       fundamentalScore * 0.1 +
@@ -1500,7 +1584,7 @@ function calculateInstitutionalScores(q) {
 
   const autoTradeApproved =
     institutionalScore >= CONFIG.minScoreToBuy &&
-    riskScore >= 65 &&
+    blendedRiskScore >= 65 &&
     Number(q.volume || 0) >= 25000 &&
     Number(q.percentChange || 0) <= 20 &&
     confirmations.fakeBreakout !== true &&
@@ -1514,7 +1598,15 @@ function calculateInstitutionalScores(q) {
   return {
     technicalScore,
     macroScore,
-    riskScore,
+    riskScore: blendedRiskScore,
+    legacyRiskScore: riskScore,
+    institutionalRiskScore: advancedRisk.institutionalRiskScore,
+    drawdownRiskScore: advancedRisk.drawdownRiskScore,
+    volatilityShockScore: advancedRisk.volatilityShockScore,
+    liquidityStressScore: advancedRisk.liquidityStressScore,
+    downsideExposureScore: advancedRisk.downsideExposureScore,
+    crashSurvivabilityScore: advancedRisk.crashSurvivabilityScore,
+    institutionalRiskLabel: advancedRisk.institutionalRiskLabel,
     statisticalScore,
         ...edge,
     fundamentalScore,
