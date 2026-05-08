@@ -136,7 +136,20 @@ const CONFIG = {
   maxSignalsToReturn: Number(process.env.MAX_SIGNALS_TO_RETURN || 80),
 
   topAutoTradeCandidates: Number(process.env.TOP_AUTO_TRADE_CANDIDATES || 5),
-
+  enableMarketRegimeEngine:
+    process.env.ENABLE_MARKET_REGIME_ENGINE !== "false",
+  aggressiveBullishExposureMultiplier: Number(
+    process.env.AGGRESSIVE_BULLISH_EXPOSURE_MULTIPLIER || 1
+  ),
+  cautiousBullishExposureMultiplier: Number(
+    process.env.CAUTIOUS_BULLISH_EXPOSURE_MULTIPLIER || 0.75
+  ),
+  defensiveExposureMultiplier: Number(
+    process.env.DEFENSIVE_EXPOSURE_MULTIPLIER || 0.4
+  ),
+  panicExposureMultiplier: Number(
+    process.env.PANIC_EXPOSURE_MULTIPLIER || 0
+  ),
   // ADVANCED FILTERS (FIXED)
     // ADVANCED FILTERS
   enableAdvancedFilters: process.env.ENABLE_ADVANCED_FILTERS !== "false",
@@ -840,6 +853,164 @@ function getSuggestedHoldTime(score) {
   if (score >= 70) return "2–7 days";
   return "Watch only";
 }
+function calculateStatisticalEdge(q) {
+  const confirmations = q.confirmations || {};
+  const technicals = q.technicals || {};
+
+  const percentChange = Number(q.percentChange || 0);
+  const volumeRatio = Number(confirmations.volumeSpikeRatio || q.volumeRatio || 0);
+  const closeNearHighPercent = Number(confirmations.closeNearHighPercent || 0);
+  const pullbackFromHighPercent = Number(
+    confirmations.pullbackFromHighPercent || 0
+  );
+
+  const rsi = Number(technicals.rsi || 50);
+  const ema9 = Number(technicals.ema9 || 0);
+  const ema20 = Number(technicals.ema20 || 0);
+  const macd = Number(technicals.macd || 0);
+  const macdSignal = Number(technicals.macdSignal || 0);
+
+  const relativeStrengthPercentile = clampScore(
+    50 +
+      percentChange * 2 +
+      (volumeRatio >= 1.5 ? 10 : 0) +
+      (closeNearHighPercent >= 70 ? 10 : 0)
+  );
+
+  const breakoutProbability = clampScore(
+    35 +
+      (percentChange > 0 ? 10 : -10) +
+      (percentChange >= 2 ? 15 : 0) +
+      (volumeRatio >= 1.5 ? 15 : 0) +
+      (closeNearHighPercent >= 70 ? 15 : 0) -
+      (pullbackFromHighPercent > 4 ? 20 : 0) -
+      (confirmations.fakeBreakout ? 35 : 0)
+  );
+
+  const continuationProbability = clampScore(
+    40 +
+      (ema9 > ema20 ? 15 : 0) +
+      (macd > macdSignal ? 15 : 0) +
+      (rsi >= 45 && rsi <= 70 ? 15 : 0) +
+      (percentChange >= 1 && percentChange <= 12 ? 10 : 0) -
+      (rsi > 80 ? 20 : 0)
+  );
+
+  const volumeConfirmationQuality = clampScore(
+    40 +
+      volumeRatio * 20 +
+      (Number(q.volume || 0) >= CONFIG.minVolume ? 15 : 0)
+  );
+
+  const momentumPersistence = clampScore(
+    45 +
+      (percentChange > 0 ? 10 : -10) +
+      (ema9 > ema20 ? 15 : 0) +
+      (macd > macdSignal ? 10 : 0) +
+      (confirmations.aboveVwap ? 10 : 0)
+  );
+
+  const volatilityQuality = clampScore(
+    75 -
+      (percentChange > 20 ? 20 : 0) -
+      (pullbackFromHighPercent > 5 ? 20 : 0) -
+      (confirmations.gapTooHigh ? 15 : 0)
+  );
+
+  const statisticalEdgeScore = clampScore(
+    breakoutProbability * 0.25 +
+      continuationProbability * 0.25 +
+      relativeStrengthPercentile * 0.15 +
+      volumeConfirmationQuality * 0.15 +
+      momentumPersistence * 0.1 +
+      volatilityQuality * 0.1
+  );
+
+  return {
+    breakoutProbability,
+    continuationProbability,
+    relativeStrengthPercentile,
+    volumeConfirmationQuality,
+    momentumPersistence,
+    volatilityQuality,
+    statisticalEdgeScore,
+  };
+}
+function detectMarketRegime(stockSignals = []) {
+  if (!CONFIG.enableMarketRegimeEngine) {
+    return {
+      state: "cautious bullish",
+      label: "Cautious Bullish",
+      exposureMultiplier: 0.75,
+      riskMessage: "Market regime engine disabled. Using cautious default.",
+    };
+  }
+
+  const signals = Array.isArray(stockSignals) ? stockSignals : [];
+
+  if (!signals.length) {
+    return {
+      state: "defensive",
+      label: "Defensive",
+      exposureMultiplier: CONFIG.defensiveExposureMultiplier,
+      riskMessage: "No strong market signal. Reducing exposure.",
+    };
+  }
+
+  const avgScore =
+    signals.reduce((sum, s) => sum + Number(s.institutionalScore || s.score || 0), 0) /
+    signals.length;
+
+  const positiveCount = signals.filter((s) => Number(s.percentChange || 0) > 0).length;
+  const positiveRatio = positiveCount / signals.length;
+
+  const fakeBreakoutCount = signals.filter(
+    (s) => s.confirmations?.fakeBreakout === true
+  ).length;
+
+  const riskCount = signals.filter(
+    (s) =>
+      s.confirmations?.newsRisk === true ||
+      Number(s.riskScore || 100) < 50
+  ).length;
+
+  const riskRatio = riskCount / signals.length;
+  const fakeBreakoutRatio = fakeBreakoutCount / signals.length;
+
+  if (riskRatio >= 0.35 || fakeBreakoutRatio >= 0.25) {
+    return {
+      state: "panic/high volatility",
+      label: "Panic / High Volatility",
+      exposureMultiplier: CONFIG.panicExposureMultiplier,
+      riskMessage: "High risk detected. New auto-buys should be blocked or heavily reduced.",
+    };
+  }
+
+  if (avgScore >= 80 && positiveRatio >= 0.65) {
+    return {
+      state: "aggressive bullish",
+      label: "Aggressive Bullish",
+      exposureMultiplier: CONFIG.aggressiveBullishExposureMultiplier,
+      riskMessage: "Strong opportunity environment. Normal exposure allowed.",
+    };
+  }
+
+  if (avgScore >= 65 && positiveRatio >= 0.5) {
+    return {
+      state: "cautious bullish",
+      label: "Cautious Bullish",
+      exposureMultiplier: CONFIG.cautiousBullishExposureMultiplier,
+      riskMessage: "Good but not perfect conditions. Reduced exposure.",
+    };
+  }
+
+  return {
+    state: "defensive",
+    label: "Defensive",
+    exposureMultiplier: CONFIG.defensiveExposureMultiplier,
+    riskMessage: "Weak or choppy conditions. Exposure reduced.",
+  };
+}
 
 function calculateInstitutionalScores(q) {
   const confirmations = q.confirmations || {};
@@ -853,6 +1024,7 @@ function calculateInstitutionalScores(q) {
   const macd = Number(technicals.macd || 0);
   const macdSignal = Number(technicals.macdSignal || 0);
 
+  const edge = calculateStatisticalEdge(q);
   const technicalScore = clampScore(
     45 +
       (momentum > 0 ? 10 : -10) +
@@ -871,16 +1043,19 @@ function calculateInstitutionalScores(q) {
       (momentum > 25 ? 15 : 0) -
       (volumeRatio < 0.8 ? 10 : 0)
   );
+  const statisticalScore = edge.statisticalEdgeScore;
 
-  const statisticalScore = clampScore(
-    50 +
-      (volumeRatio >= 1.5 ? 15 : 0) +
-      (momentum >= 1 && momentum <= 15 ? 15 : 0) +
-      (confirmations.closeNearHigh ? 10 : 0) +
-      (confirmations.aboveVwap ? 10 : 0)
+  const regime = engineState.marketRegime || detectMarketRegime([]);
+
+  const macroScore = clampScore(
+    regime.state === "aggressive bullish"
+      ? 85
+      : regime.state === "cautious bullish"
+      ? 70
+      : regime.state === "defensive"
+      ? 50
+      : 25
   );
-
-  const macroScore = clampScore(engineState.marketOpen ? 70 : 55);
 
   const fundamentalScore = clampScore(
     q.current >= 5 && q.volume >= 100000 ? 65 : 45
@@ -920,6 +1095,7 @@ function calculateInstitutionalScores(q) {
     macroScore,
     riskScore,
     statisticalScore,
+        ...edge,
     fundamentalScore,
     earningsScore,
     moatScore,
@@ -929,7 +1105,7 @@ function calculateInstitutionalScores(q) {
     aiConfidence: institutionalScore,
     riskLevel: getRiskLevel(riskScore),
     tradeQuality: getTradeQuality(institutionalScore),
-    marketRegime: engineState.marketOpen ? "Active Market" : "Closed / Cautious",
+        marketRegime: regime.label || "Unknown",
     suggestedHoldTime: getSuggestedHoldTime(institutionalScore),
     decisionLevel,
     autoTradeApproved,
@@ -2179,6 +2355,15 @@ async function replaceWeakestIfBetter(signals, positions, aiOwnedSymbols) {
     return false;
   }
 }
+  const regime = engineState.marketRegime || detectMarketRegime(signals);
+
+  if (regime.state === "panic/high volatility" || regime.exposureMultiplier <= 0) {
+    saveRecentOrder("BUY_SKIPPED_MARKET_REGIME", "ALL", {
+      marketRegime: regime.label,
+      riskMessage: regime.riskMessage,
+    });
+    return;
+  }
 
 async function autoBuySignals(signals) {
   const positions = await getPositions();
@@ -2254,12 +2439,13 @@ for (const stock of buyCandidates) {
     const freshAiPositions = freshPositions.filter((p) =>
       freshAiOwnedSymbols.has(normalizeSymbol(p.symbol))
     );
+    const baseTradeAmount = getDynamicTradeAmount(
+      account,
+      aiPositions,
+      stock.score
+    );
 
-  const tradeAmount = getDynamicTradeAmount(
-    account,
-    freshAiPositions,
-    stock.score
-  );
+    const tradeAmount = baseTradeAmount * Number(regime.exposureMultiplier || 1);
 
     if (tradeAmount <= 0) {
       saveFailedOrder(
@@ -2574,6 +2760,7 @@ if (effectiveMode === "live_stock") {
 
 const signals = [...stockSignals, ...cryptoSignals];
 
+engineState.marketRegime = detectMarketRegime(stockSignals);
 engineState.lastSignals = signals;
 engineState.lastStockSignals = stockSignals;
 engineState.lastCryptoSignals = cryptoSignals;
@@ -2954,6 +3141,11 @@ app.post("/config", (req, res) => {
     "maxPercentChange",
     "maxSignalsToReturn",
     "topAutoTradeCandidates",
+    "enableMarketRegimeEngine",
+    "aggressiveBullishExposureMultiplier",
+    "cautiousBullishExposureMultiplier",
+    "defensiveExposureMultiplier",
+    "panicExposureMultiplier",
     "enableAdvancedFilters",
     "minVolumeSpikeRatio",
     "minCloseNearHighPercent",
