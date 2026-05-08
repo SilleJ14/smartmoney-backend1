@@ -2355,7 +2355,10 @@ async function replaceWeakestIfBetter(signals, positions, aiOwnedSymbols) {
     return false;
   }
 }
-  const regime = engineState.marketRegime || detectMarketRegime(signals);
+ 
+
+async function autoBuySignals(signals) {
+   const regime = engineState.marketRegime || detectMarketRegime(signals);
 
   if (regime.state === "panic/high volatility" || regime.exposureMultiplier <= 0) {
     saveRecentOrder("BUY_SKIPPED_MARKET_REGIME", "ALL", {
@@ -2364,8 +2367,6 @@ async function replaceWeakestIfBetter(signals, positions, aiOwnedSymbols) {
     });
     return;
   }
-
-async function autoBuySignals(signals) {
   const positions = await getPositions();
   const aiOwnedSymbols = await getAiOwnedSymbols();
 
