@@ -7,6 +7,7 @@ import fs from "fs";
 
 dotenv.config({ path: path.resolve(process.cwd(), ".env") });
 const CONFIG_FILE = path.resolve(process.cwd(), "runtime-config.json");
+const ENGINE_STATE_FILE = path.resolve(process.cwd(), "engine-state.json");
 
 console.log("ENV CHECK:", {
   ALPACA_LIVE_SECRET: process.env.ALPACA_LIVE_SECRET ? "FOUND" : "MISSING",
@@ -55,6 +56,7 @@ function loadRuntimeConfig() {
   }
 }
 
+// LINE BEFORE
 function saveRuntimeConfig(updates = {}) {
   const current = loadRuntimeConfig();
   const next = {
@@ -67,11 +69,58 @@ function saveRuntimeConfig(updates = {}) {
   return next;
 }
 
+// ADDED CODE
+function loadPersistedEngineState() {
+  try {
+    if (!fs.existsSync(ENGINE_STATE_FILE)) return {};
+    return JSON.parse(fs.readFileSync(ENGINE_STATE_FILE, "utf8"));
+  } catch (err) {
+    console.error("Could not load engine-state.json:", err.message);
+    return {};
+  }
+}
+
+function saveEngineState(reason = "STATE_UPDATE") {
+  try {
+    const safeState = {
+      reason,
+      savedAt: new Date().toISOString(),
+
+      dailyStartEquity: engineState.dailyStartEquity,
+      dailyPeakEquity: engineState.dailyPeakEquity,
+      profitLockFloorEquity: engineState.profitLockFloorEquity,
+
+      dailyLossLocked: engineState.dailyLossLocked,
+      profitLocked: engineState.profitLocked,
+
+      highWaterMarks: engineState.highWaterMarks || {},
+      tradeMemory: engineState.tradeMemory || {},
+      aiEntryScores: engineState.aiEntryScores || {},
+      runnerPositions: engineState.runnerPositions || {},
+      lastSoldAt: engineState.lastSoldAt || {},
+      peaksByMode: engineState.peaksByMode || {},
+      aiManagedSymbols: engineState.aiManagedSymbols || [],
+
+      recentOrders: (engineState.recentOrders || []).slice(0, 100),
+      failedOrders: (engineState.failedOrders || []).slice(0, 100),
+      skippedSymbols: (engineState.skippedSymbols || []).slice(0, 150),
+      pendingExits: engineState.pendingExits || [],
+    };
+
+    fs.writeFileSync(ENGINE_STATE_FILE, JSON.stringify(safeState, null, 2));
+    return safeState;
+  } catch (err) {
+    console.error("Could not save engine-state.json:", err.message);
+    return null;
+  }
+}
+
 const runtimeConfig = loadRuntimeConfig();
+const persistedEngineState = loadPersistedEngineState();
+
 
 // 🔥 Trading Mode (PERSISTED)
-let TRADING_MODE = "smart";
-saveRuntimeConfig({ tradingMode: "smart" });
+let TRADING_MODE = runtimeConfig.tradingMode || process.env.TRADING_MODE || "smart";
 
   let tradingModeLocked =
   runtimeConfig.tradingModeLocked === true ||
@@ -166,7 +215,7 @@ const CONFIG = {
    enableNewsRiskFilter: process.env.ENABLE_NEWS_RISK_FILTER === "true",
   newsLookbackDays: Number(process.env.NEWS_LOOKBACK_DAYS || 3),
 };
-
+// LINE BEFORE
 let engineState = {
   running: false,
   lastScanAt: null,
@@ -196,7 +245,20 @@ let engineState = {
   aiManagedSymbols: [],
 };
 
+engineState = {
+  ...engineState,
+  ...persistedEngineState,
+
+  // Never restore running/cached live broker data from disk.
+  running: false,
+  cachedPositions: [],
+  cachedAccount: null,
+  lastError: null,
+};
+
 const sellingNow = new Set();
+const buyingNow = new Set();
+
 const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
 async function runInBatches(items, batchSize, worker) {
   const results = [];
@@ -261,8 +323,11 @@ function saveFailedOrder(type, symbol, reason, extra = {}) {
   });
 
   engineState.failedOrders = engineState.failedOrders.slice(0, 100);
+  saveEngineState("FAILED_ORDER");
 }
+
 function rememberTradeResult(symbol, result) {
+
   const normalized = normalizeSymbol(symbol);
 
   if (!engineState.tradeMemory) {
@@ -306,6 +371,7 @@ function shouldSkipFromTradeMemory(symbol) {
 
   return false;
 }
+
 function saveRecentOrder(type, symbol, extra = {}) {
   engineState.recentOrders.unshift({
     type,
@@ -315,8 +381,11 @@ function saveRecentOrder(type, symbol, extra = {}) {
   });
 
   engineState.recentOrders = engineState.recentOrders.slice(0, 100);
+  saveEngineState("RECENT_ORDER");
 }
 
+
+// LINE BEFORE
 function saveSkippedSymbol(symbol, reason) {
   engineState.skippedSymbols.unshift({
     symbol,
@@ -325,6 +394,7 @@ function saveSkippedSymbol(symbol, reason) {
   });
 
   engineState.skippedSymbols = engineState.skippedSymbols.slice(0, 150);
+  saveEngineState("SKIPPED_SYMBOL");
 }
 
 function getBotExposure(openPositions = []) {
@@ -3704,6 +3774,46 @@ app.get("/", (req, res) => {
     engineState,
   });
 });
+
+
+app.get("/infra-status", (req, res) => {
+  res.json({
+    ok: true,
+    phase: "13A",
+    backendAuthority: true,
+    tradingMode: TRADING_MODE,
+    tradingModeLocked,
+    autoTradingEnabled,
+    files: {
+      runtimeConfigFile: CONFIG_FILE,
+      engineStateFile: ENGINE_STATE_FILE,
+      engineStatePersisted: fs.existsSync(ENGINE_STATE_FILE),
+      runtimeConfigPersisted: fs.existsSync(CONFIG_FILE),
+    },
+    locks: {
+      buyingNow: Array.from(buyingNow),
+      sellingNow: Array.from(sellingNow),
+      engineRunning: engineState.running,
+    },
+    memory: {
+      recentOrders: engineState.recentOrders?.length || 0,
+      failedOrders: engineState.failedOrders?.length || 0,
+      skippedSymbols: engineState.skippedSymbols?.length || 0,
+      pendingExits: engineState.pendingExits?.length || 0,
+      highWaterMarks: Object.keys(engineState.highWaterMarks || {}).length,
+      tradeMemory: Object.keys(engineState.tradeMemory || {}).length,
+      aiEntryScores: Object.keys(engineState.aiEntryScores || {}).length,
+      runnerPositions: Object.keys(engineState.runnerPositions || {}).length,
+      aiManagedSymbols: engineState.aiManagedSymbols?.length || 0,
+    },
+    lastScanAt: engineState.lastScanAt,
+    lastError: engineState.lastError,
+    savedAt: new Date().toISOString(),
+  });
+});
+
+// LINE AFTER
+app.get("/debug", async (req, res) => {
 
 app.get("/debug", async (req, res) => {
   try {
