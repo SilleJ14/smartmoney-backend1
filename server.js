@@ -80,6 +80,41 @@ function loadPersistedEngineState() {
   }
 }
 
+function getTodayKeyET() {
+  return new Date().toLocaleDateString("en-CA", {
+    timeZone: "America/New_York",
+  });
+}
+
+function resetDailySafetyStateIfNewDay(account) {
+  const todayKey = getTodayKeyET();
+  const equity = Number(account?.equity || 0);
+
+  if (!equity || equity <= 0) return false;
+
+  if (engineState.dailyDateKey !== todayKey) {
+    engineState.dailyDateKey = todayKey;
+
+    engineState.dailyStartEquity = equity;
+    engineState.dailyPeakEquity = equity;
+
+    engineState.profitLockFloorEquity = null;
+
+    engineState.dailyLossLocked = false;
+    engineState.profitLocked = false;
+
+    saveRecentOrder("DAILY_SAFETY_RESET", "ACCOUNT", {
+      todayKey,
+      equity,
+    });
+
+    saveEngineState("DAILY_SAFETY_RESET");
+
+    return true;
+  }
+
+  return false;
+}
 function saveEngineState(reason = "STATE_UPDATE") {
   try {
     const safeState = {
@@ -89,9 +124,14 @@ function saveEngineState(reason = "STATE_UPDATE") {
       dailyStartEquity: engineState.dailyStartEquity,
       dailyPeakEquity: engineState.dailyPeakEquity,
       profitLockFloorEquity: engineState.profitLockFloorEquity,
+      dailyDateKey: engineState.dailyDateKey,
 
       dailyLossLocked: engineState.dailyLossLocked,
       profitLocked: engineState.profitLocked,
+      dailyDateKey: engineState.dailyDateKey,
+      dailyStartEquity: engineState.dailyStartEquity,
+      dailyPeakEquity: engineState.dailyPeakEquity,
+      profitLockFloorEquity: engineState.profitLockFloorEquity,
 
       highWaterMarks: engineState.highWaterMarks || {},
       tradeMemory: engineState.tradeMemory || {},
@@ -233,6 +273,7 @@ let engineState = {
   dailyLossLocked: false,
   profitLocked: false,
   marketOpen: false,
+  dailyDateKey: null,
 
   highWaterMarks: {},
   tradeMemory: {},
@@ -389,7 +430,22 @@ function saveRecentOrder(type, symbol, extra = {}) {
 }
 
 
-// LINE BEFORE
+function getEngineFreshness() {
+  const lastScanTime = engineState.lastScanAt
+    ? new Date(engineState.lastScanAt).getTime()
+    : 0;
+
+  const ageSeconds = lastScanTime
+    ? Math.round((Date.now() - lastScanTime) / 1000)
+    : null;
+
+  return {
+    lastScanAt: engineState.lastScanAt,
+    ageSeconds,
+    stale: ageSeconds === null || ageSeconds > 180,
+    staleAfterSeconds: 180,
+  };
+}
 function saveSkippedSymbol(symbol, reason) {
   engineState.skippedSymbols.unshift({
     symbol,
@@ -2867,6 +2923,7 @@ async function checkDailyLossAndProfitLock(account, marketOpen) {
     !engineState.dailyLossLocked
   ) {
     engineState.dailyLossLocked = true;
+    saveEngineState("DAILY_LOSS_LOCKED");
     autoTradingEnabled = false;
 
     saveRecentOrder("DAILY_LOSS_LOCKED", "ACCOUNT", {
@@ -2897,6 +2954,8 @@ async function checkDailyLossAndProfitLock(account, marketOpen) {
       profitDollars,
       protectedProfit,
       profitLockFloorEquity: engineState.profitLockFloorEquity,
+      dailyDateKey: engineState.dailyDateKey,
+
       profitLockTriggerPercent: CONFIG.profitLockTriggerPercent,
       profitLockProtectPercent: CONFIG.profitLockProtectPercent,
     });
@@ -2908,6 +2967,7 @@ async function checkDailyLossAndProfitLock(account, marketOpen) {
     !engineState.profitLocked
   ) {
     engineState.profitLocked = true;
+    saveEngineState("PROFIT_LOCKED");
     autoTradingEnabled = false;
 
     saveRecentOrder("PROFIT_LOCK_HIT", "ACCOUNT", {
@@ -3742,6 +3802,7 @@ async function engineTick() {
     engineState.lastStockSignals = stockSignals;
     engineState.lastCryptoSignals = cryptoSignals;
     engineState.lastScanAt = new Date().toISOString();
+    saveEngineState("SCAN_COMPLETED");
 
     if (
       autoTradingEnabled &&
@@ -3829,6 +3890,7 @@ app.get("/infra-status", (req, res) => {
       aiManagedSymbols: engineState.aiManagedSymbols?.length || 0,
     },
     lastScanAt: engineState.lastScanAt,
+    freshness: getEngineFreshness(),
     lastError: engineState.lastError,
     savedAt: new Date().toISOString(),
   });
@@ -4121,6 +4183,7 @@ app.get("/infra-status", (req, res) => {
     }
 
     autoTradingEnabled = true;
+    saveEngineState("AUTO_TRADING_ENABLED");
 
     res.json({
       message: "Auto trading enabled",
@@ -4188,8 +4251,13 @@ app.get("/infra-status", (req, res) => {
         CONFIG[key] = value;
       }
     }
-
+  saveRuntimeConfig({
+    ...CONFIG,
+    tradingMode: TRADING_MODE,
+    tradingModeLocked,
+  });
     res.json({
+      
       message: "Remote config updated",
       config: CONFIG,
     });
@@ -4214,6 +4282,12 @@ app.get("/infra-status", (req, res) => {
     }
 
     TRADING_MODE = mode;
+      saveRuntimeConfig({
+    tradingMode: TRADING_MODE,
+    tradingModeLocked,
+  });
+
+  saveEngineState("TRADING_MODE_CHANGED");
     saveRuntimeConfig({ tradingMode: TRADING_MODE });
 
     console.log("MODE SWITCHED:", TRADING_MODE);
@@ -4366,6 +4440,12 @@ app.get("/infra-status", (req, res) => {
     engineState.dailyStartEquity = null;
     engineState.dailyPeakEquity = null;
     engineState.profitLockFloorEquity = null;
+    engineState.dailyDateKey = null;
+
+saveRecentOrder("MANUAL_DAILY_LOCK_RESET", "ACCOUNT", {
+  resetAt: new Date().toISOString(),
+});
+    saveEngineState("DAILY_PROFIT_LOCK_RESET");
 
     res.json({
       message: "Daily/profit lock reset",
