@@ -308,8 +308,12 @@ function normalizeSymbol(symbol) {
 
 function markAiManagedSymbol(symbol) {
   const clean = normalizeSymbol(symbol);
+
+  if (!clean) return;
+
   if (!engineState.aiManagedSymbols.includes(clean)) {
     engineState.aiManagedSymbols.push(clean);
+    saveEngineState("AI_MANAGED_SYMBOL_ADDED");
   }
 }
 
@@ -2496,27 +2500,45 @@ async function scanMarket() {
 async function placeMarketBuy(symbol, dollars, score = 0) {
   const normalizedSymbol = normalizeSymbol(symbol);
 
-  const assetCheck = await isAssetBuyEligible(normalizedSymbol);
-
-  if (!assetCheck.ok) {
-    throw new Error(assetCheck.reason);
+  if (buyingNow.has(normalizedSymbol)) {
+    throw new Error(`${normalizedSymbol} already has a buy in progress`);
   }
 
-  const order = await alpacaTradingRequest("/v2/orders", {
-    method: "POST",
-    body: JSON.stringify({
-      symbol: normalizedSymbol,
-      notional: Number(dollars.toFixed(2)),
-      side: "buy",
-      type: "market",
-      time_in_force: "day",
-      client_order_id: `${AI_ORDER_PREFIX}_BUY_${normalizedSymbol}_${Date.now()}`,
-    }),
-  });
+  buyingNow.add(normalizedSymbol);
 
-  engineState.aiEntryScores[normalizedSymbol] = score;
+  try {
+    const assetCheck = await isAssetBuyEligible(normalizedSymbol);
 
-  return order;
+    if (!assetCheck.ok) {
+      throw new Error(assetCheck.reason);
+    }
+
+    const safeDollars = Number(dollars || 0);
+
+    if (!safeDollars || safeDollars <= 0) {
+      throw new Error(`Invalid buy amount for ${normalizedSymbol}`);
+    }
+
+    const order = await alpacaTradingRequest("/v2/orders", {
+      method: "POST",
+      body: JSON.stringify({
+        symbol: normalizedSymbol,
+        notional: Number(safeDollars.toFixed(2)),
+        side: "buy",
+        type: "market",
+        time_in_force: "day",
+        client_order_id: `${AI_ORDER_PREFIX}_BUY_${normalizedSymbol}_${Date.now()}`,
+      }),
+    });
+
+    engineState.aiEntryScores[normalizedSymbol] = score;
+    markAiManagedSymbol(normalizedSymbol);
+    saveEngineState("BUY_ORDER_SENT");
+
+    return order;
+  } finally {
+    setTimeout(() => buyingNow.delete(normalizedSymbol), 30000);
+  }
 }
 
 async function placeMarketSell(symbol, qty, reason = "AI_EXIT") {
