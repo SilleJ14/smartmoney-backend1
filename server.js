@@ -853,6 +853,111 @@ function getSuggestedHoldTime(score) {
   if (score >= 70) return "2–7 days";
   return "Watch only";
 }
+
+function calculateFundamentalDcfEngine(q) {
+  const price = Number(q.current || q.price || 0);
+  const volume = Number(q.volume || 0);
+  const percentChange = Number(q.percentChange || 0);
+  const confirmations = q.confirmations || {};
+
+  // Starter DCF proxy.
+  // Later we can replace these assumptions with real revenue, FCF, debt, and growth data.
+  const estimatedGrowthRate =
+    percentChange > 0 && percentChange <= 10 ? 0.08 : percentChange > 20 ? 0.02 : 0.05;
+
+  const discountRate = confirmations.fakeBreakout ? 0.14 : 0.10;
+  const terminalGrowthRate = 0.025;
+
+  const estimatedBaseCashFlow = Math.max(0.1, price * 0.08);
+
+  let projectedCashFlowValue = 0;
+
+  for (let year = 1; year <= 5; year += 1) {
+    const projectedCashFlow =
+      estimatedBaseCashFlow * Math.pow(1 + estimatedGrowthRate, year);
+
+    projectedCashFlowValue += projectedCashFlow / Math.pow(1 + discountRate, year);
+  }
+
+  const yearFiveCashFlow =
+    estimatedBaseCashFlow * Math.pow(1 + estimatedGrowthRate, 5);
+
+  const terminalValue =
+    (yearFiveCashFlow * (1 + terminalGrowthRate)) /
+    Math.max(0.01, discountRate - terminalGrowthRate);
+
+  const discountedTerminalValue = terminalValue / Math.pow(1 + discountRate, 5);
+
+  const intrinsicValue = Number(
+    (projectedCashFlowValue + discountedTerminalValue).toFixed(2)
+  );
+
+  const valuationGapPercent =
+    price > 0 ? Number((((intrinsicValue - price) / price) * 100).toFixed(2)) : 0;
+
+  const valuationLabel =
+    valuationGapPercent >= 20
+      ? "Undervalued"
+      : valuationGapPercent <= -20
+      ? "Overvalued"
+      : "Fairly Valued";
+
+  const valuationScore = clampScore(
+    55 +
+      (valuationGapPercent >= 20 ? 20 : 0) -
+      (valuationGapPercent <= -20 ? 20 : 0)
+  );
+
+  const balanceSheetHealthScore = clampScore(
+    50 +
+      (price >= 5 ? 10 : -10) +
+      (volume >= 25000 ? 10 : -10)
+  );
+
+  const cashFlowScore = clampScore(
+    50 +
+      (estimatedGrowthRate >= 0.08 ? 15 : 0) +
+      (discountRate <= 0.1 ? 10 : -10)
+  );
+
+  const revenueGrowthScore = clampScore(
+    50 + estimatedGrowthRate * 300 - (percentChange > 25 ? 15 : 0)
+  );
+
+  const marginScore = clampScore(
+    55 +
+      (percentChange > 0 && percentChange <= 15 ? 10 : 0) -
+      (percentChange > 25 ? 15 : 0)
+  );
+
+  const debtRiskScore = clampScore(
+    70 -
+      (price < 2 ? 20 : 0) -
+      (volume < 25000 ? 10 : 0)
+  );
+
+  const fundamentalScore = clampScore(
+    valuationScore * 0.25 +
+      balanceSheetHealthScore * 0.2 +
+      cashFlowScore * 0.2 +
+      revenueGrowthScore * 0.15 +
+      marginScore * 0.1 +
+      debtRiskScore * 0.1
+  );
+
+  return {
+    intrinsicValue,
+    valuationGapPercent,
+    valuationLabel,
+    valuationScore,
+    balanceSheetHealthScore,
+    cashFlowScore,
+    revenueGrowthScore,
+    marginScore,
+    debtRiskScore,
+    fundamentalScore,
+  };
+}
 function calculateStatisticalEdge(q) {
   const confirmations = q.confirmations || {};
   const technicals = q.technicals || {};
@@ -1023,7 +1128,7 @@ function calculateInstitutionalScores(q) {
   const ema20 = Number(technicals.ema20 || 0);
   const macd = Number(technicals.macd || 0);
   const macdSignal = Number(technicals.macdSignal || 0);
-
+  const dcf = calculateFundamentalDcfEngine(q);
   const edge = calculateStatisticalEdge(q);
   const technicalScore = clampScore(
     45 +
@@ -1057,9 +1162,7 @@ function calculateInstitutionalScores(q) {
       : 25
   );
 
-  const fundamentalScore = clampScore(
-    q.current >= 5 && q.volume >= 100000 ? 65 : 45
-  );
+  const fundamentalScore = dcf.fundamentalScore;
 
   const earningsScore = clampScore(50);
   const moatScore = clampScore(q.current >= 10 ? 60 : 45);
@@ -1077,7 +1180,7 @@ function calculateInstitutionalScores(q) {
       dividendScore * 0.02 +
       portfolioScore * 0.04
   );
-  
+
   const autoTradeApproved =
     institutionalScore >= CONFIG.minScoreToBuy &&
     riskScore >= 65 &&
@@ -1098,6 +1201,15 @@ function calculateInstitutionalScores(q) {
     statisticalScore,
         ...edge,
     fundamentalScore,
+    intrinsicValue: dcf.intrinsicValue,
+    valuationGapPercent: dcf.valuationGapPercent,
+    valuationLabel: dcf.valuationLabel,
+    valuationScore: dcf.valuationScore,
+    balanceSheetHealthScore: dcf.balanceSheetHealthScore,
+    cashFlowScore: dcf.cashFlowScore,
+    revenueGrowthScore: dcf.revenueGrowthScore,
+    marginScore: dcf.marginScore,
+    debtRiskScore: dcf.debtRiskScore,
     earningsScore,
     moatScore,
     dividendScore,
