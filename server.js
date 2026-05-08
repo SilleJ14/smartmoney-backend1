@@ -1077,13 +1077,14 @@ function calculateInstitutionalScores(q) {
       dividendScore * 0.02 +
       portfolioScore * 0.04
   );
-
+  
   const autoTradeApproved =
     institutionalScore >= CONFIG.minScoreToBuy &&
-    riskScore >= 60 &&
+    riskScore >= 65 &&
+    Number(q.volume || 0) >= 25000 &&
+    Number(q.percentChange || 0) <= 20 &&
     confirmations.fakeBreakout !== true &&
     confirmations.newsRisk !== true;
-
   const decisionLevel = autoTradeApproved
     ? "Auto-Trade Approved"
     : institutionalScore >= 60
