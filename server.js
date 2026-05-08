@@ -155,6 +155,10 @@ marketRegimeHistory:
   (engineState.marketRegimeHistory || []).slice(0, 200),
 sectorStrengthHistory:
   (engineState.sectorStrengthHistory || []).slice(0, 200),
+  sectorRotationState:
+  engineState.sectorRotationState || null,
+sectorRotationHistory:
+  (engineState.sectorRotationHistory || []).slice(0, 200),
 signalQualityHistory:
   (engineState.signalQualityHistory || []).slice(0, 200),
 marketBreadthHistory:
@@ -366,6 +370,8 @@ engineFreezeCount: 0,
   signalHistory: [],
 marketRegimeHistory: [],
 sectorStrengthHistory: [],
+sectorRotationState: null,
+sectorRotationHistory: [],
 signalQualityHistory: [],
 marketBreadthHistory: [],
 marketMomentumHistory: [],
@@ -623,6 +629,89 @@ function estimateSectorIntelligence(q) {
     sectorRole,
   };
 }
+function calculateAiSectorRotationEngine(stockSignals = []) {
+  const sectorMap = {};
+
+  for (const signal of stockSignals || []) {
+    const sectorInfo =
+      signal.estimatedSector
+        ? signal
+        : estimateSectorIntelligence(signal);
+
+    const sector = sectorInfo.estimatedSector || "General Market";
+
+    if (!sectorMap[sector]) {
+      sectorMap[sector] = {
+        sector,
+        symbols: [],
+        totalScore: 0,
+        totalMomentum: 0,
+        totalRisk: 0,
+        totalLiquidity: 0,
+        totalLeadership: 0,
+        count: 0,
+      };
+    }
+
+    sectorMap[sector].symbols.push(signal.symbol);
+    sectorMap[sector].totalScore += Number(sectorInfo.sectorScore || signal.score || 0);
+    sectorMap[sector].totalMomentum += Number(sectorInfo.sectorMomentumScore || 0);
+    sectorMap[sector].totalRisk += Number(sectorInfo.sectorRiskScore || 0);
+    sectorMap[sector].totalLiquidity += Number(sectorInfo.sectorLiquidityScore || 0);
+    sectorMap[sector].totalLeadership += Number(sectorInfo.sectorLeadershipScore || 0);
+    sectorMap[sector].count += 1;
+  }
+
+  const sectors = Object.values(sectorMap)
+    .map((item) => {
+      const count = Math.max(1, item.count);
+
+      const averageScore = item.totalScore / count;
+      const averageMomentum = item.totalMomentum / count;
+      const averageRisk = item.totalRisk / count;
+      const averageLiquidity = item.totalLiquidity / count;
+      const averageLeadership = item.totalLeadership / count;
+
+      const rotationScore = clampScore(
+        averageScore * 0.35 +
+          averageMomentum * 0.2 +
+          averageRisk * 0.2 +
+          averageLiquidity * 0.1 +
+          averageLeadership * 0.15
+      );
+
+      const rotationBias =
+        rotationScore >= 80
+          ? "OVERWEIGHT"
+          : rotationScore >= 65
+          ? "ACCUMULATE"
+          : rotationScore >= 50
+          ? "NEUTRAL"
+          : "AVOID";
+
+      return {
+        sector: item.sector,
+        symbols: item.symbols.slice(0, 10),
+        signalCount: item.count,
+        averageScore: Number(averageScore.toFixed(2)),
+        averageMomentum: Number(averageMomentum.toFixed(2)),
+        averageRisk: Number(averageRisk.toFixed(2)),
+        averageLiquidity: Number(averageLiquidity.toFixed(2)),
+        averageLeadership: Number(averageLeadership.toFixed(2)),
+        rotationScore: Number(rotationScore.toFixed(2)),
+        rotationBias,
+      };
+    })
+    .sort((a, b) => b.rotationScore - a.rotationScore);
+
+  return {
+    updatedAt: new Date().toISOString(),
+    leadingSectors: sectors.filter((s) => ["OVERWEIGHT", "ACCUMULATE"].includes(s.rotationBias)).slice(0, 5),
+    weakSectors: sectors.filter((s) => s.rotationBias === "AVOID").slice(0, 5),
+    allSectors: sectors.slice(0, 12),
+  };
+}
+
 function calculatePortfolioHeatEngine(signal, openBotPositions = []) {
   const symbol = normalizeSymbol(signal.symbol);
   const estimatedSector = signal.estimatedSector || "General Market";
@@ -4121,15 +4210,27 @@ engineState.signalHistory =
 
 engineState.aiDecisionHistory =
   engineState.aiDecisionHistory.slice(0, 500);
-  engineState.sectorStrengthHistory.unshift({
+  
+  const sectorRotation = calculateAiSectorRotationEngine(stockSignals);
+
+engineState.sectorRotationState = sectorRotation;
+
+engineState.sectorRotationHistory.unshift(sectorRotation);
+engineState.sectorRotationHistory =
+  engineState.sectorRotationHistory.slice(0, 200);
+
+engineState.sectorStrengthHistory.unshift({
   timestamp: new Date().toISOString(),
   topStockSignals: stockSignals
     .slice(0, 10)
     .map((s) => ({
       symbol: s.symbol,
       score: s.score,
-      sector: s.sector || "UNKNOWN",
+      sector: s.estimatedSector || s.sector || "UNKNOWN",
+      sectorScore: s.sectorScore || 0,
+      sectorRole: s.sectorRole || "Unknown",
     })),
+  sectorRotation,
 });
 
 engineState.sectorStrengthHistory =
