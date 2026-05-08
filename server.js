@@ -1184,6 +1184,251 @@ function detectMarketRegime(stockSignals = []) {
     riskMessage: "Weak or choppy conditions. Exposure reduced.",
   };
 }
+function calculatePortfolioConstructionEngine(q) {
+  const price = Number(q.current || q.price || 0);
+  const volume = Number(q.volume || 0);
+  const percentChange = Number(q.percentChange || 0);
+  const confirmations = q.confirmations || {};
+  const technicals = q.technicals || {};
+
+  const rsi = Number(technicals.rsi || 50);
+  const volumeRatio = Number(confirmations.volumeSpikeRatio || q.volumeRatio || 0);
+
+  const liquidityFitScore = clampScore(
+    45 +
+      (volume >= 1000000 ? 25 : volume >= 250000 ? 18 : volume >= 25000 ? 10 : -20) +
+      (price >= 5 ? 10 : -10)
+  );
+
+  const volatilityBalanceScore = clampScore(
+    75 -
+      (Math.abs(percentChange) > 20 ? 25 : 0) -
+      (Math.abs(percentChange) > 12 ? 12 : 0) -
+      (confirmations.gapTooHigh ? 15 : 0) -
+      (rsi > 80 ? 15 : 0)
+  );
+
+  const diversificationFitScore = clampScore(
+    55 +
+      (price >= 5 ? 8 : -8) +
+      (volumeRatio >= 1 && volumeRatio <= 3 ? 10 : 0) -
+      (confirmations.fakeBreakout ? 25 : 0)
+  );
+
+  const positionSizingQualityScore = clampScore(
+    60 +
+      (volume >= 250000 ? 10 : 0) +
+      (percentChange >= 0 && percentChange <= 15 ? 10 : 0) -
+      (confirmations.newsRisk ? 20 : 0) -
+      (confirmations.fakeBreakout ? 25 : 0)
+  );
+
+  const portfolioRiskContributionScore = clampScore(
+    80 -
+      (percentChange > 20 ? 20 : 0) -
+      (confirmations.gapTooHigh ? 15 : 0) -
+      (confirmations.newsRisk ? 25 : 0) -
+      (volume < 25000 ? 25 : 0)
+  );
+
+  const portfolioConstructionScore = clampScore(
+    liquidityFitScore * 0.24 +
+      volatilityBalanceScore * 0.22 +
+      diversificationFitScore * 0.18 +
+      positionSizingQualityScore * 0.2 +
+      portfolioRiskContributionScore * 0.16
+  );
+
+  const portfolioRole =
+    portfolioConstructionScore >= 85
+      ? "Core Position Candidate"
+      : portfolioConstructionScore >= 75
+      ? "Strong Portfolio Fit"
+      : portfolioConstructionScore >= 65
+      ? "Satellite Position"
+      : portfolioConstructionScore >= 50
+      ? "Small Tactical Position"
+      : "Avoid Heavy Allocation";
+
+  const suggestedAllocationTier =
+    portfolioConstructionScore >= 85
+      ? "High"
+      : portfolioConstructionScore >= 70
+      ? "Medium"
+      : portfolioConstructionScore >= 55
+      ? "Small"
+      : "Watch Only";
+
+  return {
+    portfolioScore: portfolioConstructionScore,
+    portfolioConstructionScore,
+    liquidityFitScore,
+    volatilityBalanceScore,
+    diversificationFitScore,
+    positionSizingQualityScore,
+    portfolioRiskContributionScore,
+    portfolioRole,
+    suggestedAllocationTier,
+  };
+}
+function calculateDividendWealthEngine(q) {
+  const price = Number(q.current || q.price || 0);
+  const volume = Number(q.volume || 0);
+  const percentChange = Number(q.percentChange || 0);
+
+  const confirmations = q.confirmations || {};
+  const technicals = q.technicals || {};
+
+  const rsi = Number(technicals.rsi || 50);
+  const volumeRatio = Number(
+    confirmations.volumeSpikeRatio || q.volumeRatio || 0
+  );
+
+  const dividendSafetyScore = clampScore(
+    50 +
+      (price >= 10 ? 12 : 0) +
+      (volume >= 1000000 ? 15 : volume >= 100000 ? 8 : -8) +
+      (confirmations.newsRisk ? -25 : 0) +
+      (confirmations.fakeBreakout ? -20 : 0)
+  );
+
+  const dividendGrowthScore = clampScore(
+    50 +
+      (percentChange >= 0 && percentChange <= 12 ? 12 : 0) +
+      (rsi >= 45 && rsi <= 70 ? 10 : 0) -
+      (percentChange > 25 ? 20 : 0)
+  );
+
+  const shareholderYieldScore = clampScore(
+    50 +
+      (volumeRatio >= 1.5 ? 10 : 0) +
+      (confirmations.aboveVwap ? 8 : 0) +
+      (confirmations.closeNearHigh ? 8 : 0)
+  );
+
+  const compoundingPotentialScore = clampScore(
+    45 +
+      (price >= 5 ? 10 : -5) +
+      (volume >= 250000 ? 10 : 0) +
+      (percentChange >= 1 && percentChange <= 15 ? 12 : 0) +
+      (confirmations.fakeBreakout ? -25 : 0)
+  );
+
+  const incomeStabilityScore = clampScore(
+    55 +
+      (volume >= 1000000 ? 15 : volume >= 250000 ? 10 : 0) +
+      (confirmations.newsRisk ? -25 : 0) +
+      (confirmations.gapTooHigh ? -15 : 0)
+  );
+
+  const wealthBuilderScore = clampScore(
+    dividendSafetyScore * 0.22 +
+      dividendGrowthScore * 0.18 +
+      shareholderYieldScore * 0.16 +
+      compoundingPotentialScore * 0.26 +
+      incomeStabilityScore * 0.18
+  );
+
+  let wealthProfile = "Momentum Only";
+
+  if (wealthBuilderScore >= 85) {
+    wealthProfile = "Elite Compounder";
+  } else if (wealthBuilderScore >= 75) {
+    wealthProfile = "Institutional Compounder";
+  } else if (wealthBuilderScore >= 65) {
+    wealthProfile = "Growth Compounder";
+  } else if (wealthBuilderScore >= 50) {
+    wealthProfile = "Speculative Growth";
+  } else if (wealthBuilderScore < 35) {
+    wealthProfile = "High Risk Income Trap";
+  }
+
+  return {
+    dividendSafetyScore,
+    dividendGrowthScore,
+    shareholderYieldScore,
+    compoundingPotentialScore,
+    incomeStabilityScore,
+    wealthBuilderScore,
+    wealthProfile,
+  };
+}
+
+
+function calculateMoatEngine(q) {
+  const price = Number(q.current || q.price || 0);
+  const volume = Number(q.volume || 0);
+  const percentChange = Number(q.percentChange || 0);
+  const confirmations = q.confirmations || {};
+  const technicals = q.technicals || {};
+
+  const volumeRatio = Number(confirmations.volumeSpikeRatio || q.volumeRatio || 0);
+  const rsi = Number(technicals.rsi || 50);
+  const ema9 = Number(technicals.ema9 || 0);
+  const ema20 = Number(technicals.ema20 || 0);
+
+  const brandStrengthScore = clampScore(
+    45 +
+      (price >= 10 ? 15 : price >= 5 ? 8 : -8) +
+      (volume >= 1000000 ? 15 : volume >= 100000 ? 8 : 0)
+  );
+
+  const pricingPowerScore = clampScore(
+    50 +
+      (percentChange > 0 && percentChange <= 12 ? 12 : 0) +
+      (rsi >= 45 && rsi <= 70 ? 10 : 0) -
+      (percentChange > 25 ? 20 : 0)
+  );
+
+  const marketPositionScore = clampScore(
+    45 +
+      (volume >= 1000000 ? 18 : volume >= 250000 ? 12 : volume >= 25000 ? 6 : -10) +
+      (volumeRatio >= 1.5 ? 10 : 0)
+  );
+
+  const durabilityScore = clampScore(
+    55 +
+      (ema9 > ema20 ? 12 : -8) +
+      (confirmations.aboveVwap ? 8 : 0) -
+      (confirmations.fakeBreakout ? 25 : 0) -
+      (confirmations.newsRisk ? 20 : 0)
+  );
+
+  const reinvestmentQualityScore = clampScore(
+    50 +
+      (price >= 5 ? 10 : -10) +
+      (percentChange >= 1 && percentChange <= 15 ? 10 : 0) +
+      (confirmations.closeNearHigh ? 8 : 0)
+  );
+
+  const competitiveAdvantageScore = clampScore(
+    brandStrengthScore * 0.2 +
+      pricingPowerScore * 0.2 +
+      marketPositionScore * 0.22 +
+      durabilityScore * 0.23 +
+      reinvestmentQualityScore * 0.15
+  );
+
+  const moatLabel =
+    competitiveAdvantageScore >= 80
+      ? "Wide Moat"
+      : competitiveAdvantageScore >= 65
+      ? "Developing Moat"
+      : competitiveAdvantageScore >= 50
+      ? "Weak Moat"
+      : "No Clear Moat";
+
+  return {
+    moatScore: competitiveAdvantageScore,
+    competitiveAdvantageScore,
+    brandStrengthScore,
+    pricingPowerScore,
+    marketPositionScore,
+    durabilityScore,
+    reinvestmentQualityScore,
+    moatLabel,
+  };
+}
 
 function calculateInstitutionalScores(q) {
   const confirmations = q.confirmations || {};
@@ -1199,6 +1444,9 @@ function calculateInstitutionalScores(q) {
   const dcf = calculateFundamentalDcfEngine(q);
   const earnings = calculateEarningsIntelligenceEngine(q);
   const edge = calculateStatisticalEdge(q);
+  const moat = calculateMoatEngine(q);
+  const wealth = calculateDividendWealthEngine(q);
+  const portfolio = calculatePortfolioConstructionEngine(q);
   const technicalScore = clampScore(
     45 +
       (momentum > 0 ? 10 : -10) +
@@ -1234,9 +1482,9 @@ function calculateInstitutionalScores(q) {
   const fundamentalScore = dcf.fundamentalScore;
 
   const earningsScore = earnings.earningsScore;
-  const moatScore = clampScore(q.current >= 10 ? 60 : 45);
-  const dividendScore = clampScore(45);
-  const portfolioScore = clampScore(70);
+  const moatScore = moat.moatScore;
+  const dividendScore = wealth.wealthBuilderScore;
+    const portfolioScore = portfolio.portfolioScore;
 
   const institutionalScore = clampScore(
     technicalScore * 0.25 +
@@ -1287,13 +1535,35 @@ function calculateInstitutionalScores(q) {
     institutionalEarningsSentiment: earnings.institutionalEarningsSentiment,
     earningsCashFlowStrength: earnings.earningsCashFlowStrength,
     moatScore,
+    competitiveAdvantageScore: moat.competitiveAdvantageScore,
+    brandStrengthScore: moat.brandStrengthScore,
+    pricingPowerScore: moat.pricingPowerScore,
+    marketPositionScore: moat.marketPositionScore,
+    durabilityScore: moat.durabilityScore,
+    reinvestmentQualityScore: moat.reinvestmentQualityScore,
+    moatLabel: moat.moatLabel,
     dividendScore,
+    dividendSafetyScore: wealth.dividendSafetyScore,
+    dividendGrowthScore: wealth.dividendGrowthScore,
+    shareholderYieldScore: wealth.shareholderYieldScore,
+    compoundingPotentialScore: wealth.compoundingPotentialScore,
+    incomeStabilityScore: wealth.incomeStabilityScore,
+    wealthBuilderScore: wealth.wealthBuilderScore,
+    wealthProfile: wealth.wealthProfile,
     portfolioScore,
+    portfolioConstructionScore: portfolio.portfolioConstructionScore,
+    liquidityFitScore: portfolio.liquidityFitScore,
+    volatilityBalanceScore: portfolio.volatilityBalanceScore,
+    diversificationFitScore: portfolio.diversificationFitScore,
+    positionSizingQualityScore: portfolio.positionSizingQualityScore,
+    portfolioRiskContributionScore: portfolio.portfolioRiskContributionScore,
+    portfolioRole: portfolio.portfolioRole,
+    suggestedAllocationTier: portfolio.suggestedAllocationTier,
     institutionalScore,
     aiConfidence: institutionalScore,
     riskLevel: getRiskLevel(riskScore),
     tradeQuality: getTradeQuality(institutionalScore),
-        marketRegime: regime.label || "Unknown",
+    marketRegime: regime.label || "Unknown",
     suggestedHoldTime: getSuggestedHoldTime(institutionalScore),
     decisionLevel,
     autoTradeApproved,
