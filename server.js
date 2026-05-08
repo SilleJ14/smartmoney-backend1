@@ -159,6 +159,11 @@ sectorStrengthHistory:
   engineState.sectorRotationState || null,
 sectorRotationHistory:
   (engineState.sectorRotationHistory || []).slice(0, 200),
+  capitalRedistributionState:
+  engineState.capitalRedistributionState || null,
+capitalRedistributionHistory:
+  (engineState.capitalRedistributionHistory || []).slice(0, 200),
+
 signalQualityHistory:
   (engineState.signalQualityHistory || []).slice(0, 200),
 marketBreadthHistory:
@@ -372,6 +377,8 @@ marketRegimeHistory: [],
 sectorStrengthHistory: [],
 sectorRotationState: null,
 sectorRotationHistory: [],
+capitalRedistributionState: null,
+capitalRedistributionHistory: [],
 signalQualityHistory: [],
 marketBreadthHistory: [],
 marketMomentumHistory: [],
@@ -789,6 +796,120 @@ function calculatePortfolioHeatEngine(signal, openBotPositions = []) {
     correlationAction,
   };
 }
+
+function calculateSmartCapitalRedistributionEngine(
+  account,
+  openBotPositions = [],
+  topSignals = [],
+  sectorRotationState = null
+) {
+  const equity = Number(account?.equity || 0);
+  const cash = Number(account?.cash || 0);
+  const maxBotBudget = equity * (CONFIG.maxBotExposurePercent / 100);
+  const currentBotExposure = getBotExposure(openBotPositions);
+  const remainingBotBudget = Math.max(0, maxBotBudget - currentBotExposure);
+
+  const leadingSectors = sectorRotationState?.leadingSectors || [];
+  const weakSectors = sectorRotationState?.weakSectors || [];
+
+  const positionReviews = openBotPositions.map((position) => {
+    const symbol = normalizeSymbol(position.symbol);
+    const currentPrice = Number(position.current_price || 0);
+    const entryPrice = Number(position.avg_entry_price || 0);
+    const marketValue = Math.abs(Number(position.market_value || 0));
+    const profitPercent = Number(position.unrealized_plpc || 0) * 100;
+
+    const sectorInfo = estimateSectorIntelligence({
+      symbol,
+      current: currentPrice,
+      price: currentPrice,
+      volume: 0,
+      percentChange: profitPercent,
+      confirmations: {},
+    });
+
+    const sector = sectorInfo.estimatedSector || "General Market";
+
+    const isLeadingSector = leadingSectors.some((item) => item.sector === sector);
+    const isWeakSector = weakSectors.some((item) => item.sector === sector);
+
+    const capitalEfficiencyScore = clampScore(
+      50 +
+        profitPercent * 3 +
+        (isLeadingSector ? 15 : 0) -
+        (isWeakSector ? 20 : 0) +
+        (sectorInfo.sectorScore || 0) * 0.2
+    );
+
+    const redistributionAction =
+      profitPercent <= -3 || capitalEfficiencyScore < 35
+        ? "REDUCE_OR_EXIT"
+        : profitPercent >= 5 && capitalEfficiencyScore >= 70
+        ? "PROTECT_WINNER"
+        : capitalEfficiencyScore >= 65
+        ? "KEEP_ALLOCATED"
+        : "MONITOR";
+
+    return {
+      symbol,
+      entryPrice,
+      currentPrice,
+      marketValue,
+      profitPercent: Number(profitPercent.toFixed(2)),
+      sector,
+      isLeadingSector,
+      isWeakSector,
+      capitalEfficiencyScore: Number(capitalEfficiencyScore.toFixed(2)),
+      redistributionAction,
+    };
+  });
+
+  const deployableSignals = topSignals
+    .filter((signal) => signal.qualifiedToBuy !== false)
+    .slice(0, CONFIG.topAutoTradeCandidates)
+    .map((signal) => ({
+      symbol: signal.symbol,
+      score: signal.score,
+      price: signal.current || signal.price,
+      sector: signal.estimatedSector || "General Market",
+      suggestedAction:
+        remainingBotBudget > 0 && Number(signal.score || 0) >= CONFIG.minScoreToBuy
+          ? "ELIGIBLE_FOR_CAPITAL"
+          : "WATCH_ONLY",
+    }));
+
+  const weakCapital = positionReviews
+    .filter((item) => item.redistributionAction === "REDUCE_OR_EXIT")
+    .reduce((sum, item) => sum + item.marketValue, 0);
+
+  const protectedWinnerCapital = positionReviews
+    .filter((item) => item.redistributionAction === "PROTECT_WINNER")
+    .reduce((sum, item) => sum + item.marketValue, 0);
+
+  const cashReserveTarget = equity * 0.15;
+  const cashReserveStatus =
+    cash >= cashReserveTarget ? "CASH_RESERVE_HEALTHY" : "LOW_CASH_RESERVE";
+
+  return {
+    updatedAt: new Date().toISOString(),
+    equity,
+    cash,
+    maxBotBudget: Number(maxBotBudget.toFixed(2)),
+    currentBotExposure: Number(currentBotExposure.toFixed(2)),
+    remainingBotBudget: Number(remainingBotBudget.toFixed(2)),
+    weakCapital: Number(weakCapital.toFixed(2)),
+    protectedWinnerCapital: Number(protectedWinnerCapital.toFixed(2)),
+    cashReserveTarget: Number(cashReserveTarget.toFixed(2)),
+    cashReserveStatus,
+    positionReviews,
+    deployableSignals,
+    redistributionSummary:
+      `Weak capital: $${weakCapital.toFixed(2)} • ` +
+      `Remaining bot budget: $${remainingBotBudget.toFixed(2)} • ` +
+      `${cashReserveStatus}`,
+  };
+}
+
 function calculateAiPortfolioManagerDecision(signal, account, openBotPositions = [], regime = {}) {
   const equity = Number(account?.equity || 0);
   const cash = Number(account?.cash || 0);
@@ -4210,7 +4331,7 @@ engineState.signalHistory =
 
 engineState.aiDecisionHistory =
   engineState.aiDecisionHistory.slice(0, 500);
-  
+
   const sectorRotation = calculateAiSectorRotationEngine(stockSignals);
 
 engineState.sectorRotationState = sectorRotation;
@@ -4218,6 +4339,18 @@ engineState.sectorRotationState = sectorRotation;
 engineState.sectorRotationHistory.unshift(sectorRotation);
 engineState.sectorRotationHistory =
   engineState.sectorRotationHistory.slice(0, 200);
+  const capitalRedistribution = calculateSmartCapitalRedistributionEngine(
+  account,
+  freshAiPositions,
+  stockSignals,
+  engineState.sectorRotationState
+);
+
+engineState.capitalRedistributionState = capitalRedistribution;
+
+engineState.capitalRedistributionHistory.unshift(capitalRedistribution);
+engineState.capitalRedistributionHistory =
+  engineState.capitalRedistributionHistory.slice(0, 200);
 
 engineState.sectorStrengthHistory.unshift({
   timestamp: new Date().toISOString(),
