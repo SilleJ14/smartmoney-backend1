@@ -115,8 +115,8 @@ const CONFIG = {
 
   // EXIT SETTINGS
   takeProfitPercent: Number(process.env.TAKE_PROFIT_PERCENT || 6),
-  stopLossPercent: Number(process.env.STOP_LOSS_PERCENT || 0.5),
-  trailingStopPercent: Number(process.env.TRAILING_STOP_PERCENT || 0.5),
+  stopLossPercent: Number(process.env.STOP_LOSS_PERCENT || -0.5),
+  trailingStopPercent: Number(process.env.TRAILING_STOP_PERCENT || -0.5),
 
   // RUNNER STRATEGY
   runnerTriggerPercent: Number(process.env.RUNNER_TRIGGER_PERCENT || 6),
@@ -813,6 +813,127 @@ function scoreStock(q) {
   }
 
   return Math.min(100, Math.max(0, Math.round(score)));
+
+}
+function clampScore(value) {
+  return Math.min(100, Math.max(0, Math.round(Number(value || 0))));
+}
+
+function getRiskLevel(score) {
+  if (score >= 80) return "Low";
+  if (score >= 60) return "Moderate";
+  if (score >= 40) return "Elevated";
+  return "High";
+}
+
+function getTradeQuality(score) {
+  if (score >= 90) return "Institutional Grade";
+  if (score >= 80) return "High Quality";
+  if (score >= 70) return "Qualified Setup";
+  if (score >= 55) return "Watchlist";
+  return "Weak";
+}
+
+function getSuggestedHoldTime(score) {
+  if (score >= 90) return "5–15 days";
+  if (score >= 80) return "3–10 days";
+  if (score >= 70) return "2–7 days";
+  return "Watch only";
+}
+
+function calculateInstitutionalScores(q) {
+  const confirmations = q.confirmations || {};
+  const technicals = q.technicals || {};
+
+  const momentum = Number(q.percentChange || 0);
+  const volumeRatio = Number(confirmations.volumeSpikeRatio || q.volumeRatio || 0);
+  const rsi = Number(technicals.rsi || 50);
+  const ema9 = Number(technicals.ema9 || 0);
+  const ema20 = Number(technicals.ema20 || 0);
+  const macd = Number(technicals.macd || 0);
+  const macdSignal = Number(technicals.macdSignal || 0);
+
+  const technicalScore = clampScore(
+    45 +
+      (momentum > 0 ? 10 : -10) +
+      (momentum >= 2 ? 10 : 0) +
+      (volumeRatio >= 1.5 ? 10 : 0) +
+      (ema9 > ema20 ? 10 : 0) +
+      (macd > macdSignal ? 10 : 0) +
+      (rsi >= 45 && rsi <= 70 ? 10 : rsi > 80 ? -15 : 0)
+  );
+
+  const riskScore = clampScore(
+    80 -
+      (confirmations.fakeBreakout ? 35 : 0) -
+      (confirmations.gapTooHigh ? 20 : 0) -
+      (confirmations.newsRisk ? 30 : 0) -
+      (momentum > 25 ? 15 : 0) -
+      (volumeRatio < 0.8 ? 10 : 0)
+  );
+
+  const statisticalScore = clampScore(
+    50 +
+      (volumeRatio >= 1.5 ? 15 : 0) +
+      (momentum >= 1 && momentum <= 15 ? 15 : 0) +
+      (confirmations.closeNearHigh ? 10 : 0) +
+      (confirmations.aboveVwap ? 10 : 0)
+  );
+
+  const macroScore = clampScore(engineState.marketOpen ? 70 : 55);
+
+  const fundamentalScore = clampScore(
+    q.current >= 5 && q.volume >= 100000 ? 65 : 45
+  );
+
+  const earningsScore = clampScore(50);
+  const moatScore = clampScore(q.current >= 10 ? 60 : 45);
+  const dividendScore = clampScore(45);
+  const portfolioScore = clampScore(70);
+
+  const institutionalScore = clampScore(
+    technicalScore * 0.25 +
+      riskScore * 0.2 +
+      statisticalScore * 0.2 +
+      macroScore * 0.1 +
+      fundamentalScore * 0.1 +
+      earningsScore * 0.05 +
+      moatScore * 0.04 +
+      dividendScore * 0.02 +
+      portfolioScore * 0.04
+  );
+
+  const autoTradeApproved =
+    institutionalScore >= CONFIG.minScoreToBuy &&
+    riskScore >= 60 &&
+    confirmations.fakeBreakout !== true &&
+    confirmations.newsRisk !== true;
+
+  const decisionLevel = autoTradeApproved
+    ? "Auto-Trade Approved"
+    : institutionalScore >= 60
+    ? "Qualified Setup"
+    : "Visible Stock";
+
+  return {
+    technicalScore,
+    macroScore,
+    riskScore,
+    statisticalScore,
+    fundamentalScore,
+    earningsScore,
+    moatScore,
+    dividendScore,
+    portfolioScore,
+    institutionalScore,
+    aiConfidence: institutionalScore,
+    riskLevel: getRiskLevel(riskScore),
+    tradeQuality: getTradeQuality(institutionalScore),
+    marketRegime: engineState.marketOpen ? "Active Market" : "Closed / Cautious",
+    suggestedHoldTime: getSuggestedHoldTime(institutionalScore),
+    decisionLevel,
+    autoTradeApproved,
+  };
 }
 
 function calculateEMA(values = [], period = 9) {
@@ -886,23 +1007,18 @@ function calculateTechnicals(bars = []) {
     macd: macdData.macd,
     macdSignal: macdData.signal,
   };
-}
-function passesQualityFilters(q) {
+}function passesQualityFilters(q) {
   if (!q.current || q.current <= 0) {
     return { ok: false, reason: "No valid price" };
   }
 
-  // 🔥 LIQUIDITY FILTER
- if (CONFIG.minScanVolume > 0 && q.volume < CONFIG.minScanVolume) {
-  return {
-    ok: false,
-    reason: `Low volume (<${CONFIG.minScanVolume})`,
-  };
-}
-
-  // 🔥 REMOVE DEAD / SLOW STOCKS
-  if (Math.abs(q.percentChange) < 1.5) {
-    return { ok: false, reason: "No meaningful movement" };
+  // Hard block only extremely low liquidity.
+  // Weak volume should score lower, not disappear from the scanner.
+  if (CONFIG.minScanVolume > 0 && q.volume < CONFIG.minScanVolume) {
+    return {
+      ok: false,
+      reason: `Extremely low volume (<${CONFIG.minScanVolume})`,
+    };
   }
 
   if (
@@ -912,74 +1028,18 @@ function passesQualityFilters(q) {
     return { ok: false, reason: `Price outside range: $${q.current}` };
   }
 
-  if (q.percentChange <= 0) {
-    return { ok: false, reason: "No positive momentum" };
-  }
-
   if (q.percentChange > CONFIG.maxPercentChange) {
     return {
       ok: false,
-      reason: `Too extended: ${q.percentChange.toFixed(2)}%`,
+      reason: `Dangerously extended: ${q.percentChange.toFixed(2)}%`,
     };
   }
 
-  if (q.open > 0 && q.current < q.open) {
-    return { ok: false, reason: "Below open price" };
-  }
-
-  if (q.previousClose > 0 && q.current < q.previousClose) {
-    return { ok: false, reason: "Below previous close" };
-  }
-    const marketIsOpen = engineState.marketOpen === true;
-
-if (!marketIsOpen && q.percentChange > 60) {
-    return {
-      ok: false,
-      reason: `After-hours move too extended: ${q.percentChange.toFixed(2)}%`,
-    };
-  }
-
-  if (!marketIsOpen && q.confirmations?.pullbackFromHighPercent > 5) {
-    return {
-      ok: false,
-      reason: `After-hours pullback risk: ${q.confirmations.pullbackFromHighPercent}%`,
-    };
-  }
-
-   if (CONFIG.enableAdvancedFilters && q.confirmations) {
-    const hasValidVolumeData =
-      q.confirmations.barsFound > 0 &&
-      q.confirmations.volumeSpikeRatio > 0;
-
-    // Only enforce volume rule if data is valid
-    if (hasValidVolumeData && !q.confirmations.volumeSpike) {
-      return {
-        ok: false,
-        reason: `No volume spike. Ratio: ${q.confirmations.volumeSpikeRatio}`,
-      };
-    }
-    if (CONFIG.requireAboveVwap && !q.confirmations.aboveVwap) {
-      return { ok: false, reason: "Below VWAP confirmation" };
-    }
-
-    if (!q.confirmations.closeNearHigh) {
-      return {
-        ok: false,
-        reason: `Not closing near high: ${q.confirmations.closeNearHighPercent}%`,
-      };
-    }
-
+  if (CONFIG.enableAdvancedFilters && q.confirmations) {
     if (q.confirmations.fakeBreakout) {
       return {
         ok: false,
         reason: `Fake breakout risk. Pulled back ${q.confirmations.pullbackFromHighPercent}% from high`,
-      };
-    }
-
-    if (q.confirmations.gapTooHigh) {
-      return {
-        ok: false,
-        reason: `Gap-up too high: ${q.confirmations.gapUpPercent}%`,
       };
     }
 
@@ -1302,12 +1362,18 @@ async function scanMarket() {
       }
 
       const score = scoreStock(quote);
+      const institutional = calculateInstitutionalScores({
+        ...quote,
+        score,
+      });
 
-     return {
-  ...quote,
-  score,
-  qualifiedToBuy: score >= CONFIG.minScoreToBuy,
-};
+      return {
+        ...quote,
+        score: institutional.institutionalScore,
+        legacyMomentumScore: score,
+        ...institutional,
+        qualifiedToBuy: institutional.decisionLevel !== "Visible Stock",
+      };
     } catch (err) {
       saveSkippedSymbol(symbol, err.message);
       return null;
@@ -2130,32 +2196,16 @@ async function autoBuySignals(signals) {
   }
 
   const openSlots = CONFIG.maxOpenTrades - aiPositions.length;
-
   const buyCandidates = signals
+    .filter((s) => s.autoTradeApproved === true)
+    .filter((s) => s.decisionLevel === "Auto-Trade Approved")
     .filter((s) => s.score >= CONFIG.minScoreToBuy)
     .filter((s) => s.qualifiedToBuy === true)
-    .filter((s) => Number(s.percentChange || 0) >= 1.5)
-        .filter((s) => {
-      const tech = s.technicals || {};
-
-      const rsi = Number(tech.rsi || 0);
-      const ema9 = Number(tech.ema9 || 0);
-      const ema20 = Number(tech.ema20 || 0);
-      const macd = Number(tech.macd || 0);
-      const macdSignal = Number(tech.macdSignal || 0);
-
-      return (
-        rsi >= 50 &&
-        ema9 > ema20 &&
-        macd > macdSignal
-      );
-    })
-    .filter((s) => Number(s.percentChange || 0) <= 25)
     .filter((s) => s.confirmations?.fakeBreakout !== true)
-    .filter((s) => s.confirmations?.gapTooHigh !== true)
+    .filter((s) => s.confirmations?.newsRisk !== true)
     .filter((s) => !openSymbols.has(normalizeSymbol(s.symbol)))
+    .filter((s) => !shouldSkipFromTradeMemory(s.symbol))
     .filter((s) => isNormalStockSymbol(s.symbol))
-    .sort((a, b) => Number(b.score || 0) - Number(a.score || 0))
     .slice(0, Math.min(openSlots, CONFIG.topAutoTradeCandidates));
 
 for (const stock of buyCandidates) {
