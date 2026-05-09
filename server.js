@@ -191,6 +191,29 @@ selfHealingScanHistory:
 
   liveAiPerformanceState:
   engineState.liveAiPerformanceState || null,
+  tradeJournalState:
+  engineState.tradeJournalState || {},
+
+tradeJournalOpenEntries:
+  engineState.tradeJournalOpenEntries || {},
+
+tradeJournalHistory:
+  (engineState.tradeJournalHistory || []).slice(
+    0,
+    100
+  ),
+
+strategyPerformanceState:
+  engineState.strategyPerformanceState || {},
+
+regimePerformanceState:
+  engineState.regimePerformanceState || {},
+
+sectorPerformanceState:
+  engineState.sectorPerformanceState || {},
+
+confirmationPerformanceState:
+  engineState.confirmationPerformanceState || {},
 
 liveAiPerformanceHistory:
   (engineState.liveAiPerformanceHistory || []).slice(0, 200),
@@ -4178,6 +4201,14 @@ async function autoExitPositions(marketOpen) {
         profitPercent: unrealizedPercent,
         reason,
       });
+
+     journalTradeExit(symbol, {
+  assetClass: "stock",
+  exitType: "AUTO_STOCK_EXIT",
+  exitPrice: currentPrice,
+  profitPercent: unrealizedPercent,
+  exitReason: reason,
+});
       delete engineState.highWaterMarks[symbol];
       engineState.lastSoldAt[symbol] = Date.now();
       delete engineState.aiEntryScores[symbol];
@@ -4250,6 +4281,14 @@ async function autoExitCryptoPositions() {
         reason,
         order,
       });
+
+ journalTradeExit(symbol, {
+  assetClass: "crypto",
+  exitType: "AUTO_CRYPTO_EXIT",
+  exitPrice: currentPrice,
+  profitPercent,
+  exitReason: reason,
+});
       rememberTradeResult(symbol, {
         profitPercent,
         reason,
@@ -5154,7 +5193,31 @@ engineState.institutionalExposureHistory =
   stockSignalCount: stockSignals.length,
   cryptoSignalCount: cryptoSignals.length,
 });
+if (engineState.tradeJournalState) {
+  const tradeJournalSnapshot = {
+    timestamp: new Date().toISOString(),
 
+    totalClosedTrades:
+      engineState.tradeJournalState.totalClosedTrades || 0,
+
+    winningTrades:
+      engineState.tradeJournalState.winningTrades || 0,
+
+    losingTrades:
+      engineState.tradeJournalState.losingTrades || 0,
+
+    averageProfitPercent:
+      engineState.tradeJournalState.averageProfitPercent || 0,
+
+    winRate:
+      engineState.tradeJournalState.winRate || 0,
+  };
+
+  engineState.analyticsSnapshots.unshift({
+    type: "TRADE_JOURNAL_ANALYTICS",
+    ...tradeJournalSnapshot,
+  });
+}
 engineState.analyticsSnapshots =
   engineState.analyticsSnapshots.slice(0, 300);
     saveEngineState("SCAN_COMPLETED");
@@ -5998,6 +6061,44 @@ saveRecentOrder("MANUAL_DAILY_LOCK_RESET", "ACCOUNT", {
       engineState,
     });
   });
+  app.get("/trade-journal", async (req, res) => {
+  try {
+    ensureTradeJournalState();
+
+    res.json({
+      ok: true,
+
+      tradeJournalState:
+        engineState.tradeJournalState,
+
+      openEntries:
+        engineState.tradeJournalOpenEntries,
+
+      recentClosedTrades:
+        (engineState.tradeJournalHistory || []).slice(
+          0,
+          100
+        ),
+
+      strategyPerformanceState:
+        engineState.strategyPerformanceState,
+
+      regimePerformanceState:
+        engineState.regimePerformanceState,
+
+      sectorPerformanceState:
+        engineState.sectorPerformanceState,
+
+      confirmationPerformanceState:
+        engineState.confirmationPerformanceState,
+    });
+  } catch (err) {
+    res.status(500).json({
+      ok: false,
+      error: err.message,
+    });
+  }
+});
 
   app.listen(PORT, "0.0.0.0", async () => {
     console.log(`SmartMoney Pro backend running on port ${PORT}`);
