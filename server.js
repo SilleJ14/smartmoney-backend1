@@ -163,6 +163,11 @@ sectorRotationHistory:
   engineState.capitalRedistributionState || null,
 capitalRedistributionHistory:
   (engineState.capitalRedistributionHistory || []).slice(0, 200),
+  multiTimeframeState:
+  engineState.multiTimeframeState || null,
+
+multiTimeframeHistory:
+  (engineState.multiTimeframeHistory || []).slice(0, 200),
 
 signalQualityHistory:
   (engineState.signalQualityHistory || []).slice(0, 200),
@@ -379,6 +384,8 @@ sectorRotationState: null,
 sectorRotationHistory: [],
 capitalRedistributionState: null,
 capitalRedistributionHistory: [],
+multiTimeframeState: null,
+multiTimeframeHistory: [],
 signalQualityHistory: [],
 marketBreadthHistory: [],
 marketMomentumHistory: [],
@@ -907,6 +914,105 @@ function calculateSmartCapitalRedistributionEngine(
       `Weak capital: $${weakCapital.toFixed(2)} • ` +
       `Remaining bot budget: $${remainingBotBudget.toFixed(2)} • ` +
       `${cashReserveStatus}`,
+  };
+}
+
+function calculateMultiTimeframeConfirmationEngine(signals = []) {
+  const analyzedSignals = (signals || []).map((signal) => {
+    const score = Number(signal.score || 0);
+    const percentChange = Number(signal.percentChange || 0);
+    const volumeRatio = Number(
+      signal.confirmations?.volumeSpikeRatio ||
+      signal.volumeRatio ||
+      0
+    );
+
+    const microTrend =
+      score >= 85 && percentChange > 1
+        ? "BULLISH"
+        : percentChange < -2
+        ? "BEARISH"
+        : "NEUTRAL";
+
+    const intradayTrend =
+      volumeRatio >= 1.5 && score >= 70
+        ? "BULLISH"
+        : score < 50
+        ? "BEARISH"
+        : "NEUTRAL";
+
+    const higherTimeframeTrend =
+      score >= 90
+        ? "BULLISH"
+        : score <= 35
+        ? "BEARISH"
+        : "NEUTRAL";
+
+    const alignedBullish =
+      microTrend === "BULLISH" &&
+      intradayTrend === "BULLISH" &&
+      higherTimeframeTrend === "BULLISH";
+
+    const alignedBearish =
+      microTrend === "BEARISH" &&
+      intradayTrend === "BEARISH";
+
+    const timeframeConflict =
+      new Set([
+        microTrend,
+        intradayTrend,
+        higherTimeframeTrend,
+      ]).size >= 3;
+
+    const timeframeConfidenceScore = clampScore(
+      40 +
+        (alignedBullish ? 40 : 0) -
+        (alignedBearish ? 25 : 0) -
+        (timeframeConflict ? 20 : 0) +
+        score * 0.15
+    );
+
+    const timeframeDecision =
+      timeframeConfidenceScore >= 80
+        ? "FULL_ALIGNMENT"
+        : timeframeConfidenceScore >= 65
+        ? "PARTIAL_ALIGNMENT"
+        : timeframeConflict
+        ? "TIMEFRAME_CONFLICT"
+        : "WEAK_CONFIRMATION";
+
+    return {
+      symbol: signal.symbol,
+      score,
+      microTrend,
+      intradayTrend,
+      higherTimeframeTrend,
+      alignedBullish,
+      alignedBearish,
+      timeframeConflict,
+      timeframeConfidenceScore:
+        Number(timeframeConfidenceScore.toFixed(2)),
+      timeframeDecision,
+    };
+  });
+
+  return {
+    updatedAt: new Date().toISOString(),
+    alignedSignals: analyzedSignals.filter(
+      (s) => s.alignedBullish
+    ).length,
+
+    conflictedSignals: analyzedSignals.filter(
+      (s) => s.timeframeConflict
+    ).length,
+
+    topAlignedSignals: analyzedSignals
+      .sort(
+        (a, b) =>
+          b.timeframeConfidenceScore -
+          a.timeframeConfidenceScore
+      )
+      .slice(0, 10),
   };
 }
 
@@ -4351,6 +4457,18 @@ engineState.capitalRedistributionState = capitalRedistribution;
 engineState.capitalRedistributionHistory.unshift(capitalRedistribution);
 engineState.capitalRedistributionHistory =
   engineState.capitalRedistributionHistory.slice(0, 200);
+  const multiTimeframeAnalysis =
+  calculateMultiTimeframeConfirmationEngine(stockSignals);
+
+engineState.multiTimeframeState =
+  multiTimeframeAnalysis;
+
+engineState.multiTimeframeHistory.unshift(
+  multiTimeframeAnalysis
+);
+
+engineState.multiTimeframeHistory =
+  engineState.multiTimeframeHistory.slice(0, 200);
 
 engineState.sectorStrengthHistory.unshift({
   timestamp: new Date().toISOString(),
