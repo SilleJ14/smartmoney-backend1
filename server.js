@@ -4444,19 +4444,26 @@ engineState.sectorRotationState = sectorRotation;
 engineState.sectorRotationHistory.unshift(sectorRotation);
 engineState.sectorRotationHistory =
   engineState.sectorRotationHistory.slice(0, 200);
-  const capitalRedistribution = calculateSmartCapitalRedistributionEngine(
-  account,
-  freshAiPositions,
-  stockSignals,
-  engineState.sectorRotationState
-);
+ const analyticsPositions = Array.isArray(engineState.cachedPositions)
+  ? engineState.cachedPositions
+  : [];
 
-engineState.capitalRedistributionState = capitalRedistribution;
+const analyticsAiPositions = analyticsPositions.filter((position) => {
+  const symbol = normalizeSymbol(position.symbol);
 
-engineState.capitalRedistributionHistory.unshift(capitalRedistribution);
-engineState.capitalRedistributionHistory =
-  engineState.capitalRedistributionHistory.slice(0, 200);
-const multiTimeframeSourceSignals =
+  if (!symbol) return false;
+
+  if (
+    Array.isArray(engineState.aiManagedSymbols) &&
+    engineState.aiManagedSymbols.includes(symbol)
+  ) {
+    return true;
+  }
+
+  return String(position.asset_class || "").toLowerCase() === "us_equity";
+});
+
+const allSignalsForAnalytics =
   Array.isArray(stockSignals) && stockSignals.length > 0
     ? stockSignals
     : Array.isArray(cryptoSignals) && cryptoSignals.length > 0
@@ -4465,28 +4472,27 @@ const multiTimeframeSourceSignals =
     ? engineState.lastSignals
     : [];
 
+const capitalRedistribution = calculateSmartCapitalRedistributionEngine(
+  account,
+  analyticsAiPositions,
+  allSignalsForAnalytics,
+  engineState.sectorRotationState
+);
+
+engineState.capitalRedistributionState = capitalRedistribution;
+
+engineState.capitalRedistributionHistory.unshift(capitalRedistribution);
+engineState.capitalRedistributionHistory =
+  engineState.capitalRedistributionHistory.slice(0, 200);
+
 const multiTimeframeAnalysis =
-  calculateMultiTimeframeConfirmationEngine(multiTimeframeSourceSignals);
+  calculateMultiTimeframeConfirmationEngine(allSignalsForAnalytics);
 
 engineState.multiTimeframeState = multiTimeframeAnalysis;
 
 engineState.multiTimeframeHistory.unshift(multiTimeframeAnalysis);
 engineState.multiTimeframeHistory =
   engineState.multiTimeframeHistory.slice(0, 200);
-
-engineState.sectorStrengthHistory.unshift({
-  timestamp: new Date().toISOString(),
-  topStockSignals: stockSignals
-    .slice(0, 10)
-    .map((s) => ({
-      symbol: s.symbol,
-      score: s.score,
-      sector: s.estimatedSector || s.sector || "UNKNOWN",
-      sectorScore: s.sectorScore || 0,
-      sectorRole: s.sectorRole || "Unknown",
-    })),
-  sectorRotation,
-});
 
 engineState.sectorStrengthHistory =
   engineState.sectorStrengthHistory.slice(0, 200);
