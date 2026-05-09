@@ -202,6 +202,30 @@ earningsIntelligenceState:
 earningsIntelligenceHistory:
   (engineState.earningsIntelligenceHistory || []).slice(0, 200),
 
+competitiveAdvantageState:
+  engineState.competitiveAdvantageState || null,
+
+competitiveAdvantageHistory:
+  (engineState.competitiveAdvantageHistory || []).slice(0, 200),
+
+dividendCompoundingState:
+  engineState.dividendCompoundingState || null,
+
+dividendCompoundingHistory:
+  (engineState.dividendCompoundingHistory || []).slice(0, 200),
+
+dcfValuationState:
+  engineState.dcfValuationState || null,
+
+dcfValuationHistory:
+  (engineState.dcfValuationHistory || []).slice(0, 200),
+
+institutionalOrchestratorState:
+  engineState.institutionalOrchestratorState || null,
+
+institutionalOrchestratorHistory:
+  (engineState.institutionalOrchestratorHistory || []).slice(0, 200),
+
 macroRiskState:
   engineState.macroRiskState || null,
 
@@ -482,6 +506,14 @@ portfolioOptimizationState: null,
 portfolioOptimizationHistory: [],
 earningsIntelligenceState: null,
 earningsIntelligenceHistory: [],
+competitiveAdvantageState: null,
+competitiveAdvantageHistory: [],
+dividendCompoundingState: null,
+dividendCompoundingHistory: [],
+dcfValuationState: null,
+dcfValuationHistory: [],
+institutionalOrchestratorState: null,
+institutionalOrchestratorHistory: [],
 macroRiskState: null,
 macroRiskHistory: [],
 signalQualityHistory: [],
@@ -2064,6 +2096,167 @@ function calculateBlackRockPortfolioOptimizer(
   };
 }
 
+function calculateInstitutionalAiPortfolioOrchestrator(signal = {}) {
+  const institutionalScore = Number(
+    signal.institutionalScore || signal.score || 0
+  );
+
+  const statisticalScore = Number(
+    signal.statisticalScore ||
+      signal.statisticalEdge?.statisticalEdgeScore ||
+      0
+  );
+
+  const technicalScore = Number(
+    signal.technicalIntelligence?.institutionalEntryScore ||
+      signal.technicalScore ||
+      0
+  );
+
+  const macroScore = Number(
+    engineState.macroRiskState?.macroStressScore ?? 50
+  );
+
+  const portfolioScore = Number(
+    signal.portfolioScore ||
+      engineState.portfolioOptimizationState?.portfolioEfficiencyScore ||
+      0
+  );
+
+  const earningsScore = Number(signal.earningsScore || 0);
+
+  const moatScore = Number(
+    signal.competitiveAdvantageScore ||
+      signal.moatScore ||
+      0
+  );
+
+  const wealthScore = Number(
+    signal.harvardDividendScore ||
+      signal.longTermWealthScore ||
+      signal.wealthBuilderScore ||
+      signal.dividendScore ||
+      0
+  );
+
+  const dcfScore = Number(signal.dcfValuationScore || 0);
+
+  const riskScore = Number(
+    signal.institutionalRiskScore ||
+      signal.riskScore ||
+      0
+  );
+
+  const exhaustionRisk = Number(
+    signal.exhaustionRiskScore ||
+      signal.technicalIntelligence?.exhaustionRiskScore ||
+      0
+  );
+
+  const valuationRisk = Number(signal.valuationRiskScore || 0);
+
+  const earningsRisk = Number(
+    signal.earningsVolatilityRiskScore || 0
+  );
+
+  const macroPenalty =
+    engineState.macroRiskState?.shouldBlockNewTrades
+      ? 100
+      : macroScore >= 80
+      ? 35
+      : macroScore >= 60
+      ? 20
+      : macroScore >= 40
+      ? 10
+      : 0;
+
+  const portfolioPenalty =
+    engineState.portfolioOptimizationState?.rebalanceRequired
+      ? 15
+      : 0;
+
+  const institutionalOpportunityScore = clampScore(
+    institutionalScore * 0.18 +
+      technicalScore * 0.16 +
+      statisticalScore * 0.14 +
+      riskScore * 0.13 +
+      earningsScore * 0.1 +
+      moatScore * 0.09 +
+      wealthScore * 0.07 +
+      dcfScore * 0.07 +
+      portfolioScore * 0.06
+  );
+
+  const institutionalRiskPenalty = clampScore(
+    macroPenalty +
+      portfolioPenalty +
+      exhaustionRisk * 0.15 +
+      valuationRisk * 0.15 +
+      earningsRisk * 0.12 +
+      (riskScore < 50 ? 20 : 0)
+  );
+
+  const finalInstitutionalDecisionScore = clampScore(
+    institutionalOpportunityScore -
+      institutionalRiskPenalty * 0.55
+  );
+
+  const orchestratorAction =
+    engineState.macroRiskState?.shouldBlockNewTrades
+      ? "BLOCKED_BY_MACRO_RISK"
+      : finalInstitutionalDecisionScore >= 85
+      ? "DEPLOY_HIGH_CONVICTION"
+      : finalInstitutionalDecisionScore >= 75
+      ? "DEPLOY_CONTROLLED"
+      : finalInstitutionalDecisionScore >= 65
+      ? "SMALL_TACTICAL"
+      : finalInstitutionalDecisionScore >= 50
+      ? "WATCHLIST_ONLY"
+      : "AVOID";
+
+  const orchestratorMultiplier =
+    orchestratorAction === "DEPLOY_HIGH_CONVICTION"
+      ? 1
+      : orchestratorAction === "DEPLOY_CONTROLLED"
+      ? 0.8
+      : orchestratorAction === "SMALL_TACTICAL"
+      ? 0.5
+      : orchestratorAction === "WATCHLIST_ONLY"
+      ? 0.15
+      : 0;
+
+  return {
+    symbol: signal.symbol,
+    institutionalOpportunityScore,
+    institutionalRiskPenalty,
+    finalInstitutionalDecisionScore,
+    orchestratorAction,
+    orchestratorMultiplier,
+    engineScores: {
+      institutionalScore,
+      technicalScore,
+      statisticalScore,
+      riskScore,
+      earningsScore,
+      moatScore,
+      wealthScore,
+      dcfScore,
+      portfolioScore,
+      macroStressScore: macroScore,
+    },
+    riskInputs: {
+      exhaustionRisk,
+      valuationRisk,
+      earningsRisk,
+      macroPenalty,
+      portfolioPenalty,
+    },
+    orchestratorReason:
+      `${orchestratorAction} • Final ${finalInstitutionalDecisionScore}/100 • ` +
+      `Opportunity ${institutionalOpportunityScore}/100 • Penalty ${institutionalRiskPenalty}/100`,
+  };
+}
+
 function calculateAiPortfolioManagerDecision(signal, account, openBotPositions = [], regime = {}) {
   const equity = Number(account?.equity || 0);
   const cash = Number(account?.cash || 0);
@@ -2093,8 +2286,26 @@ function calculateAiPortfolioManagerDecision(signal, account, openBotPositions =
       : 1;
   const moatScore = Number(signal.moatScore || 0);
   const wealthBuilderScore = Number(signal.wealthBuilderScore || signal.dividendScore || 0);
+    const competitiveAdvantageScore = Number(
+    signal.competitiveAdvantageScore ||
+      signal.moatScore ||
+      0
+  );
+
+  const moatMultiplier =
+    competitiveAdvantageScore >= 80
+      ? 1
+      : competitiveAdvantageScore >= 65
+      ? 0.85
+      : competitiveAdvantageScore >= 50
+      ? 0.65
+      : competitiveAdvantageScore >= 40
+      ? 0.4
+      : 0.2;
   const portfolioScore = Number(signal.portfolioScore || 0);
   const institutionalRiskScore = Number(signal.institutionalRiskScore || riskScore || 0);
+    const orchestrator =
+    calculateInstitutionalAiPortfolioOrchestrator(signal);
   const portfolioHeat = calculatePortfolioHeatEngine(signal, openBotPositions);
   const portfolioOptimizer =
     engineState.portfolioOptimizationState || {};
@@ -2199,6 +2410,8 @@ const effectiveRemainingBotBudget =
       roleMultiplier *
       optimizerMultiplier *
       earningsRiskMultiplier *
+      moatMultiplier *
+      orchestrator.orchestratorMultiplier *
       heatMultiplier *
       regimeMultiplier *
       macroMultiplier
@@ -2214,6 +2427,8 @@ const effectiveRemainingBotBudget =
       roleMultiplier *
       optimizerMultiplier *
       earningsRiskMultiplier *
+      moatMultiplier *
+      orchestrator.orchestratorMultiplier *
       heatMultiplier *
       regimeMultiplier *
       macroMultiplier,
@@ -2238,12 +2453,23 @@ const effectiveRemainingBotBudget =
 
   return {
     aiConvictionScore,
+        institutionalOrchestrator: orchestrator,
+    finalInstitutionalDecisionScore:
+      orchestrator.finalInstitutionalDecisionScore,
+    orchestratorAction:
+      orchestrator.orchestratorAction,
+    orchestratorMultiplier:
+      orchestrator.orchestratorMultiplier,
     citadelTechnicalScore,
     earningsScore,
     earningsVolatilityRiskScore,
     earningsRiskMode:
       signal.earningsRiskMode || "NORMAL",
     earningsRiskMultiplier,
+    competitiveAdvantageScore,
+    moatMultiplier,
+    moatLabel:
+      signal.moatLabel || "UNKNOWN",
     institutionalEntryGrade:
     signal.institutionalEntryGrade ||
     signal.technicalIntelligence?.institutionalEntryGrade ||
@@ -2293,8 +2519,8 @@ effectiveRemainingBotBudget:
   Number(effectiveRemainingBotBudget.toFixed(2)),
 
 portfolioManagerReason:
-  `${aiPortfolioAction} • Conviction ${aiConvictionScore}/100 • ` +
-    `Risk ${institutionalRiskScore}/100 • Technical ${citadelTechnicalScore}/100 • Earnings ${earningsScore}/100 • Fit ${portfolioFitScore}/100 • ` +
+  `${aiPortfolioAction} • Orchestrator ${orchestrator.finalInstitutionalDecisionScore}/100 • Conviction ${aiConvictionScore}/100 • ` +
+  `Risk ${institutionalRiskScore}/100 • Technical ${citadelTechnicalScore}/100 • Earnings ${earningsScore}/100 • Moat ${competitiveAdvantageScore}/100 • Fit ${portfolioFitScore}/100 • ` +
   `Compounding ${
     engineState.capitalCompoundingState?.compoundingMode ||
     "BASELINE"
@@ -3197,6 +3423,108 @@ function calculateEarningsIntelligenceEngine(q) {
   };
 }
 
+function calculateInstitutionalDcfValuationEngine(q) {
+  const symbol = normalizeSymbol(q.symbol);
+  const price = Number(q.current || q.price || 0);
+  const percentChange = Number(q.percentChange || 0);
+  const volume = Number(q.volume || 0);
+  const confirmations = q.confirmations || {};
+
+  const baseDcf = calculateFundamentalDcfEngine(q);
+
+  const moatScore = Number(q.moatScore || q.competitiveAdvantageScore || 50);
+  const earningsScore = Number(q.earningsScore || 50);
+  const riskScore = Number(q.riskScore || 50);
+  const dividendScore = Number(q.dividendScore || q.wealthBuilderScore || 50);
+
+  const estimatedFairValue = Number(baseDcf.intrinsicValue || price || 0);
+
+  const marginOfSafetyPercent =
+    price > 0
+      ? ((estimatedFairValue - price) / price) * 100
+      : 0;
+
+  const qualityAdjustedFairValue = Number(
+    (
+      estimatedFairValue *
+      (1 +
+        (moatScore - 50) / 300 +
+        (earningsScore - 50) / 400 +
+        (dividendScore - 50) / 500 -
+        (100 - riskScore) / 500)
+    ).toFixed(2)
+  );
+
+  const qualityAdjustedMarginOfSafety =
+    price > 0
+      ? ((qualityAdjustedFairValue - price) / price) * 100
+      : 0;
+
+  const valuationRiskScore = clampScore(
+    50 +
+      (qualityAdjustedMarginOfSafety <= -25 ? 30 : 0) +
+      (qualityAdjustedMarginOfSafety <= -50 ? 20 : 0) +
+      (percentChange > 25 ? 20 : 0) +
+      (confirmations.fakeBreakout ? 20 : 0) -
+      (qualityAdjustedMarginOfSafety >= 20 ? 20 : 0)
+  );
+
+  const marginOfSafetyScore = clampScore(
+    50 +
+      (qualityAdjustedMarginOfSafety >= 10 ? 15 : 0) +
+      (qualityAdjustedMarginOfSafety >= 25 ? 20 : 0) +
+      (qualityAdjustedMarginOfSafety >= 50 ? 15 : 0) -
+      (qualityAdjustedMarginOfSafety <= -10 ? 15 : 0) -
+      (qualityAdjustedMarginOfSafety <= -25 ? 20 : 0)
+  );
+
+  const dcfValuationScore = clampScore(
+    Number(baseDcf.valuationScore || 50) * 0.35 +
+      marginOfSafetyScore * 0.35 +
+      (100 - valuationRiskScore) * 0.3
+  );
+
+  const valuationLabel =
+    qualityAdjustedMarginOfSafety >= 30
+      ? "Deep Value"
+      : qualityAdjustedMarginOfSafety >= 15
+      ? "Undervalued"
+      : qualityAdjustedMarginOfSafety >= -15
+      ? "Fair Value"
+      : qualityAdjustedMarginOfSafety >= -30
+      ? "Overvalued"
+      : "Extremely Overvalued";
+
+  const valuationAction =
+    valuationRiskScore >= 80
+      ? "Avoid Valuation Risk"
+      : valuationRiskScore >= 65
+      ? "Reduce Position Size"
+      : dcfValuationScore >= 75
+      ? "Valuation Supportive"
+      : dcfValuationScore >= 60
+      ? "Valuation Neutral"
+      : "Watch Only";
+
+  return {
+    symbol,
+    dcfValuationScore,
+    estimatedFairValue,
+    qualityAdjustedFairValue,
+    marginOfSafetyPercent: Number(marginOfSafetyPercent.toFixed(2)),
+    qualityAdjustedMarginOfSafety:
+      Number(qualityAdjustedMarginOfSafety.toFixed(2)),
+    marginOfSafetyScore,
+    valuationRiskScore,
+    valuationLabel,
+    valuationAction,
+    baseDcf,
+    dcfReason:
+      `${valuationAction} • ${valuationLabel} • DCF ${dcfValuationScore}/100 • ` +
+      `Margin ${qualityAdjustedMarginOfSafety.toFixed(2)}%`,
+  };
+}
+
 function calculateFundamentalDcfEngine(q) {
   const price = Number(q.current || q.price || 0);
   const volume = Number(q.volume || 0);
@@ -3621,6 +3949,73 @@ function calculatePortfolioConstructionEngine(q) {
     suggestedAllocationTier,
   };
 }
+
+function calculateHarvardDividendCompoundingEngine(q) {
+  const symbol = normalizeSymbol(q.symbol);
+  const price = Number(q.current || q.price || 0);
+  const percentChange = Number(q.percentChange || 0);
+  const volume = Number(q.volume || 0);
+  const confirmations = q.confirmations || {};
+  const technicals = q.technicals || {};
+  const rsi = Number(technicals.rsi || 50);
+
+  const existingWealth = calculateDividendWealthEngine(q);
+  const sector = estimateSectorIntelligence(q);
+
+  const harvardStabilityScore = clampScore(
+    50 +
+      (price >= 10 ? 15 : price >= 5 ? 8 : -10) +
+      (volume >= 250000 ? 12 : volume >= 25000 ? 6 : -8) +
+      (Math.abs(percentChange) <= 10 ? 12 : -10) -
+      (confirmations.newsRisk ? 20 : 0) -
+      (confirmations.fakeBreakout ? 20 : 0)
+  );
+
+  const endowmentQualityScore = clampScore(
+    Number(existingWealth.wealthBuilderScore || 0) * 0.45 +
+      Number(sector.sectorRiskScore || 50) * 0.25 +
+      Number(sector.sectorLiquidityScore || 50) * 0.2 +
+      (rsi >= 40 && rsi <= 70 ? 10 : 0)
+  );
+
+  const capitalPreservationScore = clampScore(
+    55 +
+      (price >= 5 ? 10 : -15) +
+      (Math.abs(percentChange) <= 12 ? 12 : -12) +
+      (Number(existingWealth.incomeStabilityScore || 0) >= 65 ? 12 : 0) -
+      (confirmations.newsRisk ? 20 : 0)
+  );
+
+  const harvardDividendCompoundingScore = clampScore(
+    harvardStabilityScore * 0.3 +
+      endowmentQualityScore * 0.35 +
+      capitalPreservationScore * 0.35
+  );
+
+  const harvardDividendProfile =
+    harvardDividendCompoundingScore >= 85
+      ? "Elite Endowment Compounder"
+      : harvardDividendCompoundingScore >= 72
+      ? "Strong Long-Term Compounder"
+      : harvardDividendCompoundingScore >= 60
+      ? "Moderate Wealth Builder"
+      : harvardDividendCompoundingScore >= 45
+      ? "Trade Only"
+      : "Avoid Long-Term Allocation";
+
+  return {
+    symbol,
+    harvardDividendCompoundingScore,
+    harvardStabilityScore,
+    endowmentQualityScore,
+    capitalPreservationScore,
+    harvardDividendProfile,
+    harvardDividendReason:
+      `${harvardDividendProfile} • Harvard ${harvardDividendCompoundingScore}/100 • ` +
+      `Stability ${harvardStabilityScore}/100 • Preservation ${capitalPreservationScore}/100`,
+  };
+}
+
 function calculateDividendWealthEngine(q) {
   const price = Number(q.current || q.price || 0);
   const volume = Number(q.volume || 0);
@@ -3706,70 +4101,109 @@ function calculateDividendWealthEngine(q) {
 
 
 function calculateMoatEngine(q) {
+  const symbol = normalizeSymbol(q.symbol);
   const price = Number(q.current || q.price || 0);
-  const volume = Number(q.volume || 0);
   const percentChange = Number(q.percentChange || 0);
+  const volume = Number(q.volume || 0);
+  const volumeRatio = Number(
+    q.confirmations?.volumeSpikeRatio ||
+      q.volumeRatio ||
+      0
+  );
+
   const confirmations = q.confirmations || {};
   const technicals = q.technicals || {};
-
-  const volumeRatio = Number(confirmations.volumeSpikeRatio || q.volumeRatio || 0);
   const rsi = Number(technicals.rsi || 50);
-  const ema9 = Number(technicals.ema9 || 0);
-  const ema20 = Number(technicals.ema20 || 0);
+
+  const sectorInfo = estimateSectorIntelligence(q);
+  const sectorScore = Number(sectorInfo.sectorScore || 50);
+  const sectorLiquidityScore = Number(
+    sectorInfo.sectorLiquidityScore || 50
+  );
+  const sectorRiskScore = Number(
+    sectorInfo.sectorRiskScore || 50
+  );
+  const estimatedSector =
+    sectorInfo.estimatedSector || "General Market";
 
   const brandStrengthScore = clampScore(
     45 +
-    (price >= 10 ? 15 : price >= 5 ? 8 : -8) +
-    (volume >= 1000000 ? 15 : volume >= 100000 ? 8 : 0)
+      (price >= 5 ? 10 : -10) +
+      (volume >= 250000 ? 15 : volume >= 25000 ? 8 : -10) +
+      (sectorScore >= 65 ? 12 : 0) +
+      (confirmations.closeNearHigh ? 8 : 0) -
+      (confirmations.newsRisk ? 20 : 0)
   );
 
   const pricingPowerScore = clampScore(
     50 +
-    (percentChange > 0 && percentChange <= 12 ? 12 : 0) +
-    (rsi >= 45 && rsi <= 70 ? 10 : 0) -
-    (percentChange > 25 ? 20 : 0)
+      (percentChange > 0 && percentChange <= 12 ? 12 : 0) +
+      (rsi >= 45 && rsi <= 70 ? 10 : 0) +
+      (sectorRiskScore >= 65 ? 12 : 0) -
+      (percentChange > 30 ? 18 : 0) -
+      (price < 2 ? 20 : 0)
   );
 
   const marketPositionScore = clampScore(
     45 +
-    (volume >= 1000000 ? 18 : volume >= 250000 ? 12 : volume >= 25000 ? 6 : -10) +
-    (volumeRatio >= 1.5 ? 10 : 0)
+      (sectorScore >= 70 ? 18 : sectorScore >= 55 ? 10 : 0) +
+      (sectorLiquidityScore >= 65 ? 12 : 0) +
+      (volumeRatio >= 1.2 ? 8 : 0) +
+      (confirmations.aboveVwap ? 7 : 0) -
+      (confirmations.fakeBreakout ? 25 : 0)
   );
 
   const durabilityScore = clampScore(
     55 +
-    (ema9 > ema20 ? 12 : -8) +
-    (confirmations.aboveVwap ? 8 : 0) -
-    (confirmations.fakeBreakout ? 25 : 0) -
-    (confirmations.newsRisk ? 20 : 0)
+      (price >= 10 ? 12 : price >= 5 ? 6 : -12) +
+      (volume >= 100000 ? 10 : volume >= 25000 ? 5 : -10) +
+      (Math.abs(percentChange) <= 15 ? 10 : -12) -
+      (confirmations.newsRisk ? 20 : 0) -
+      (estimatedSector === "Speculative Small Cap" ? 15 : 0)
   );
 
   const reinvestmentQualityScore = clampScore(
     50 +
-    (price >= 5 ? 10 : -10) +
-    (percentChange >= 1 && percentChange <= 15 ? 10 : 0) +
-    (confirmations.closeNearHigh ? 8 : 0)
+      (percentChange > 0 && percentChange <= 15 ? 12 : 0) +
+      (volumeRatio >= 1 ? 8 : -8) +
+      (sectorScore >= 60 ? 10 : 0) -
+      (rsi > 80 ? 15 : 0) -
+      (percentChange > 35 ? 20 : 0)
   );
 
   const competitiveAdvantageScore = clampScore(
     brandStrengthScore * 0.2 +
-    pricingPowerScore * 0.2 +
-    marketPositionScore * 0.22 +
-    durabilityScore * 0.23 +
-    reinvestmentQualityScore * 0.15
+      pricingPowerScore * 0.2 +
+      marketPositionScore * 0.22 +
+      durabilityScore * 0.23 +
+      reinvestmentQualityScore * 0.15
   );
 
+  const moatScore = competitiveAdvantageScore;
+
   const moatLabel =
-    competitiveAdvantageScore >= 80
-      ? "Wide Moat"
-      : competitiveAdvantageScore >= 65
-        ? "Developing Moat"
-        : competitiveAdvantageScore >= 50
-          ? "Weak Moat"
-          : "No Clear Moat";
+    competitiveAdvantageScore >= 85
+      ? "Wide Moat / Durable Compounder"
+      : competitiveAdvantageScore >= 72
+      ? "Strong Competitive Advantage"
+      : competitiveAdvantageScore >= 60
+      ? "Developing Advantage"
+      : competitiveAdvantageScore >= 45
+      ? "Weak Advantage"
+      : "No Clear Moat";
+
+  const competitiveAdvantageAction =
+    competitiveAdvantageScore >= 75
+      ? "Long-Term Quality Candidate"
+      : competitiveAdvantageScore >= 60
+      ? "Tactical Quality Candidate"
+      : competitiveAdvantageScore >= 45
+      ? "Trade Only, Not Core"
+      : "Avoid Core Allocation";
 
   return {
-    moatScore: competitiveAdvantageScore,
+    symbol,
+    moatScore,
     competitiveAdvantageScore,
     brandStrengthScore,
     pricingPowerScore,
@@ -3777,6 +4211,11 @@ function calculateMoatEngine(q) {
     durabilityScore,
     reinvestmentQualityScore,
     moatLabel,
+    competitiveAdvantageAction,
+    estimatedSector,
+    competitiveAdvantageReason:
+      `${moatLabel} • Advantage ${competitiveAdvantageScore}/100 • ` +
+      `Durability ${durabilityScore}/100 • Pricing Power ${pricingPowerScore}/100`,
   };
 }
 
@@ -3791,12 +4230,16 @@ function calculateInstitutionalScores(q) {
   const ema20 = Number(technicals.ema20 || 0);
   const macd = Number(technicals.macd || 0);
   const macdSignal = Number(technicals.macdSignal || 0);
-  const dcf = calculateFundamentalDcfEngine(q);
+  const institutionalDcf =
+  calculateInstitutionalDcfValuationEngine(q);
+  
   const earnings = calculateEarningsIntelligenceEngine(q);
   const edge = calculateStatisticalEdge(q);
   const citadelTechnical = calculateCitadelTechnicalIntelligenceEngine(q);
   const moat = calculateMoatEngine(q);
   const wealth = calculateDividendWealthEngine(q);
+  const harvardDividend =
+  calculateHarvardDividendCompoundingEngine(q);
   const portfolio = calculatePortfolioConstructionEngine(q);
   const sector = estimateSectorIntelligence(q);
   const advancedRisk = calculateAdvancedRiskEngine(q);
@@ -3831,10 +4274,14 @@ function calculateInstitutionalScores(q) {
   );
 
   const fundamentalScore = dcf.fundamentalScore;
+  const dcfValuationScore =
+  institutionalDcf.dcfValuationScore;
 
   const earningsScore = earnings.earningsScore;
   const moatScore = moat.moatScore;
   const dividendScore = wealth.wealthBuilderScore;
+  const harvardDividendScore =
+  harvardDividend.harvardDividendCompoundingScore;
   const portfolioScore = portfolio.portfolioScore;
 
   const institutionalScore = clampScore(
@@ -3842,10 +4289,12 @@ function calculateInstitutionalScores(q) {
     blendedRiskScore * 0.2 +
     statisticalScore * 0.2 +
     macroScore * 0.1 +
-    fundamentalScore * 0.1 +
+    fundamentalScore * 0.08 +
+dcfValuationScore * 0.04 +
     earningsScore * 0.07 +
-    moatScore * 0.04 +
+    moatScore * 0.07 +
     dividendScore * 0.02 +
+harvardDividendScore * 0.03 +
     portfolioScore * 0.04 +
     sector.sectorScore * 0.03
   );
@@ -3859,8 +4308,11 @@ function calculateInstitutionalScores(q) {
     Number(q.percentChange || 0) <= 20 &&
     confirmations.fakeBreakout !== true &&
     confirmations.newsRisk !== true &&
+harvardDividendScore >= 40 &&
+institutionalDcf.valuationRiskScore <= 80;
     earnings.earningsRiskMode !== "HIGH_EARNINGS_RISK" &&
-    earnings.earningsVolatilityRiskScore <= 75;
+    earnings.earningsVolatilityRiskScore <= 75 &&
+    moat.competitiveAdvantageScore >= 45;
   const decisionLevel = autoTradeApproved
     ? "Auto-Trade Approved"
     : institutionalScore >= 60
@@ -3888,6 +4340,18 @@ function calculateInstitutionalScores(q) {
     statisticalScore,
     ...edge,
     fundamentalScore,
+    dcfValuation: institutionalDcf,
+dcfValuationScore,
+valuationRiskScore:
+  institutionalDcf.valuationRiskScore,
+marginOfSafetyScore:
+  institutionalDcf.marginOfSafetyScore,
+qualityAdjustedMarginOfSafety:
+  institutionalDcf.qualityAdjustedMarginOfSafety,
+valuationLabel:
+  institutionalDcf.valuationLabel,
+valuationAction:
+  institutionalDcf.valuationAction,
     intrinsicValue: dcf.intrinsicValue,
     valuationGapPercent: dcf.valuationGapPercent,
     valuationLabel: dcf.valuationLabel,
@@ -3925,6 +4389,16 @@ function calculateInstitutionalScores(q) {
     incomeStabilityScore: wealth.incomeStabilityScore,
     wealthBuilderScore: wealth.wealthBuilderScore,
     wealthProfile: wealth.wealthProfile,
+    harvardDividendCompounding: harvardDividend,
+harvardDividendScore,
+harvardStabilityScore:
+  harvardDividend.harvardStabilityScore,
+endowmentQualityScore:
+  harvardDividend.endowmentQualityScore,
+capitalPreservationScore:
+  harvardDividend.capitalPreservationScore,
+harvardDividendProfile:
+  harvardDividend.harvardDividendProfile,
     portfolioScore,
     portfolioConstructionScore: portfolio.portfolioConstructionScore,
     liquidityFitScore: portfolio.liquidityFitScore,
@@ -5982,6 +6456,181 @@ engineState.technicalIntelligenceHistory.unshift(
 engineState.technicalIntelligenceHistory =
   engineState.technicalIntelligenceHistory.slice(0, 200);
 
+const orchestratedSignals =
+  allSignalsForAnalytics.map((signal) => ({
+    ...signal,
+    institutionalOrchestrator:
+      calculateInstitutionalAiPortfolioOrchestrator(signal),
+  }));
+
+const deployableOrchestratedSignals =
+  orchestratedSignals.filter(
+    (signal) =>
+      Number(
+        signal.institutionalOrchestrator
+          ?.finalInstitutionalDecisionScore || 0
+      ) >= 65
+  );
+
+const averageOrchestratorScore =
+  orchestratedSignals.length > 0
+    ? orchestratedSignals.reduce(
+        (sum, signal) =>
+          sum +
+          Number(
+            signal.institutionalOrchestrator
+              ?.finalInstitutionalDecisionScore || 0
+          ),
+        0
+      ) / orchestratedSignals.length
+    : 0;
+
+engineState.institutionalOrchestratorState = {
+  updatedAt: new Date().toISOString(),
+  totalSignals: orchestratedSignals.length,
+  deployableSignals: deployableOrchestratedSignals.length,
+  averageOrchestratorScore:
+    Number(averageOrchestratorScore.toFixed(2)),
+  strongestOrchestratedSignals:
+    deployableOrchestratedSignals
+      .slice(0, 5)
+      .map((signal) => ({
+        symbol: signal.symbol,
+        score: signal.score,
+        finalInstitutionalDecisionScore:
+          signal.institutionalOrchestrator
+            ?.finalInstitutionalDecisionScore,
+        orchestratorAction:
+          signal.institutionalOrchestrator
+            ?.orchestratorAction,
+        orchestratorMultiplier:
+          signal.institutionalOrchestrator
+            ?.orchestratorMultiplier,
+      })),
+};
+
+engineState.institutionalOrchestratorHistory.unshift(
+  engineState.institutionalOrchestratorState
+);
+
+engineState.institutionalOrchestratorHistory =
+  engineState.institutionalOrchestratorHistory.slice(
+    0,
+    200
+  );  
+
+const dcfValuationSignals =
+  allSignalsForAnalytics.filter(
+    (signal) =>
+      Number(signal.dcfValuationScore || 0) >= 65
+  );
+
+const highValuationRiskSignals =
+  allSignalsForAnalytics.filter(
+    (signal) =>
+      Number(signal.valuationRiskScore || 0) >= 75
+  );
+
+const averageDcfValuationScore =
+  allSignalsForAnalytics.length > 0
+    ? allSignalsForAnalytics.reduce(
+        (sum, signal) =>
+          sum +
+          Number(signal.dcfValuationScore || 0),
+        0
+      ) / allSignalsForAnalytics.length
+    : 0;
+
+engineState.dcfValuationState = {
+  updatedAt: new Date().toISOString(),
+
+  qualifyingDcfSignals:
+    dcfValuationSignals.length,
+
+  highValuationRiskSignals:
+    highValuationRiskSignals.length,
+
+  averageDcfValuationScore:
+    Number(
+      averageDcfValuationScore.toFixed(2)
+    ),
+
+  strongestDcfSetups:
+    dcfValuationSignals
+      .slice(0, 5)
+      .map((signal) => ({
+        symbol: signal.symbol,
+        score: signal.score,
+
+        dcfValuationScore:
+          signal.dcfValuationScore,
+
+        valuationRiskScore:
+          signal.valuationRiskScore,
+
+        valuationLabel:
+          signal.valuationLabel,
+
+        qualityAdjustedMarginOfSafety:
+          signal.qualityAdjustedMarginOfSafety,
+      })),
+};
+
+engineState.dcfValuationHistory.unshift(
+  engineState.dcfValuationState
+);
+
+engineState.dcfValuationHistory =
+  engineState.dcfValuationHistory.slice(
+    0,
+    200
+  );
+
+const competitiveAdvantageSignals =
+  allSignalsForAnalytics.filter(
+    (signal) =>
+      Number(signal.competitiveAdvantageScore || signal.moatScore || 0) >= 65
+  );
+
+const averageCompetitiveAdvantageScore =
+  allSignalsForAnalytics.length > 0
+    ? allSignalsForAnalytics.reduce(
+        (sum, signal) =>
+          sum +
+          Number(
+            signal.competitiveAdvantageScore ||
+              signal.moatScore ||
+              0
+          ),
+        0
+      ) / allSignalsForAnalytics.length
+    : 0;
+
+engineState.competitiveAdvantageState = {
+  updatedAt: new Date().toISOString(),
+  qualifyingMoatSignals: competitiveAdvantageSignals.length,
+  averageCompetitiveAdvantageScore:
+    Number(averageCompetitiveAdvantageScore.toFixed(2)),
+  strongestMoatCandidates: competitiveAdvantageSignals
+    .slice(0, 5)
+    .map((signal) => ({
+      symbol: signal.symbol,
+      score: signal.score,
+      moatScore: signal.moatScore,
+      competitiveAdvantageScore:
+        signal.competitiveAdvantageScore,
+      moatLabel: signal.moatLabel,
+      estimatedSector: signal.estimatedSector,
+    })),
+};
+
+engineState.competitiveAdvantageHistory.unshift(
+  engineState.competitiveAdvantageState
+);
+
+engineState.competitiveAdvantageHistory =
+  engineState.competitiveAdvantageHistory.slice(0, 200);
+
 const earningsSignals =
   allSignalsForAnalytics.filter(
     (signal) => Number(signal.earningsScore || 0) >= 70
@@ -7045,6 +7694,69 @@ statisticalEdgeHistory:
       res.status(500).json({ error: err.message });
     }
   });
+
+  app.get("/institutional-orchestrator", async (req, res) => {
+  try {
+    res.json({
+      ok: true,
+
+      institutionalOrchestratorState:
+        engineState.institutionalOrchestratorState || null,
+
+      institutionalOrchestratorHistory:
+        (
+          engineState.institutionalOrchestratorHistory || []
+        ).slice(0, 100),
+    });
+  } catch (err) {
+    res.status(500).json({
+      ok: false,
+      error: err.message,
+    });
+  }
+});
+
+  app.get("/dcf-valuation", async (req, res) => {
+  try {
+    res.json({
+      ok: true,
+
+      dcfValuationState:
+        engineState.dcfValuationState || null,
+
+      dcfValuationHistory:
+        (
+          engineState.dcfValuationHistory || []
+        ).slice(0, 100),
+    });
+  } catch (err) {
+    res.status(500).json({
+      ok: false,
+      error: err.message,
+    });
+  }
+});
+
+  app.get("/competitive-advantage", async (req, res) => {
+  try {
+    res.json({
+      ok: true,
+
+      competitiveAdvantageState:
+        engineState.competitiveAdvantageState || null,
+
+      competitiveAdvantageHistory:
+        (
+          engineState.competitiveAdvantageHistory || []
+        ).slice(0, 100),
+    });
+  } catch (err) {
+    res.status(500).json({
+      ok: false,
+      error: err.message,
+    });
+  }
+});
 
   app.get("/earnings-intelligence", async (req, res) => {
   try {
