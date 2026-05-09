@@ -183,6 +183,17 @@ institutionalExposureHistory:
 
 marketCrashProtectionHistory:
   (engineState.marketCrashProtectionHistory || []).slice(0, 200),
+  selfHealingScanState:
+  engineState.selfHealingScanState || null,
+
+selfHealingScanHistory:
+  (engineState.selfHealingScanHistory || []).slice(0, 200),
+
+scanFailureCount:
+  engineState.scanFailureCount || 0,
+
+lastScanRecoveryAt:
+  engineState.lastScanRecoveryAt || null,
 aiDecisionHistory:
   (engineState.aiDecisionHistory || []).slice(0, 500),
       recentOrders: (engineState.recentOrders || []).slice(0, 100),
@@ -397,6 +408,10 @@ marketVolatilityHistory: [],
 institutionalExposureHistory: [],
 marketCrashProtectionState: null,
 marketCrashProtectionHistory: [],
+selfHealingScanState: null,
+selfHealingScanHistory: [],
+scanFailureCount: 0,
+lastScanRecoveryAt: null,
 aiDecisionHistory: [],
 };
 
@@ -970,6 +985,77 @@ function calculateSmartCapitalRedistributionEngine(
       `Remaining bot budget: $${remainingBotBudget.toFixed(2)} • ` +
       `${cashReserveStatus}`,
   };
+}
+
+function calculateSelfHealingScanRecoveryEngine() {
+  const now = Date.now();
+
+  const lastScanTime = engineState.lastScanAt
+    ? new Date(engineState.lastScanAt).getTime()
+    : 0;
+
+  const lastHeartbeatTime = engineState.lastHeartbeatAt
+    ? new Date(engineState.lastHeartbeatAt).getTime()
+    : 0;
+
+  const scanAgeSeconds = lastScanTime
+    ? Math.round((now - lastScanTime) / 1000)
+    : null;
+
+  const heartbeatAgeSeconds = lastHeartbeatTime
+    ? Math.round((now - lastHeartbeatTime) / 1000)
+    : null;
+
+  const scanIsStale =
+    scanAgeSeconds === null || scanAgeSeconds > 240;
+
+  const heartbeatIsStale =
+    heartbeatAgeSeconds === null || heartbeatAgeSeconds > 180;
+
+  const engineAppearsStuck =
+    engineState.running === true &&
+    engineState.lastTickStartedAt &&
+    now - Number(engineState.lastTickStartedAt) > 1000 * 60 * 4;
+
+  let recoveryAction = "NO_ACTION";
+  let recovered = false;
+
+  if (engineAppearsStuck) {
+    engineState.running = false;
+    engineState.engineFreezeDetected = true;
+    engineState.engineFreezeCount =
+      Number(engineState.engineFreezeCount || 0) + 1;
+
+    recoveryAction = "ENGINE_UNLOCKED";
+    recovered = true;
+  } else if (scanIsStale || heartbeatIsStale) {
+    recoveryAction = "SCAN_STALE_MONITORING";
+  }
+
+  if (recovered) {
+    engineState.lastScanRecoveryAt = new Date().toISOString();
+  }
+
+  const state = {
+    updatedAt: new Date().toISOString(),
+    scanAgeSeconds,
+    heartbeatAgeSeconds,
+    scanIsStale,
+    heartbeatIsStale,
+    engineAppearsStuck,
+    recoveryAction,
+    recovered,
+    scanFailureCount: Number(engineState.scanFailureCount || 0),
+    engineFreezeCount: Number(engineState.engineFreezeCount || 0),
+  };
+
+  engineState.selfHealingScanState = state;
+
+  engineState.selfHealingScanHistory.unshift(state);
+  engineState.selfHealingScanHistory =
+    engineState.selfHealingScanHistory.slice(0, 200);
+
+  return state;
 }
 
 function calculateAiMarketCrashProtectionEngine(
@@ -4653,6 +4739,11 @@ engineState.marketCrashProtectionHistory.unshift(
 
 engineState.marketCrashProtectionHistory =
   engineState.marketCrashProtectionHistory.slice(0, 200);
+  const selfHealingScanRecovery =
+  calculateSelfHealingScanRecoveryEngine();
+
+engineState.selfHealingScanState =
+  selfHealingScanRecovery;
 
 if (marketCrashProtection.shouldBlockNewTrades) {
   autoTradingEnabled = false;
@@ -4786,6 +4877,23 @@ engineState.analyticsSnapshots =
     }
   } catch (err) {
     engineState.lastError = err.message;
+    engineState.scanFailureCount =
+  Number(engineState.scanFailureCount || 0) + 1;
+
+engineState.selfHealingScanState = {
+  updatedAt: new Date().toISOString(),
+  recoveryAction: "SCAN_ERROR_RECORDED",
+  recovered: false,
+  error: err.message,
+  scanFailureCount: engineState.scanFailureCount,
+};
+
+engineState.selfHealingScanHistory.unshift(
+  engineState.selfHealingScanState
+);
+
+engineState.selfHealingScanHistory =
+  engineState.selfHealingScanHistory.slice(0, 200);
     engineState.lastEngineStopReason = "ENGINE_ERROR";
     console.error("Engine error:", err.message);
   } finally {
