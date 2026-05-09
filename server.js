@@ -1242,19 +1242,32 @@ function calculateSmartCapitalRedistributionEngine(
     };
   });
 
+  const weakCapitalPreview = positionReviews
+    .filter((item) => item.redistributionAction === "REDUCE_OR_EXIT")
+    .reduce((sum, item) => sum + item.marketValue, 0);
+
   const deployableSignals = topSignals
     .filter((signal) => signal.qualifiedToBuy !== false)
     .slice(0, CONFIG.topAutoTradeCandidates)
-    .map((signal) => ({
-      symbol: signal.symbol,
-      score: signal.score,
-      price: signal.current || signal.price,
-      sector: signal.estimatedSector || "General Market",
-      suggestedAction:
-        remainingBotBudget > 0 && Number(signal.score || 0) >= CONFIG.minScoreToBuy
-          ? "ELIGIBLE_FOR_CAPITAL"
-          : "WATCH_ONLY",
-    }));
+    .map((signal) => {
+      const score = Number(signal.score || 0);
+      const hasDirectBudget = remainingBotBudget > 0;
+      const canRotateWeakCapital = weakCapitalPreview > 0;
+
+      return {
+        symbol: signal.symbol,
+        score,
+        price: signal.current || signal.price,
+        sector: signal.estimatedSector || "General Market",
+        suggestedAction:
+          hasDirectBudget && score >= CONFIG.minScoreToBuy
+            ? "ELIGIBLE_FOR_CAPITAL"
+            : canRotateWeakCapital && score >= CONFIG.minScoreToBuy + CONFIG.replaceWeakestMinScoreGap
+            ? "ROTATION_CANDIDATE"
+            : "WATCH_ONLY",
+        rotationCapitalAvailable: Number(weakCapitalPreview.toFixed(2)),
+      };
+    });
 
   const weakCapital = positionReviews
     .filter((item) => item.redistributionAction === "REDUCE_OR_EXIT")
