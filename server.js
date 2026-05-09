@@ -475,7 +475,7 @@ engineFreezeCount: 0,
   cooldownMinutes: 30,
   lastRotationDateKey: null,
   rotationCountToday: 0,
-  maxRotationsPerDay: 1,
+  maxRotationsPerDay: 2,
   peaksByMode: {},
 
   cachedPositions: [],
@@ -6061,6 +6061,64 @@ async function rotateWeakCryptoIfBetter(signals, positions) {
     const posProfit = Number(pos.unrealized_plpc || 0);
     return posProfit < weakProfit ? pos : weak;
   });
+    if (!marketOpen && TRADING_MODE !== "live_crypto") {
+    saveRecentOrder(
+      "ROTATION_SKIPPED_MARKET_CLOSED",
+      weakest?.symbol || "UNKNOWN",
+      {
+        replacementCandidate: topCandidate?.symbol,
+      }
+    );
+
+    return false;
+  }
+
+  const weakestProfitPercent =
+    Number(weakest.unrealized_plpc || 0) * 100;
+
+  if (weakestProfitPercent >= 2) {
+    saveRecentOrder(
+      "ROTATION_SKIPPED_PROFITABLE_POSITION",
+      weakest.symbol,
+      {
+        weakestProfitPercent,
+        replacementCandidate: topCandidate.symbol,
+      }
+    );
+
+    return false;
+  }
+
+  if (weakestProfitPercent > -4) {
+    saveRecentOrder(
+      "ROTATION_SKIPPED_POSITION_NOT_WEAK_ENOUGH",
+      weakest.symbol,
+      {
+        weakestProfitPercent,
+        replacementCandidate: topCandidate.symbol,
+      }
+    );
+
+    return false;
+  }
+
+  const swingRotationCheck =
+    canRunSwingSafeRotation(weakest);
+
+  if (!swingRotationCheck.allowed) {
+    saveRecentOrder(
+      "CRYPTO_ROTATION_SKIPPED_SWING_SAFE",
+      weakest.symbol,
+      {
+        replacementSymbol: topCandidate.symbol,
+        replacementScore: topCandidate.score,
+        reason: swingRotationCheck.reason,
+        weakestProfitPercent,
+      }
+    );
+
+    return false;
+  }
 
   const weakestSymbol = normalizeSymbol(weakest.symbol);
     const swingRotationCheck = canRunSwingSafeRotation(weakest);
