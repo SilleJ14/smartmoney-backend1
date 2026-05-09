@@ -189,6 +189,13 @@ statisticalEdgeHistory:
 
 technicalIntelligenceHistory:
   (engineState.technicalIntelligenceHistory || []).slice(0, 200),
+
+  portfolioOptimizationState:
+  engineState.portfolioOptimizationState || null,
+
+portfolioOptimizationHistory:
+  (engineState.portfolioOptimizationHistory || []).slice(0, 200),
+
 macroRiskState:
   engineState.macroRiskState || null,
 
@@ -465,6 +472,8 @@ statisticalEdgeState: null,
 statisticalEdgeHistory: [],
 technicalIntelligenceState: null,
 technicalIntelligenceHistory: [],
+portfolioOptimizationState: null,
+portfolioOptimizationHistory: [],
 macroRiskState: null,
 macroRiskHistory: [],
 signalQualityHistory: [],
@@ -1895,6 +1904,158 @@ function calculateMultiTimeframeConfirmationEngine(signals = []) {
   };
 }
 
+function calculateBlackRockPortfolioOptimizer(
+  account,
+  openPositions = [],
+  signals = []
+) {
+  const equity = Number(account?.equity || 0);
+  const cash = Number(account?.cash || 0);
+
+  const positions = Array.isArray(openPositions)
+    ? openPositions
+    : [];
+
+  const analyzedSignals = Array.isArray(signals)
+    ? signals
+    : [];
+
+  const totalExposure = positions.reduce(
+    (sum, position) =>
+      sum + Math.abs(Number(position.market_value || 0)),
+    0
+  );
+
+  const exposurePercent =
+    equity > 0
+      ? (totalExposure / equity) * 100
+      : 0;
+
+  const sectorMap = {};
+
+  for (const position of positions) {
+    const sector =
+      estimateSectorIntelligence({
+        symbol: position.symbol,
+        current:
+          Number(position.current_price || 0),
+      }).estimatedSector || "General Market";
+
+    if (!sectorMap[sector]) {
+      sectorMap[sector] = {
+        sector,
+        exposure: 0,
+        positions: 0,
+      };
+    }
+
+    sectorMap[sector].positions += 1;
+
+    sectorMap[sector].exposure += Math.abs(
+      Number(position.market_value || 0)
+    );
+  }
+
+  const sectorDiversification = Object.values(sectorMap);
+
+  const concentrationRiskScore = clampScore(
+    100 -
+      sectorDiversification.reduce(
+        (sum, sector) =>
+          sum +
+          (sector.positions >= 2 ? 18 : 0),
+        0
+      ) -
+      (exposurePercent > CONFIG.maxBotExposurePercent
+        ? 40
+        : 0)
+  );
+
+  const diversificationScore = clampScore(
+    45 +
+      sectorDiversification.length * 12 -
+      (positions.length >= CONFIG.maxOpenTrades
+        ? 15
+        : 0)
+  );
+
+  const liquidityReserveScore = clampScore(
+    equity > 0
+      ? (cash / equity) * 100
+      : 0
+  );
+
+  const portfolioEfficiencyScore = clampScore(
+    concentrationRiskScore * 0.35 +
+      diversificationScore * 0.35 +
+      liquidityReserveScore * 0.3
+  );
+
+  const optimizerMode =
+    portfolioEfficiencyScore >= 80
+      ? "MAX_EFFICIENCY"
+      : portfolioEfficiencyScore >= 65
+      ? "BALANCED"
+      : portfolioEfficiencyScore >= 50
+      ? "DEFENSIVE"
+      : "RISK_REDUCTION";
+
+  const rebalanceRequired =
+    concentrationRiskScore < 45 ||
+    exposurePercent >
+      CONFIG.maxBotExposurePercent;
+
+  const topSignals = analyzedSignals
+    .slice(0, 5)
+    .map((signal) => ({
+      symbol: signal.symbol,
+      score: signal.score,
+      technicalScore:
+        signal.technicalIntelligence
+          ?.institutionalEntryScore || 0,
+      portfolioRole:
+        signal.portfolioRole || "UNKNOWN",
+    }));
+
+  return {
+    updatedAt: new Date().toISOString(),
+    optimizerMode,
+    rebalanceRequired,
+    portfolioEfficiencyScore:
+      Number(
+        portfolioEfficiencyScore.toFixed(2)
+      ),
+
+    concentrationRiskScore:
+      Number(
+        concentrationRiskScore.toFixed(2)
+      ),
+
+    diversificationScore:
+      Number(diversificationScore.toFixed(2)),
+
+    liquidityReserveScore:
+      Number(
+        liquidityReserveScore.toFixed(2)
+      ),
+
+    totalExposure:
+      Number(totalExposure.toFixed(2)),
+
+    exposurePercent:
+      Number(exposurePercent.toFixed(2)),
+
+    sectorDiversification,
+
+    topSignals,
+
+    optimizerReason:
+      `${optimizerMode} • Efficiency ${portfolioEfficiencyScore}/100 • ` +
+      `Diversification ${diversificationScore}/100 • ` +
+      `Concentration ${concentrationRiskScore}/100`,
+  };
+}
+
 function calculateAiPortfolioManagerDecision(signal, account, openBotPositions = [], regime = {}) {
   const equity = Number(account?.equity || 0);
   const cash = Number(account?.cash || 0);
@@ -1915,6 +2076,8 @@ function calculateAiPortfolioManagerDecision(signal, account, openBotPositions =
   const portfolioScore = Number(signal.portfolioScore || 0);
   const institutionalRiskScore = Number(signal.institutionalRiskScore || riskScore || 0);
   const portfolioHeat = calculatePortfolioHeatEngine(signal, openBotPositions);
+  const portfolioOptimizer =
+    engineState.portfolioOptimizationState || {};
   const currentBotExposure = getBotExposure(openBotPositions);
   const maxBotBudget = equity * (CONFIG.maxBotExposurePercent / 100);
   const remainingBotBudget = Math.max(0, maxBotBudget - currentBotExposure);
@@ -1982,6 +2145,15 @@ const effectiveRemainingBotBudget =
           ? 0.45
           : 0.2;
 
+  const optimizerMultiplier =
+    portfolioOptimizer.optimizerMode === "RISK_REDUCTION"
+      ? 0.25
+      : portfolioOptimizer.optimizerMode === "DEFENSIVE"
+      ? 0.5
+      : portfolioOptimizer.optimizerMode === "BALANCED"
+      ? 0.8
+      : 1;
+
   const heatMultiplier =
     portfolioHeat.correlationAction === "Allow Allocation"
       ? 1
@@ -2005,6 +2177,7 @@ const effectiveRemainingBotBudget =
       convictionMultiplier *
       riskMultiplier *
       roleMultiplier *
+      optimizerMultiplier *
       heatMultiplier *
       regimeMultiplier *
       macroMultiplier
@@ -2018,6 +2191,7 @@ const effectiveRemainingBotBudget =
       convictionMultiplier *
       riskMultiplier *
       roleMultiplier *
+      optimizerMultiplier *
       heatMultiplier *
       regimeMultiplier *
       macroMultiplier,
@@ -2052,6 +2226,14 @@ const effectiveRemainingBotBudget =
     aiAllocationPercentOfBotBudget,
     recommendedTradeAmount: Number(recommendedTradeAmount.toFixed(2)),
     portfolioHeatScore: portfolioHeat.portfolioHeatScore,
+        portfolioEfficiencyScore:
+      portfolioOptimizer.portfolioEfficiencyScore || 0,
+
+    optimizerMode:
+      portfolioOptimizer.optimizerMode || "UNKNOWN",
+
+    rebalanceRequired:
+      portfolioOptimizer.rebalanceRequired || false,
     portfolioHeatLabel: portfolioHeat.portfolioHeatLabel,
     correlationRiskScore: portfolioHeat.correlationRiskScore,
     concentrationRiskScore: portfolioHeat.concentrationRiskScore,
@@ -5640,6 +5822,26 @@ engineState.technicalIntelligenceHistory.unshift(
 engineState.technicalIntelligenceHistory =
   engineState.technicalIntelligenceHistory.slice(0, 200);
 
+  const portfolioOptimization =
+  calculateBlackRockPortfolioOptimizer(
+    account,
+    freshAiPositions,
+    allSignalsForAnalytics
+  );
+
+engineState.portfolioOptimizationState =
+  portfolioOptimization;
+
+engineState.portfolioOptimizationHistory.unshift(
+  portfolioOptimization
+);
+
+engineState.portfolioOptimizationHistory =
+  engineState.portfolioOptimizationHistory.slice(
+    0,
+    200
+  );
+
 const macroRisk =
   calculateBridgewaterMacroRiskEngine(
     allSignalsForAnalytics,
@@ -6616,6 +6818,27 @@ statisticalEdgeHistory:
       res.status(500).json({ error: err.message });
     }
   });
+
+app.get("/portfolio-optimizer", async (req, res) => {
+  try {
+    res.json({
+      ok: true,
+
+      portfolioOptimizationState:
+        engineState.portfolioOptimizationState || null,
+
+      portfolioOptimizationHistory:
+        (
+          engineState.portfolioOptimizationHistory || []
+        ).slice(0, 100),
+    });
+  } catch (err) {
+    res.status(500).json({
+      ok: false,
+      error: err.message,
+    });
+  }
+});
 
   app.get("/technical-intelligence", async (req, res) => {
   try {
