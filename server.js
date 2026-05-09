@@ -184,6 +184,12 @@ multiTimeframeHistory:
 statisticalEdgeHistory:
   (engineState.statisticalEdgeHistory || []).slice(0, 200),
 
+macroRiskState:
+  engineState.macroRiskState || null,
+
+macroRiskHistory:
+  (engineState.macroRiskHistory || []).slice(0, 200),
+
 signalQualityHistory:
   (engineState.signalQualityHistory || []).slice(0, 200),
 marketBreadthHistory:
@@ -452,6 +458,8 @@ multiTimeframeState: null,
 multiTimeframeHistory: [],
 statisticalEdgeState: null,
 statisticalEdgeHistory: [],
+macroRiskState: null,
+macroRiskHistory: [],
 signalQualityHistory: [],
 marketBreadthHistory: [],
 marketMomentumHistory: [],
@@ -1558,6 +1566,122 @@ function calculateAiMarketCrashProtectionEngine(
   };
 }
 
+function calculateBridgewaterMacroRiskEngine(
+  signals = [],
+  marketRegime = {},
+  crashProtection = {},
+  account = {}
+) {
+  const analyzedSignals = Array.isArray(signals) ? signals : [];
+
+  const totalSignals = analyzedSignals.length;
+
+  const averageScore =
+    totalSignals > 0
+      ? analyzedSignals.reduce(
+          (sum, signal) => sum + Number(signal.score || 0),
+          0
+        ) / totalSignals
+      : 0;
+
+  const averageRiskScore =
+    totalSignals > 0
+      ? analyzedSignals.reduce(
+          (sum, signal) => sum + Number(signal.riskScore || 50),
+          0
+        ) / totalSignals
+      : 50;
+
+  const averagePercentChange =
+    totalSignals > 0
+      ? analyzedSignals.reduce(
+          (sum, signal) => sum + Number(signal.percentChange || 0),
+          0
+        ) / totalSignals
+      : 0;
+
+  const weakSignals = analyzedSignals.filter(
+    (signal) => Number(signal.score || 0) < 50
+  ).length;
+
+  const highVolatilitySignals = analyzedSignals.filter(
+    (signal) => Math.abs(Number(signal.percentChange || 0)) >= 15
+  ).length;
+
+  const liquidityStressSignals = analyzedSignals.filter(
+    (signal) =>
+      Number(signal.volume || 0) < CONFIG.minScanVolume ||
+      Number(signal.confirmations?.volumeSpikeRatio || signal.volumeRatio || 0) < 0.75
+  ).length;
+
+  const weakSignalRatio =
+    totalSignals > 0 ? weakSignals / totalSignals : 0;
+
+  const volatilityStressRatio =
+    totalSignals > 0 ? highVolatilitySignals / totalSignals : 0;
+
+  const liquidityStressRatio =
+    totalSignals > 0 ? liquidityStressSignals / totalSignals : 0;
+
+  const macroStressScore = clampScore(
+    weakSignalRatio * 25 +
+      volatilityStressRatio * 25 +
+      liquidityStressRatio * 20 +
+      (averageRiskScore < 55 ? 15 : 0) +
+      (averagePercentChange < -2 ? 10 : 0) +
+      (marketRegime?.state === "panic/high volatility" ? 25 : 0) +
+      Number(crashProtection?.crashRiskScore || 0) * 0.25
+  );
+
+  const macroMode =
+    macroStressScore >= 80
+      ? "CAPITAL_PRESERVATION"
+      : macroStressScore >= 60
+      ? "RISK_OFF"
+      : macroStressScore >= 40
+      ? "CAUTIOUS"
+      : averageScore >= 75 && averageRiskScore >= 65
+      ? "RISK_ON"
+      : "NEUTRAL";
+
+  const macroExposureMultiplier =
+    macroMode === "CAPITAL_PRESERVATION"
+      ? 0
+      : macroMode === "RISK_OFF"
+      ? 0.25
+      : macroMode === "CAUTIOUS"
+      ? 0.5
+      : macroMode === "RISK_ON"
+      ? 1
+      : 0.75;
+
+  const shouldBlockNewTrades =
+    macroMode === "CAPITAL_PRESERVATION";
+
+  return {
+    updatedAt: new Date().toISOString(),
+    macroMode,
+    macroStressScore,
+    macroExposureMultiplier,
+    shouldBlockNewTrades,
+    totalSignals,
+    averageScore: Number(averageScore.toFixed(2)),
+    averageRiskScore: Number(averageRiskScore.toFixed(2)),
+    averagePercentChange: Number(averagePercentChange.toFixed(2)),
+    weakSignalRatio: Number(weakSignalRatio.toFixed(2)),
+    volatilityStressRatio: Number(volatilityStressRatio.toFixed(2)),
+    liquidityStressRatio: Number(liquidityStressRatio.toFixed(2)),
+    marketRegimeState: marketRegime?.state || "unknown",
+    crashProtectionMode:
+      crashProtection?.crashProtectionMode || "UNKNOWN",
+    accountEquity: Number(account?.equity || 0),
+    accountCash: Number(account?.cash || 0),
+    macroReason:
+      `Macro ${macroMode} • Stress ${macroStressScore}/100 • ` +
+      `Exposure x${macroExposureMultiplier}`,
+  };
+}
+
 function calculateMultiTimeframeConfirmationEngine(signals = []) {
   const analyzedSignals = (signals || []).map((signal) => {
     const score = Number(signal.score || 0);
@@ -1713,6 +1837,11 @@ const effectiveRemainingBotBudget =
       ? Number(regime.exposureMultiplier || 1)
       : 0;
 
+  const macroMultiplier =
+    engineState.macroRiskState?.shouldBlockNewTrades
+      ? 0
+      : Number(engineState.macroRiskState?.macroExposureMultiplier || 1);
+
   const convictionMultiplier =
     aiConvictionScore >= 90
       ? 1
@@ -1757,7 +1886,8 @@ const effectiveRemainingBotBudget =
       riskMultiplier *
       roleMultiplier *
       heatMultiplier *
-      regimeMultiplier
+      regimeMultiplier *
+      macroMultiplier
     ).toFixed(2)
   );
 
@@ -1769,7 +1899,8 @@ const effectiveRemainingBotBudget =
       riskMultiplier *
       roleMultiplier *
       heatMultiplier *
-      regimeMultiplier,
+      regimeMultiplier *
+      macroMultiplier,
       effectiveRemainingBotBudget,
       cash,
       buyingPower || cash
@@ -1812,6 +1943,18 @@ compoundingMultiplier:
   engineState.capitalCompoundingState?.compoundingMultiplier ||
   1,
 
+  macroMode:
+  engineState.macroRiskState?.macroMode ||
+  "NEUTRAL",
+
+macroExposureMultiplier:
+  engineState.macroRiskState?.macroExposureMultiplier ??
+  1,
+
+macroStressScore:
+  engineState.macroRiskState?.macroStressScore ??
+  0,
+
 effectiveRemainingBotBudget:
   Number(effectiveRemainingBotBudget.toFixed(2)),
 
@@ -1821,6 +1964,9 @@ portfolioManagerReason:
   `Compounding ${
     engineState.capitalCompoundingState?.compoundingMode ||
     "BASELINE"
+  } • Macro ${
+    engineState.macroRiskState?.macroMode ||
+    "NEUTRAL"
   }`,
   };
 }
@@ -5315,7 +5461,22 @@ engineState.marketCrashProtectionHistory.unshift(
 
 engineState.marketCrashProtectionHistory =
   engineState.marketCrashProtectionHistory.slice(0, 200);
-  const liveAiPerformance =
+
+const macroRisk =
+  calculateBridgewaterMacroRiskEngine(
+    allSignalsForAnalytics,
+    engineState.marketRegime,
+    marketCrashProtection,
+    account
+  );
+
+engineState.macroRiskState = macroRisk;
+
+engineState.macroRiskHistory.unshift(macroRisk);
+engineState.macroRiskHistory =
+  engineState.macroRiskHistory.slice(0, 200);
+
+const liveAiPerformance =
   calculateLiveAiPerformanceAnalyticsEngine(
     account,
     analyticsAiPositions
@@ -5332,8 +5493,16 @@ engineState.liveAiPerformanceHistory =
 engineState.selfHealingScanState =
   selfHealingScanRecovery;
 
-if (marketCrashProtection.shouldBlockNewTrades) {
+if (
+  marketCrashProtection.shouldBlockNewTrades ||
+  engineState.macroRiskState?.shouldBlockNewTrades
+) {
   autoTradingEnabled = false;
+
+  saveRecentOrder("AUTO_TRADING_BLOCKED_MACRO_RISK", "SYSTEM", {
+    marketCrashProtection,
+    macroRisk: engineState.macroRiskState,
+  });
 }
 engineState.sectorStrengthHistory =
   engineState.sectorStrengthHistory.slice(0, 200);
