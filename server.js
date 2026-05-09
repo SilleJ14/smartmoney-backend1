@@ -161,8 +161,6 @@ sectorRotationHistory:
   (engineState.sectorRotationHistory || []).slice(0, 200),
   capitalRedistributionState:
   engineState.capitalRedistributionState || null,
-  capitalCompoundingState:
-  engineState.capitalCompoundingState || null,
 
 equityCurveState:
   engineState.equityCurveState || null,
@@ -180,16 +178,6 @@ capitalRedistributionHistory:
 capitalCompoundingHistory:
   (engineState.capitalCompoundingHistory || []).slice(0, 200),
 
-equityCurveState:
-  engineState.equityCurveState || null,
-
-drawdownRecoveryState:
-  engineState.drawdownRecoveryState || null,
-
-adaptiveRiskState:
-  engineState.adaptiveRiskState || null,
-  capitalCompoundingHistory:
-  engineState.capitalCompoundingHistory || [],
   multiTimeframeState:
   engineState.multiTimeframeState || null,
 multiTimeframeHistory:
@@ -251,30 +239,11 @@ lastScanRecoveryAt:
   engineState.lastScanRecoveryAt || null,
 aiDecisionHistory:
   (engineState.aiDecisionHistory || []).slice(0, 500),
-  tradeJournalState:
-  engineState.tradeJournalState || {},
-
-tradeJournalHistory:
-  (engineState.tradeJournalHistory || []).slice(0, 500),
-
-tradeJournalOpenEntries:
-  engineState.tradeJournalOpenEntries || {},
-
-strategyPerformanceState:
-  engineState.strategyPerformanceState || {},
-
-regimePerformanceState:
-  engineState.regimePerformanceState || {},
-
-sectorPerformanceState:
-  engineState.sectorPerformanceState || {},
-
-confirmationPerformanceState:
-  engineState.confirmationPerformanceState || {},
-      recentOrders: (engineState.recentOrders || []).slice(0, 100),
-      failedOrders: (engineState.failedOrders || []).slice(0, 100),
-      skippedSymbols: (engineState.skippedSymbols || []).slice(0, 150),
-      lastScanAt: engineState.lastScanAt,
+  
+recentOrders: (engineState.recentOrders || []).slice(0, 100),
+failedOrders: (engineState.failedOrders || []).slice(0, 100),
+skippedSymbols: (engineState.skippedSymbols || []).slice(0, 150),
+lastScanAt: engineState.lastScanAt,
 lastHeartbeatAt: engineState.lastHeartbeatAt,
 lastTickStartedAt: engineState.lastTickStartedAt,
 lastTickDurationMs: engineState.lastTickDurationMs,
@@ -462,7 +431,6 @@ engineFreezeCount: 0,
 
   aiManagedSymbols: [], 
   institutionalWatchlist: [],
-  analyticsSnapshots: [],
   analyticsSnapshots: [],
   apiHealth: {},
   apiFailureCounts: {},
@@ -2046,15 +2014,6 @@ async function isAssetSellEligible(symbol) {
 }
 
 async function finnhubQuote(symbol) {
-  if (
-  engineState.apiCooldowns.finnhubQuote &&
-  Date.now() <
-    engineState.apiCooldowns.finnhubQuote
-) {
-  throw new Error(
-    "Finnhub quote API cooling down"
-  );
-}
 if (
   engineState.apiCooldowns.finnhubQuote &&
   Date.now() <
@@ -2077,15 +2036,13 @@ if (
   if (!res.ok || !data || typeof data.c !== "number") {
     engineState.apiFailureCounts.finnhubQuote =
       (engineState.apiFailureCounts.finnhubQuote || 0) + 1;
-engineState.apiCooldowns.finnhubNews =
+engineState.apiCooldowns.finnhubQuote =
   Date.now() + 1000 * 60;
     markApiHealth(
       "finnhubQuote",
       false,
       `Quote failed for ${symbol}`
     );
-engineState.apiFailureCounts.finnhubQuote =
-  (engineState.apiFailureCounts.finnhubQuote || 0) + 1;
 
 markApiHealth("finnhubQuote", false, `Quote failed for ${symbol}`);
     throw new Error(`Finnhub quote failed for ${symbol}`);
