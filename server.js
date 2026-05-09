@@ -6587,18 +6587,51 @@ engineState.marketCrashProtectionHistory.unshift(
 
 engineState.marketCrashProtectionHistory =
   engineState.marketCrashProtectionHistory.slice(0, 200);
+const getUnifiedTechnicalScore = (signal = {}) => {
+  const directScore = Number(
+    signal.technicalIntelligence?.institutionalEntryScore ||
+      signal.technicalScore ||
+      0
+  );
+
+  if (directScore > 0) {
+    return clampScore(directScore);
+  }
+
+  return clampScore(
+    Number(signal.score || 0) * 0.85 +
+      (Number(signal.barsFound || 0) >= 30 ? 15 : 0) +
+      (signal.qualifiedToBuy !== false ? 5 : -20)
+  );
+};
+
+const getUnifiedExhaustionRisk = (signal = {}) => {
+  const directRisk = Number(
+    signal.technicalIntelligence?.exhaustionRiskScore ||
+      signal.exhaustionRiskScore ||
+      0
+  );
+
+  if (directRisk > 0) {
+    return clampScore(directRisk);
+  }
+
+  return clampScore(
+    35 -
+      (Number(signal.score || 0) >= 80 ? 10 : 0) +
+      (signal.qualifiedToBuy === false ? 20 : 0)
+  );
+};
+
 const technicalSignals =
   allSignalsForAnalytics.filter(
-    (signal) =>
-      Number(signal.technicalIntelligence?.institutionalEntryScore || 0) >= 65
+    (signal) => getUnifiedTechnicalScore(signal) >= 65
   );
 
 const averageTechnicalScore =
   allSignalsForAnalytics.length > 0
     ? allSignalsForAnalytics.reduce(
-        (sum, signal) =>
-          sum +
-          Number(signal.technicalIntelligence?.institutionalEntryScore || 0),
+        (sum, signal) => sum + getUnifiedTechnicalScore(signal),
         0
       ) / allSignalsForAnalytics.length
     : 0;
@@ -6606,9 +6639,7 @@ const averageTechnicalScore =
 const averageExhaustionRisk =
   allSignalsForAnalytics.length > 0
     ? allSignalsForAnalytics.reduce(
-        (sum, signal) =>
-          sum +
-          Number(signal.technicalIntelligence?.exhaustionRiskScore || 0),
+        (sum, signal) => sum + getUnifiedExhaustionRisk(signal),
         0
       ) / allSignalsForAnalytics.length
     : 0;
@@ -6618,19 +6649,15 @@ engineState.technicalIntelligenceState = {
   qualifyingTechnicalSignals: technicalSignals.length,
   averageTechnicalScore: Number(averageTechnicalScore.toFixed(2)),
   averageExhaustionRisk: Number(averageExhaustionRisk.toFixed(2)),
-  strongestTechnicalSetups: technicalSignals
-    .slice(0, 5)
-    .map((signal) => ({
-      symbol: signal.symbol,
-      score: signal.score,
-      technicalScore:
-        signal.technicalIntelligence?.institutionalEntryScore || 0,
-      institutionalEntryGrade:
-        signal.institutionalEntryGrade ||
-        signal.technicalIntelligence?.institutionalEntryGrade,
-      exhaustionRiskScore:
-        signal.technicalIntelligence?.exhaustionRiskScore || 0,
-    })),
+  strongestTechnicalSetups:
+    technicalSignals
+      .slice(0, 5)
+      .map((signal) => ({
+        symbol: signal.symbol,
+        score: signal.score,
+        technicalScore: getUnifiedTechnicalScore(signal),
+        exhaustionRisk: getUnifiedExhaustionRisk(signal),
+      })),
 };
 
 engineState.technicalIntelligenceHistory.unshift(
