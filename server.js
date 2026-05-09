@@ -2196,24 +2196,24 @@ function calculateInstitutionalAiPortfolioOrchestrator(signal = {}) {
       (riskScore < 50 ? 20 : 0)
   );
 
-  const finalInstitutionalDecisionScore = clampScore(
+    const finalInstitutionalDecisionScore = clampScore(
     institutionalOpportunityScore -
-      institutionalRiskPenalty * 0.55
+      institutionalRiskPenalty * 0.4
   );
-
   const orchestratorAction =
     engineState.macroRiskState?.shouldBlockNewTrades
       ? "BLOCKED_BY_MACRO_RISK"
-      : finalInstitutionalDecisionScore >= 85
+      : finalInstitutionalDecisionScore >= 78
       ? "DEPLOY_HIGH_CONVICTION"
-      : finalInstitutionalDecisionScore >= 75
+      : finalInstitutionalDecisionScore >= 68
       ? "DEPLOY_CONTROLLED"
-      : finalInstitutionalDecisionScore >= 65
+      : finalInstitutionalDecisionScore >= 55
       ? "SMALL_TACTICAL"
-      : finalInstitutionalDecisionScore >= 50
+      : finalInstitutionalDecisionScore >= 42
       ? "WATCHLIST_ONLY"
       : "AVOID";
 
+      
   const orchestratorMultiplier =
     orchestratorAction === "DEPLOY_HIGH_CONVICTION"
       ? 1
@@ -2436,20 +2436,36 @@ const effectiveRemainingBotBudget =
       cash,
       buyingPower || cash
     )
-  );
-
-  const aiPortfolioAction =
+  );  const aiPortfolioAction =
     portfolioHeat.correlationAction === "Block Duplicate Symbol"
       ? "Blocked Duplicate"
+
+      : recommendedTradeAmount <= 0
+      ? "No Capital Available"
+
+      : signal.earningsRiskMode === "HIGH_EARNINGS_RISK" &&
+        TRADING_MODE !== "live_crypto"
+      ? "Watch Only"
+
+      : Number(signal.valuationRiskScore || 0) >= 92 &&
+        TRADING_MODE !== "live_crypto"
+      ? "Watch Only"
+
+      : orchestrator.orchestratorAction === "AVOID" &&
+        aiConvictionScore < 58
+      ? "Watch Only"
+
       : portfolioHeat.correlationAction === "Avoid Additional Exposure"
-        ? "Portfolio Heat Too High"
-        : recommendedTradeAmount <= 0
-          ? "No Capital Available"
-          : aiConvictionScore >= 80 && institutionalRiskScore >= 65
-            ? "Deploy Capital"
-            : aiConvictionScore >= 65
-              ? "Small Tactical Allocation"
-              : "Watch Only";
+      ? "Reduced Allocation"
+
+      : aiConvictionScore >= 72 &&
+        orchestrator.finalInstitutionalDecisionScore >= 60
+      ? "Deploy Capital"
+
+      : aiConvictionScore >= 55
+      ? "Small Tactical Allocation"
+
+      : "Watchlist Candidate";
 
   return {
     aiConvictionScore,
@@ -4298,23 +4314,35 @@ harvardDividendScore * 0.03 +
     sector.sectorScore * 0.03
   );
 
-  const autoTradeApproved =
-    institutionalScore >= CONFIG.minScoreToBuy &&
-    blendedRiskScore >= 65 &&
-    citadelTechnical.institutionalEntryScore >= 65 &&
-    citadelTechnical.exhaustionRiskScore <= 70 &&
-    Number(q.volume || 0) >= 25000 &&
-    Number(q.percentChange || 0) <= 20 &&
+  const hardSafetyPass =
     confirmations.fakeBreakout !== true &&
     confirmations.newsRisk !== true &&
-    harvardDividendScore >= 40 &&
-    institutionalDcf.valuationRiskScore <= 80 &&
-    earnings.earningsRiskMode !== "HIGH_EARNINGS_RISK" &&
-    earnings.earningsVolatilityRiskScore <= 75 &&
-    moat.competitiveAdvantageScore >= 45;
+    blendedRiskScore >= 55 &&
+    citadelTechnical.exhaustionRiskScore <= 82 &&
+    Number(q.volume || 0) >= 5000 &&
+    Number(q.percentChange || 0) <= CONFIG.maxPercentChange;
+
+  const institutionalQualityPass =
+    institutionalScore >= CONFIG.minScoreToBuy &&
+    citadelTechnical.institutionalEntryScore >= 55;
+
+  const stockResearchPass =
+    TRADING_MODE === "live_crypto" ||
+    (
+      institutionalDcf.valuationRiskScore <= 90 &&
+      earnings.earningsRiskMode !== "HIGH_EARNINGS_RISK" &&
+      earnings.earningsVolatilityRiskScore <= 85 &&
+      moat.competitiveAdvantageScore >= 35
+    );
+
+  const autoTradeApproved =
+    hardSafetyPass &&
+    institutionalQualityPass &&
+    stockResearchPass;
+
   const decisionLevel = autoTradeApproved
     ? "Auto-Trade Approved"
-    : institutionalScore >= 60
+    : institutionalScore >= 55
       ? "Qualified Setup"
       : "Visible Stock";
 
