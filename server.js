@@ -4273,9 +4273,8 @@ function calculateInstitutionalScores(q) {
           : 25
   );
 
-  const fundamentalScore = dcf.fundamentalScore;
-  const dcfValuationScore =
-  institutionalDcf.dcfValuationScore;
+  const fundamentalScore = institutionalDcf.fundamentalScore;
+  const dcfValuationScore = institutionalDcf.dcfValuationScore;
 
   const earningsScore = earnings.earningsScore;
   const moatScore = moat.moatScore;
@@ -4308,8 +4307,8 @@ harvardDividendScore * 0.03 +
     Number(q.percentChange || 0) <= 20 &&
     confirmations.fakeBreakout !== true &&
     confirmations.newsRisk !== true &&
-harvardDividendScore >= 40 &&
-institutionalDcf.valuationRiskScore <= 80;
+    harvardDividendScore >= 40 &&
+    institutionalDcf.valuationRiskScore <= 80 &&
     earnings.earningsRiskMode !== "HIGH_EARNINGS_RISK" &&
     earnings.earningsVolatilityRiskScore <= 75 &&
     moat.competitiveAdvantageScore >= 45;
