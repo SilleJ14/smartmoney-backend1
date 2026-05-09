@@ -161,8 +161,35 @@ sectorRotationHistory:
   (engineState.sectorRotationHistory || []).slice(0, 200),
   capitalRedistributionState:
   engineState.capitalRedistributionState || null,
+  capitalCompoundingState:
+  engineState.capitalCompoundingState || null,
+
+equityCurveState:
+  engineState.equityCurveState || null,
+
+drawdownRecoveryState:
+  engineState.drawdownRecoveryState || null,
+
+adaptiveRiskState:
+  engineState.adaptiveRiskState || null,
 capitalRedistributionHistory:
   (engineState.capitalRedistributionHistory || []).slice(0, 200),
+  capitalCompoundingState:
+  engineState.capitalCompoundingState || null,
+
+capitalCompoundingHistory:
+  (engineState.capitalCompoundingHistory || []).slice(0, 200),
+
+equityCurveState:
+  engineState.equityCurveState || null,
+
+drawdownRecoveryState:
+  engineState.drawdownRecoveryState || null,
+
+adaptiveRiskState:
+  engineState.adaptiveRiskState || null,
+  capitalCompoundingHistory:
+  engineState.capitalCompoundingHistory || [],
   multiTimeframeState:
   engineState.multiTimeframeState || null,
 multiTimeframeHistory:
@@ -447,6 +474,11 @@ sectorRotationState: null,
 sectorRotationHistory: [],
 capitalRedistributionState: null,
 capitalRedistributionHistory: [],
+capitalCompoundingState: null,
+capitalCompoundingHistory: [],
+equityCurveState: null,
+drawdownRecoveryState: null,
+adaptiveRiskState: null,
 multiTimeframeState: null,
 multiTimeframeHistory: [],
 signalQualityHistory: [],
@@ -1219,6 +1251,102 @@ function calculateSmartCapitalRedistributionEngine(
       `Remaining bot budget: $${remainingBotBudget.toFixed(2)} • ` +
       `${cashReserveStatus}`,
   };
+}
+
+function calculateSmartCapitalCompoundingEngine(account, openBotPositions = []) {
+  const equity = Number(account?.equity || 0);
+  const cash = Number(account?.cash || 0);
+
+  const modePeaks = engineState.peaksByMode?.[TRADING_MODE] || {};
+  const peakEquity = Number(modePeaks.peakEquity || equity || 0);
+
+  const drawdownPercent =
+    peakEquity > 0
+      ? ((peakEquity - equity) / peakEquity) * 100
+      : 0;
+
+  const dailyStart = Number(engineState.dailyStartEquity || equity || 0);
+
+  const dailyReturnPercent =
+    dailyStart > 0
+      ? ((equity - dailyStart) / dailyStart) * 100
+      : 0;
+
+  const currentBotExposure = getBotExposure(openBotPositions);
+
+  let compoundingMode = "BASELINE";
+  let compoundingMultiplier = 1;
+
+  if (drawdownPercent >= 8) {
+    compoundingMode = "CAPITAL_DEFENSE";
+    compoundingMultiplier = 0.25;
+  } else if (drawdownPercent >= 4) {
+    compoundingMode = "DRAWDOWN_RECOVERY";
+    compoundingMultiplier = 0.5;
+  } else if (dailyReturnPercent >= 2) {
+    compoundingMode = "PROTECT_GAINS";
+    compoundingMultiplier = 0.65;
+  } else if (dailyReturnPercent >= 1 && drawdownPercent < 2) {
+    compoundingMode = "CONTROLLED_COMPOUNDING";
+    compoundingMultiplier = 1.15;
+  }
+
+  const baseMaxBotBudget =
+    equity * (CONFIG.maxBotExposurePercent / 100);
+
+  const compoundedBotBudget =
+    baseMaxBotBudget * compoundingMultiplier;
+
+  const remainingCompoundedBudget =
+    Math.max(0, compoundedBotBudget - currentBotExposure);
+
+  const state = {
+    updatedAt: new Date().toISOString(),
+    equity,
+    cash,
+    peakEquity,
+    dailyStart,
+    dailyReturnPercent: Number(dailyReturnPercent.toFixed(2)),
+    drawdownPercent: Number(drawdownPercent.toFixed(2)),
+    currentBotExposure: Number(currentBotExposure.toFixed(2)),
+    baseMaxBotBudget: Number(baseMaxBotBudget.toFixed(2)),
+    compoundedBotBudget: Number(compoundedBotBudget.toFixed(2)),
+    remainingCompoundedBudget: Number(
+      remainingCompoundedBudget.toFixed(2)
+    ),
+    compoundingMode,
+    compoundingMultiplier,
+  };
+
+  engineState.capitalCompoundingState = state;
+  engineState.equityCurveState = {
+    updatedAt: state.updatedAt,
+    equity,
+    peakEquity,
+    dailyStart,
+    dailyReturnPercent: state.dailyReturnPercent,
+  };
+
+  engineState.drawdownRecoveryState = {
+    updatedAt: state.updatedAt,
+    drawdownPercent: state.drawdownPercent,
+    recoveryMode:
+      drawdownPercent >= 4
+        ? "ACTIVE_RECOVERY"
+        : "NORMAL",
+  };
+
+  engineState.adaptiveRiskState = {
+    updatedAt: state.updatedAt,
+    compoundingMode,
+    compoundingMultiplier,
+  };
+
+  engineState.capitalCompoundingHistory.unshift(state);
+  engineState.capitalCompoundingHistory =
+    engineState.capitalCompoundingHistory.slice(0, 200);
+
+  return state;
 }
 
 function calculateLiveAiPerformanceAnalyticsEngine(account, openPositions = []) {
@@ -5075,6 +5203,22 @@ engineState.capitalRedistributionHistory.unshift(capitalRedistribution);
 engineState.capitalRedistributionHistory =
   engineState.capitalRedistributionHistory.slice(0, 200);
 
+const capitalCompounding =
+  calculateSmartCapitalCompoundingEngine(
+    account,
+    analyticsAiPositions
+  );
+
+engineState.capitalCompoundingState =
+  capitalCompounding;
+
+engineState.capitalCompoundingHistory.unshift(
+  capitalCompounding
+);
+
+engineState.capitalCompoundingHistory =
+  engineState.capitalCompoundingHistory.slice(0, 200);
+
 const multiTimeframeAnalysis =
   calculateMultiTimeframeConfirmationEngine(allSignalsForAnalytics);
 
@@ -6042,6 +6186,32 @@ institutionalWatchlist:
       res.status(500).json({ error: err.message });
     }
   });
+
+  app.get("/capital-compounding", async (req, res) => {
+  try {
+    res.json({
+      ok: true,
+      capitalCompoundingState:
+        engineState.capitalCompoundingState || null,
+      equityCurveState:
+        engineState.equityCurveState || null,
+      drawdownRecoveryState:
+        engineState.drawdownRecoveryState || null,
+      adaptiveRiskState:
+        engineState.adaptiveRiskState || null,
+      capitalCompoundingHistory:
+        (engineState.capitalCompoundingHistory || []).slice(
+          0,
+          100
+        ),
+    });
+  } catch (err) {
+    res.status(500).json({
+      ok: false,
+      error: err.message,
+    });
+  }
+});
 
   app.post("/reset-daily-lock", (req, res) => {
     engineState.dailyLossLocked = false;
