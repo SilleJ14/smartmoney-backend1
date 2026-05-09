@@ -201,6 +201,26 @@ lastScanRecoveryAt:
   engineState.lastScanRecoveryAt || null,
 aiDecisionHistory:
   (engineState.aiDecisionHistory || []).slice(0, 500),
+  tradeJournalState:
+  engineState.tradeJournalState || {},
+
+tradeJournalHistory:
+  (engineState.tradeJournalHistory || []).slice(0, 500),
+
+tradeJournalOpenEntries:
+  engineState.tradeJournalOpenEntries || {},
+
+strategyPerformanceState:
+  engineState.strategyPerformanceState || {},
+
+regimePerformanceState:
+  engineState.regimePerformanceState || {},
+
+sectorPerformanceState:
+  engineState.sectorPerformanceState || {},
+
+confirmationPerformanceState:
+  engineState.confirmationPerformanceState || {},
       recentOrders: (engineState.recentOrders || []).slice(0, 100),
       failedOrders: (engineState.failedOrders || []).slice(0, 100),
       skippedSymbols: (engineState.skippedSymbols || []).slice(0, 150),
@@ -420,6 +440,26 @@ liveAiPerformanceHistory: [],
 scanFailureCount: 0,
 lastScanRecoveryAt: null,
 aiDecisionHistory: [],
+tradeJournalState: {
+  totalClosedTrades: 0,
+  winningTrades: 0,
+  losingTrades: 0,
+  breakevenTrades: 0,
+  totalProfitPercent: 0,
+  averageProfitPercent: 0,
+  winRate: 0,
+  bestTrade: null,
+  worstTrade: null,
+  lastUpdated: null,
+},
+
+tradeJournalHistory: [],
+tradeJournalOpenEntries: {},
+
+strategyPerformanceState: {},
+regimePerformanceState: {},
+sectorPerformanceState: {},
+confirmationPerformanceState: {},
 };
 
 engineState = {
@@ -551,6 +591,170 @@ function shouldSkipFromTradeMemory(symbol) {
   }
 
   return false;
+}
+
+function ensureTradeJournalState() {
+  if (!engineState.tradeJournalState) {
+    engineState.tradeJournalState = {
+      totalClosedTrades: 0,
+      winningTrades: 0,
+      losingTrades: 0,
+      breakevenTrades: 0,
+      totalProfitPercent: 0,
+      averageProfitPercent: 0,
+      winRate: 0,
+      bestTrade: null,
+      worstTrade: null,
+      lastUpdated: null,
+    };
+  }
+
+  if (!engineState.tradeJournalHistory) {
+    engineState.tradeJournalHistory = [];
+  }
+
+  if (!engineState.tradeJournalOpenEntries) {
+    engineState.tradeJournalOpenEntries = {};
+  }
+
+  if (!engineState.strategyPerformanceState) {
+    engineState.strategyPerformanceState = {};
+  }
+
+  if (!engineState.regimePerformanceState) {
+    engineState.regimePerformanceState = {};
+  }
+
+  if (!engineState.sectorPerformanceState) {
+    engineState.sectorPerformanceState = {};
+  }
+
+  if (!engineState.confirmationPerformanceState) {
+    engineState.confirmationPerformanceState = {};
+  }
+}
+
+function journalTradeEntry(symbol, entry = {}) {
+  ensureTradeJournalState();
+
+  const cleanSymbol = normalizeSymbol(symbol);
+
+  if (!cleanSymbol) return;
+
+  engineState.tradeJournalOpenEntries[cleanSymbol] = {
+    symbol: cleanSymbol,
+    entryType: entry.entryType || "AI_ENTRY",
+    assetClass: entry.assetClass || "stock",
+    entryPrice: Number(entry.entryPrice || 0),
+    score: Number(entry.score || 0),
+    strategy: entry.strategy || "institutional_momentum",
+    sector: entry.sector || "General Market",
+    marketRegime:
+      entry.marketRegime ||
+      engineState.marketRegime?.state ||
+      "unknown",
+    confirmations: entry.confirmations || {},
+    portfolioManager: entry.portfolioManager || null,
+    tradeAmount: Number(entry.tradeAmount || 0),
+    enteredAt: new Date().toISOString(),
+  };
+
+  saveEngineState("TRADE_JOURNAL_ENTRY");
+}
+
+function journalTradeExit(symbol, exit = {}) {
+  ensureTradeJournalState();
+
+  const cleanSymbol = normalizeSymbol(symbol);
+
+  if (!cleanSymbol) return;
+
+  const entry =
+    engineState.tradeJournalOpenEntries[cleanSymbol] || {};
+
+  const profitPercent = Number(exit.profitPercent || 0);
+
+  const closedTrade = {
+    symbol: cleanSymbol,
+    assetClass: exit.assetClass || entry.assetClass || "stock",
+    entryType: entry.entryType || "AI_ENTRY",
+    exitType: exit.exitType || "AI_EXIT",
+    strategy: entry.strategy || exit.strategy || "institutional_momentum",
+    sector: entry.sector || exit.sector || "General Market",
+    marketRegime:
+      entry.marketRegime ||
+      exit.marketRegime ||
+      engineState.marketRegime?.state ||
+      "unknown",
+    entryPrice: Number(entry.entryPrice || 0),
+    exitPrice: Number(exit.exitPrice || 0),
+    score: Number(entry.score || exit.score || 0),
+    tradeAmount: Number(entry.tradeAmount || 0),
+    profitPercent,
+    exitReason: exit.exitReason || "UNKNOWN_EXIT",
+    confirmations: entry.confirmations || {},
+    portfolioManager: entry.portfolioManager || null,
+    enteredAt: entry.enteredAt || null,
+    exitedAt: new Date().toISOString(),
+  };
+
+  engineState.tradeJournalHistory.unshift(closedTrade);
+  engineState.tradeJournalHistory =
+    engineState.tradeJournalHistory.slice(0, 500);
+
+  engineState.tradeJournalState.totalClosedTrades += 1;
+
+  if (profitPercent > 0) {
+    engineState.tradeJournalState.winningTrades += 1;
+  } else if (profitPercent < 0) {
+    engineState.tradeJournalState.losingTrades += 1;
+  } else {
+    engineState.tradeJournalState.breakevenTrades += 1;
+  }
+
+  engineState.tradeJournalState.totalProfitPercent =
+    Number(engineState.tradeJournalState.totalProfitPercent || 0) +
+    profitPercent;
+
+  engineState.tradeJournalState.averageProfitPercent =
+    Number(
+      (
+        engineState.tradeJournalState.totalProfitPercent /
+        Math.max(1, engineState.tradeJournalState.totalClosedTrades)
+      ).toFixed(2)
+    );
+
+  engineState.tradeJournalState.winRate =
+    Number(
+      (
+        (engineState.tradeJournalState.winningTrades /
+          Math.max(1, engineState.tradeJournalState.totalClosedTrades)) *
+        100
+      ).toFixed(2)
+    );
+
+  if (
+    !engineState.tradeJournalState.bestTrade ||
+    profitPercent >
+      Number(engineState.tradeJournalState.bestTrade.profitPercent || 0)
+  ) {
+    engineState.tradeJournalState.bestTrade = closedTrade;
+  }
+
+  if (
+    !engineState.tradeJournalState.worstTrade ||
+    profitPercent <
+      Number(engineState.tradeJournalState.worstTrade.profitPercent || 0)
+  ) {
+    engineState.tradeJournalState.worstTrade = closedTrade;
+  }
+
+  engineState.tradeJournalState.lastUpdated =
+    new Date().toISOString();
+
+  delete engineState.tradeJournalOpenEntries[cleanSymbol];
+
+  saveEngineState("TRADE_JOURNAL_EXIT");
 }
 
 function saveRecentOrder(type, symbol, extra = {}) {
@@ -4357,6 +4561,20 @@ saveRecentOrder("AUTO_BUY_INSTITUTIONAL_ALLOCATOR", stock.symbol, {
   portfolioManager: refreshedPortfolioManager,
   buyOrder,
 });
+
+journalTradeEntry(stock.symbol, {
+  entryType: "AUTO_BUY_INSTITUTIONAL_ALLOCATOR",
+  assetClass: "stock",
+  entryPrice: stock.current,
+  score: stock.score,
+  strategy: "institutional_allocator",
+  sector: stock.estimatedSector || "General Market",
+  marketRegime:
+    engineState.marketRegime?.state || "unknown",
+  confirmations: stock.confirmations || {},
+  portfolioManager: refreshedPortfolioManager,
+  tradeAmount,
+});
     } catch (err) {
       saveFailedOrder("AUTO_BUY_FAILED", stock.symbol, err.message, {
         price: stock.current,
@@ -4439,6 +4657,20 @@ async function rotateWeakCryptoIfBetter(signals, positions) {
           replacedSymbol: weakestSymbol,
           buyOrder,
         });
+
+        journalTradeEntry(topCandidate.symbol, {
+  entryType: "CRYPTO_ROTATED_IN",
+  assetClass: "crypto",
+  entryPrice:
+    topCandidate.current || topCandidate.price || 0,
+  score: topCandidate.score,
+  strategy: "crypto_rotation",
+  sector: "Crypto",
+  marketRegime:
+    engineState.marketRegime?.state || "unknown",
+  confirmations: topCandidate.confirmations || {},
+  tradeAmount,
+});
       } catch (err) {
         saveFailedOrder("CRYPTO_ROTATION_BUY_FAILED", topCandidate.symbol, err.message);
       }
@@ -5321,7 +5553,32 @@ engineFreezeCount: engineState.engineFreezeCount,
       });
     }
   });
+app.get("/trade-journal", async (req, res) => {
+  try {
+    ensureTradeJournalState();
 
+    res.json({
+      ok: true,
+      tradeJournalState: engineState.tradeJournalState,
+      openEntries: engineState.tradeJournalOpenEntries,
+      recentClosedTrades:
+        engineState.tradeJournalHistory.slice(0, 100),
+      strategyPerformanceState:
+        engineState.strategyPerformanceState,
+      regimePerformanceState:
+        engineState.regimePerformanceState,
+      sectorPerformanceState:
+        engineState.sectorPerformanceState,
+      confirmationPerformanceState:
+        engineState.confirmationPerformanceState,
+    });
+  } catch (err) {
+    res.status(500).json({
+      ok: false,
+      error: err.message,
+    });
+  }
+});
   // ===== CRYPTO ROUTE END =====
 
   app.get("/positions", async (req, res) => {
