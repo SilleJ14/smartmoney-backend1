@@ -5672,7 +5672,7 @@ async function replaceWeakestIfBetter(signals, positions, aiOwnedSymbols) {
         const portfolioManager = calculateAiPortfolioManagerDecision(
           topCandidate,
           account,
-          freshAiPositions,
+          openBotPositions,
           engineState.marketRegime || detectMarketRegime([])
         );
 
