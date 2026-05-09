@@ -128,11 +128,6 @@ function saveEngineState(reason = "STATE_UPDATE") {
 
       dailyLossLocked: engineState.dailyLossLocked,
       profitLocked: engineState.profitLocked,
-      dailyDateKey: engineState.dailyDateKey,
-      dailyStartEquity: engineState.dailyStartEquity,
-      dailyPeakEquity: engineState.dailyPeakEquity,
-      profitLockFloorEquity: engineState.profitLockFloorEquity,
-
       highWaterMarks: engineState.highWaterMarks || {},
       tradeMemory: engineState.tradeMemory || {},
       aiEntryScores: engineState.aiEntryScores || {},
@@ -3742,9 +3737,9 @@ async function scanMarket() {
   console.log(`Scanning ${limitedSymbols.length} of ${symbols.length} symbols...`);
   console.log("Advanced filters enabled:", CONFIG.enableAdvancedFilters);
 
-  const batchSize = 5; // safe for now (can increase later)
+  const batchSize = 5;
 
-  const results = await runInBatches(limitedSymbols, batchSize, async (symbol) => {
+  const rawResults = await runInBatches(limitedSymbols, batchSize, async (symbol) => {
     try {
       const assetCheck = await isAssetBuyEligible(symbol);
 
@@ -3761,6 +3756,7 @@ async function scanMarket() {
       if (CONFIG.enableAdvancedFilters) {
         quote.confirmations = await getAdvancedConfirmations(quote);
       }
+
       const quality = passesQualityFilters(quote);
 
       if (!quality.ok) {
@@ -3769,11 +3765,10 @@ async function scanMarket() {
       }
 
       const score = scoreStock(quote);
-      const statisticalEdge =
-        quote.statisticalEdge || null;
 
-      const statisticalScore =
-        Number(quote.statisticalScore || 0);
+      const statisticalEdge = quote.statisticalEdge || null;
+      const statisticalScore = Number(quote.statisticalScore || 0);
+
       const institutional = calculateInstitutionalScores({
         ...quote,
         score,
@@ -3790,7 +3785,7 @@ async function scanMarket() {
         ...quote,
         score: institutional.institutionalScore,
         legacyMomentumScore: score,
-                statisticalScore,
+        statisticalScore,
         statisticalEdge,
         ...institutional,
         ...portfolioManager,
@@ -3802,94 +3797,44 @@ async function scanMarket() {
     }
   });
 
+  const results = rawResults.filter(Boolean);
+
   console.log(`Scan finished. Found ${results.length} stocks.`);
-    const statisticalEdgeSignals =
-    results.filter(
-      (signal) =>
-        Number(signal.statisticalScore || 0) >= 70
-    );
+
+  const statisticalEdgeSignals = results.filter(
+    (signal) => Number(signal.statisticalScore || 0) >= 70
+  );
 
   const averageStatisticalEdge =
     statisticalEdgeSignals.length > 0
       ? statisticalEdgeSignals.reduce(
-          (sum, signal) =>
-            sum + Number(signal.statisticalScore || 0),
+          (sum, signal) => sum + Number(signal.statisticalScore || 0),
           0
         ) / statisticalEdgeSignals.length
       : 0;
 
   engineState.statisticalEdgeState = {
     updatedAt: new Date().toISOString(),
-    qualifyingSignals:
-      statisticalEdgeSignals.length,
-    averageStatisticalEdge:
-      Number(averageStatisticalEdge.toFixed(2)),
-    strongestSignals:
-      statisticalEdgeSignals
-        .slice(0, 5)
-        .map((signal) => ({
-          symbol: signal.symbol,
-          score: signal.score,
-          statisticalScore:
-            signal.statisticalScore,
-        })),
+    qualifyingSignals: statisticalEdgeSignals.length,
+    averageStatisticalEdge: Number(averageStatisticalEdge.toFixed(2)),
+    strongestSignals: statisticalEdgeSignals.slice(0, 5).map((signal) => ({
+      symbol: signal.symbol,
+      score: signal.score,
+      statisticalScore: signal.statisticalScore,
+    })),
   };
+
+  if (!Array.isArray(engineState.statisticalEdgeHistory)) {
+    engineState.statisticalEdgeHistory = [];
+  }
 
   engineState.statisticalEdgeHistory.unshift({
     updatedAt: new Date().toISOString(),
-    qualifyingSignals:
-      statisticalEdgeSignals.length,
-    averageStatisticalEdge:
-      Number(averageStatisticalEdge.toFixed(2)),
+    qualifyingSignals: statisticalEdgeSignals.length,
+    averageStatisticalEdge: Number(averageStatisticalEdge.toFixed(2)),
   });
 
-  engineState.statisticalEdgeHistory =
-    engineState.statisticalEdgeHistory.slice(
-      0,
-      200
-    );
-  const statisticalEdgeSignals =
-  results.filter(
-    (signal) =>
-      Number(signal.statisticalScore || 0) >= 70
-  );
-
-const averageStatisticalEdge =
-  statisticalEdgeSignals.length > 0
-    ? statisticalEdgeSignals.reduce(
-        (sum, signal) =>
-          sum + Number(signal.statisticalScore || 0),
-        0
-      ) / statisticalEdgeSignals.length
-    : 0;
-
-engineState.statisticalEdgeState = {
-  updatedAt: new Date().toISOString(),
-  qualifyingSignals:
-    statisticalEdgeSignals.length,
-  averageStatisticalEdge:
-    Number(averageStatisticalEdge.toFixed(2)),
-  strongestSignals:
-    statisticalEdgeSignals
-      .slice(0, 5)
-      .map((signal) => ({
-        symbol: signal.symbol,
-        score: signal.score,
-        statisticalScore:
-          signal.statisticalScore,
-      })),
-};
-
-engineState.statisticalEdgeHistory.unshift({
-  updatedAt: new Date().toISOString(),
-  qualifyingSignals:
-    statisticalEdgeSignals.length,
-  averageStatisticalEdge:
-    Number(averageStatisticalEdge.toFixed(2)),
-});
-
-engineState.statisticalEdgeHistory =
-  engineState.statisticalEdgeHistory.slice(
+  engineState.statisticalEdgeHistory = engineState.statisticalEdgeHistory.slice(
     0,
     200
   );
@@ -3900,50 +3845,6 @@ engineState.statisticalEdgeHistory =
       return b.percentChange - a.percentChange;
     })
     .slice(0, CONFIG.maxSignalsToReturn);
-}
-
-async function placeMarketBuy(symbol, dollars, score = 0) {
-  const normalizedSymbol = normalizeSymbol(symbol);
-
-  if (buyingNow.has(normalizedSymbol)) {
-    throw new Error(`${normalizedSymbol} already has a buy in progress`);
-  }
-
-  buyingNow.add(normalizedSymbol);
-
-  try {
-    const assetCheck = await isAssetBuyEligible(normalizedSymbol);
-
-    if (!assetCheck.ok) {
-      throw new Error(assetCheck.reason);
-    }
-
-    const safeDollars = Number(dollars || 0);
-
-    if (!safeDollars || safeDollars <= 0) {
-      throw new Error(`Invalid buy amount for ${normalizedSymbol}`);
-    }
-
-    const order = await alpacaTradingRequest("/v2/orders", {
-      method: "POST",
-      body: JSON.stringify({
-        symbol: normalizedSymbol,
-        notional: Number(safeDollars.toFixed(2)),
-        side: "buy",
-        type: "market",
-        time_in_force: "day",
-        client_order_id: `${AI_ORDER_PREFIX}_BUY_${normalizedSymbol}_${Date.now()}`,
-      }),
-    });
-
-    engineState.aiEntryScores[normalizedSymbol] = score;
-    markAiManagedSymbol(normalizedSymbol);
-    saveEngineState("BUY_ORDER_SENT");
-
-    return order;
-  } finally {
-    setTimeout(() => buyingNow.delete(normalizedSymbol), 30000);
-  }
 }
 
 async function placeMarketSell(symbol, qty, reason = "AI_EXIT") {
