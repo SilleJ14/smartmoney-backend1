@@ -165,7 +165,6 @@ capitalRedistributionHistory:
   (engineState.capitalRedistributionHistory || []).slice(0, 200),
   multiTimeframeState:
   engineState.multiTimeframeState || null,
-
 multiTimeframeHistory:
   (engineState.multiTimeframeHistory || []).slice(0, 200),
 
@@ -4457,9 +4456,10 @@ engineState.capitalRedistributionState = capitalRedistribution;
 engineState.capitalRedistributionHistory.unshift(capitalRedistribution);
 engineState.capitalRedistributionHistory =
   engineState.capitalRedistributionHistory.slice(0, 200);
-  const multiTimeframeAnalysis =
-  calculateMultiTimeframeConfirmationEngine(stockSignals);
-
+ const multiTimeframeAnalysis =
+  calculateMultiTimeframeConfirmationEngine(
+    stockSignals.length > 0 ? stockSignals : cryptoSignals
+  );
 engineState.multiTimeframeState =
   multiTimeframeAnalysis;
 
