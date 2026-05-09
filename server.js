@@ -473,6 +473,9 @@ engineFreezeCount: 0,
   lastSoldAt: {},
   symbolCooldowns: {},
   cooldownMinutes: 30,
+  lastRotationDateKey: null,
+  rotationCountToday: 0,
+  maxRotationsPerDay: 1,
   peaksByMode: {},
 
   cachedPositions: [],
@@ -845,6 +848,50 @@ function journalTradeExit(symbol, exit = {}) {
   delete engineState.tradeJournalOpenEntries[cleanSymbol];
 
   saveEngineState("TRADE_JOURNAL_EXIT");
+}
+
+function canRunSwingSafeRotation(position = {}) {
+  const todayKey = getTodayKeyET();
+
+  if (engineState.lastRotationDateKey !== todayKey) {
+    engineState.lastRotationDateKey = todayKey;
+    engineState.rotationCountToday = 0;
+  }
+
+  if (Number(engineState.rotationCountToday || 0) >= Number(engineState.maxRotationsPerDay || 1)) {
+    return {
+      allowed: false,
+      reason: "Daily rotation limit reached",
+    };
+  }
+
+  const profitPercent = Number(position.unrealized_plpc || 0) * 100;
+
+  if (profitPercent > -4) {
+    return {
+      allowed: false,
+      reason: "Position is not weak enough for swing-safe rotation",
+    };
+  }
+
+  return {
+    allowed: true,
+    reason: "Swing-safe rotation allowed",
+  };
+}
+
+function markSwingSafeRotationUsed(symbol, replacementSymbol) {
+  engineState.lastRotationDateKey = getTodayKeyET();
+  engineState.rotationCountToday =
+    Number(engineState.rotationCountToday || 0) + 1;
+
+  saveRecentOrder("SWING_SAFE_ROTATION_USED", symbol, {
+    replacementSymbol,
+    rotationCountToday: engineState.rotationCountToday,
+    maxRotationsPerDay: engineState.maxRotationsPerDay,
+  });
+
+  saveEngineState("SWING_SAFE_ROTATION_USED");
 }
 
 function saveRecentOrder(type, symbol, extra = {}) {
@@ -6016,6 +6063,18 @@ async function rotateWeakCryptoIfBetter(signals, positions) {
   });
 
   const weakestSymbol = normalizeSymbol(weakest.symbol);
+    const swingRotationCheck = canRunSwingSafeRotation(weakest);
+
+  if (!swingRotationCheck.allowed) {
+    saveRecentOrder("CRYPTO_ROTATION_SKIPPED_SWING_SAFE", weakest.symbol, {
+      replacementSymbol: topCandidate.symbol,
+      replacementScore: topCandidate.score,
+      reason: swingRotationCheck.reason,
+      weakestProfitPercent: Number(weakest.unrealized_plpc || 0) * 100,
+    });
+
+    return false;
+  }
   const weakestQty = Number(weakest.qty);
 
   if (!weakestQty || weakestQty <= 0) return false;
@@ -6040,7 +6099,7 @@ async function rotateWeakCryptoIfBetter(signals, positions) {
       try {
         const account = await getAccount();
         const cash = Number(account.cash || 0);
-        const tradeAmount = Math.min(cash, 10);
+       const tradeAmount = Math.min(cash, 25);
 
         if (tradeAmount < 5) {
           saveFailedOrder(
