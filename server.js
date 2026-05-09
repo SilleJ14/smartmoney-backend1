@@ -189,6 +189,11 @@ marketCrashProtectionHistory:
 selfHealingScanHistory:
   (engineState.selfHealingScanHistory || []).slice(0, 200),
 
+  liveAiPerformanceState:
+  engineState.liveAiPerformanceState || null,
+
+liveAiPerformanceHistory:
+  (engineState.liveAiPerformanceHistory || []).slice(0, 200),
 scanFailureCount:
   engineState.scanFailureCount || 0,
 
@@ -410,6 +415,8 @@ marketCrashProtectionState: null,
 marketCrashProtectionHistory: [],
 selfHealingScanState: null,
 selfHealingScanHistory: [],
+liveAiPerformanceState: null,
+liveAiPerformanceHistory: [],
 scanFailureCount: 0,
 lastScanRecoveryAt: null,
 aiDecisionHistory: [],
@@ -984,6 +991,88 @@ function calculateSmartCapitalRedistributionEngine(
       `Weak capital: $${weakCapital.toFixed(2)} • ` +
       `Remaining bot budget: $${remainingBotBudget.toFixed(2)} • ` +
       `${cashReserveStatus}`,
+  };
+}
+
+function calculateLiveAiPerformanceAnalyticsEngine(account, openPositions = []) {
+  const positions = Array.isArray(openPositions) ? openPositions : [];
+
+  const aiSymbols = Array.isArray(engineState.aiManagedSymbols)
+    ? engineState.aiManagedSymbols.map((symbol) => normalizeSymbol(symbol))
+    : [];
+
+  const aiPositions = positions.filter((position) => {
+    const symbol = normalizeSymbol(position.symbol);
+
+    if (aiSymbols.includes(symbol)) return true;
+
+    return String(position.asset_class || "").toLowerCase() === "us_equity";
+  });
+
+  const totalMarketValue = aiPositions.reduce(
+    (sum, position) => sum + Math.abs(Number(position.market_value || 0)),
+    0
+  );
+
+  const totalUnrealizedProfit = aiPositions.reduce(
+    (sum, position) => sum + Number(position.unrealized_pl || 0),
+    0
+  );
+
+  const winners = aiPositions.filter(
+    (position) => Number(position.unrealized_pl || 0) > 0
+  );
+
+  const losers = aiPositions.filter(
+    (position) => Number(position.unrealized_pl || 0) < 0
+  );
+
+  const bestPerformer = [...aiPositions].sort(
+    (a, b) => Number(b.unrealized_plpc || 0) - Number(a.unrealized_plpc || 0)
+  )[0] || null;
+
+  const worstPerformer = [...aiPositions].sort(
+    (a, b) => Number(a.unrealized_plpc || 0) - Number(b.unrealized_plpc || 0)
+  )[0] || null;
+
+  const winRate =
+    aiPositions.length > 0
+      ? (winners.length / aiPositions.length) * 100
+      : 0;
+
+  const averageUnrealizedPercent =
+    aiPositions.length > 0
+      ? aiPositions.reduce(
+          (sum, position) => sum + Number(position.unrealized_plpc || 0) * 100,
+          0
+        ) / aiPositions.length
+      : 0;
+
+  return {
+    updatedAt: new Date().toISOString(),
+    accountEquity: Number(account?.equity || 0),
+    accountCash: Number(account?.cash || 0),
+    aiPositionCount: aiPositions.length,
+    totalMarketValue: Number(totalMarketValue.toFixed(2)),
+    totalUnrealizedProfit: Number(totalUnrealizedProfit.toFixed(2)),
+    winRate: Number(winRate.toFixed(2)),
+    winners: winners.length,
+    losers: losers.length,
+    averageUnrealizedPercent: Number(averageUnrealizedPercent.toFixed(2)),
+    bestPerformer: bestPerformer
+      ? {
+          symbol: bestPerformer.symbol,
+          unrealizedPercent: Number(bestPerformer.unrealized_plpc || 0) * 100,
+          unrealizedProfit: Number(bestPerformer.unrealized_pl || 0),
+        }
+      : null,
+    worstPerformer: worstPerformer
+      ? {
+          symbol: worstPerformer.symbol,
+          unrealizedPercent: Number(worstPerformer.unrealized_plpc || 0) * 100,
+          unrealizedProfit: Number(worstPerformer.unrealized_pl || 0),
+        }
+      : null,
   };
 }
 
@@ -4739,6 +4828,17 @@ engineState.marketCrashProtectionHistory.unshift(
 
 engineState.marketCrashProtectionHistory =
   engineState.marketCrashProtectionHistory.slice(0, 200);
+  const liveAiPerformance =
+  calculateLiveAiPerformanceAnalyticsEngine(
+    account,
+    analyticsAiPositions
+  );
+
+engineState.liveAiPerformanceState = liveAiPerformance;
+
+engineState.liveAiPerformanceHistory.unshift(liveAiPerformance);
+engineState.liveAiPerformanceHistory =
+  engineState.liveAiPerformanceHistory.slice(0, 200);
   const selfHealingScanRecovery =
   calculateSelfHealingScanRecoveryEngine();
 
