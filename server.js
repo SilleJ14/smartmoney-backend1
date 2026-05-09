@@ -5482,6 +5482,55 @@ async function executePendingExits() {
   }
 }
 
+function calculateTrendPersistenceHoldDecision({
+  unrealizedPercent = 0,
+  dropFromHigh = 0,
+  isRunner = false,
+  highWater = 0,
+  currentPrice = 0,
+}) {
+  const priceStillNearHigh =
+    highWater > 0 && currentPrice > 0
+      ? currentPrice >= highWater * 0.985
+      : false;
+
+  const strongRunner =
+    isRunner &&
+    unrealizedPercent >= CONFIG.runnerTriggerPercent &&
+    dropFromHigh <= 1.25 &&
+    priceStillNearHigh;
+
+  const veryStrongRunner =
+    isRunner &&
+    unrealizedPercent >= 10 &&
+    dropFromHigh <= 1.75;
+
+  if (veryStrongRunner) {
+    return {
+      shouldHold: true,
+      mode: "VERY_STRONG_TREND_HOLD",
+      runnerTrailingStopPercent: 2,
+      reason: "Very strong runner. Holding longer with wider trailing stop.",
+    };
+  }
+
+  if (strongRunner) {
+    return {
+      shouldHold: true,
+      mode: "STRONG_TREND_HOLD",
+      runnerTrailingStopPercent: 1.5,
+      reason: "Runner trend remains healthy. Avoiding premature exit.",
+    };
+  }
+
+  return {
+    shouldHold: false,
+    mode: "NORMAL_EXIT_RULES",
+    runnerTrailingStopPercent: CONFIG.runnerTrailingStopPercent,
+    reason: "Normal exit rules apply.",
+  };
+}
+
 async function autoExitPositions(marketOpen) {
   const positions = engineState.cachedPositions || (await getPositions());
   const aiOwnedSymbols = await getAiOwnedSymbols();
@@ -5548,15 +5597,39 @@ async function autoExitPositions(marketOpen) {
       unrealizedPercent > 0 &&
       dropFromHigh >= CONFIG.trailingStopPercent;
 
+    const trendHoldDecision =
+      calculateTrendPersistenceHoldDecision({
+        unrealizedPercent,
+        dropFromHigh,
+        isRunner,
+        highWater,
+        currentPrice,
+      });
+
     const dynamicRunnerTrailingStopPercent =
-      unrealizedPercent >= 15
-        ? 2
-        : unrealizedPercent >= 10
-          ? 1.5
-          : CONFIG.runnerTrailingStopPercent;
+      trendHoldDecision.runnerTrailingStopPercent;
 
     const shouldRunnerTrailingExit =
       isRunner && dropFromHigh >= dynamicRunnerTrailingStopPercent;
+    if (
+      trendHoldDecision.shouldHold &&
+      !shouldStopLoss
+    ) {
+      saveRecentOrder("TREND_PERSISTENCE_HOLD", symbol, {
+        qty,
+        price: currentPrice,
+        highWater,
+        dropFromHigh,
+        profitPercent: unrealizedPercent,
+        isRunner,
+        trendHoldMode: trendHoldDecision.mode,
+        trendHoldReason: trendHoldDecision.reason,
+        dynamicRunnerTrailingStopPercent,
+      });
+
+      continue;
+    }
+
     if (
       !shouldStopLoss &&
       !shouldProtectProfit &&
@@ -5584,6 +5657,8 @@ async function autoExitPositions(marketOpen) {
 
       saveRecentOrder("EXIT_PENDING_MARKET_CLOSED", symbol, {
         dynamicRunnerTrailingStopPercent,
+        trendHoldMode: trendHoldDecision.mode,
+        trendHoldReason: trendHoldDecision.reason,
         qty,
         price: currentPrice,
         highWater,
@@ -5601,6 +5676,8 @@ async function autoExitPositions(marketOpen) {
 
       saveRecentOrder(reason, symbol, {
         dynamicRunnerTrailingStopPercent,
+        trendHoldMode: trendHoldDecision.mode,
+        trendHoldReason: trendHoldDecision.reason,
         qty,
         price: currentPrice,
         highWater,
@@ -5627,8 +5704,11 @@ async function autoExitPositions(marketOpen) {
       delete engineState.aiEntryScores[symbol];
       delete engineState.runnerPositions[symbol];
     } catch (err) {
+
       saveFailedOrder(`${reason}_FAILED`, symbol, err.message, {
         dynamicRunnerTrailingStopPercent,
+        trendHoldMode: trendHoldDecision.mode,
+        trendHoldReason: trendHoldDecision.reason,
         qty,
         price: currentPrice,
         highWater,
