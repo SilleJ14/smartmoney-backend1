@@ -178,6 +178,11 @@ marketVolatilityHistory:
   (engineState.marketVolatilityHistory || []).slice(0, 200),
 institutionalExposureHistory:
   (engineState.institutionalExposureHistory || []).slice(0, 200),
+  marketCrashProtectionState:
+  engineState.marketCrashProtectionState || null,
+
+marketCrashProtectionHistory:
+  (engineState.marketCrashProtectionHistory || []).slice(0, 200),
 aiDecisionHistory:
   (engineState.aiDecisionHistory || []).slice(0, 500),
       recentOrders: (engineState.recentOrders || []).slice(0, 100),
@@ -390,6 +395,8 @@ marketBreadthHistory: [],
 marketMomentumHistory: [],
 marketVolatilityHistory: [],
 institutionalExposureHistory: [],
+marketCrashProtectionState: null,
+marketCrashProtectionHistory: [],
 aiDecisionHistory: [],
 };
 
@@ -962,6 +969,91 @@ function calculateSmartCapitalRedistributionEngine(
       `Weak capital: $${weakCapital.toFixed(2)} • ` +
       `Remaining bot budget: $${remainingBotBudget.toFixed(2)} • ` +
       `${cashReserveStatus}`,
+  };
+}
+
+function calculateAiMarketCrashProtectionEngine(
+  signals = [],
+  marketRegime = {},
+  account = {}
+) {
+  const analyzedSignals = Array.isArray(signals) ? signals : [];
+
+  const totalSignals = analyzedSignals.length;
+
+  const bearishSignals = analyzedSignals.filter(
+    (signal) =>
+      Number(signal.percentChange || 0) < -5 ||
+      Number(signal.riskScore || 100) < 40
+  ).length;
+
+  const fakeBreakouts = analyzedSignals.filter(
+    (signal) => signal.confirmations?.fakeBreakout
+  ).length;
+
+  const severeVolatilitySignals = analyzedSignals.filter(
+    (signal) =>
+      Math.abs(Number(signal.percentChange || 0)) >= 20
+  ).length;
+
+  const bearishRatio =
+    totalSignals > 0 ? bearishSignals / totalSignals : 0;
+
+  const fakeBreakoutRatio =
+    totalSignals > 0 ? fakeBreakouts / totalSignals : 0;
+
+  const severeVolatilityRatio =
+    totalSignals > 0
+      ? severeVolatilitySignals / totalSignals
+      : 0;
+
+  const crashRiskScore = clampScore(
+    bearishRatio * 45 +
+      fakeBreakoutRatio * 30 +
+      severeVolatilityRatio * 25 +
+      (marketRegime?.state === "panic/high volatility"
+        ? 25
+        : 0)
+  );
+
+  const crashProtectionMode =
+    crashRiskScore >= 80
+      ? "FULL_DEFENSE"
+      : crashRiskScore >= 60
+      ? "HIGH_RISK"
+      : crashRiskScore >= 40
+      ? "CAUTION"
+      : "NORMAL";
+
+  const exposureReductionMultiplier =
+    crashProtectionMode === "FULL_DEFENSE"
+      ? 0
+      : crashProtectionMode === "HIGH_RISK"
+      ? 0.25
+      : crashProtectionMode === "CAUTION"
+      ? 0.5
+      : 1;
+
+  const shouldBlockNewTrades =
+    crashProtectionMode === "FULL_DEFENSE";
+
+  return {
+    updatedAt: new Date().toISOString(),
+    totalSignals,
+    bearishSignals,
+    fakeBreakouts,
+    severeVolatilitySignals,
+    bearishRatio: Number(bearishRatio.toFixed(2)),
+    fakeBreakoutRatio: Number(fakeBreakoutRatio.toFixed(2)),
+    severeVolatilityRatio: Number(
+      severeVolatilityRatio.toFixed(2)
+    ),
+    crashRiskScore,
+    crashProtectionMode,
+    exposureReductionMultiplier,
+    shouldBlockNewTrades,
+    accountEquity: Number(account?.equity || 0),
+    accountCash: Number(account?.cash || 0),
   };
 }
 
@@ -4545,7 +4637,26 @@ engineState.multiTimeframeState = multiTimeframeAnalysis;
 engineState.multiTimeframeHistory.unshift(multiTimeframeAnalysis);
 engineState.multiTimeframeHistory =
   engineState.multiTimeframeHistory.slice(0, 200);
+const marketCrashProtection =
+  calculateAiMarketCrashProtectionEngine(
+    allSignalsForAnalytics,
+    engineState.marketRegime,
+    account
+  );
 
+engineState.marketCrashProtectionState =
+  marketCrashProtection;
+
+engineState.marketCrashProtectionHistory.unshift(
+  marketCrashProtection
+);
+
+engineState.marketCrashProtectionHistory =
+  engineState.marketCrashProtectionHistory.slice(0, 200);
+
+if (marketCrashProtection.shouldBlockNewTrades) {
+  autoTradingEnabled = false;
+}
 engineState.sectorStrengthHistory =
   engineState.sectorStrengthHistory.slice(0, 200);
   engineState.lastScanDurationMs =
