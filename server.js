@@ -2111,7 +2111,6 @@ function calculateBlackRockPortfolioOptimizer(
 }
 
 function calculateInstitutionalAiPortfolioOrchestrator(signal = {}) {
-
   const institutionalScore = Number(
     signal.institutionalScore || signal.score || 0
   );
@@ -2125,6 +2124,7 @@ function calculateInstitutionalAiPortfolioOrchestrator(signal = {}) {
   const technicalScore = Number(
     signal.technicalIntelligence?.institutionalEntryScore ||
       signal.technicalScore ||
+      signal.score ||
       0
   );
 
@@ -2146,7 +2146,7 @@ function calculateInstitutionalAiPortfolioOrchestrator(signal = {}) {
       0
   );
 
-  const wealthScore = Number(
+  const dividendScore = Number(
     signal.harvardDividendScore ||
       signal.longTermWealthScore ||
       signal.wealthBuilderScore ||
@@ -2154,12 +2154,18 @@ function calculateInstitutionalAiPortfolioOrchestrator(signal = {}) {
       0
   );
 
-  const dcfScore = Number(signal.dcfValuationScore || 0);
+  const wealthScore = dividendScore;
+
+  const dcfScore = Number(
+    signal.dcfValuationScore ||
+      signal.dcfScore ||
+      0
+  );
 
   const riskScore = Number(
     signal.institutionalRiskScore ||
       signal.riskScore ||
-      0
+      50
   );
 
   const exhaustionRisk = Number(
@@ -2172,6 +2178,12 @@ function calculateInstitutionalAiPortfolioOrchestrator(signal = {}) {
 
   const earningsRisk = Number(
     signal.earningsVolatilityRiskScore || 0
+  );
+
+  const momentumScore = Number(
+    signal.momentumScore ||
+      signal.score ||
+      0
   );
 
   const macroPenalty =
@@ -2190,33 +2202,6 @@ function calculateInstitutionalAiPortfolioOrchestrator(signal = {}) {
       ? 15
       : 0;
 
-  const technicalScore =
-    Number(signal.technicalScore || 0);
-
-  const macroScore =
-    Number(signal.macroScore || 0);
-
-  const statisticalScore =
-    Number(signal.statisticalScore || 0);
-
-  const dcfScore =
-    Number(signal.dcfScore || 0);
-
-  const earningsScore =
-    Number(signal.earningsScore || 0);
-
-  const moatScore =
-    Number(signal.moatScore || 0);
-
-  const dividendScore =
-    Number(signal.dividendScore || 0);
-
-  const portfolioScore =
-    Number(signal.portfolioScore || 0);
-
-  const momentumScore =
-    Number(signal.momentumScore || signal.score || 0);
-    
   const cryptoAdaptiveOpportunityScore =
     TRADING_MODE === "live_crypto"
       ? clampScore(
@@ -2250,10 +2235,11 @@ function calculateInstitutionalAiPortfolioOrchestrator(signal = {}) {
       (riskScore < 50 ? 20 : 0)
   );
 
-    const finalInstitutionalDecisionScore = clampScore(
+  const finalInstitutionalDecisionScore = clampScore(
     institutionalOpportunityScore -
       institutionalRiskPenalty * 0.4
   );
+
   const orchestratorAction =
     engineState.macroRiskState?.shouldBlockNewTrades
       ? "BLOCKED_BY_MACRO_RISK"
@@ -2266,7 +2252,6 @@ function calculateInstitutionalAiPortfolioOrchestrator(signal = {}) {
       : finalInstitutionalDecisionScore >= 42
       ? "WATCHLIST_ONLY"
       : "AVOID";
-
 
   const orchestratorMultiplier =
     orchestratorAction === "DEPLOY_HIGH_CONVICTION"
@@ -2310,7 +2295,6 @@ function calculateInstitutionalAiPortfolioOrchestrator(signal = {}) {
       `Opportunity ${institutionalOpportunityScore}/100 • Penalty ${institutionalRiskPenalty}/100`,
   };
 }
-
 function calculateAiPortfolioManagerDecision(signal, account, openBotPositions = [], regime = {}) {
   const equity = Number(account?.equity || 0);
   const cash = Number(account?.cash || 0);
