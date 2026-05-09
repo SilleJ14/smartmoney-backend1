@@ -2189,6 +2189,34 @@ function calculateInstitutionalAiPortfolioOrchestrator(signal = {}) {
     engineState.portfolioOptimizationState?.rebalanceRequired
       ? 15
       : 0;
+
+  const technicalScore =
+    Number(signal.technicalScore || 0);
+
+  const macroScore =
+    Number(signal.macroScore || 0);
+
+  const statisticalScore =
+    Number(signal.statisticalScore || 0);
+
+  const dcfScore =
+    Number(signal.dcfScore || 0);
+
+  const earningsScore =
+    Number(signal.earningsScore || 0);
+
+  const moatScore =
+    Number(signal.moatScore || 0);
+
+  const dividendScore =
+    Number(signal.dividendScore || 0);
+
+  const portfolioScore =
+    Number(signal.portfolioScore || 0);
+
+  const momentumScore =
+    Number(signal.momentumScore || signal.score || 0);
+    
   const cryptoAdaptiveOpportunityScore =
     TRADING_MODE === "live_crypto"
       ? clampScore(
