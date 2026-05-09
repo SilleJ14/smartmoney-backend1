@@ -6700,10 +6700,9 @@ engineState.earningsIntelligenceHistory =
   const portfolioOptimization =
   calculateBlackRockPortfolioOptimizer(
     account,
-    freshAiPositions,
+    analyticsAiPositions,
     allSignalsForAnalytics
   );
-
 engineState.portfolioOptimizationState =
   portfolioOptimization;
 
