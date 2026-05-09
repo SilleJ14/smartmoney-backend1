@@ -1704,6 +1704,16 @@ function calculateAiPortfolioManagerDecision(signal, account, openBotPositions =
   const currentBotExposure = getBotExposure(openBotPositions);
   const maxBotBudget = equity * (CONFIG.maxBotExposurePercent / 100);
   const remainingBotBudget = Math.max(0, maxBotBudget - currentBotExposure);
+ const compoundingBudget =
+  Number(
+    engineState.capitalCompoundingState
+      ?.remainingCompoundedBudget || 0
+  );
+
+const effectiveRemainingBotBudget =
+  compoundingBudget > 0
+    ? Math.min(remainingBotBudget, compoundingBudget)
+    : remainingBotBudget; 
   const basePerTradeMax = maxBotBudget / Math.max(1, CONFIG.maxOpenTrades);
 
   const opportunityQualityScore = clampScore(
@@ -1789,7 +1799,7 @@ function calculateAiPortfolioManagerDecision(signal, account, openBotPositions =
       roleMultiplier *
       heatMultiplier *
       regimeMultiplier,
-      remainingBotBudget,
+      effectiveRemainingBotBudget,
       cash,
       buyingPower || cash
     )
@@ -1823,12 +1833,26 @@ function calculateAiPortfolioManagerDecision(signal, account, openBotPositions =
     duplicateSymbolRisk: portfolioHeat.duplicateSymbolRisk,
     correlationAction: portfolioHeat.correlationAction,
     aiPortfolioAction,
-    portfolioManagerReason:
-      `${aiPortfolioAction} • Conviction ${aiConvictionScore}/100 • ` +
-      `Risk ${institutionalRiskScore}/100 • Fit ${portfolioFitScore}/100`,
+ compoundingMode:
+  engineState.capitalCompoundingState?.compoundingMode ||
+  "BASELINE",
+
+compoundingMultiplier:
+  engineState.capitalCompoundingState?.compoundingMultiplier ||
+  1,
+
+effectiveRemainingBotBudget:
+  Number(effectiveRemainingBotBudget.toFixed(2)),
+
+portfolioManagerReason:
+  `${aiPortfolioAction} • Conviction ${aiConvictionScore}/100 • ` +
+  `Risk ${institutionalRiskScore}/100 • Fit ${portfolioFitScore}/100 • ` +
+  `Compounding ${
+    engineState.capitalCompoundingState?.compoundingMode ||
+    "BASELINE"
+  }`,
   };
 }
-
 function getDynamicTradeAmount(account, openBotPositions = [], signalScore = 80) {
   const cash = Number(account?.cash || 0);
   const equity = Number(account?.equity || 0);
@@ -1839,8 +1863,18 @@ function getDynamicTradeAmount(account, openBotPositions = [], signalScore = 80)
   const maxBotBudget = equity * (CONFIG.maxBotExposurePercent / 100);
   const currentBotExposure = getBotExposure(openBotPositions);
   const remainingBotBudget = maxBotBudget - currentBotExposure;
+  const compoundingBudget =
+  Number(
+    engineState.capitalCompoundingState
+      ?.remainingCompoundedBudget || 0
+  );
 
-  if (remainingBotBudget <= 0) return 0;
+const effectiveRemainingBotBudget =
+  compoundingBudget > 0
+    ? Math.min(remainingBotBudget, compoundingBudget)
+    : remainingBotBudget;
+
+if (effectiveRemainingBotBudget <= 0) return 0;
 
   const perTradeMax = maxBotBudget / CONFIG.maxOpenTrades;
   const scoreMultiplier =
@@ -1856,7 +1890,12 @@ function getDynamicTradeAmount(account, openBotPositions = [], signalScore = 80)
 
   return Math.max(
     1,
-    Math.min(scoreAdjustedTradeMax, remainingBotBudget, cash, buyingPower || cash)
+   Math.min(
+  scoreAdjustedTradeMax,
+  effectiveRemainingBotBudget,
+  cash,
+  buyingPower || cash
+)
   );
 }
 
