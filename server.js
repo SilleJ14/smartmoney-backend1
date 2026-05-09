@@ -184,6 +184,11 @@ multiTimeframeHistory:
 statisticalEdgeHistory:
   (engineState.statisticalEdgeHistory || []).slice(0, 200),
 
+  technicalIntelligenceState:
+  engineState.technicalIntelligenceState || null,
+
+technicalIntelligenceHistory:
+  (engineState.technicalIntelligenceHistory || []).slice(0, 200),
 macroRiskState:
   engineState.macroRiskState || null,
 
@@ -458,6 +463,8 @@ multiTimeframeState: null,
 multiTimeframeHistory: [],
 statisticalEdgeState: null,
 statisticalEdgeHistory: [],
+technicalIntelligenceState: null,
+technicalIntelligenceHistory: [],
 macroRiskState: null,
 macroRiskHistory: [],
 signalQualityHistory: [],
@@ -1682,6 +1689,113 @@ function calculateBridgewaterMacroRiskEngine(
   };
 }
 
+function calculateCitadelTechnicalIntelligenceEngine(q = {}) {
+  const price = Number(q.current || q.price || 0);
+  const high = Number(q.high || price || 0);
+  const low = Number(q.low || price || 0);
+  const open = Number(q.open || price || 0);
+  const previousClose = Number(q.previousClose || open || price || 0);
+  const percentChange = Number(q.percentChange || 0);
+  const volume = Number(q.volume || 0);
+  const volumeRatio = Number(q.volumeRatio || q.confirmations?.volumeSpikeRatio || 0);
+
+  const technicals = q.technicals || {};
+  const ema9 = Number(technicals.ema9 || 0);
+  const ema20 = Number(technicals.ema20 || 0);
+  const rsi = Number(technicals.rsi || 50);
+  const macd = Number(technicals.macd || 0);
+  const macdSignal = Number(technicals.macdSignal || 0);
+
+  const confirmations = q.confirmations || {};
+
+  const range = Math.max(0.01, high - low);
+  const closeLocationPercent =
+    high > low ? ((price - low) / range) * 100 : 50;
+
+  const pullbackFromHighPercent =
+    high > 0 ? ((high - price) / high) * 100 : 0;
+
+  const openToCloseStrength =
+    open > 0 ? ((price - open) / open) * 100 : 0;
+
+  const gapPercent =
+    previousClose > 0
+      ? ((open - previousClose) / previousClose) * 100
+      : 0;
+
+  const trendQualityScore = clampScore(
+    45 +
+      (ema9 > ema20 ? 20 : -10) +
+      (macd > macdSignal ? 15 : -5) +
+      (rsi >= 45 && rsi <= 70 ? 15 : 0) -
+      (rsi > 78 ? 20 : 0) +
+      (percentChange > 0 && percentChange <= 15 ? 10 : 0)
+  );
+
+  const breakoutQualityScore = clampScore(
+    40 +
+      (closeLocationPercent >= 75 ? 20 : 0) +
+      (volumeRatio >= 1.5 ? 20 : volumeRatio >= 1 ? 10 : -10) +
+      (openToCloseStrength > 0 ? 10 : -10) -
+      (pullbackFromHighPercent > 3 ? 20 : 0) -
+      (Math.abs(gapPercent) > CONFIG.maxGapUpPercent ? 20 : 0)
+  );
+
+  const executionTimingScore = clampScore(
+    50 +
+      (price > open ? 15 : -10) +
+      (closeLocationPercent >= 65 ? 15 : 0) +
+      (pullbackFromHighPercent <= 2 ? 10 : -10) +
+      (rsi >= 50 && rsi <= 72 ? 10 : 0) -
+      (percentChange > 25 ? 25 : 0)
+  );
+
+  const exhaustionRiskScore = clampScore(
+    20 +
+      (rsi > 75 ? 25 : 0) +
+      (percentChange > 20 ? 25 : 0) +
+      (pullbackFromHighPercent > 4 ? 20 : 0) +
+      (volumeRatio < 0.75 ? 15 : 0) +
+      (confirmations.fakeBreakout ? 35 : 0)
+  );
+
+  const institutionalEntryScore = clampScore(
+    trendQualityScore * 0.3 +
+      breakoutQualityScore * 0.25 +
+      executionTimingScore * 0.25 +
+      (100 - exhaustionRiskScore) * 0.2
+  );
+
+  const institutionalEntryGrade =
+    institutionalEntryScore >= 85
+      ? "A+ Institutional Entry"
+      : institutionalEntryScore >= 75
+      ? "A Quality Entry"
+      : institutionalEntryScore >= 65
+      ? "B Tactical Entry"
+      : institutionalEntryScore >= 50
+      ? "C Watch Only"
+      : "D Avoid Entry";
+
+  return {
+    technicalScore: Number(institutionalEntryScore.toFixed(2)),
+    trendQualityScore: Number(trendQualityScore.toFixed(2)),
+    breakoutQualityScore: Number(breakoutQualityScore.toFixed(2)),
+    executionTimingScore: Number(executionTimingScore.toFixed(2)),
+    exhaustionRiskScore: Number(exhaustionRiskScore.toFixed(2)),
+    institutionalEntryScore: Number(institutionalEntryScore.toFixed(2)),
+    institutionalEntryGrade,
+    closeLocationPercent: Number(closeLocationPercent.toFixed(2)),
+    pullbackFromHighPercent: Number(pullbackFromHighPercent.toFixed(2)),
+    openToCloseStrength: Number(openToCloseStrength.toFixed(2)),
+    technicalReason:
+      `${institutionalEntryGrade} • Trend ${trendQualityScore.toFixed(0)}/100 • ` +
+      `Breakout ${breakoutQualityScore.toFixed(0)}/100 • ` +
+      `Timing ${executionTimingScore.toFixed(0)}/100 • ` +
+      `Exhaustion ${exhaustionRiskScore.toFixed(0)}/100`,
+  };
+}
+
 function calculateMultiTimeframeConfirmationEngine(signals = []) {
   const analyzedSignals = (signals || []).map((signal) => {
     const score = Number(signal.score || 0);
@@ -1789,6 +1903,11 @@ function calculateAiPortfolioManagerDecision(signal, account, openBotPositions =
   const institutionalScore = Number(signal.institutionalScore || signal.score || 0);
   const riskScore = Number(signal.riskScore || 0);
   const statisticalScore = Number(signal.statisticalScore || 0);
+    const citadelTechnicalScore = Number(
+    signal.technicalIntelligence?.institutionalEntryScore ||
+    signal.technicalScore ||
+    0
+  );
   const fundamentalScore = Number(signal.fundamentalScore || 0);
   const earningsScore = Number(signal.earningsScore || 0);
   const moatScore = Number(signal.moatScore || 0);
@@ -1812,9 +1931,10 @@ const effectiveRemainingBotBudget =
   const basePerTradeMax = maxBotBudget / Math.max(1, CONFIG.maxOpenTrades);
 
   const opportunityQualityScore = clampScore(
-    institutionalScore * 0.3 +
-    statisticalScore * 0.18 +
-    riskScore * 0.18 +
+    institutionalScore * 0.25 +
+    citadelTechnicalScore * 0.18 +
+    statisticalScore * 0.17 +
+    riskScore * 0.16 +
     fundamentalScore * 0.1 +
     earningsScore * 0.08 +
     moatScore * 0.08 +
@@ -1922,6 +2042,11 @@ const effectiveRemainingBotBudget =
 
   return {
     aiConvictionScore,
+    citadelTechnicalScore,
+    institutionalEntryGrade:
+    signal.institutionalEntryGrade ||
+    signal.technicalIntelligence?.institutionalEntryGrade ||
+      "UNKNOWN",
     opportunityQualityScore,
     portfolioFitScore,
     aiAllocationPercentOfBotBudget,
@@ -1960,7 +2085,7 @@ effectiveRemainingBotBudget:
 
 portfolioManagerReason:
   `${aiPortfolioAction} • Conviction ${aiConvictionScore}/100 • ` +
-  `Risk ${institutionalRiskScore}/100 • Fit ${portfolioFitScore}/100 • ` +
+  `Risk ${institutionalRiskScore}/100 • Technical ${citadelTechnicalScore}/100 • Fit ${portfolioFitScore}/100 • ` +
   `Compounding ${
     engineState.capitalCompoundingState?.compoundingMode ||
     "BASELINE"
@@ -3334,20 +3459,13 @@ function calculateInstitutionalScores(q) {
   const dcf = calculateFundamentalDcfEngine(q);
   const earnings = calculateEarningsIntelligenceEngine(q);
   const edge = calculateStatisticalEdge(q);
+  const citadelTechnical = calculateCitadelTechnicalIntelligenceEngine(q);
   const moat = calculateMoatEngine(q);
   const wealth = calculateDividendWealthEngine(q);
   const portfolio = calculatePortfolioConstructionEngine(q);
   const sector = estimateSectorIntelligence(q);
   const advancedRisk = calculateAdvancedRiskEngine(q);
-  const technicalScore = clampScore(
-    45 +
-    (momentum > 0 ? 10 : -10) +
-    (momentum >= 2 ? 10 : 0) +
-    (volumeRatio >= 1.5 ? 10 : 0) +
-    (ema9 > ema20 ? 10 : 0) +
-    (macd > macdSignal ? 10 : 0) +
-    (rsi >= 45 && rsi <= 70 ? 10 : rsi > 80 ? -15 : 0)
-  );
+  const technicalScore = citadelTechnical.technicalScore;
 
   const riskScore = clampScore(
     80 -
@@ -3400,6 +3518,8 @@ function calculateInstitutionalScores(q) {
   const autoTradeApproved =
     institutionalScore >= CONFIG.minScoreToBuy &&
     blendedRiskScore >= 65 &&
+    citadelTechnical.institutionalEntryScore >= 65 &&
+    citadelTechnical.exhaustionRiskScore <= 70 &&
     Number(q.volume || 0) >= 25000 &&
     Number(q.percentChange || 0) <= 20 &&
     confirmations.fakeBreakout !== true &&
@@ -3412,6 +3532,12 @@ function calculateInstitutionalScores(q) {
 
   return {
     technicalScore,
+    technicalIntelligence: citadelTechnical,
+    trendQualityScore: citadelTechnical.trendQualityScore,
+    breakoutQualityScore: citadelTechnical.breakoutQualityScore,
+    executionTimingScore: citadelTechnical.executionTimingScore,
+    exhaustionRiskScore: citadelTechnical.exhaustionRiskScore,
+    institutionalEntryGrade: citadelTechnical.institutionalEntryGrade,
     macroScore,
     riskScore: blendedRiskScore,
     legacyRiskScore: riskScore,
@@ -5461,6 +5587,58 @@ engineState.marketCrashProtectionHistory.unshift(
 
 engineState.marketCrashProtectionHistory =
   engineState.marketCrashProtectionHistory.slice(0, 200);
+const technicalSignals =
+  allSignalsForAnalytics.filter(
+    (signal) =>
+      Number(signal.technicalIntelligence?.institutionalEntryScore || 0) >= 65
+  );
+
+const averageTechnicalScore =
+  allSignalsForAnalytics.length > 0
+    ? allSignalsForAnalytics.reduce(
+        (sum, signal) =>
+          sum +
+          Number(signal.technicalIntelligence?.institutionalEntryScore || 0),
+        0
+      ) / allSignalsForAnalytics.length
+    : 0;
+
+const averageExhaustionRisk =
+  allSignalsForAnalytics.length > 0
+    ? allSignalsForAnalytics.reduce(
+        (sum, signal) =>
+          sum +
+          Number(signal.technicalIntelligence?.exhaustionRiskScore || 0),
+        0
+      ) / allSignalsForAnalytics.length
+    : 0;
+
+engineState.technicalIntelligenceState = {
+  updatedAt: new Date().toISOString(),
+  qualifyingTechnicalSignals: technicalSignals.length,
+  averageTechnicalScore: Number(averageTechnicalScore.toFixed(2)),
+  averageExhaustionRisk: Number(averageExhaustionRisk.toFixed(2)),
+  strongestTechnicalSetups: technicalSignals
+    .slice(0, 5)
+    .map((signal) => ({
+      symbol: signal.symbol,
+      score: signal.score,
+      technicalScore:
+        signal.technicalIntelligence?.institutionalEntryScore || 0,
+      institutionalEntryGrade:
+        signal.institutionalEntryGrade ||
+        signal.technicalIntelligence?.institutionalEntryGrade,
+      exhaustionRiskScore:
+        signal.technicalIntelligence?.exhaustionRiskScore || 0,
+    })),
+};
+
+engineState.technicalIntelligenceHistory.unshift(
+  engineState.technicalIntelligenceState
+);
+
+engineState.technicalIntelligenceHistory =
+  engineState.technicalIntelligenceHistory.slice(0, 200);
 
 const macroRisk =
   calculateBridgewaterMacroRiskEngine(
@@ -6438,6 +6616,26 @@ statisticalEdgeHistory:
       res.status(500).json({ error: err.message });
     }
   });
+
+  app.get("/technical-intelligence", async (req, res) => {
+  try {
+    res.json({
+      ok: true,
+      technicalIntelligenceState:
+        engineState.technicalIntelligenceState || null,
+
+      technicalIntelligenceHistory:
+        (
+          engineState.technicalIntelligenceHistory || []
+        ).slice(0, 100),
+    });
+  } catch (err) {
+    res.status(500).json({
+      ok: false,
+      error: err.message,
+    });
+  }
+});
 
     app.get("/statistical-edge", async (req, res) => {
     try {
