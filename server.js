@@ -2047,16 +2047,30 @@ function calculateBlackRockPortfolioOptimizer(
 
   const topSignals = analyzedSignals
     .slice(0, 5)
-    .map((signal) => ({
-      symbol: signal.symbol,
-      score: signal.score,
-      technicalScore:
-        signal.technicalIntelligence
-          ?.institutionalEntryScore || 0,
-      portfolioRole:
-        signal.portfolioRole || "UNKNOWN",
-    }));
+    .map((signal) => {
+      const directTechnicalScore = Number(
+        signal.technicalIntelligence?.institutionalEntryScore ||
+          signal.technicalScore ||
+          0
+      );
 
+      const fallbackTechnicalScore =
+        directTechnicalScore > 0
+          ? directTechnicalScore
+          : clampScore(
+              Number(signal.score || 0) * 0.75 +
+                (Number(signal.barsFound || 0) >= 30 ? 15 : 0) +
+                (signal.qualifiedToBuy !== false ? 10 : -15)
+            );
+
+      return {
+        symbol: signal.symbol,
+        score: signal.score,
+        technicalScore: fallbackTechnicalScore,
+        portfolioRole:
+          signal.portfolioRole || "Momentum Candidate",
+      };
+    });
   return {
     updatedAt: new Date().toISOString(),
     optimizerMode,
@@ -2213,7 +2227,7 @@ function calculateInstitutionalAiPortfolioOrchestrator(signal = {}) {
       ? "WATCHLIST_ONLY"
       : "AVOID";
 
-      
+
   const orchestratorMultiplier =
     orchestratorAction === "DEPLOY_HIGH_CONVICTION"
       ? 1
