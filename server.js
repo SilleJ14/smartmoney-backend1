@@ -642,6 +642,55 @@ function estimateSectorIntelligence(q) {
     sectorRole,
   };
 }
+
+function updateInstitutionalWatchlist(signals = []) {
+  const existing = Array.isArray(engineState.institutionalWatchlist)
+    ? engineState.institutionalWatchlist
+    : [];
+
+  const now = new Date().toISOString();
+
+  const strongSignals = (signals || [])
+    .filter((signal) => Number(signal.score || 0) >= CONFIG.minScoreToBuy)
+    .slice(0, 20);
+
+  const mergedMap = new Map();
+
+  for (const item of existing) {
+    if (!item?.symbol) continue;
+
+    mergedMap.set(normalizeSymbol(item.symbol), {
+      ...item,
+      symbol: normalizeSymbol(item.symbol),
+    });
+  }
+
+  for (const signal of strongSignals) {
+    const symbol = normalizeSymbol(signal.symbol);
+    if (!symbol) continue;
+
+    const previous = mergedMap.get(symbol);
+
+    mergedMap.set(symbol, {
+      symbol,
+      score: Number(signal.score || 0),
+      previousScore: Number(previous?.score || signal.score || 0),
+      scoreChange: Number(signal.score || 0) - Number(previous?.score || signal.score || 0),
+      price: Number(signal.current || signal.price || 0),
+      assetClass: signal.assetClass || signal.asset_class || "stock",
+      qualifiedToBuy: signal.qualifiedToBuy !== false,
+      firstSeenAt: previous?.firstSeenAt || now,
+      updatedAt: now,
+    });
+  }
+
+  engineState.institutionalWatchlist = Array.from(mergedMap.values())
+    .sort((a, b) => Number(b.score || 0) - Number(a.score || 0))
+    .slice(0, 50);
+
+  return engineState.institutionalWatchlist;
+}
+
 function calculateAiSectorRotationEngine(stockSignals = []) {
   const sectorMap = {};
 
@@ -4471,7 +4520,10 @@ const allSignalsForAnalytics =
     : Array.isArray(engineState.lastSignals)
     ? engineState.lastSignals
     : [];
+const updatedInstitutionalWatchlist =
+  updateInstitutionalWatchlist(allSignalsForAnalytics);
 
+engineState.institutionalWatchlist = updatedInstitutionalWatchlist;
 const capitalRedistribution = calculateSmartCapitalRedistributionEngine(
   account,
   analyticsAiPositions,
