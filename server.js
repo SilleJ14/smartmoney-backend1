@@ -196,6 +196,12 @@ technicalIntelligenceHistory:
 portfolioOptimizationHistory:
   (engineState.portfolioOptimizationHistory || []).slice(0, 200),
 
+earningsIntelligenceState:
+  engineState.earningsIntelligenceState || null,
+
+earningsIntelligenceHistory:
+  (engineState.earningsIntelligenceHistory || []).slice(0, 200),
+
 macroRiskState:
   engineState.macroRiskState || null,
 
@@ -474,6 +480,8 @@ technicalIntelligenceState: null,
 technicalIntelligenceHistory: [],
 portfolioOptimizationState: null,
 portfolioOptimizationHistory: [],
+earningsIntelligenceState: null,
+earningsIntelligenceHistory: [],
 macroRiskState: null,
 macroRiskHistory: [],
 signalQualityHistory: [],
@@ -2071,6 +2079,18 @@ function calculateAiPortfolioManagerDecision(signal, account, openBotPositions =
   );
   const fundamentalScore = Number(signal.fundamentalScore || 0);
   const earningsScore = Number(signal.earningsScore || 0);
+    const earningsVolatilityRiskScore = Number(
+    signal.earningsIntelligence?.earningsVolatilityRiskScore ||
+      signal.earningsVolatilityRiskScore ||
+      0
+  );
+
+  const earningsRiskMultiplier =
+    signal.earningsRiskMode === "HIGH_EARNINGS_RISK"
+      ? 0
+      : signal.earningsRiskMode === "EARNINGS_CAUTION"
+      ? 0.5
+      : 1;
   const moatScore = Number(signal.moatScore || 0);
   const wealthBuilderScore = Number(signal.wealthBuilderScore || signal.dividendScore || 0);
   const portfolioScore = Number(signal.portfolioScore || 0);
@@ -2178,6 +2198,7 @@ const effectiveRemainingBotBudget =
       riskMultiplier *
       roleMultiplier *
       optimizerMultiplier *
+      earningsRiskMultiplier *
       heatMultiplier *
       regimeMultiplier *
       macroMultiplier
@@ -2192,6 +2213,7 @@ const effectiveRemainingBotBudget =
       riskMultiplier *
       roleMultiplier *
       optimizerMultiplier *
+      earningsRiskMultiplier *
       heatMultiplier *
       regimeMultiplier *
       macroMultiplier,
@@ -2217,6 +2239,11 @@ const effectiveRemainingBotBudget =
   return {
     aiConvictionScore,
     citadelTechnicalScore,
+    earningsScore,
+    earningsVolatilityRiskScore,
+    earningsRiskMode:
+      signal.earningsRiskMode || "NORMAL",
+    earningsRiskMultiplier,
     institutionalEntryGrade:
     signal.institutionalEntryGrade ||
     signal.technicalIntelligence?.institutionalEntryGrade ||
@@ -2267,7 +2294,7 @@ effectiveRemainingBotBudget:
 
 portfolioManagerReason:
   `${aiPortfolioAction} • Conviction ${aiConvictionScore}/100 • ` +
-  `Risk ${institutionalRiskScore}/100 • Technical ${citadelTechnicalScore}/100 • Fit ${portfolioFitScore}/100 • ` +
+    `Risk ${institutionalRiskScore}/100 • Technical ${citadelTechnicalScore}/100 • Earnings ${earningsScore}/100 • Fit ${portfolioFitScore}/100 • ` +
   `Compounding ${
     engineState.capitalCompoundingState?.compoundingMode ||
     "BASELINE"
@@ -2977,70 +3004,196 @@ function getSuggestedHoldTime(score) {
 }
 
 function calculateEarningsIntelligenceEngine(q) {
+  const symbol = normalizeSymbol(q.symbol);
   const percentChange = Number(q.percentChange || 0);
   const volume = Number(q.volume || 0);
   const confirmations = q.confirmations || {};
   const technicals = q.technicals || {};
 
-  const volumeRatio = Number(confirmations.volumeSpikeRatio || q.volumeRatio || 0);
+  const volumeRatio = Number(
+    confirmations.volumeSpikeRatio ||
+      q.volumeRatio ||
+      0
+  );
+
   const rsi = Number(technicals.rsi || 50);
+
+  const riskyHeadlineText = (
+    confirmations.riskyNewsHeadlines || []
+  )
+    .join(" ")
+    .toLowerCase();
+
+  const earningsWords = [
+    "earnings",
+    "eps",
+    "revenue",
+    "guidance",
+    "forecast",
+    "quarter",
+    "q1",
+    "q2",
+    "q3",
+    "q4",
+  ];
+
+  const negativeEarningsWords = [
+    "miss",
+    "misses",
+    "cut guidance",
+    "lowers guidance",
+    "weak guidance",
+    "loss",
+    "decline",
+    "downgrade",
+    "margin pressure",
+  ];
+
+  const positiveEarningsWords = [
+    "beats",
+    "beat",
+    "raises guidance",
+    "strong revenue",
+    "record revenue",
+    "profit rises",
+    "eps beat",
+  ];
+
+  const hasEarningsNews = earningsWords.some((word) =>
+    riskyHeadlineText.includes(word)
+  );
+
+  const negativeEarningsNews = negativeEarningsWords.some((word) =>
+    riskyHeadlineText.includes(word)
+  );
+
+  const positiveEarningsNews = positiveEarningsWords.some((word) =>
+    riskyHeadlineText.includes(word)
+  );
 
   const revenueQualityScore = clampScore(
     50 +
-    (percentChange > 0 && percentChange <= 12 ? 15 : 0) +
-    (volume >= 25000 ? 10 : -10)
+      (percentChange > 0 && percentChange <= 12 ? 15 : 0) +
+      (volume >= 25000 ? 10 : -10) +
+      (positiveEarningsNews ? 15 : 0) -
+      (negativeEarningsNews ? 25 : 0)
   );
 
   const guidanceScore = clampScore(
     50 +
-    (percentChange > 2 && percentChange <= 15 ? 15 : 0) -
-    (percentChange > 25 ? 20 : 0)
+      (percentChange > 2 && percentChange <= 15 ? 15 : 0) +
+      (positiveEarningsNews ? 25 : 0) -
+      (negativeEarningsNews ? 35 : 0) -
+      (percentChange > 25 ? 20 : 0)
   );
 
   const marginExpansionScore = clampScore(
     50 +
-    (percentChange > 0 && percentChange <= 10 ? 10 : 0) -
-    (rsi > 80 ? 10 : 0)
+      (percentChange > 0 && percentChange <= 10 ? 10 : 0) -
+      (rsi > 80 ? 10 : 0) -
+      (negativeEarningsNews ? 20 : 0)
   );
 
   const epsSurpriseQualityScore = clampScore(
     50 +
-    (volumeRatio >= 1.3 ? 15 : 0) +
-    (percentChange > 0 ? 10 : -10) -
-    (confirmations.fakeBreakout ? 25 : 0)
+      (volumeRatio >= 1.3 ? 15 : 0) +
+      (percentChange > 0 ? 10 : -10) +
+      (positiveEarningsNews ? 20 : 0) -
+      (negativeEarningsNews ? 30 : 0) -
+      (confirmations.fakeBreakout ? 25 : 0)
   );
 
   const institutionalEarningsSentiment = clampScore(
     50 +
-    (volumeRatio >= 1.5 ? 15 : 0) +
-    (confirmations.closeNearHigh ? 10 : 0) +
-    (confirmations.aboveVwap ? 10 : 0) -
-    (confirmations.newsRisk ? 25 : 0)
+      (volumeRatio >= 1.5 ? 15 : 0) +
+      (confirmations.closeNearHigh ? 10 : 0) +
+      (confirmations.aboveVwap ? 10 : 0) +
+      (positiveEarningsNews ? 15 : 0) -
+      (confirmations.newsRisk ? 25 : 0) -
+      (negativeEarningsNews ? 25 : 0)
   );
 
   const earningsCashFlowStrength = clampScore(
     50 +
-    (volume >= 100000 ? 15 : volume >= 25000 ? 8 : -10) -
-    (percentChange > 30 ? 15 : 0)
+      (volume >= 100000 ? 15 : volume >= 25000 ? 8 : -10) -
+      (percentChange > 30 ? 15 : 0) -
+      (negativeEarningsNews ? 15 : 0)
+  );
+
+  const earningsMomentumScore = clampScore(
+    50 +
+      (percentChange > 0 && percentChange <= 12 ? 18 : 0) +
+      (volumeRatio >= 1.5 ? 15 : 0) +
+      (positiveEarningsNews ? 20 : 0) -
+      (percentChange > 25 ? 20 : 0) -
+      (negativeEarningsNews ? 30 : 0)
+  );
+
+  const earningsVolatilityRiskScore = clampScore(
+    20 +
+      (Math.abs(percentChange) >= 12 ? 25 : 0) +
+      (Math.abs(percentChange) >= 25 ? 25 : 0) +
+      (rsi > 78 ? 15 : 0) +
+      (hasEarningsNews ? 15 : 0) +
+      (confirmations.newsRisk ? 20 : 0)
+  );
+
+  const earningsSurpriseScore = clampScore(
+    epsSurpriseQualityScore * 0.6 +
+      institutionalEarningsSentiment * 0.4
   );
 
   const earningsScore = clampScore(
-    revenueQualityScore * 0.18 +
-    guidanceScore * 0.18 +
-    marginExpansionScore * 0.16 +
-    epsSurpriseQualityScore * 0.16 +
-    institutionalEarningsSentiment * 0.17 +
-    earningsCashFlowStrength * 0.15
+    revenueQualityScore * 0.16 +
+      guidanceScore * 0.16 +
+      marginExpansionScore * 0.14 +
+      epsSurpriseQualityScore * 0.14 +
+      institutionalEarningsSentiment * 0.15 +
+      earningsCashFlowStrength * 0.12 +
+      earningsMomentumScore * 0.08 +
+      (100 - earningsVolatilityRiskScore) * 0.05
   );
 
+  const earningsRiskMode =
+    earningsVolatilityRiskScore >= 75
+      ? "HIGH_EARNINGS_RISK"
+      : earningsVolatilityRiskScore >= 55
+      ? "EARNINGS_CAUTION"
+      : hasEarningsNews
+      ? "EARNINGS_ACTIVE"
+      : "NORMAL";
+
+  const earningsAction =
+    earningsRiskMode === "HIGH_EARNINGS_RISK"
+      ? "Avoid New Entry"
+      : earningsRiskMode === "EARNINGS_CAUTION"
+      ? "Reduce Position Size"
+      : earningsScore >= 75
+      ? "Earnings Tailwind"
+      : "Neutral";
+
   return {
+    symbol,
     earningsScore,
     revenueQualityScore,
     guidanceScore,
+    guidanceQualityScore: guidanceScore,
     marginExpansionScore,
     epsSurpriseQualityScore,
     institutionalEarningsSentiment,
     earningsCashFlowStrength,
+    earningsMomentumScore,
+    earningsSurpriseScore,
+    earningsVolatilityRiskScore,
+    hasEarningsNews,
+    positiveEarningsNews,
+    negativeEarningsNews,
+    earningsRiskMode,
+    earningsAction,
+    earningsReason:
+      `${earningsAction} • Earnings ${earningsScore}/100 • ` +
+      `Guidance ${guidanceScore}/100 • ` +
+      `Volatility Risk ${earningsVolatilityRiskScore}/100`,
   };
 }
 
@@ -3690,7 +3843,7 @@ function calculateInstitutionalScores(q) {
     statisticalScore * 0.2 +
     macroScore * 0.1 +
     fundamentalScore * 0.1 +
-    earningsScore * 0.05 +
+    earningsScore * 0.07 +
     moatScore * 0.04 +
     dividendScore * 0.02 +
     portfolioScore * 0.04 +
@@ -3705,7 +3858,9 @@ function calculateInstitutionalScores(q) {
     Number(q.volume || 0) >= 25000 &&
     Number(q.percentChange || 0) <= 20 &&
     confirmations.fakeBreakout !== true &&
-    confirmations.newsRisk !== true;
+    confirmations.newsRisk !== true &&
+    earnings.earningsRiskMode !== "HIGH_EARNINGS_RISK" &&
+    earnings.earningsVolatilityRiskScore <= 75;
   const decisionLevel = autoTradeApproved
     ? "Auto-Trade Approved"
     : institutionalScore >= 60
@@ -3743,6 +3898,11 @@ function calculateInstitutionalScores(q) {
     marginScore: dcf.marginScore,
     debtRiskScore: dcf.debtRiskScore,
     earningsScore,
+    earningsIntelligence: earnings,
+    earningsRiskMode: earnings.earningsRiskMode,
+    earningsAction: earnings.earningsAction,
+    earningsVolatilityRiskScore:
+    earnings.earningsVolatilityRiskScore,
     revenueQualityScore: earnings.revenueQualityScore,
     guidanceScore: earnings.guidanceScore,
     marginExpansionScore: earnings.marginExpansionScore,
@@ -5822,6 +5982,73 @@ engineState.technicalIntelligenceHistory.unshift(
 engineState.technicalIntelligenceHistory =
   engineState.technicalIntelligenceHistory.slice(0, 200);
 
+const earningsSignals =
+  allSignalsForAnalytics.filter(
+    (signal) => Number(signal.earningsScore || 0) >= 70
+  );
+
+const highEarningsRiskSignals =
+  allSignalsForAnalytics.filter(
+    (signal) =>
+      signal.earningsRiskMode === "HIGH_EARNINGS_RISK" ||
+      Number(signal.earningsVolatilityRiskScore || 0) >= 75
+  );
+
+const averageEarningsScore =
+  allSignalsForAnalytics.length > 0
+    ? allSignalsForAnalytics.reduce(
+        (sum, signal) =>
+          sum + Number(signal.earningsScore || 0),
+        0
+      ) / allSignalsForAnalytics.length
+    : 0;
+
+const averageEarningsVolatilityRisk =
+  allSignalsForAnalytics.length > 0
+    ? allSignalsForAnalytics.reduce(
+        (sum, signal) =>
+          sum +
+          Number(signal.earningsVolatilityRiskScore || 0),
+        0
+      ) / allSignalsForAnalytics.length
+    : 0;
+
+engineState.earningsIntelligenceState = {
+  updatedAt: new Date().toISOString(),
+  qualifyingEarningsSignals: earningsSignals.length,
+  highEarningsRiskSignals: highEarningsRiskSignals.length,
+  averageEarningsScore:
+    Number(averageEarningsScore.toFixed(2)),
+  averageEarningsVolatilityRisk:
+    Number(averageEarningsVolatilityRisk.toFixed(2)),
+  strongestEarningsSetups: earningsSignals
+    .slice(0, 5)
+    .map((signal) => ({
+      symbol: signal.symbol,
+      score: signal.score,
+      earningsScore: signal.earningsScore,
+      earningsRiskMode: signal.earningsRiskMode,
+      earningsAction: signal.earningsAction,
+    })),
+  riskiestEarningsSetups: highEarningsRiskSignals
+    .slice(0, 5)
+    .map((signal) => ({
+      symbol: signal.symbol,
+      score: signal.score,
+      earningsScore: signal.earningsScore,
+      earningsRiskMode: signal.earningsRiskMode,
+      earningsVolatilityRiskScore:
+        signal.earningsVolatilityRiskScore,
+    })),
+};
+
+engineState.earningsIntelligenceHistory.unshift(
+  engineState.earningsIntelligenceState
+);
+
+engineState.earningsIntelligenceHistory =
+  engineState.earningsIntelligenceHistory.slice(0, 200);
+
   const portfolioOptimization =
   calculateBlackRockPortfolioOptimizer(
     account,
@@ -6818,6 +7045,27 @@ statisticalEdgeHistory:
       res.status(500).json({ error: err.message });
     }
   });
+
+  app.get("/earnings-intelligence", async (req, res) => {
+  try {
+    res.json({
+      ok: true,
+
+      earningsIntelligenceState:
+        engineState.earningsIntelligenceState || null,
+
+      earningsIntelligenceHistory:
+        (
+          engineState.earningsIntelligenceHistory || []
+        ).slice(0, 100),
+    });
+  } catch (err) {
+    res.status(500).json({
+      ok: false,
+      error: err.message,
+    });
+  }
+});
 
 app.get("/portfolio-optimizer", async (req, res) => {
   try {
