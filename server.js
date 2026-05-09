@@ -183,6 +183,12 @@ capitalCompoundingHistory:
 multiTimeframeHistory:
   (engineState.multiTimeframeHistory || []).slice(0, 200),
 
+  statisticalEdgeState:
+  engineState.statisticalEdgeState || null,
+
+statisticalEdgeHistory:
+  (engineState.statisticalEdgeHistory || []).slice(0, 200),
+
 signalQualityHistory:
   (engineState.signalQualityHistory || []).slice(0, 200),
 marketBreadthHistory:
@@ -449,6 +455,8 @@ drawdownRecoveryState: null,
 adaptiveRiskState: null,
 multiTimeframeState: null,
 multiTimeframeHistory: [],
+statisticalEdgeState: null,
+statisticalEdgeHistory: [],
 signalQualityHistory: [],
 marketBreadthHistory: [],
 marketMomentumHistory: [],
@@ -2409,6 +2417,17 @@ function scoreStock(q) {
     if (macd > 0 && macdSignal > 0) score += 6;
   }
 
+  const statisticalEdge =
+  calculateRenaissanceStatisticalEdgeEngine(q);
+
+q.statisticalEdge = statisticalEdge;
+q.statisticalScore =
+  statisticalEdge.statisticalEdgeScore;
+
+if (statisticalEdge.statisticalEdgeScore >= 85) score += 12;
+else if (statisticalEdge.statisticalEdgeScore >= 70) score += 8;
+else if (statisticalEdge.statisticalEdgeScore < 45) score -= 12;
+
   if (q.confirmations) {
     if (q.confirmations.volumeSpike) score += 12;
     if (q.confirmations.aboveVwap) score += 10;
@@ -2424,6 +2443,65 @@ function scoreStock(q) {
   return Math.min(100, Math.max(0, Math.round(score)));
 
 }
+
+function calculateRenaissanceStatisticalEdgeEngine(q) {
+  const percentChange = Number(q.percentChange || 0);
+  const volume = Number(q.volume || 0);
+  const volumeRatio = Number(
+    q.confirmations?.volumeSpikeRatio ||
+      q.volumeRatio ||
+      0
+  );
+
+  const rsi = Number(q.technicals?.rsi || 50);
+  const macd = Number(q.technicals?.macd || 0);
+  const macdSignal = Number(q.technicals?.macdSignal || 0);
+
+  const trendPersistenceScore = clampScore(
+    50 +
+      (percentChange > 0 && percentChange <= 12 ? 20 : 0) -
+      (percentChange > 25 ? 25 : 0) +
+      (macd > macdSignal ? 15 : -10)
+  );
+
+  const volumeAnomalyScore = clampScore(
+    45 +
+      (volumeRatio >= 1.5 ? 25 : 0) +
+      (volumeRatio >= 2 ? 15 : 0) +
+      (volume >= CONFIG.minVolume ? 10 : -10)
+  );
+
+  const meanReversionRiskScore = clampScore(
+    100 -
+      (rsi > 80 ? 35 : 0) -
+      (percentChange > 35 ? 30 : 0) -
+      (q.confirmations?.fakeBreakout ? 35 : 0)
+  );
+
+  const statisticalEdgeScore = clampScore(
+    trendPersistenceScore * 0.35 +
+      volumeAnomalyScore * 0.3 +
+      meanReversionRiskScore * 0.35
+  );
+
+  const statisticalEdgeLabel =
+    statisticalEdgeScore >= 85
+      ? "High Probability Edge"
+      : statisticalEdgeScore >= 70
+      ? "Positive Statistical Edge"
+      : statisticalEdgeScore >= 55
+      ? "Neutral Edge"
+      : "Weak Statistical Edge";
+
+  return {
+    statisticalEdgeScore,
+    statisticalEdgeLabel,
+    trendPersistenceScore,
+    volumeAnomalyScore,
+    meanReversionRiskScore,
+  };
+}
+
 function clampScore(value) {
   return Math.min(100, Math.max(0, Math.round(Number(value || 0))));
 }
@@ -3691,6 +3769,11 @@ async function scanMarket() {
       }
 
       const score = scoreStock(quote);
+      const statisticalEdge =
+        quote.statisticalEdge || null;
+
+      const statisticalScore =
+        Number(quote.statisticalScore || 0);
       const institutional = calculateInstitutionalScores({
         ...quote,
         score,
@@ -3707,6 +3790,8 @@ async function scanMarket() {
         ...quote,
         score: institutional.institutionalScore,
         legacyMomentumScore: score,
+                statisticalScore,
+        statisticalEdge,
         ...institutional,
         ...portfolioManager,
         qualifiedToBuy: institutional.decisionLevel !== "Visible Stock",
@@ -3718,6 +3803,96 @@ async function scanMarket() {
   });
 
   console.log(`Scan finished. Found ${results.length} stocks.`);
+    const statisticalEdgeSignals =
+    results.filter(
+      (signal) =>
+        Number(signal.statisticalScore || 0) >= 70
+    );
+
+  const averageStatisticalEdge =
+    statisticalEdgeSignals.length > 0
+      ? statisticalEdgeSignals.reduce(
+          (sum, signal) =>
+            sum + Number(signal.statisticalScore || 0),
+          0
+        ) / statisticalEdgeSignals.length
+      : 0;
+
+  engineState.statisticalEdgeState = {
+    updatedAt: new Date().toISOString(),
+    qualifyingSignals:
+      statisticalEdgeSignals.length,
+    averageStatisticalEdge:
+      Number(averageStatisticalEdge.toFixed(2)),
+    strongestSignals:
+      statisticalEdgeSignals
+        .slice(0, 5)
+        .map((signal) => ({
+          symbol: signal.symbol,
+          score: signal.score,
+          statisticalScore:
+            signal.statisticalScore,
+        })),
+  };
+
+  engineState.statisticalEdgeHistory.unshift({
+    updatedAt: new Date().toISOString(),
+    qualifyingSignals:
+      statisticalEdgeSignals.length,
+    averageStatisticalEdge:
+      Number(averageStatisticalEdge.toFixed(2)),
+  });
+
+  engineState.statisticalEdgeHistory =
+    engineState.statisticalEdgeHistory.slice(
+      0,
+      200
+    );
+  const statisticalEdgeSignals =
+  results.filter(
+    (signal) =>
+      Number(signal.statisticalScore || 0) >= 70
+  );
+
+const averageStatisticalEdge =
+  statisticalEdgeSignals.length > 0
+    ? statisticalEdgeSignals.reduce(
+        (sum, signal) =>
+          sum + Number(signal.statisticalScore || 0),
+        0
+      ) / statisticalEdgeSignals.length
+    : 0;
+
+engineState.statisticalEdgeState = {
+  updatedAt: new Date().toISOString(),
+  qualifyingSignals:
+    statisticalEdgeSignals.length,
+  averageStatisticalEdge:
+    Number(averageStatisticalEdge.toFixed(2)),
+  strongestSignals:
+    statisticalEdgeSignals
+      .slice(0, 5)
+      .map((signal) => ({
+        symbol: signal.symbol,
+        score: signal.score,
+        statisticalScore:
+          signal.statisticalScore,
+      })),
+};
+
+engineState.statisticalEdgeHistory.unshift({
+  updatedAt: new Date().toISOString(),
+  qualifyingSignals:
+    statisticalEdgeSignals.length,
+  averageStatisticalEdge:
+    Number(averageStatisticalEdge.toFixed(2)),
+});
+
+engineState.statisticalEdgeHistory =
+  engineState.statisticalEdgeHistory.slice(
+    0,
+    200
+  );
 
   return results
     .sort((a, b) => {
@@ -5604,6 +5779,8 @@ engineFreezeCount: engineState.engineFreezeCount,
 
         dailyLossLocked: engineState.dailyLossLocked,
         profitLocked: engineState.profitLocked,
+                statisticalEdge:
+          engineState.statisticalEdgeState || null,
       },
 
       clock,
@@ -5896,6 +6073,15 @@ institutionalWatchlist:
   engineState.institutionalWatchlist,
   analyticsSnapshots:
   engineState.analyticsSnapshots?.slice(0, 20) || [],
+
+  statisticalEdgeState:
+  engineState.statisticalEdgeState || null,
+
+statisticalEdgeHistory:
+  (engineState.statisticalEdgeHistory || []).slice(
+    0,
+    20
+  ),
   apiHealth: engineState.apiHealth || {},
     recentSignals:
 
@@ -6180,6 +6366,26 @@ institutionalWatchlist:
       saveFailedOrder("MANUAL_CLOSE_FAILED", symbol, err.message);
 
       res.status(500).json({ error: err.message });
+    }
+  });
+
+    app.get("/statistical-edge", async (req, res) => {
+    try {
+      res.json({
+        ok: true,
+        statisticalEdgeState:
+          engineState.statisticalEdgeState || null,
+        statisticalEdgeHistory:
+          (engineState.statisticalEdgeHistory || []).slice(
+            0,
+            100
+          ),
+      });
+    } catch (err) {
+      res.status(500).json({
+        ok: false,
+        error: err.message,
+      });
     }
   });
 
