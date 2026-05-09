@@ -4456,17 +4456,21 @@ engineState.capitalRedistributionState = capitalRedistribution;
 engineState.capitalRedistributionHistory.unshift(capitalRedistribution);
 engineState.capitalRedistributionHistory =
   engineState.capitalRedistributionHistory.slice(0, 200);
- const multiTimeframeAnalysis =
-  calculateMultiTimeframeConfirmationEngine(
-    stockSignals.length > 0 ? stockSignals : cryptoSignals
-  );
-engineState.multiTimeframeState =
-  multiTimeframeAnalysis;
+const multiTimeframeSourceSignals =
+  Array.isArray(stockSignals) && stockSignals.length > 0
+    ? stockSignals
+    : Array.isArray(cryptoSignals) && cryptoSignals.length > 0
+    ? cryptoSignals
+    : Array.isArray(engineState.lastSignals)
+    ? engineState.lastSignals
+    : [];
 
-engineState.multiTimeframeHistory.unshift(
-  multiTimeframeAnalysis
-);
+const multiTimeframeAnalysis =
+  calculateMultiTimeframeConfirmationEngine(multiTimeframeSourceSignals);
 
+engineState.multiTimeframeState = multiTimeframeAnalysis;
+
+engineState.multiTimeframeHistory.unshift(multiTimeframeAnalysis);
 engineState.multiTimeframeHistory =
   engineState.multiTimeframeHistory.slice(0, 200);
 
