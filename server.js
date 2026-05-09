@@ -6121,18 +6121,7 @@ async function rotateWeakCryptoIfBetter(signals, positions) {
   }
 
   const weakestSymbol = normalizeSymbol(weakest.symbol);
-    const swingRotationCheck = canRunSwingSafeRotation(weakest);
 
-  if (!swingRotationCheck.allowed) {
-    saveRecentOrder("CRYPTO_ROTATION_SKIPPED_SWING_SAFE", weakest.symbol, {
-      replacementSymbol: topCandidate.symbol,
-      replacementScore: topCandidate.score,
-      reason: swingRotationCheck.reason,
-      weakestProfitPercent: Number(weakest.unrealized_plpc || 0) * 100,
-    });
-
-    return false;
-  }
   const weakestQty = Number(weakest.qty);
 
   if (!weakestQty || weakestQty <= 0) return false;
