@@ -2111,6 +2111,7 @@ function calculateBlackRockPortfolioOptimizer(
 }
 
 function calculateInstitutionalAiPortfolioOrchestrator(signal = {}) {
+
   const institutionalScore = Number(
     signal.institutionalScore || signal.score || 0
   );
@@ -2188,18 +2189,29 @@ function calculateInstitutionalAiPortfolioOrchestrator(signal = {}) {
     engineState.portfolioOptimizationState?.rebalanceRequired
       ? 15
       : 0;
+  const cryptoAdaptiveOpportunityScore =
+    TRADING_MODE === "live_crypto"
+      ? clampScore(
+          technicalScore * 0.35 +
+            statisticalScore * 0.3 +
+            momentumScore * 0.2 +
+            portfolioScore * 0.15
+        )
+      : 0;
 
-  const institutionalOpportunityScore = clampScore(
-    institutionalScore * 0.18 +
-      technicalScore * 0.16 +
-      statisticalScore * 0.14 +
-      riskScore * 0.13 +
-      earningsScore * 0.1 +
-      moatScore * 0.09 +
-      wealthScore * 0.07 +
-      dcfScore * 0.07 +
-      portfolioScore * 0.06
-  );
+  const institutionalOpportunityScore =
+    TRADING_MODE === "live_crypto"
+      ? cryptoAdaptiveOpportunityScore
+      : clampScore(
+          technicalScore * 0.18 +
+            macroScore * 0.1 +
+            statisticalScore * 0.1 +
+            dcfScore * 0.16 +
+            earningsScore * 0.14 +
+            moatScore * 0.12 +
+            dividendScore * 0.05 +
+            portfolioScore * 0.15
+        );
 
   const institutionalRiskPenalty = clampScore(
     macroPenalty +
