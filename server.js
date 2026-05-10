@@ -242,6 +242,54 @@ institutionalOrchestratorHistory:
 macroRiskState:
   engineState.macroRiskState || null,
 
+autonomousTradingSystemState:
+  engineState.autonomousTradingSystemState || null,
+
+autonomousTradingSystemHistory:
+  (engineState.autonomousTradingSystemHistory || []).slice(0, 200),  
+
+executionIntelligenceState:
+  engineState.executionIntelligenceState || null,
+
+executionIntelligenceHistory:
+  (engineState.executionIntelligenceHistory || []).slice(0, 200),  
+
+reinforcementWeightState:
+  engineState.reinforcementWeightState || null,
+
+reinforcementWeightHistory:
+  (engineState.reinforcementWeightHistory || []).slice(0, 200),  
+
+selfOptimizationState:
+  engineState.selfOptimizationState || null,
+
+selfOptimizationHistory:
+  (engineState.selfOptimizationHistory || []).slice(0, 200),  
+
+marketCycleIntelligenceState:
+  engineState.marketCycleIntelligenceState || null,
+
+marketCycleIntelligenceHistory:
+  (engineState.marketCycleIntelligenceHistory || []).slice(0, 200),  
+
+liquidityIntelligenceState:
+  engineState.liquidityIntelligenceState || null,
+
+liquidityIntelligenceHistory:
+  (engineState.liquidityIntelligenceHistory || []).slice(0, 200),
+
+correlationIntelligenceState:
+  engineState.correlationIntelligenceState || null,
+
+correlationIntelligenceHistory:
+  (engineState.correlationIntelligenceHistory || []).slice(0, 200),  
+
+  portfolioGovernorState:
+  engineState.portfolioGovernorState || null,
+
+portfolioGovernorHistory:
+  (engineState.portfolioGovernorHistory || []).slice(0, 200),
+
 macroRiskHistory:
   (engineState.macroRiskHistory || []).slice(0, 200),
 
@@ -536,6 +584,22 @@ dcfValuationState: null,
 dcfValuationHistory: [],
 institutionalOrchestratorState: null,
 institutionalOrchestratorHistory: [],
+autonomousTradingSystemState: null,
+autonomousTradingSystemHistory: [],
+executionIntelligenceState: null,
+executionIntelligenceHistory: [],
+reinforcementWeightState: null,
+reinforcementWeightHistory: [],
+selfOptimizationState: null,
+selfOptimizationHistory: [],
+marketCycleIntelligenceState: null,
+marketCycleIntelligenceHistory: [],
+liquidityIntelligenceState: null,
+liquidityIntelligenceHistory: [],
+correlationIntelligenceState: null,
+correlationIntelligenceHistory: [],
+portfolioGovernorState: null,
+portfolioGovernorHistory: [],
 macroRiskState: null,
 macroRiskHistory: [],
 signalQualityHistory: [],
@@ -1459,7 +1523,14 @@ const deploymentPriorityScore = clampScore(
   orchestratorScore * 0.7 +
     reinforcedProbability * 0.3
 );
-
+const reinforcementActionBias =
+  reinforcedProbability >= 80
+    ? "HIGH_CONVICTION"
+    : reinforcedProbability >= 65
+    ? "CONFIRMED"
+    : reinforcedProbability <= 40
+    ? "WEAKENING"
+    : "NEUTRAL";
 
 const canRotateWeakCapital = weakCapitalPreview > 0;
 
@@ -1471,17 +1542,28 @@ const canRotateWeakCapital = weakCapitalPreview > 0;
   deploymentPriorityScore:
     Number(deploymentPriorityScore.toFixed(2)),
   reinforcementActionBias,
-  suggestedAction:
+suggestedAction:
     reinforcedProbability >= 80 &&
     hasDirectBudget &&
-    score >= CONFIG.minScoreToBuy
+    score >=
+      Number(
+        engineState.selfOptimizationState?.adaptiveMinScoreToBuy ||
+          CONFIG.minScoreToBuy
+      )
       ? "HIGH_CONVICTION_DEPLOYMENT"
-      : hasDirectBudget &&
-        score >= CONFIG.minScoreToBuy
-      ? "ELIGIBLE_FOR_CAPITAL"
-      : canRotateWeakCapital &&
+: hasDirectBudget &&
         score >=
-          CONFIG.minScoreToBuy +
+          Number(
+            engineState.selfOptimizationState?.adaptiveMinScoreToBuy ||
+              CONFIG.minScoreToBuy
+          )
+      ? "ELIGIBLE_FOR_CAPITAL"
+: canRotateWeakCapital &&
+        score >=
+          Number(
+            engineState.selfOptimizationState?.adaptiveMinScoreToBuy ||
+              CONFIG.minScoreToBuy
+          ) +
             CONFIG.replaceWeakestMinScoreGap
       ? "ROTATION_CANDIDATE"
       : reinforcedProbability <= 40
@@ -1583,6 +1665,1152 @@ const strongestReinforcementSignal =
       `Weak capital: $${weakCapital.toFixed(2)} • ` +
       `Remaining bot budget: $${remainingBotBudget.toFixed(2)} • ` +
       `${cashReserveStatus}`,
+  };
+}
+
+function calculateFullInstitutionalAutonomousTradingSystem(signals = []) {
+  const analyzedSignals = Array.isArray(signals) ? signals : [];
+
+  const governor =
+    engineState.portfolioGovernorState || {};
+  const correlation =
+    engineState.correlationIntelligenceState || {};
+  const liquidity =
+    engineState.liquidityIntelligenceState || {};
+  const marketCycle =
+    engineState.marketCycleIntelligenceState || {};
+  const selfOptimization =
+    engineState.selfOptimizationState || {};
+  const execution =
+    engineState.executionIntelligenceState || {};
+  const reinforcement =
+    engineState.reinforcementWeightState || {};
+  const macro =
+    engineState.macroRiskState || {};
+  const crash =
+    engineState.marketCrashProtectionState || {};
+
+  const agentVotes = {
+    portfolioGovernor:
+      governor.shouldBlockNewTrades
+        ? -1
+        : Number(governor.governorScore || 50) >= 70
+        ? 1
+        : 0,
+
+    correlationRisk:
+      correlation.shouldReduceExposure ? -1 : 1,
+
+    liquidity:
+      liquidity.shouldBlockWeakLiquidity
+        ? -1
+        : Number(liquidity.averageExecutionQuality || 50) >= 65
+        ? 1
+        : 0,
+
+    marketCycle:
+      marketCycle.shouldBlockNewTrades
+        ? -1
+        : Number(marketCycle.cycleThrottleMultiplier || 0) >= 0.75
+        ? 1
+        : 0,
+
+    selfOptimization:
+      Number(selfOptimization.adaptiveRiskMultiplier || 1) >= 0.85
+        ? 1
+        : Number(selfOptimization.adaptiveRiskMultiplier || 1) <= 0.5
+        ? -1
+        : 0,
+
+    execution:
+      Number(execution.averageExecutionConfidence || 50) >= 65
+        ? 1
+        : Number(execution.averageExecutionConfidence || 50) < 45
+        ? -1
+        : 0,
+
+    macro:
+      macro.shouldBlockNewTrades ? -1 : 0,
+
+    crashProtection:
+      crash.shouldBlockNewTrades ? -1 : 0,
+  };
+
+  const yesVotes = Object.values(agentVotes).filter((vote) => vote === 1).length;
+  const noVotes = Object.values(agentVotes).filter((vote) => vote === -1).length;
+  const neutralVotes = Object.values(agentVotes).filter((vote) => vote === 0).length;
+
+  const probabilityScore = clampScore(
+    50 +
+      yesVotes * 8 -
+      noVotes * 14 +
+      Number(governor.governorScore || 50) * 0.1 +
+      Number(liquidity.averageExecutionQuality || 50) * 0.1 +
+      Number(execution.averageExecutionConfidence || 50) * 0.1 -
+      Number(correlation.hiddenExposureRiskScore || 0) * 0.12 -
+      Number(macro.macroStressScore || 0) * 0.12
+  );
+
+  const adversarialValidationPassed =
+    noVotes === 0 ||
+    (noVotes === 1 && probabilityScore >= 80);
+
+  const capitalParliamentDecision =
+    probabilityScore >= 80 && adversarialValidationPassed
+      ? "FULL_AUTONOMOUS_APPROVAL"
+      : probabilityScore >= 68 && adversarialValidationPassed
+      ? "CONTROLLED_AUTONOMOUS_APPROVAL"
+      : probabilityScore >= 55
+      ? "WATCHLIST_ONLY"
+      : "AUTONOMOUS_REJECTION";
+
+  const autonomousCapitalMultiplier =
+    capitalParliamentDecision === "FULL_AUTONOMOUS_APPROVAL"
+      ? 1
+      : capitalParliamentDecision === "CONTROLLED_AUTONOMOUS_APPROVAL"
+      ? 0.65
+      : capitalParliamentDecision === "WATCHLIST_ONLY"
+      ? 0.25
+      : 0;
+
+  const shouldBlockNewTrades =
+    capitalParliamentDecision === "AUTONOMOUS_REJECTION" ||
+    !adversarialValidationPassed ||
+    macro.shouldBlockNewTrades ||
+    crash.shouldBlockNewTrades;
+
+  const strongestSignals = analyzedSignals
+    .filter((signal) => signal.qualifiedToBuy !== false)
+    .sort((a, b) => Number(b.score || 0) - Number(a.score || 0))
+    .slice(0, 10)
+    .map((signal) => ({
+      symbol: signal.symbol,
+      score: signal.score,
+      institutionalScore: signal.institutionalScore,
+      finalDecisionScore:
+        signal.institutionalOrchestrator?.finalInstitutionalDecisionScore ||
+        signal.score,
+    }));
+
+  return {
+    updatedAt: new Date().toISOString(),
+    capitalParliamentDecision,
+    probabilityScore: Number(probabilityScore.toFixed(2)),
+    autonomousCapitalMultiplier,
+    adversarialValidationPassed,
+    shouldBlockNewTrades,
+    yesVotes,
+    noVotes,
+    neutralVotes,
+    agentVotes,
+    strongestSignals,
+    reinforcementLearningMode:
+      reinforcement.learningMode || "UNKNOWN",
+    finalSystemReason:
+      `${capitalParliamentDecision} • Probability ${probabilityScore.toFixed(0)}/100 • ` +
+      `Votes ${yesVotes} yes / ${noVotes} no`,
+  };
+}
+
+function calculateInstitutionalExecutionIntelligence(
+  signals = [],
+  openPositions = []
+) {
+  const analyzedSignals = Array.isArray(signals) ? signals : [];
+  const positions = Array.isArray(openPositions) ? openPositions : [];
+
+  const liquidityQuality =
+    Number(engineState.liquidityIntelligenceState?.averageExecutionQuality || 50);
+
+  const governorThrottle =
+    Number(engineState.portfolioGovernorState?.capitalThrottleMultiplier || 1);
+
+  const cycleThrottle =
+    Number(engineState.marketCycleIntelligenceState?.cycleThrottleMultiplier || 1);
+
+  const correlationRisk =
+    Number(engineState.correlationIntelligenceState?.hiddenExposureRiskScore || 0);
+
+  const executionReviews = analyzedSignals.slice(0, 25).map((signal) => {
+    const symbol = normalizeSymbol(signal.symbol);
+    const score = Number(signal.score || 0);
+    const price = Number(signal.current || signal.price || 0);
+    const volume = Number(signal.volume || 0);
+    const spreadPercent = Number(
+      signal.spreadPercent ||
+        signal.liquidityReview?.spreadPercent ||
+        0
+    );
+
+    const existingPosition = positions.find(
+      (position) => normalizeSymbol(position.symbol) === symbol
+    );
+
+    const hasPosition = Boolean(existingPosition);
+
+    const executionConfidence = clampScore(
+      score * 0.35 +
+        liquidityQuality * 0.25 +
+        Number(signal.technicalScore || 0) * 0.15 +
+        Number(signal.statisticalScore || 0) * 0.15 +
+        governorThrottle * 10 +
+        cycleThrottle * 10 -
+        correlationRisk * 0.2 -
+        spreadPercent * 15
+    );
+
+    const entryStyle =
+      executionConfidence >= 85
+        ? "STEALTH_SCALE_IN"
+        : executionConfidence >= 70
+        ? "STAGGERED_ENTRY"
+        : executionConfidence >= 55
+        ? "SMALL_PROBE_ENTRY"
+        : "NO_EXECUTION";
+
+    const icebergSlices =
+      entryStyle === "STEALTH_SCALE_IN"
+        ? 4
+        : entryStyle === "STAGGERED_ENTRY"
+        ? 3
+        : entryStyle === "SMALL_PROBE_ENTRY"
+        ? 2
+        : 0;
+
+    const firstSlicePercent =
+      icebergSlices >= 4
+        ? 35
+        : icebergSlices === 3
+        ? 45
+        : icebergSlices === 2
+        ? 50
+        : 0;
+
+    const partialExitPlan =
+      hasPosition &&
+      Number(existingPosition.unrealized_plpc || 0) * 100 >= 4
+        ? "TRIM_25_PERCENT_PROTECT_PROFIT"
+        : hasPosition &&
+          Number(existingPosition.unrealized_plpc || 0) * 100 <= -2
+        ? "REDUCE_50_PERCENT_WEAK_POSITION"
+        : "HOLD_FULL_POSITION";
+
+    return {
+      symbol,
+      score,
+      price,
+      volume,
+      spreadPercent,
+      hasPosition,
+      executionConfidence: Number(executionConfidence.toFixed(2)),
+      entryStyle,
+      icebergSlices,
+      firstSlicePercent,
+      partialExitPlan,
+      executionReason:
+        `${entryStyle} • Confidence ${executionConfidence.toFixed(0)}/100`,
+    };
+  });
+
+  const executableSignals = executionReviews.filter(
+    (review) => review.entryStyle !== "NO_EXECUTION"
+  );
+
+  const averageExecutionConfidence =
+    executionReviews.length > 0
+      ? executionReviews.reduce(
+          (sum, review) => sum + Number(review.executionConfidence || 0),
+          0
+        ) / executionReviews.length
+      : 0;
+
+  const executionMode =
+    averageExecutionConfidence >= 80
+      ? "INSTITUTIONAL_STEALTH_EXECUTION"
+      : averageExecutionConfidence >= 65
+      ? "CONTROLLED_STAGGERED_EXECUTION"
+      : averageExecutionConfidence >= 50
+      ? "PROBE_ONLY_EXECUTION"
+      : "EXECUTION_DEFENSE";
+
+  return {
+    updatedAt: new Date().toISOString(),
+    executionMode,
+    averageExecutionConfidence:
+      Number(averageExecutionConfidence.toFixed(2)),
+    executableSignalCount: executableSignals.length,
+    liquidityQuality,
+    governorThrottle,
+    cycleThrottle,
+    correlationRisk,
+    executionReviews,
+    topExecutableSignals: executableSignals.slice(0, 10),
+    executionReason:
+      `${executionMode} • Avg confidence ${averageExecutionConfidence.toFixed(0)}/100`,
+  };
+}
+
+function calculateReinforcementLearningWeightEngine(signals = []) {
+  const analyzedSignals = Array.isArray(signals) ? signals : [];
+  const recentTrades = (engineState.tradeJournalHistory || []).slice(0, 50);
+
+  const baseWeights = {
+    momentum: 0.18,
+    technicals: 0.25,
+    fundamentals: 0.12,
+    macro: 0.1,
+    statisticalEdge: 0.2,
+    riskQuality: 0.15,
+  };
+
+  const setupPerformance = {};
+
+  for (const trade of recentTrades) {
+    const setup =
+      trade.strategy ||
+      trade.exitReason ||
+      "GENERAL_SETUP";
+
+    if (!setupPerformance[setup]) {
+      setupPerformance[setup] = {
+        trades: 0,
+        wins: 0,
+        totalProfit: 0,
+      };
+    }
+
+    setupPerformance[setup].trades += 1;
+    setupPerformance[setup].totalProfit += Number(trade.profitPercent || 0);
+
+    if (Number(trade.profitPercent || 0) > 0) {
+      setupPerformance[setup].wins += 1;
+    }
+  }
+
+  const totalClosedTrades =
+    Number(engineState.tradeJournalState?.totalClosedTrades || 0);
+
+  const recentWinRate =
+    recentTrades.length > 0
+      ? (recentTrades.filter((trade) => Number(trade.profitPercent || 0) > 0).length /
+          recentTrades.length) *
+        100
+      : Number(engineState.tradeJournalState?.winRate || 0);
+
+  const recentAverageProfit =
+    recentTrades.length > 0
+      ? recentTrades.reduce(
+          (sum, trade) => sum + Number(trade.profitPercent || 0),
+          0
+        ) / recentTrades.length
+      : Number(engineState.tradeJournalState?.averageProfitPercent || 0);
+
+  const marketCycle =
+    engineState.marketCycleIntelligenceState?.marketCyclePhase ||
+    "NEUTRAL_CYCLE";
+
+  const macroStress =
+    Number(engineState.macroRiskState?.macroStressScore || 0);
+
+  const liquidityQuality =
+    Number(engineState.liquidityIntelligenceState?.averageExecutionQuality || 50);
+
+  const correlationRisk =
+    Number(engineState.correlationIntelligenceState?.hiddenExposureRiskScore || 0);
+
+  let weights = { ...baseWeights };
+
+  if (totalClosedTrades >= 10 && recentWinRate >= 60 && recentAverageProfit > 0) {
+    weights.momentum += 0.03;
+    weights.technicals += 0.03;
+    weights.statisticalEdge += 0.02;
+    weights.riskQuality -= 0.03;
+    weights.macro -= 0.02;
+  }
+
+  if (totalClosedTrades >= 10 && recentWinRate < 45) {
+    weights.riskQuality += 0.06;
+    weights.macro += 0.03;
+    weights.momentum -= 0.03;
+    weights.technicals -= 0.02;
+  }
+
+  if (
+    marketCycle === "PANIC" ||
+    marketCycle === "DISTRIBUTION" ||
+    macroStress >= 65 ||
+    correlationRisk >= 70 ||
+    liquidityQuality < 50
+  ) {
+    weights.riskQuality += 0.08;
+    weights.macro += 0.05;
+    weights.momentum -= 0.04;
+    weights.fundamentals += 0.02;
+  }
+
+  if (marketCycle === "ACCUMULATION") {
+    weights.momentum += 0.03;
+    weights.technicals += 0.03;
+    weights.statisticalEdge += 0.02;
+  }
+
+  const totalWeight = Object.values(weights).reduce(
+    (sum, value) => sum + Number(value || 0),
+    0
+  );
+
+  const normalizedWeights = Object.fromEntries(
+    Object.entries(weights).map(([key, value]) => [
+      key,
+      Number((Number(value || 0) / totalWeight).toFixed(4)),
+    ])
+  );
+
+  const learningMode =
+    totalClosedTrades < 10
+      ? "BASELINE_LEARNING"
+      : recentWinRate >= 60 && recentAverageProfit > 0
+      ? "REINFORCE_WINNING_FACTORS"
+      : recentWinRate < 45
+      ? "DEFENSIVE_REWEIGHTING"
+      : "BALANCED_REWEIGHTING";
+
+  return {
+    updatedAt: new Date().toISOString(),
+    learningMode,
+    weights: normalizedWeights,
+    baseWeights,
+    totalClosedTrades,
+    recentTradesAnalyzed: recentTrades.length,
+    recentWinRate: Number(recentWinRate.toFixed(2)),
+    recentAverageProfit: Number(recentAverageProfit.toFixed(2)),
+    marketCycle,
+    macroStress,
+    liquidityQuality,
+    correlationRisk,
+    setupPerformance,
+    weightReason:
+      `${learningMode} • Momentum ${normalizedWeights.momentum} • ` +
+      `Technicals ${normalizedWeights.technicals} • Risk ${normalizedWeights.riskQuality}`,
+  };
+}
+
+function calculateAiSelfOptimizationLayer(signals = []) {
+  const analyzedSignals = Array.isArray(signals) ? signals : [];
+
+  const journal = engineState.tradeJournalState || {};
+  const totalClosedTrades = Number(journal.totalClosedTrades || 0);
+  const winRate = Number(journal.winRate || 0);
+  const averageProfitPercent = Number(journal.averageProfitPercent || 0);
+
+  const recentTrades =
+    (engineState.tradeJournalHistory || []).slice(0, 30);
+
+  const recentWinRate =
+    recentTrades.length > 0
+      ? (recentTrades.filter((trade) => Number(trade.profitPercent || 0) > 0).length /
+          recentTrades.length) *
+        100
+      : winRate;
+
+  const recentAverageProfit =
+    recentTrades.length > 0
+      ? recentTrades.reduce(
+          (sum, trade) => sum + Number(trade.profitPercent || 0),
+          0
+        ) / recentTrades.length
+      : averageProfitPercent;
+
+  const marketCycle =
+    engineState.marketCycleIntelligenceState?.marketCyclePhase ||
+    "UNKNOWN";
+
+  const liquidityQuality =
+    Number(
+      engineState.liquidityIntelligenceState?.averageExecutionQuality || 50
+    );
+
+  const correlationRisk =
+    Number(
+      engineState.correlationIntelligenceState?.hiddenExposureRiskScore || 0
+    );
+
+  const governorScore =
+    Number(engineState.portfolioGovernorState?.governorScore || 50);
+
+  const recentSignalAverage =
+    analyzedSignals.length > 0
+      ? analyzedSignals.reduce(
+          (sum, signal) => sum + Number(signal.score || 0),
+          0
+        ) / analyzedSignals.length
+      : 50;
+
+  let adaptiveMinScoreToBuy = CONFIG.minScoreToBuy;
+  let adaptiveRiskMultiplier = 1;
+  let adaptiveTrailingStopPercent = CONFIG.trailingStopPercent;
+  let adaptiveRunnerTrailingStopPercent = CONFIG.runnerTrailingStopPercent;
+
+  if (totalClosedTrades >= 10 && recentWinRate < 45) {
+    adaptiveMinScoreToBuy += 5;
+    adaptiveRiskMultiplier *= 0.75;
+  }
+
+  if (totalClosedTrades >= 10 && recentAverageProfit < 0) {
+    adaptiveMinScoreToBuy += 3;
+    adaptiveRiskMultiplier *= 0.8;
+  }
+
+  if (recentWinRate >= 60 && recentAverageProfit > 0.5 && governorScore >= 70) {
+    adaptiveMinScoreToBuy -= 2;
+    adaptiveRiskMultiplier *= 1.1;
+  }
+
+  if (
+    marketCycle === "PANIC" ||
+    marketCycle === "DISTRIBUTION" ||
+    marketCycle === "EUPHORIA_EXHAUSTION"
+  ) {
+    adaptiveMinScoreToBuy += 5;
+    adaptiveRiskMultiplier *= 0.6;
+    adaptiveTrailingStopPercent = Math.max(1, adaptiveTrailingStopPercent - 0.5);
+  }
+
+  if (liquidityQuality < 50) {
+    adaptiveMinScoreToBuy += 4;
+    adaptiveRiskMultiplier *= 0.7;
+  }
+
+  if (correlationRisk >= 70) {
+    adaptiveMinScoreToBuy += 4;
+    adaptiveRiskMultiplier *= 0.7;
+  }
+
+  if (recentSignalAverage >= 85 && governorScore >= 80 && liquidityQuality >= 70) {
+    adaptiveRiskMultiplier *= 1.05;
+  }
+
+  adaptiveMinScoreToBuy = Math.min(
+    95,
+    Math.max(60, Math.round(adaptiveMinScoreToBuy))
+  );
+
+  adaptiveRiskMultiplier = Number(
+    Math.min(1.25, Math.max(0.25, adaptiveRiskMultiplier)).toFixed(2)
+  );
+
+  adaptiveTrailingStopPercent = Number(
+    Math.min(5, Math.max(0.75, adaptiveTrailingStopPercent)).toFixed(2)
+  );
+
+  adaptiveRunnerTrailingStopPercent = Number(
+    Math.min(6, Math.max(1, adaptiveRunnerTrailingStopPercent)).toFixed(2)
+  );
+
+  const qualificationMode =
+    adaptiveRiskMultiplier <= 0.5
+      ? "STRICT_DEFENSE"
+      : adaptiveRiskMultiplier < 0.85
+      ? "SELECTIVE_QUALITY"
+      : adaptiveRiskMultiplier > 1
+      ? "CONTROLLED_OFFENSE"
+      : "BALANCED";
+
+  return {
+    updatedAt: new Date().toISOString(),
+    qualificationMode,
+    adaptiveMinScoreToBuy,
+    baseMinScoreToBuy: CONFIG.minScoreToBuy,
+    adaptiveRiskMultiplier,
+    adaptiveTrailingStopPercent,
+    adaptiveRunnerTrailingStopPercent,
+    totalClosedTrades,
+    winRate,
+    recentWinRate: Number(recentWinRate.toFixed(2)),
+    averageProfitPercent,
+    recentAverageProfit: Number(recentAverageProfit.toFixed(2)),
+    marketCycle,
+    liquidityQuality,
+    correlationRisk,
+    governorScore,
+    recentSignalAverage: Number(recentSignalAverage.toFixed(2)),
+    optimizationReason:
+      `${qualificationMode} • Min score ${adaptiveMinScoreToBuy} • ` +
+      `Risk x${adaptiveRiskMultiplier}`,
+  };
+}
+
+function calculateAdaptiveMarketCycleIntelligence(signals = []) {
+  const analyzedSignals = Array.isArray(signals) ? signals : [];
+
+  const totalSignals = analyzedSignals.length;
+
+  const averageScore =
+    totalSignals > 0
+      ? analyzedSignals.reduce(
+          (sum, signal) => sum + Number(signal.score || 0),
+          0
+        ) / totalSignals
+      : 0;
+
+  const averagePercentChange =
+    totalSignals > 0
+      ? analyzedSignals.reduce(
+          (sum, signal) => sum + Number(signal.percentChange || 0),
+          0
+        ) / totalSignals
+      : 0;
+
+  const averageVolumeRatio =
+    totalSignals > 0
+      ? analyzedSignals.reduce(
+          (sum, signal) =>
+            sum +
+            Number(
+              signal.confirmations?.volumeSpikeRatio ||
+                signal.volumeRatio ||
+                0
+            ),
+          0
+        ) / totalSignals
+      : 0;
+
+  const strongBreakouts = analyzedSignals.filter(
+    (signal) =>
+      Number(signal.score || 0) >= 75 &&
+      Number(signal.percentChange || 0) > 0 &&
+      signal.confirmations?.fakeBreakout !== true
+  ).length;
+
+  const fakeBreakouts = analyzedSignals.filter(
+    (signal) => signal.confirmations?.fakeBreakout
+  ).length;
+
+  const exhaustedSignals = analyzedSignals.filter(
+    (signal) =>
+      Number(signal.percentChange || 0) >= 25 ||
+      Number(signal.technicalIntelligence?.exhaustionRiskScore || 0) >= 70
+  ).length;
+
+  const compressedSignals = analyzedSignals.filter(
+    (signal) =>
+      Math.abs(Number(signal.percentChange || 0)) <= 2 &&
+      Number(
+        signal.confirmations?.volumeSpikeRatio ||
+          signal.volumeRatio ||
+          0
+      ) >= 1
+  ).length;
+
+  const accumulationScore = clampScore(
+    averageScore * 0.35 +
+      averageVolumeRatio * 18 +
+      strongBreakouts * 4 -
+      fakeBreakouts * 8
+  );
+
+  const distributionScore = clampScore(
+    fakeBreakouts * 12 +
+      Math.max(0, -averagePercentChange) * 6 +
+      exhaustedSignals * 5
+  );
+
+  const panicScore = clampScore(
+    Math.max(0, -averagePercentChange) * 8 +
+      Number(engineState.marketStressLevel || 0) +
+      Number(engineState.macroRiskState?.macroStressScore || 0) * 0.35
+  );
+
+  const euphoriaScore = clampScore(
+    Math.max(0, averagePercentChange) * 5 +
+      exhaustedSignals * 6 +
+      (averageScore >= 85 ? 20 : 0)
+  );
+
+  const volatilityCompressionScore = clampScore(
+    compressedSignals * 8 +
+      (Number(engineState.marketVolatility || 0) <= 25 ? 20 : 0)
+  );
+
+  const exhaustionRiskScore = clampScore(
+    exhaustedSignals * 10 +
+      fakeBreakouts * 8 +
+      euphoriaScore * 0.4
+  );
+
+  const marketCyclePhase =
+    panicScore >= 75
+      ? "PANIC"
+      : distributionScore >= 70
+      ? "DISTRIBUTION"
+      : euphoriaScore >= 75 || exhaustionRiskScore >= 75
+      ? "EUPHORIA_EXHAUSTION"
+      : accumulationScore >= 70
+      ? "ACCUMULATION"
+      : volatilityCompressionScore >= 65
+      ? "VOLATILITY_COMPRESSION"
+      : "NEUTRAL_CYCLE";
+
+  const cycleThrottleMultiplier =
+    marketCyclePhase === "PANIC"
+      ? 0
+      : marketCyclePhase === "DISTRIBUTION"
+      ? 0.25
+      : marketCyclePhase === "EUPHORIA_EXHAUSTION"
+      ? 0.35
+      : marketCyclePhase === "VOLATILITY_COMPRESSION"
+      ? 0.75
+      : marketCyclePhase === "ACCUMULATION"
+      ? 1
+      : 0.65;
+
+  const shouldBlockNewTrades =
+    marketCyclePhase === "PANIC" ||
+    exhaustionRiskScore >= 85;
+
+  return {
+    updatedAt: new Date().toISOString(),
+    marketCyclePhase,
+    cycleThrottleMultiplier,
+    shouldBlockNewTrades,
+    totalSignals,
+    averageScore: Number(averageScore.toFixed(2)),
+    averagePercentChange: Number(averagePercentChange.toFixed(2)),
+    averageVolumeRatio: Number(averageVolumeRatio.toFixed(2)),
+    accumulationScore: Number(accumulationScore.toFixed(2)),
+    distributionScore: Number(distributionScore.toFixed(2)),
+    panicScore: Number(panicScore.toFixed(2)),
+    euphoriaScore: Number(euphoriaScore.toFixed(2)),
+    exhaustionRiskScore: Number(exhaustionRiskScore.toFixed(2)),
+    volatilityCompressionScore: Number(volatilityCompressionScore.toFixed(2)),
+    strongBreakouts,
+    fakeBreakouts,
+    exhaustedSignals,
+    compressedSignals,
+    cycleReason:
+      `${marketCyclePhase} • Cycle throttle x${cycleThrottleMultiplier}`,
+  };
+}
+
+function calculateLiquidityIntelligenceEngine(signals = []) {
+  const analyzedSignals = Array.isArray(signals) ? signals : [];
+
+  const liquidityReviews = analyzedSignals.map((signal) => {
+    const symbol = normalizeSymbol(signal.symbol);
+    const price = Number(signal.current || signal.price || 0);
+    const volume = Number(signal.volume || 0);
+    const bid = Number(signal.bid || 0);
+    const ask = Number(signal.ask || 0);
+
+    const spreadPercent =
+      bid > 0 && ask > 0
+        ? ((ask - bid) / ask) * 100
+        : Number(signal.spreadPercent || 0);
+
+    const dollarVolume = price * volume;
+
+    const liquidityDepthScore = clampScore(
+      20 +
+        (volume >= 1000000 ? 35 : volume >= 250000 ? 25 : volume >= 50000 ? 15 : 0) +
+        (dollarVolume >= 5000000 ? 25 : dollarVolume >= 1000000 ? 15 : dollarVolume >= 250000 ? 8 : 0) +
+        (spreadPercent <= 0.15 ? 20 : spreadPercent <= 0.35 ? 10 : spreadPercent <= 0.65 ? 0 : -20)
+    );
+
+    const estimatedSlippagePercent = Number(
+      (
+        Math.max(0.05, spreadPercent * 0.6) +
+        (volume < 50000 ? 0.35 : volume < 250000 ? 0.18 : 0.05)
+      ).toFixed(3)
+    );
+
+    const executionQualityScore = clampScore(
+      liquidityDepthScore -
+        estimatedSlippagePercent * 20 -
+        (spreadPercent > 0.65 ? 20 : 0)
+    );
+
+    const liquidityAction =
+      executionQualityScore >= 80
+        ? "CLEAN_EXECUTION"
+        : executionQualityScore >= 65
+        ? "ACCEPTABLE_EXECUTION"
+        : executionQualityScore >= 50
+        ? "SMALL_SIZE_ONLY"
+        : "AVOID_EXECUTION";
+
+    return {
+      symbol,
+      price,
+      volume,
+      dollarVolume: Number(dollarVolume.toFixed(2)),
+      spreadPercent: Number(spreadPercent.toFixed(3)),
+      liquidityDepthScore: Number(liquidityDepthScore.toFixed(2)),
+      estimatedSlippagePercent,
+      executionQualityScore: Number(executionQualityScore.toFixed(2)),
+      liquidityAction,
+    };
+  });
+
+  const weakLiquiditySignals = liquidityReviews.filter(
+    (item) => item.liquidityAction === "AVOID_EXECUTION"
+  );
+
+  const averageExecutionQuality =
+    liquidityReviews.length > 0
+      ? liquidityReviews.reduce(
+          (sum, item) => sum + Number(item.executionQualityScore || 0),
+          0
+        ) / liquidityReviews.length
+      : 0;
+
+  const spreadPersistenceRisk =
+    liquidityReviews.filter((item) => item.spreadPercent > 0.65).length;
+
+  const shouldBlockWeakLiquidity =
+    averageExecutionQuality < 45 || spreadPersistenceRisk >= 3;
+
+  return {
+    updatedAt: new Date().toISOString(),
+    averageExecutionQuality: Number(averageExecutionQuality.toFixed(2)),
+    weakLiquidityCount: weakLiquiditySignals.length,
+    spreadPersistenceRisk,
+    shouldBlockWeakLiquidity,
+    weakestLiquiditySignals: weakLiquiditySignals.slice(0, 10),
+    liquidityReviews: liquidityReviews.slice(0, 25),
+    liquidityReason:
+      `Execution quality ${averageExecutionQuality.toFixed(0)}/100 • ` +
+      `Weak liquidity ${weakLiquiditySignals.length}`,
+  };
+}
+
+function calculateCorrelationIntelligenceEngine(
+  openPositions = [],
+  signals = []
+) {
+  const positions = Array.isArray(openPositions)
+    ? openPositions
+    : [];
+
+  const analyzedSignals = Array.isArray(signals)
+    ? signals
+    : [];
+
+  const sectorBuckets = {};
+  const cryptoPositions = [];
+  const overlapWarnings = [];
+
+  for (const position of positions) {
+    const symbol = normalizeSymbol(position.symbol);
+
+    const sectorInfo = estimateSectorIntelligence({
+      symbol,
+      current:
+        Number(position.current_price || 0),
+      price:
+        Number(position.current_price || 0),
+      volume: 0,
+      percentChange:
+        Number(position.unrealized_plpc || 0) * 100,
+      confirmations: {},
+    });
+
+    const sector =
+      sectorInfo.estimatedSector ||
+      "General Market";
+
+    if (!sectorBuckets[sector]) {
+      sectorBuckets[sector] = [];
+    }
+
+    sectorBuckets[sector].push({
+      symbol,
+      marketValue: Math.abs(
+        Number(position.market_value || 0)
+      ),
+      unrealizedPercent:
+        Number(position.unrealized_plpc || 0) * 100,
+    });
+
+    const isCrypto =
+      String(position.asset_class || "")
+        .toLowerCase()
+        .includes("crypto") ||
+      symbol.includes("/");
+
+    if (isCrypto) {
+      cryptoPositions.push(symbol);
+    }
+  }
+
+  const sectorClusters = Object.entries(
+    sectorBuckets
+  ).map(([sector, positions]) => {
+    const totalExposure =
+      positions.reduce(
+        (sum, p) => sum + p.marketValue,
+        0
+      );
+
+    const averagePerformance =
+      positions.length > 0
+        ? positions.reduce(
+            (sum, p) =>
+              sum + p.unrealizedPercent,
+            0
+          ) / positions.length
+        : 0;
+
+    const contagionRiskScore = clampScore(
+      positions.length * 18 +
+        Math.max(
+          0,
+          -averagePerformance * 4
+        )
+    );
+
+    const clusterRisk =
+      contagionRiskScore >= 80
+        ? "SEVERE_CLUSTER_RISK"
+        : contagionRiskScore >= 60
+        ? "HIGH_CLUSTER_RISK"
+        : contagionRiskScore >= 40
+        ? "MODERATE_CLUSTER_RISK"
+        : "LOW_CLUSTER_RISK";
+
+    return {
+      sector,
+      positions,
+      positionCount: positions.length,
+      totalExposure:
+        Number(totalExposure.toFixed(2)),
+      averagePerformance:
+        Number(
+          averagePerformance.toFixed(2)
+        ),
+      contagionRiskScore:
+        Number(
+          contagionRiskScore.toFixed(2)
+        ),
+      clusterRisk,
+    };
+  });
+
+  const concentratedClusters =
+    sectorClusters.filter(
+      (cluster) =>
+        cluster.positionCount >= 2 ||
+        cluster.contagionRiskScore >= 60
+    );
+
+  for (const cluster of concentratedClusters) {
+    overlapWarnings.push({
+      type: "SECTOR_OVERLAP",
+      sector: cluster.sector,
+      risk: cluster.clusterRisk,
+      positions:
+        cluster.positions.map(
+          (p) => p.symbol
+        ),
+    });
+  }
+
+  const cryptoCorrelationRisk =
+    cryptoPositions.length >= 3
+      ? "HIGH_CRYPTO_CORRELATION"
+      : cryptoPositions.length >= 2
+      ? "MODERATE_CRYPTO_CORRELATION"
+      : "LOW_CRYPTO_CORRELATION";
+
+  const averageClusterRisk =
+    sectorClusters.length > 0
+      ? sectorClusters.reduce(
+          (sum, cluster) =>
+            sum +
+            Number(
+              cluster.contagionRiskScore || 0
+            ),
+          0
+        ) / sectorClusters.length
+      : 0;
+
+  const hiddenExposureRiskScore =
+    clampScore(
+      averageClusterRisk +
+        concentratedClusters.length * 10 +
+        cryptoPositions.length * 8
+    );
+
+  const drawdownContagionRisk =
+    hiddenExposureRiskScore >= 80
+      ? "EXTREME_CONTAGION_RISK"
+      : hiddenExposureRiskScore >= 60
+      ? "HIGH_CONTAGION_RISK"
+      : hiddenExposureRiskScore >= 40
+      ? "MODERATE_CONTAGION_RISK"
+      : "LOW_CONTAGION_RISK";
+
+  const shouldReduceExposure =
+    hiddenExposureRiskScore >= 70;
+
+  return {
+    updatedAt: new Date().toISOString(),
+    hiddenExposureRiskScore:
+      Number(
+        hiddenExposureRiskScore.toFixed(2)
+      ),
+    drawdownContagionRisk,
+    cryptoCorrelationRisk,
+    shouldReduceExposure,
+    totalClusters: sectorClusters.length,
+    concentratedClusters:
+      concentratedClusters.length,
+    cryptoPositions,
+    overlapWarnings,
+    sectorClusters:
+      sectorClusters.slice(0, 10),
+    correlationReason:
+      `${drawdownContagionRisk} • ` +
+      `Hidden exposure ${hiddenExposureRiskScore.toFixed(0)}/100`,
+  };
+}
+
+function calculateAutonomousPortfolioGovernor(
+  account = {},
+  openBotPositions = [],
+  signals = [],
+  portfolioOptimization = {},
+  macroRisk = {},
+  crashProtection = {}
+) {
+  const equity = Number(account?.equity || 0);
+  const cash = Number(account?.cash || 0);
+  const positions = Array.isArray(openBotPositions) ? openBotPositions : [];
+  const candidates = Array.isArray(signals) ? signals : [];
+
+  const currentExposure = getBotExposure(positions);
+  const maxBudget = equity * (CONFIG.maxBotExposurePercent / 100);
+  const exposurePercent =
+    equity > 0 ? (currentExposure / equity) * 100 : 0;
+
+  const sectorExposureMap = {};
+
+  for (const position of positions) {
+    const symbol = normalizeSymbol(position.symbol);
+    const marketValue = Math.abs(Number(position.market_value || 0));
+
+    const sector =
+      estimateSectorIntelligence({
+        symbol,
+        current: Number(position.current_price || position.avg_entry_price || 0),
+        price: Number(position.current_price || position.avg_entry_price || 0),
+        volume: 0,
+        percentChange: Number(position.unrealized_plpc || 0) * 100,
+        confirmations: {},
+      }).estimatedSector || "General Market";
+
+    sectorExposureMap[sector] =
+      Number(sectorExposureMap[sector] || 0) + marketValue;
+  }
+
+  const sectorExposure = Object.entries(sectorExposureMap)
+    .map(([sector, value]) => ({
+      sector,
+      exposure: Number(value.toFixed(2)),
+      exposurePercent:
+        equity > 0 ? Number(((value / equity) * 100).toFixed(2)) : 0,
+    }))
+    .sort((a, b) => b.exposure - a.exposure);
+
+  const topSector = sectorExposure[0] || null;
+
+  const sectorSaturationRisk =
+    topSector && topSector.exposurePercent >= CONFIG.maxBotExposurePercent * 0.6;
+
+  const averageCandidateScore =
+    candidates.length > 0
+      ? candidates.reduce((sum, signal) => sum + Number(signal.score || 0), 0) /
+        candidates.length
+      : 0;
+
+  const volatilityBudgetScore = clampScore(
+    100 -
+      Number(engineState.marketVolatility || 0) -
+      Number(macroRisk?.macroStressScore || 0) * 0.4 -
+      Number(crashProtection?.crashRiskScore || 0) * 0.4
+  );
+
+  const portfolioEfficiencyScore = Number(
+    portfolioOptimization?.portfolioEfficiencyScore ||
+      portfolioOptimization?.optimizationScore ||
+      50
+  );
+
+  const governorScore = clampScore(
+    portfolioEfficiencyScore * 0.3 +
+      volatilityBudgetScore * 0.25 +
+      averageCandidateScore * 0.2 +
+      (100 - exposurePercent * 10) * 0.15 +
+      (sectorSaturationRisk ? 35 : 75) * 0.1
+  );
+
+  const capitalThrottleMultiplier =
+    macroRisk?.shouldBlockNewTrades || crashProtection?.shouldBlockNewTrades
+      ? 0
+      : governorScore >= 85
+      ? 1
+      : governorScore >= 70
+      ? 0.75
+      : governorScore >= 55
+      ? 0.5
+      : governorScore >= 40
+      ? 0.25
+      : 0;
+
+  const governorMode =
+    capitalThrottleMultiplier === 0
+      ? "CAPITAL_LOCKDOWN"
+      : governorScore >= 85
+      ? "FULL_PORTFOLIO_GREENLIGHT"
+      : governorScore >= 70
+      ? "CONTROLLED_EXPANSION"
+      : governorScore >= 55
+      ? "SELECTIVE_DEPLOYMENT"
+      : "DEFENSIVE_THROTTLE";
+
+const shouldBlockNewTrades =
+  capitalThrottleMultiplier === 0 ||
+  sectorSaturationRisk ||
+  exposurePercent >= CONFIG.maxBotExposurePercent ||
+  engineState.correlationIntelligenceState
+    ?.shouldReduceExposure ||
+  engineState.liquidityIntelligenceState
+    ?.shouldBlockWeakLiquidity ||
+engineState.marketCycleIntelligenceState
+    ?.shouldBlockNewTrades ||
+  engineState.autonomousTradingSystemState
+    ?.shouldBlockNewTrades;
+
+
+  return {
+    updatedAt: new Date().toISOString(),
+    governorMode,
+    governorScore: Number(governorScore.toFixed(2)),
+    capitalThrottleMultiplier,
+    shouldBlockNewTrades,
+    equity,
+    cash,
+    maxBudget: Number(maxBudget.toFixed(2)),
+    currentExposure: Number(currentExposure.toFixed(2)),
+    exposurePercent: Number(exposurePercent.toFixed(2)),
+    portfolioEfficiencyScore,
+    volatilityBudgetScore: Number(volatilityBudgetScore.toFixed(2)),
+    averageCandidateScore: Number(averageCandidateScore.toFixed(2)),
+    sectorSaturationRisk,
+    topSector,
+    sectorExposure,
+    governorReason:
+      `${governorMode} • Governor ${governorScore.toFixed(0)}/100 • ` +
+      `Throttle x${capitalThrottleMultiplier}`,
   };
 }
 
@@ -5116,19 +6344,41 @@ function calculateInstitutionalScores(q) {
   harvardDividend.harvardDividendCompoundingScore;
   const portfolioScore = portfolio.portfolioScore;
 
+    const reinforcementWeights =
+    engineState.reinforcementWeightState?.weights || {
+      momentum: 0.18,
+      technicals: 0.25,
+      fundamentals: 0.12,
+      macro: 0.1,
+      statisticalEdge: 0.2,
+      riskQuality: 0.15,
+    };
+
+  const momentumScore = clampScore(
+    50 +
+      momentum * 1.5 +
+      volumeRatio * 8 -
+      (momentum > 35 ? 15 : 0)
+  );
+
+  const fundamentalBlendScore = clampScore(
+    fundamentalScore * 0.45 +
+      dcfValuationScore * 0.2 +
+      earningsScore * 0.15 +
+      moatScore * 0.12 +
+      dividendScore * 0.04 +
+      harvardDividendScore * 0.04
+  );
+
   const institutionalScore = clampScore(
-    technicalScore * 0.25 +
-    blendedRiskScore * 0.2 +
-    statisticalScore * 0.2 +
-    macroScore * 0.1 +
-    fundamentalScore * 0.08 +
-dcfValuationScore * 0.04 +
-    earningsScore * 0.07 +
-    moatScore * 0.07 +
-    dividendScore * 0.02 +
-harvardDividendScore * 0.03 +
-    portfolioScore * 0.04 +
-    sector.sectorScore * 0.03
+    momentumScore * reinforcementWeights.momentum +
+      technicalScore * reinforcementWeights.technicals +
+      fundamentalBlendScore * reinforcementWeights.fundamentals +
+      macroScore * reinforcementWeights.macro +
+      statisticalScore * reinforcementWeights.statisticalEdge +
+      blendedRiskScore * reinforcementWeights.riskQuality +
+      portfolioScore * 0.04 +
+      sector.sectorScore * 0.03
   );
 
   const hardSafetyPass =
@@ -5795,6 +7045,9 @@ async function scanMarket() {
         ...quote,
         score: institutional.institutionalScore,
         legacyMomentumScore: score,
+      momentumScore,
+    fundamentalBlendScore,
+    reinforcementWeights,
         statisticalScore,
         statisticalEdge,
         ...institutional,
@@ -8124,6 +9377,133 @@ engineState.macroRiskHistory.unshift(macroRisk);
 engineState.macroRiskHistory =
   engineState.macroRiskHistory.slice(0, 200);
 
+
+const executionIntelligence =
+  calculateInstitutionalExecutionIntelligence(
+    allSignalsForAnalytics,
+    analyticsAiPositions
+  );
+
+engineState.executionIntelligenceState =
+  executionIntelligence;
+
+engineState.executionIntelligenceHistory.unshift(
+  executionIntelligence
+);
+
+engineState.executionIntelligenceHistory =
+  engineState.executionIntelligenceHistory.slice(0, 200);  
+
+const autonomousTradingSystem =
+  calculateFullInstitutionalAutonomousTradingSystem(
+    allSignalsForAnalytics
+  );
+
+engineState.autonomousTradingSystemState =
+  autonomousTradingSystem;
+
+engineState.autonomousTradingSystemHistory.unshift(
+  autonomousTradingSystem
+);
+
+engineState.autonomousTradingSystemHistory =
+  engineState.autonomousTradingSystemHistory.slice(0, 200);  
+
+const reinforcementWeights =
+  calculateReinforcementLearningWeightEngine(
+    allSignalsForAnalytics
+  );
+
+engineState.reinforcementWeightState =
+  reinforcementWeights;
+
+engineState.reinforcementWeightHistory.unshift(
+  reinforcementWeights
+);
+
+engineState.reinforcementWeightHistory =
+  engineState.reinforcementWeightHistory.slice(0, 200);  
+
+const selfOptimization =
+  calculateAiSelfOptimizationLayer(
+    allSignalsForAnalytics
+  );
+
+engineState.selfOptimizationState =
+  selfOptimization;
+
+engineState.selfOptimizationHistory.unshift(
+  selfOptimization
+);
+
+engineState.selfOptimizationHistory =
+  engineState.selfOptimizationHistory.slice(0, 200);  
+
+const marketCycleIntelligence =
+  calculateAdaptiveMarketCycleIntelligence(
+    allSignalsForAnalytics
+  );
+
+engineState.marketCycleIntelligenceState =
+  marketCycleIntelligence;
+
+engineState.marketCycleIntelligenceHistory.unshift(
+  marketCycleIntelligence
+);
+
+engineState.marketCycleIntelligenceHistory =
+  engineState.marketCycleIntelligenceHistory.slice(0, 200);  
+
+const liquidityIntelligence =
+  calculateLiquidityIntelligenceEngine(
+    allSignalsForAnalytics
+  );
+
+engineState.liquidityIntelligenceState =
+  liquidityIntelligence;
+
+engineState.liquidityIntelligenceHistory.unshift(
+  liquidityIntelligence
+);
+
+engineState.liquidityIntelligenceHistory =
+  engineState.liquidityIntelligenceHistory.slice(0, 200);  
+
+const correlationIntelligence =
+  calculateCorrelationIntelligenceEngine(
+    analyticsAiPositions,
+    allSignalsForAnalytics
+  );
+
+engineState.correlationIntelligenceState =
+  correlationIntelligence;
+
+engineState.correlationIntelligenceHistory.unshift(
+  correlationIntelligence
+);
+
+engineState.correlationIntelligenceHistory =
+  engineState.correlationIntelligenceHistory.slice(
+    0,
+    200
+  );  
+
+const portfolioGovernor =
+  calculateAutonomousPortfolioGovernor(
+    account,
+    analyticsAiPositions,
+    allSignalsForAnalytics,
+    engineState.portfolioOptimizationState,
+    engineState.macroRiskState,
+    marketCrashProtection
+  );
+
+engineState.portfolioGovernorState = portfolioGovernor;
+
+engineState.portfolioGovernorHistory.unshift(portfolioGovernor);
+engineState.portfolioGovernorHistory =
+  engineState.portfolioGovernorHistory.slice(0, 200);
+
 const liveAiPerformance =
   calculateLiveAiPerformanceAnalyticsEngine(
     account,
@@ -8143,8 +9523,10 @@ engineState.selfHealingScanState =
 
 if (
   marketCrashProtection.shouldBlockNewTrades ||
-  engineState.macroRiskState?.shouldBlockNewTrades
+  engineState.macroRiskState?.shouldBlockNewTrades ||
+  engineState.portfolioGovernorState?.shouldBlockNewTrades
 ) {
+
   autoTradingEnabled = false;
 
   saveRecentOrder("AUTO_TRADING_BLOCKED_MACRO_RISK", "SYSTEM", {
@@ -8583,6 +9965,22 @@ engineFreezeCount: engineState.engineFreezeCount,
           peakEquity: peaks.peakEquity,
           peakCash: peaks.peakCash,
         },
+        autonomousTradingSystem:
+        engineState.autonomousTradingSystemState || null,
+        executionIntelligence:
+        engineState.executionIntelligenceState || null,
+        reinforcementWeights:
+        engineState.reinforcementWeightState || null,
+        selfOptimization:
+        engineState.selfOptimizationState || null,
+        marketCycleIntelligence:
+        engineState.marketCycleIntelligenceState || null,
+        liquidityIntelligence:
+        engineState.liquidityIntelligenceState || null,
+        correlationIntelligence:
+        engineState.correlationIntelligenceState || null,
+        portfolioGovernor:
+        engineState.portfolioGovernorState || null,
         engineState,
       });
     } catch (err) {
