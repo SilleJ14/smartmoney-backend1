@@ -370,7 +370,7 @@ const CONFIG = {
 
   // EXIT SETTINGS
 takeProfitPercent: Number(process.env.TAKE_PROFIT_PERCENT || 8),
-stopLossPercent: Number(process.env.STOP_LOSS_PERCENT || -4),
+stopLossPercent: Number(process.env.STOP_LOSS_PERCENT || -2),
 trailingStopPercent: Number(process.env.TRAILING_STOP_PERCENT || -2),
 
   // RUNNER STRATEGY
@@ -3346,6 +3346,124 @@ function calculateRenaissanceStatisticalEdgeEngine(q) {
   };
 }
 
+function estimateAtrStyleVolatility(signal = {}) {
+  const price = Number(
+    signal.current ||
+      signal.price ||
+      signal.currentPrice ||
+      0
+  );
+
+  const high = Number(signal.high || price || 0);
+  const low = Number(signal.low || price || 0);
+  const percentChange = Math.abs(
+    Number(signal.percentChange || 0)
+  );
+
+  const intradayRangePercent =
+    price > 0 && high > low
+      ? ((high - low) / price) * 100
+      : percentChange;
+
+  const atrStyleVolatilityPercent = Math.max(
+    intradayRangePercent,
+    percentChange
+  );
+
+  const volatilityScore = clampScore(
+    atrStyleVolatilityPercent * 8
+  );
+
+  const volatilityRegime =
+    atrStyleVolatilityPercent >= 10
+      ? "EXTREME_VOLATILITY"
+      : atrStyleVolatilityPercent >= 6
+      ? "HIGH_VOLATILITY"
+      : atrStyleVolatilityPercent >= 3
+      ? "NORMAL_VOLATILITY"
+      : "LOW_VOLATILITY";
+
+  return {
+    atrStyleVolatilityPercent: Number(
+      atrStyleVolatilityPercent.toFixed(2)
+    ),
+    intradayRangePercent: Number(
+      intradayRangePercent.toFixed(2)
+    ),
+    volatilityScore,
+    volatilityRegime,
+  };
+}
+function calculateAdaptiveSwingRisk(signal = {}, context = {}) {
+  const assetType =
+    signal.assetType ||
+    context.assetType ||
+    (String(signal.symbol || "").includes("/") ? "crypto" : "stock");
+
+  const score = Number(signal.score || 0);
+  const technicalScore = Number(signal.technicalScore || signal.technical?.score || 0);
+  const statisticalScore = Number(signal.statisticalScore || 0);
+  const trendPersistenceScore = Number(signal.trendPersistenceScore || 0);
+ const atrStyleVolatility = estimateAtrStyleVolatility(signal);
+
+const volatilityScore = Number(
+  signal.volatilityScore ||
+    signal.volatility ||
+    atrStyleVolatility.volatilityScore ||
+    0
+);
+  let stopLossPercent = CONFIG.stopLossPercent;
+  let trailingStopPercent = CONFIG.trailingStopPercent;
+  let runnerTrailingStopPercent = CONFIG.runnerTrailingStopPercent;
+  let takeProfitPercent = CONFIG.takeProfitPercent;
+
+  const strongTrend =
+    score >= 80 ||
+    technicalScore >= 80 ||
+    trendPersistenceScore >= 70 ||
+    statisticalScore >= 75;
+
+  const weakTrend =
+    score < 65 ||
+    technicalScore < 60 ||
+    trendPersistenceScore < 45;
+
+  const highVolatility =
+    volatilityScore >= 70 ||
+    Math.abs(Number(signal.percentChange || 0)) >= 8;
+
+  if (assetType === "crypto") {
+    stopLossPercent = highVolatility ? -6 : -4;
+    trailingStopPercent = strongTrend ? -4 : -3;
+    runnerTrailingStopPercent = strongTrend ? 4 : 3;
+    takeProfitPercent = strongTrend ? 12 : 8;
+  } else {
+    stopLossPercent = highVolatility ? -5 : -4;
+    trailingStopPercent = strongTrend ? -3 : -2;
+    runnerTrailingStopPercent = strongTrend ? 3.5 : 3;
+    takeProfitPercent = strongTrend ? 10 : 8;
+  }
+
+  if (weakTrend) {
+    stopLossPercent = assetType === "crypto" ? -3 : -2.5;
+    trailingStopPercent = assetType === "crypto" ? -2 : -1.5;
+    runnerTrailingStopPercent = 2;
+    takeProfitPercent = 6;
+  }
+
+  return {
+    assetType,
+    stopLossPercent,
+    trailingStopPercent,
+    runnerTrailingStopPercent,
+    takeProfitPercent,
+    strongTrend,
+    weakTrend,
+    highVolatility,
+    atrStyleVolatility,
+  };
+}
+
 function clampScore(value) {
   return Math.min(100, Math.max(0, Math.round(Number(value || 0))));
 }
@@ -5589,6 +5707,44 @@ async function executePendingExits() {
   }
 }
 
+function calculateTrendQualityHoldDuration(signal = {}) {
+  const score = Number(signal.score || 0);
+  const technicalScore = Number(signal.technicalScore || 0);
+  const statisticalScore = Number(signal.statisticalScore || 0);
+  const trendPersistenceScore = Number(signal.trendPersistenceScore || 0);
+  const unrealizedPercent = Number(signal.unrealizedPercent || 0);
+  const dropFromHigh = Number(signal.dropFromHigh || 0);
+
+  const trendQualityScore = clampScore(
+    score * 0.3 +
+      technicalScore * 0.25 +
+      statisticalScore * 0.2 +
+      trendPersistenceScore * 0.25
+  );
+
+  const holdMode =
+    trendQualityScore >= 80 && unrealizedPercent > 0 && dropFromHigh <= 2
+      ? "EXTENDED_SWING_HOLD"
+      : trendQualityScore >= 65 && dropFromHigh <= 1.5
+      ? "NORMAL_SWING_HOLD"
+      : "STANDARD_EXIT_RULES";
+
+  const suggestedHoldDays =
+    holdMode === "EXTENDED_SWING_HOLD"
+      ? 5
+      : holdMode === "NORMAL_SWING_HOLD"
+      ? 3
+      : 1;
+
+  return {
+    trendQualityScore,
+    holdMode,
+    suggestedHoldDays,
+    shouldExtendHold:
+      holdMode !== "STANDARD_EXIT_RULES",
+  };
+}
+
 function calculateTrendPersistenceHoldDecision({
   unrealizedPercent = 0,
   dropFromHigh = 0,
@@ -5649,10 +5805,9 @@ async function autoExitPositions(marketOpen) {
 
     const isAiOwned = aiOwnedSymbols.has(symbol);
     const isManualManaged = engineState.aiManagedSymbols?.includes(symbol);
-
-
     const qty = Number(pos.qty);
-    const currentPrice = Number(pos.current_price);
+
+
     const unrealizedPercent = Number(pos.unrealized_plpc) * 100;
 
     if (!qty || !currentPrice) continue;
@@ -5665,9 +5820,34 @@ async function autoExitPositions(marketOpen) {
     const dropFromHigh =
       highWater > 0 ? ((highWater - currentPrice) / highWater) * 100 : 0;
 
+const adaptiveSwingRisk = calculateAdaptiveSwingRisk(
+  {
+    symbol,
+    current: currentPrice,
+    price: currentPrice,
+    high: highWater,
+    low: Number(pos.avg_entry_price || currentPrice),
+    score: engineState.aiEntryScores?.[symbol]?.score || 0,
+    technicalScore:
+      engineState.aiEntryScores?.[symbol]?.technicalScore || 0,
+    statisticalScore:
+      engineState.aiEntryScores?.[symbol]?.statisticalScore || 0,
+    trendPersistenceScore:
+      engineState.trendPersistenceState?.heldSymbols?.[symbol]
+        ?.trendPersistenceScore || 0,
+    percentChange: unrealizedPercent,
+    assetType: "stock",
+  },
+  { assetType: "stock" }
+);
+
     const alreadyRunner = Boolean(engineState.runnerPositions[symbol]);
-    const shouldActivateRunner =
-      unrealizedPercent >= CONFIG.runnerTriggerPercent;
+   const shouldActivateRunner =
+  unrealizedPercent >=
+  Math.max(
+    CONFIG.runnerTriggerPercent,
+    adaptiveSwingRisk.takeProfitPercent * 0.7
+  );
 
     if (shouldActivateRunner && !alreadyRunner) {
       engineState.runnerPositions[symbol] = {
@@ -5694,15 +5874,31 @@ async function autoExitPositions(marketOpen) {
 
     const isRunner = Boolean(engineState.runnerPositions[symbol]);
 
-    const shouldStopLoss = unrealizedPercent <= -CONFIG.stopLossPercent;
+    const shouldStopLoss = unrealizedPercent <= adaptiveSwingRisk.stopLossPercent;
     const shouldProtectProfit =
       unrealizedPercent >= 2 &&
       dropFromHigh >= 0.8;
 
-    const shouldNormalTrailingExit =
-      !isRunner &&
-      unrealizedPercent > 0 &&
-      dropFromHigh >= CONFIG.trailingStopPercent;
+
+const shouldNormalTrailingExit =
+  !isRunner &&
+  unrealizedPercent > 0 &&
+  dropFromHigh >= Math.abs(adaptiveSwingRisk.trailingStopPercent);
+
+  const trendQualityHold =
+  calculateTrendQualityHoldDuration({
+    symbol,
+    score: engineState.aiEntryScores?.[symbol]?.score || 0,
+    technicalScore:
+      engineState.aiEntryScores?.[symbol]?.technicalScore || 0,
+    statisticalScore:
+      engineState.aiEntryScores?.[symbol]?.statisticalScore || 0,
+    trendPersistenceScore:
+      engineState.trendPersistenceState?.heldSymbols?.[symbol]
+        ?.trendPersistenceScore || 0,
+    unrealizedPercent,
+    dropFromHigh,
+  });
 
     const trendHoldDecision =
       calculateTrendPersistenceHoldDecision({
@@ -5718,10 +5914,11 @@ async function autoExitPositions(marketOpen) {
 
     const shouldRunnerTrailingExit =
       isRunner && dropFromHigh >= dynamicRunnerTrailingStopPercent;
-    if (
-      trendHoldDecision.shouldHold &&
-      !shouldStopLoss
-    ) {
+ if (
+  (trendHoldDecision.shouldHold ||
+    trendQualityHold.shouldExtendHold) &&
+  !shouldStopLoss
+) {
       saveRecentOrder("TREND_PERSISTENCE_HOLD", symbol, {
         qty,
         price: currentPrice,
@@ -5849,19 +6046,72 @@ async function autoExitCryptoPositions() {
     const dropFromHigh =
       highWater > 0 ? ((highWater - currentPrice) / highWater) * 100 : 0;
 
-    const TAKE_PROFIT_ACTIVATE = 3;
-    const HARD_STOP_LOSS = -1.2;
-    const TRAILING_STOP = 1;
-    const MIN_PROFIT_TO_TRAIL = 1.5;
+const adaptiveSwingRisk = calculateAdaptiveSwingRisk(
+  {
+    symbol,
+    current: currentPrice,
+    price: currentPrice,
+    high: highWater,
+    low: Number(pos.avg_entry_price || currentPrice),
+    score: engineState.aiEntryScores?.[symbol]?.score || 0,
+    technicalScore:
+      engineState.aiEntryScores?.[symbol]?.technicalScore || 0,
+    statisticalScore:
+      engineState.aiEntryScores?.[symbol]?.statisticalScore || 0,
+    trendPersistenceScore:
+      engineState.trendPersistenceState?.heldSymbols?.[symbol]
+        ?.trendPersistenceScore || 0,
+    percentChange: profitPercent,
+    assetType: "crypto",
+  },
+  { assetType: "crypto" }
+);
 
-    const trailingActive = profitPercent >= TAKE_PROFIT_ACTIVATE;
-    const shouldStopLoss = profitPercent <= HARD_STOP_LOSS;
-    const shouldTrailingStop =
-      trailingActive &&
-      profitPercent >= MIN_PROFIT_TO_TRAIL &&
-      dropFromHigh >= TRAILING_STOP;
+const trendQualityHold =
+  calculateTrendQualityHoldDuration({
+    symbol,
+    score: engineState.aiEntryScores?.[symbol]?.score || 0,
+    technicalScore:
+      engineState.aiEntryScores?.[symbol]?.technicalScore || 0,
+    statisticalScore:
+      engineState.aiEntryScores?.[symbol]?.statisticalScore || 0,
+    trendPersistenceScore:
+      engineState.trendPersistenceState?.heldSymbols?.[symbol]
+        ?.trendPersistenceScore || 0,
+    unrealizedPercent: profitPercent,
+    dropFromHigh,
+  });
+const trailingActive =
+  profitPercent >= adaptiveSwingRisk.takeProfitPercent * 0.5;
 
-    if (!shouldStopLoss && !shouldTrailingStop) continue;
+const shouldStopLoss =
+  profitPercent <= adaptiveSwingRisk.stopLossPercent;
+
+const shouldTrailingStop =
+  trailingActive &&
+  profitPercent >= 1.5 &&
+  dropFromHigh >=
+
+    Math.abs(adaptiveSwingRisk.trailingStopPercent);
+
+    if (
+  trendQualityHold.shouldExtendHold &&
+  !shouldStopLoss
+) {
+  saveRecentOrder("CRYPTO_TREND_QUALITY_HOLD", symbol, {
+    qty,
+    currentPrice,
+    profitPercent,
+    highWater,
+    dropFromHigh,
+    trendQualityHold,
+    adaptiveSwingRisk,
+  });
+
+  continue;
+}
+
+if (!shouldStopLoss && !shouldTrailingStop) continue;
 
     let reason = "CRYPTO_EXIT";
 
@@ -6382,6 +6632,76 @@ async function rotateWeakCryptoIfBetter(signals, positions) {
 }
 // ===== CRYPTO AUTO BUY START =====
 
+function calculateAdaptiveCryptoPositionSize(signal = {}, account = {}) {
+  const equity = Number(account?.equity || 0);
+  const cash = Number(account?.cash || 0);
+  const buyingPower = Number(account?.buying_power || cash || 0);
+
+  const score = Number(signal.score || 0);
+  const technicalScore = Number(signal.technicalScore || signal.technical?.score || 0);
+  const statisticalScore = Number(signal.statisticalScore || 0);
+  const percentChange = Math.abs(Number(signal.percentChange || 0));
+
+  const baseCryptoBudget =
+    equity * (CONFIG.maxBotExposurePercent / 100);
+
+  const qualityMultiplier =
+    score >= 90
+      ? 1
+      : score >= 80
+      ? 0.75
+      : score >= 70
+      ? 0.5
+      : 0.25;
+
+  const technicalMultiplier =
+    technicalScore >= 80 || statisticalScore >= 75
+      ? 1
+      : technicalScore >= 65
+      ? 0.75
+      : 0.5;
+
+  const volatilityMultiplier =
+    percentChange >= 12
+      ? 0.35
+      : percentChange >= 8
+      ? 0.5
+      : percentChange >= 5
+      ? 0.75
+      : 1;
+
+  const macroMultiplier =
+    engineState.macroRiskState?.shouldBlockNewTrades
+      ? 0
+      : Number(engineState.macroRiskState?.macroExposureMultiplier || 1);
+
+  const recommendedAmount = Math.max(
+    0,
+    Math.min(
+      baseCryptoBudget *
+        qualityMultiplier *
+        technicalMultiplier *
+        volatilityMultiplier *
+        macroMultiplier,
+      cash,
+      buyingPower
+    )
+  );
+
+  return {
+    recommendedAmount: Number(recommendedAmount.toFixed(2)),
+    baseCryptoBudget: Number(baseCryptoBudget.toFixed(2)),
+    qualityMultiplier,
+    technicalMultiplier,
+    volatilityMultiplier,
+    macroMultiplier,
+    reason:
+      `Crypto size adjusted by quality x${qualityMultiplier}, ` +
+      `technical x${technicalMultiplier}, volatility x${volatilityMultiplier}, ` +
+      `macro x${macroMultiplier}`,
+  };
+}
+
 async function autoBuyCryptoSignals(signals) {
   if (!["live_crypto", "live_stock", "smart"].includes(TRADING_MODE)) return;
 
@@ -6412,7 +6732,7 @@ async function autoBuyCryptoSignals(signals) {
   const baseTradeAmount = getDynamicTradeAmount(account, cryptoPositions);
 
   const bestCandidateScore = Math.max(
-    ...signals
+       signals
       .filter((s) => s.qualifiedToBuy === true)
       .map((s) => Number(s.score || 0)),
     0
@@ -6472,13 +6792,42 @@ async function autoBuyCryptoSignals(signals) {
       continue;
     }
     try {
-      const order = await placeCryptoMarketBuy(crypto.symbol, tradeAmount);
 
-      saveRecentOrder("AUTO_CRYPTO_BUY", crypto.symbol, {
-        price: crypto.current,
-        tradeAmount,
-        order,
-      });
+
+
+const adaptiveCryptoSizing =
+  calculateAdaptiveCryptoPositionSize(
+    crypto,
+    account
+  );
+
+const finalTradeAmount =
+  adaptiveCryptoSizing.recommendedAmount;
+
+if (!finalTradeAmount || finalTradeAmount <= 0) {
+  saveRecentOrder(
+    "AUTO_CRYPTO_BUY_SKIPPED_SIZE_ZERO",
+    crypto.symbol,
+    {
+      score: crypto.score,
+      adaptiveCryptoSizing,
+    }
+  );
+
+  continue;
+}
+
+const order = await placeCryptoMarketBuy(
+  crypto.symbol,
+  finalTradeAmount
+);
+
+saveRecentOrder("AUTO_CRYPTO_BUY", crypto.symbol, {
+  price: crypto.current,
+  tradeAmount: finalTradeAmount,
+  adaptiveCryptoSizing,
+  order,
+});
     } catch (err) {
       saveFailedOrder("AUTO_CRYPTO_BUY_FAILED", crypto.symbol, err.message);
     }
@@ -7452,6 +7801,34 @@ app.get("/infra-status", (req, res) => {
         recentSkippedSymbols: engineState.skippedSymbols.slice(0, 20),
 
         config: CONFIG,
+
+        adaptiveSwingRisk: {
+  mode: "SWING_ADAPTIVE",
+
+  stock: {
+    stopLossPercent: CONFIG.stopLossPercent,
+    trailingStopPercent: CONFIG.trailingStopPercent,
+    takeProfitPercent: CONFIG.takeProfitPercent,
+  },
+
+  crypto: {
+    stopLossPercent: -4,
+    trailingStopPercent: -3,
+    takeProfitPercent: 8,
+  },
+
+  runner: {
+    triggerPercent: CONFIG.runnerTriggerPercent,
+    trailingStopPercent:
+      CONFIG.runnerTrailingStopPercent,
+  },
+
+  engineState:
+    engineState.adaptiveRiskState || null,
+
+  description:
+    "Adaptive swing exits active with wider institutional breathing room.",
+},
         risk: {
           equity: Number(account.equity || 0),
           cash: Number(account.cash || 0),
