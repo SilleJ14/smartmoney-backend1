@@ -7296,14 +7296,6 @@ engineState.technicalIntelligenceHistory.unshift(
 engineState.technicalIntelligenceHistory =
   engineState.technicalIntelligenceHistory.slice(0, 200);
 
-for (const signal of orchestratedSignals) {
-  const realismScore = Number(
-    signal.realismAdjustedScore ||
-    signal.cryptoRealism?.realismScore ||
-    signal.score ||
-    0
-  );
-
   const spreadPercent = Number(
     signal.cryptoRealism?.spreadPercent || 0
   );
@@ -7331,7 +7323,6 @@ for (const signal of orchestratedSignals) {
       statisticalScore > 0 ||
       realismScore >= 85
     );
-}
 
 const orchestratedSignals =
   allSignalsForAnalytics.map((signal) => ({
