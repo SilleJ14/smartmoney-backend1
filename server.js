@@ -6809,38 +6809,91 @@ async function getBestCryptoBars(symbol) {
   return await getCryptoRecentBars(symbol, "1Min", 30);
 }
 
-function calculateCryptoLiquidityFromBars(bars = [], currentPrice = 0) {
+function calculateCryptoLiquidityFromBars(
+  bars = [],
+  currentPrice = 0
+) {
   const cleanBars = Array.isArray(bars)
     ? bars
-        .map((bar) => ({
-          close: Number(bar.c || bar.close || 0),
-          volume: Number(bar.v || bar.volume || 0),
-        }))
-        .filter((bar) => bar.close > 0)
+        .map((bar) => {
+          const close = Number(
+            bar.c ??
+            bar.close ??
+            bar.price ??
+            0
+          );
+
+          const rawVolume =
+            bar.v ??
+            bar.volume ??
+            bar.volume_crypto ??
+            bar.volume_usd ??
+            bar.baseVolume ??
+            bar.quoteVolume ??
+            0;
+
+          const parsedVolume = Number(rawVolume);
+
+          return {
+            close,
+            volume:
+              Number.isFinite(parsedVolume)
+                ? parsedVolume
+                : 0,
+          };
+        })
+        .filter(
+          (bar) =>
+            Number.isFinite(bar.close) &&
+            bar.close > 0
+        )
     : [];
 
-  const latestBar = cleanBars[cleanBars.length - 1] || {};
-  const latestVolume = Number(latestBar.volume || 0);
+  const latestBar =
+    cleanBars[cleanBars.length - 1] || {};
+
+  const latestVolume = Number(
+    latestBar.volume || 0
+  );
 
   const averageVolume =
     cleanBars.length > 0
       ? cleanBars.reduce(
-          (sum, bar) => sum + Number(bar.volume || 0),
+          (sum, bar) =>
+            sum + Number(bar.volume || 0),
           0
         ) / cleanBars.length
       : 0;
 
   const volumeSpikeRatio =
-    averageVolume > 0 ? latestVolume / averageVolume : 0;
+    averageVolume > 0
+      ? latestVolume / averageVolume
+      : 0;
 
   const dollarVolume =
-    latestVolume * Number(currentPrice || latestBar.close || 0);
+    latestVolume *
+    Number(
+      currentPrice ||
+      latestBar.close ||
+      0
+    );
 
   return {
-    volume: Number(latestVolume.toFixed(2)),
-    averageVolume: Number(averageVolume.toFixed(2)),
-    volumeSpikeRatio: Number(volumeSpikeRatio.toFixed(3)),
-    dollarVolume: Number(dollarVolume.toFixed(2)),
+    volume: Number(
+      latestVolume.toFixed(2)
+    ),
+
+    averageVolume: Number(
+      averageVolume.toFixed(2)
+    ),
+
+    volumeSpikeRatio: Number(
+      volumeSpikeRatio.toFixed(3)
+    ),
+
+    dollarVolume: Number(
+      dollarVolume.toFixed(2)
+    ),
   };
 }
 
