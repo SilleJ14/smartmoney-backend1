@@ -187,10 +187,14 @@ statisticalMemoryState:
     probabilityHistory: [],
   },
 
-statisticalEdgeState:
-  engineState.statisticalEdgeState || null,
-statisticalEdgeHistory:
-  (engineState.statisticalEdgeHistory || []).slice(0, 200),
+probabilityReinforcementState:
+  engineState.probabilityReinforcementState || {
+    updatedAt: null,
+    setupTrust: {},
+  },
+
+probabilityReinforcementHistory:
+  (engineState.probabilityReinforcementHistory || []).slice(0, 200),
 
   technicalIntelligenceState:
   engineState.technicalIntelligenceState || null,
@@ -230,6 +234,7 @@ dcfValuationHistory:
 
 institutionalOrchestratorState:
   engineState.institutionalOrchestratorState || null,
+
 
 institutionalOrchestratorHistory:
   (engineState.institutionalOrchestratorHistory || []).slice(0, 200),
@@ -511,6 +516,11 @@ adaptiveRiskState: null,
 multiTimeframeState: null,
 multiTimeframeHistory: [],
 statisticalEdgeState: null,
+probabilityReinforcementState: {
+  updatedAt: null,
+  setupTrust: {},
+},
+probabilityReinforcementHistory: [],
 statisticalEdgeHistory: [],
 technicalIntelligenceState: null,
 technicalIntelligenceHistory: [],
@@ -1417,26 +1427,86 @@ function calculateSmartCapitalRedistributionEngine(
 
   const deployableSignals = topSignals
     .filter((signal) => signal.qualifiedToBuy !== false)
-    .slice(0, CONFIG.topAutoTradeCandidates)
     .map((signal) => {
       const score = Number(signal.score || 0);
       const hasDirectBudget = remainingBotBudget > 0;
-      const canRotateWeakCapital = weakCapitalPreview > 0;
 
-      return {
-        symbol: signal.symbol,
-        score,
-        price: signal.current || signal.price,
-        sector: signal.estimatedSector || "General Market",
-        suggestedAction:
-          hasDirectBudget && score >= CONFIG.minScoreToBuy
-            ? "ELIGIBLE_FOR_CAPITAL"
-            : canRotateWeakCapital && score >= CONFIG.minScoreToBuy + CONFIG.replaceWeakestMinScoreGap
-            ? "ROTATION_CANDIDATE"
-            : "WATCH_ONLY",
+      const reinforcedProbability = Number(
+  signal.institutionalOrchestrator
+    ?.probabilityReinforcement
+    ?.reinforcedProbability || 50
+);
+
+const reinforcementCapitalMultiplier =
+  reinforcedProbability >= 85
+    ? 1.4
+    : reinforcedProbability >= 75
+    ? 1.2
+    : reinforcedProbability >= 65
+    ? 1.05
+    : reinforcedProbability <= 40
+    ? 0.55
+    : reinforcedProbability <= 50
+    ? 0.8
+    : 1;
+
+const orchestratorScore = Number(
+  signal.institutionalOrchestrator
+    ?.finalInstitutionalDecisionScore || score
+);
+
+const deploymentPriorityScore = clampScore(
+  orchestratorScore * 0.7 +
+    reinforcedProbability * 0.3
+);
+
+
+const canRotateWeakCapital = weakCapitalPreview > 0;
+
+ return {
+  symbol: signal.symbol,
+  score,
+  price: signal.current || signal.price,
+  sector: signal.estimatedSector || "General Market",
+  deploymentPriorityScore:
+    Number(deploymentPriorityScore.toFixed(2)),
+  reinforcementActionBias,
+  suggestedAction:
+    reinforcedProbability >= 80 &&
+    hasDirectBudget &&
+    score >= CONFIG.minScoreToBuy
+      ? "HIGH_CONVICTION_DEPLOYMENT"
+      : hasDirectBudget &&
+        score >= CONFIG.minScoreToBuy
+      ? "ELIGIBLE_FOR_CAPITAL"
+      : canRotateWeakCapital &&
+        score >=
+          CONFIG.minScoreToBuy +
+            CONFIG.replaceWeakestMinScoreGap
+      ? "ROTATION_CANDIDATE"
+      : reinforcedProbability <= 40
+      ? "REDUCE_RISK"
+      : "WATCH_ONLY",
+  reinforcedProbability,
+  reinforcementCapitalMultiplier,     
+
+
+suggestedCapitalAllocation:
+  Number(
+    (
+      remainingBotBudget *
+      reinforcementCapitalMultiplier
+    ).toFixed(2)
+  ),
         rotationCapitalAvailable: Number(weakCapitalPreview.toFixed(2)),
       };
-    });
+        })
+    .sort(
+      (a, b) =>
+        Number(b.deploymentPriorityScore || 0) -
+        Number(a.deploymentPriorityScore || 0)
+    )
+    .slice(0, CONFIG.topAutoTradeCandidates);
 
   const weakCapital = positionReviews
     .filter((item) => item.redistributionAction === "REDUCE_OR_EXIT")
@@ -1450,6 +1520,30 @@ function calculateSmartCapitalRedistributionEngine(
   const cashReserveStatus =
     cash >= cashReserveTarget ? "CASH_RESERVE_HEALTHY" : "LOW_CASH_RESERVE";
 
+    const averageReinforcedProbability =
+  deployableSignals.length > 0
+    ? deployableSignals.reduce(
+        (sum, signal) =>
+          sum +
+          Number(signal.reinforcedProbability || 0),
+        0
+      ) / deployableSignals.length
+    : 0;
+
+const totalSuggestedCapitalAllocation =
+  deployableSignals.reduce(
+    (sum, signal) =>
+      sum +
+      Number(signal.suggestedCapitalAllocation || 0),
+    0
+  );
+
+const strongestReinforcementSignal =
+  [...deployableSignals].sort(
+    (a, b) =>
+      Number(b.reinforcedProbability || 0) -
+      Number(a.reinforcedProbability || 0)
+  )[0] || null;
   return {
     updatedAt: new Date().toISOString(),
     equity,
@@ -1463,6 +1557,28 @@ function calculateSmartCapitalRedistributionEngine(
     cashReserveStatus,
     positionReviews,
     deployableSignals,
+
+        totalSuggestedCapitalAllocation:
+      Number(
+        totalSuggestedCapitalAllocation.toFixed(2)
+      ),
+        averageReinforcedProbability:
+      Number(
+        averageReinforcedProbability.toFixed(2)
+      ),
+
+    strongestReinforcementSignal:
+      strongestReinforcementSignal
+        ? {
+            symbol:
+              strongestReinforcementSignal.symbol,
+            reinforcedProbability:
+              strongestReinforcementSignal.reinforcedProbability,
+            deploymentPriorityScore:
+              strongestReinforcementSignal.deploymentPriorityScore,
+          }
+        : null,
+
     redistributionSummary:
       `Weak capital: $${weakCapital.toFixed(2)} • ` +
       `Remaining bot budget: $${remainingBotBudget.toFixed(2)} • ` +
@@ -2029,6 +2145,15 @@ function calculateCitadelTechnicalIntelligenceEngine(q = {}) {
 
 function classifyInstitutionalSetup(signal = {}) {
   const score = Number(signal.score || 0);
+  const orchestratorScore = Number(
+  signal.institutionalOrchestrator
+    ?.finalInstitutionalDecisionScore || score
+);
+
+const deploymentPriorityScore = clampScore(
+  orchestratorScore * 0.7 +
+    reinforcedProbability * 0.3
+);
 
   const technicalScore = Number(
     signal.technicalIntelligence?.institutionalEntryScore ||
@@ -2544,6 +2669,165 @@ if (matchingHistory.length < 5) {
   };
 }
 
+function calculateDynamicProbabilityReinforcementEngine(
+  signal = {},
+  statisticalExpectancy = {}
+) {
+  const setupType =
+    statisticalExpectancy.setupType ||
+    signal.setupType ||
+    classifyInstitutionalSetup(signal);
+
+  if (!engineState.probabilityReinforcementState) {
+    engineState.probabilityReinforcementState = {
+      updatedAt: null,
+      setupTrust: {},
+    };
+  }
+
+  if (!Array.isArray(engineState.probabilityReinforcementHistory)) {
+    engineState.probabilityReinforcementHistory = [];
+  }
+
+  const setupHistory =
+    engineState.statisticalMemoryState?.setupHistory || [];
+
+  const matchingHistory = setupHistory.filter(
+    (item) => item.setupType === setupType
+  );
+
+  const recentHistory = matchingHistory.slice(0, 20);
+
+  const wins = recentHistory.filter(
+    (item) => Number(item.profitPercent || 0) > 0
+  );
+
+  const losses = recentHistory.filter(
+    (item) => Number(item.profitPercent || 0) <= 0
+  );
+
+  const runnerWins = recentHistory.filter(
+    (item) =>
+      Number(item.profitPercent || 0) >=
+      Number(CONFIG.runnerTriggerPercent || 6)
+  );
+
+  const previousTrust =
+    engineState.probabilityReinforcementState.setupTrust[setupType] || {};
+
+  const previousProbability = Number(
+    previousTrust.reinforcedProbability ||
+      statisticalExpectancy.winRate ||
+      50
+  );
+
+  const baseProbability = Number(
+    statisticalExpectancy.winRate ||
+      (wins.length / Math.max(1, recentHistory.length)) * 100 ||
+      50
+  );
+
+  const recentWinRate =
+    recentHistory.length > 0
+      ? (wins.length / recentHistory.length) * 100
+      : baseProbability;
+
+  const runnerReinforcement =
+    recentHistory.length > 0
+      ? (runnerWins.length / recentHistory.length) * 12
+      : 0;
+
+  const lossPressure =
+    recentHistory.length > 0
+      ? (losses.length / recentHistory.length) * 10
+      : 0;
+
+  const lastSetupAt = matchingHistory[0]?.timestamp
+    ? new Date(matchingHistory[0].timestamp).getTime()
+    : 0;
+
+  const hoursSinceLastSetup = lastSetupAt
+    ? (Date.now() - lastSetupAt) / 1000 / 60 / 60
+    : 999;
+
+  const probabilityDecay = clampScore(
+    hoursSinceLastSetup > 72
+      ? 15
+      : hoursSinceLastSetup > 24
+      ? 8
+      : hoursSinceLastSetup > 8
+      ? 4
+      : 0
+  );
+
+  const adaptiveTrustWeight = Number(
+    (
+      1 +
+      (recentWinRate - 50) / 200 +
+      runnerReinforcement / 100 -
+      lossPressure / 100 -
+      probabilityDecay / 200
+    ).toFixed(2)
+  );
+
+  const reinforcedProbability = clampScore(
+    baseProbability * adaptiveTrustWeight +
+      runnerReinforcement -
+      lossPressure -
+      probabilityDecay
+  );
+
+  const confidenceDrift = Number(
+    (reinforcedProbability - previousProbability).toFixed(2)
+  );
+
+  const reinforcedExpectedValue = Number(
+    (
+      Number(statisticalExpectancy.expectedValue || 0) *
+        adaptiveTrustWeight +
+      runnerReinforcement * 0.08 -
+      lossPressure * 0.08 -
+      probabilityDecay * 0.05
+    ).toFixed(2)
+  );
+
+  const reinforcementMode =
+    reinforcedProbability >= 70 && confidenceDrift >= 3
+      ? "REINFORCING"
+      : reinforcedProbability >= 60
+      ? "TRUSTED"
+      : confidenceDrift <= -8 || reinforcedProbability < 45
+      ? "WEAKENING"
+      : probabilityDecay > 0
+      ? "DECAYING"
+      : "NEUTRAL";
+
+  const state = {
+    updatedAt: new Date().toISOString(),
+    symbol: signal.symbol,
+    setupType,
+    baseProbability: Number(baseProbability.toFixed(2)),
+    reinforcedProbability,
+    confidenceDrift,
+    probabilityDecay,
+    adaptiveTrustWeight,
+    reinforcedExpectedValue,
+    recentSampleSize: recentHistory.length,
+    recentWinRate: Number(recentWinRate.toFixed(2)),
+    runnerWins: runnerWins.length,
+    losses: losses.length,
+    reinforcementMode,
+  };
+
+  engineState.probabilityReinforcementState.updatedAt = state.updatedAt;
+  engineState.probabilityReinforcementState.setupTrust[setupType] = state;
+
+  engineState.probabilityReinforcementHistory.unshift(state);
+  engineState.probabilityReinforcementHistory =
+    engineState.probabilityReinforcementHistory.slice(0, 200);
+
+  return state;
+}
 
 function calculateInstitutionalAiPortfolioOrchestrator(signal = {}) {
   const institutionalScore = Number(
@@ -2661,15 +2945,44 @@ function calculateInstitutionalAiPortfolioOrchestrator(signal = {}) {
 const statisticalExpectancy =
   calculateStatisticalExpectancyEngine(signal);
 
+const probabilityReinforcement =
+  calculateDynamicProbabilityReinforcementEngine(
+    signal,
+    statisticalExpectancy
+  );
+
+
+const reinforcementConfidenceBonus =
+  probabilityReinforcement.reinforcedProbability >= 80
+    ? 8
+    : probabilityReinforcement.reinforcedProbability >= 70
+    ? 5
+    : probabilityReinforcement.reinforcedProbability >= 60
+    ? 2
+    : probabilityReinforcement.reinforcedProbability < 45
+    ? -8
+    : 0;
+
+const reinforcementDriftAdjustment =
+  probabilityReinforcement.confidenceDrift >= 10
+    ? 6
+    : probabilityReinforcement.confidenceDrift >= 5
+    ? 3
+    : probabilityReinforcement.confidenceDrift <= -10
+    ? -8
+    : probabilityReinforcement.confidenceDrift <= -5
+    ? -4
+    : 0;
+    
 const expectancyBoost =
-  statisticalExpectancy.expectedValue > 0
+  probabilityReinforcement.reinforcedExpectedValue > 0
     ? Math.min(
-        statisticalExpectancy.expectedValue * 2,
-        15
+        probabilityReinforcement.reinforcedExpectedValue * 2,
+        18
       )
     : Math.max(
-        statisticalExpectancy.expectedValue * 2,
-        -20
+        probabilityReinforcement.reinforcedExpectedValue * 2,
+        -22
       );
 
 const institutionalOpportunityScore =
@@ -2721,12 +3034,13 @@ const institutionalOpportunityScore =
       : signal.timeframeDecision === "TIMEFRAME_CONFLICT"
       ? 25
       : 0;
-
   const finalInstitutionalDecisionScore = clampScore(
     institutionalOpportunityScore * 0.82 +
       (100 - institutionalRiskPenalty) * 0.18 -
       missingStatisticalPenalty -
-      timeframePenalty
+      timeframePenalty +
+      + reinforcementConfidenceBonus +
+      reinforcementDriftAdjustment
   );
 
   const highConvictionThreshold = isCryptoSignal ? 72 : 78;
@@ -2765,6 +3079,8 @@ const institutionalOpportunityScore =
     institutionalOpportunityScore,
     institutionalRiskPenalty,
     finalInstitutionalDecisionScore,
+    statisticalExpectancy,
+    probabilityReinforcement,
     orchestratorAction,
     orchestratorMultiplier,
     engineScores: {
@@ -2833,6 +3149,31 @@ function passesInstitutionalOrchestratorBuyGate(signal = {}) {
     "BLOCK_TRADE",
     "CAPITAL_PRESERVATION",
   ];
+
+    const reinforcementMode =
+    orchestrator.probabilityReinforcement?.reinforcementMode ||
+    "NEUTRAL";
+
+  const reinforcedProbability = Number(
+    orchestrator.probabilityReinforcement?.reinforcedProbability || 50
+  );
+
+  const confidenceDrift = Number(
+    orchestrator.probabilityReinforcement?.confidenceDrift || 0
+  );
+
+  if (
+    reinforcementMode === "WEAKENING" ||
+    (reinforcedProbability < 45 && confidenceDrift <= -5)
+  ) {
+    return {
+      allowed: false,
+      reason:
+        `Probability reinforcement blocked: ${reinforcementMode} ` +
+        `${reinforcedProbability}/100 drift ${confidenceDrift}`,
+      orchestrator,
+    };
+  }
 
   if (blockedActions.includes(action)) {
     return {
@@ -5482,7 +5823,7 @@ async function scanMarket() {
         ) / statisticalEdgeSignals.length
       : 0;
 engineState.statisticalMemoryState =
-  saved.statisticalMemoryState || {
+  engineState.statisticalMemoryState || {
     updatedAt: null,
     setupHistory: [],
     setupPerformance: {},
@@ -6215,9 +6556,79 @@ const shouldNormalTrailingExit =
     }
 
     try {
-      const order = await placeMarketSell(symbol, qty, reason);
+const order = await placeMarketSell(symbol, qty, reason);
 
-      saveRecentOrder(reason, symbol, {
+if (
+  unrealizedPercent >=
+  Number(CONFIG.runnerTriggerPercent || 6)
+) {
+  if (!engineState.statisticalMemoryState) {
+    engineState.statisticalMemoryState = {
+      updatedAt: new Date().toISOString(),
+      setupHistory: [],
+      setupPerformance: {},
+      expectancyHistory: [],
+      probabilityHistory: [],
+    };
+  }
+
+  const reinforcementSetupType =
+    engineState.aiEntryScores?.[symbol]
+      ?.setupType || "UNKNOWN_SETUP";
+
+  engineState.statisticalMemoryState.setupHistory.unshift({
+    symbol,
+    setupType: reinforcementSetupType,
+    timestamp: new Date().toISOString(),
+    profitPercent: Number(
+      unrealizedPercent.toFixed(2)
+    ),
+    reinforcementSource: "LIVE_RUNNER_EXIT",
+  });
+
+  engineState.statisticalMemoryState.setupHistory =
+    engineState.statisticalMemoryState.setupHistory.slice(
+      0,
+      500
+    );
+}
+
+if (
+  unrealizedPercent <=
+  -Number(CONFIG.stopLossPercent || 1)
+) {
+  if (!engineState.statisticalMemoryState) {
+    engineState.statisticalMemoryState = {
+      updatedAt: new Date().toISOString(),
+      setupHistory: [],
+      setupPerformance: {},
+      expectancyHistory: [],
+      probabilityHistory: [],
+    };
+  }
+
+  const weakeningSetupType =
+    engineState.aiEntryScores?.[symbol]
+      ?.setupType || "UNKNOWN_SETUP";
+
+  engineState.statisticalMemoryState.setupHistory.unshift({
+    symbol,
+    setupType: weakeningSetupType,
+    timestamp: new Date().toISOString(),
+    profitPercent: Number(
+      unrealizedPercent.toFixed(2)
+    ),
+    reinforcementSource: "LIVE_STOP_LOSS",
+  });
+
+  engineState.statisticalMemoryState.setupHistory =
+    engineState.statisticalMemoryState.setupHistory.slice(
+      0,
+      500
+    );
+}
+
+saveRecentOrder(reason, symbol, {
         dynamicRunnerTrailingStopPercent,
         trendHoldMode: trendHoldDecision.mode,
         trendHoldReason: trendHoldDecision.reason,
@@ -6229,11 +6640,13 @@ const shouldNormalTrailingExit =
         isRunner,
         order,
       });
-
+saveEngineState("PROBABILITY_REINFORCEMENT_UPDATED");
       rememberTradeResult(symbol, {
         profitPercent: unrealizedPercent,
         reason,
       });
+
+saveEngineState("CRYPTO_PROBABILITY_REINFORCEMENT_UPDATED");
 
      journalTradeExit(symbol, {
   assetClass: "stock",
@@ -7423,12 +7836,54 @@ const averageOrchestratorScore =
   };
 }
 
+const reinforcedSignals =
+  orchestratedSignals.filter(
+    (signal) =>
+      Number(
+        signal.institutionalOrchestrator
+          ?.probabilityReinforcement
+          ?.reinforcedProbability || 0
+      ) >= 70
+  );
+
+const weakeningSignals =
+  orchestratedSignals.filter(
+    (signal) =>
+      signal.institutionalOrchestrator
+        ?.probabilityReinforcement
+        ?.reinforcementMode === "WEAKENING"
+  );
+
+const averageReinforcedProbability =
+  orchestratedSignals.length > 0
+    ? orchestratedSignals.reduce(
+        (sum, signal) =>
+          sum +
+          Number(
+            signal.institutionalOrchestrator
+              ?.probabilityReinforcement
+              ?.reinforcedProbability || 0
+          ),
+        0
+      ) / orchestratedSignals.length
+    : 0;
+
 engineState.institutionalOrchestratorState = {
   updatedAt: new Date().toISOString(),
   totalSignals: orchestratedSignals.length,
   deployableSignals: deployableOrchestratedSignals.length,
   averageOrchestratorScore:
     Number(averageOrchestratorScore.toFixed(2)),
+
+  reinforcedSignals: reinforcedSignals.length,
+
+  weakeningSignals: weakeningSignals.length,
+
+  averageReinforcedProbability:
+    Number(
+      averageReinforcedProbability.toFixed(2)
+    ),
+
   strongestOrchestratedSignals:
     deployableOrchestratedSignals
       .slice(0, 5)
@@ -8675,6 +9130,27 @@ statisticalEdgeHistory:
       res.status(500).json({ error: err.message });
     }
   });
+
+    app.get("/probability-reinforcement", async (req, res) => {
+  try {
+    res.json({
+      ok: true,
+
+      probabilityReinforcementState:
+        engineState.probabilityReinforcementState || null,
+
+      probabilityReinforcementHistory:
+        (
+          engineState.probabilityReinforcementHistory || []
+        ).slice(0, 100),
+    });
+  } catch (err) {
+    res.status(500).json({
+      ok: false,
+      error: err.message,
+    });
+  }
+});
 
   app.get("/institutional-orchestrator", async (req, res) => {
   try {
