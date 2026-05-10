@@ -3060,9 +3060,7 @@ function calculateCorrelationIntelligenceEngine(
     : [];
 
 const tradingMode =
-  TRADING_MODE ||
-  engineState.currentTradingMode ||
-  "paper_stock";
+  getEffectiveTradingMode(engineState.marketOpen);
 
 const filteredPositions =
   tradingMode === "live_crypto"
@@ -3083,7 +3081,8 @@ const filteredPositions =
         const symbol = normalizeSymbol(position.symbol);
 
         return !symbol.includes("/");
-      });    
+      });
+      
 
   const sectorBuckets = {};
   const cryptoPositions = [];
