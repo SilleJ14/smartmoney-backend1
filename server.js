@@ -4748,6 +4748,41 @@ const averageVolume =
               bar.volume ??
               bar.volume_crypto ??
               bar.volume_usd ??
+              bar.baseVolume ??
+              bar.quoteVolume ??
+              0
+          ),
+        0
+      ) / bars.length
+    : 0;
+
+const volumeSpikeRatio =
+  averageVolume > 0
+    ? normalizedCryptoVolume / averageVolume
+    : 0;
+  const rawVolume =
+  latestBar?.v ??
+  latestBar?.volume ??
+  latestBar?.vw ??
+  latestBar?.volume_crypto ??
+  latestBar?.volume_usd ??
+  latestBar?.baseVolume ??
+  latestBar?.quoteVolume ??
+  0;
+
+const normalizedCryptoVolume =
+  Number(rawVolume) || 0;
+
+const averageVolume =
+  bars.length > 0
+    ? bars.reduce(
+        (sum, bar) =>
+          sum +
+          Number(
+            bar.v ??
+              bar.volume ??
+              bar.volume_crypto ??
+              bar.volume_usd ??
               0
           ),
         0
@@ -4765,6 +4800,8 @@ const dollarVolume =
   const alpacaCurrent = Number(latestBar.c || 0);
   const alpacaOpen = Number(firstBar.o || latestBar.o || 0);
   const alpacaHigh = Math.max(...bars.map((b) => Number(b.h || 0)), 0);
+  const dollarVolume =
+  normalizedCryptoVolume * alpacaCurrent;
   const alpacaLow = Math.min(
     ...bars.map((b) => Number(b.l || Infinity))
   );
@@ -6971,24 +7008,35 @@ if (!institutionalUsdPair) {
             100
           : 0;
 
-      results.push({
-        ...quote,
-        score,
-        volume: Number(normalizedCryptoVolume.toFixed(2)),
-        averageVolume: Number(averageVolume.toFixed(2)),
-        volumeSpikeRatio: Number(volumeSpikeRatio.toFixed(3)),
-        dollarVolume: Number(dollarVolume.toFixed(2)),
-        barsFound: bars.length,
-        volume: liquidityMetrics.volume,
-        averageVolume: liquidityMetrics.averageVolume,
-        volumeSpikeRatio: liquidityMetrics.volumeSpikeRatio,
-        dollarVolume: liquidityMetrics.dollarVolume,
-        spreadPercent: Number(spreadPercent.toFixed(3)),
-        confirmations: {
-          volumeSpikeRatio: liquidityMetrics.volumeSpikeRatio,
-        },
-        qualifiedToBuy: false,
-      });
+      const spreadPercent =
+        Number(quote.bid || 0) > 0 &&
+        Number(quote.ask || 0) > 0
+          ? ((Number(quote.ask) - Number(quote.bid)) /
+              Number(quote.ask)) *
+            100
+          : 0;
+
+results.push({
+  ...quote,
+  score,
+
+  barsFound: bars.length,
+
+  volume: liquidityMetrics.volume,
+  averageVolume: liquidityMetrics.averageVolume,
+  volumeSpikeRatio: liquidityMetrics.volumeSpikeRatio,
+  dollarVolume: liquidityMetrics.dollarVolume,
+
+  spreadPercent: Number(spreadPercent.toFixed(3)),
+
+  confirmations: {
+    volumeSpikeRatio:
+      liquidityMetrics.volumeSpikeRatio,
+  },
+
+  qualifiedToBuy: false,
+});
+
     } catch (err) {
       saveSkippedSymbol(symbol, err.message);
     }
