@@ -2119,7 +2119,13 @@ function calculateBlackRockPortfolioOptimizer(
           ? directTechnicalScore
           : clampScore(
               Number(signal.score || 0) * 0.75 +
-                (Number(signal.barsFound || 0) >= 30 ? 15 : 0) +
+           (Number(signal.barsFound || 0) >= 30
+  ? 15
+  : Number(signal.barsFound || 0) >= 20
+  ? 10
+  : Number(signal.barsFound || 0) >= 10
+  ? 5
+  : 0)
                 (signal.qualifiedToBuy !== false ? 10 : -15)
             );
 
@@ -4786,6 +4792,25 @@ function scoreCrypto(quote, bars = []) {
   return Math.min(100, Math.max(0, Math.round(score)));
 }
 
+async function getBestCryptoBars(symbol) {
+  const attempts = [
+    ["5Min", 30],
+    ["1Min", 30],
+    ["15Min", 30],
+  ];
+
+  for (const [timeframe, limit] of attempts) {
+    const bars = await getCryptoRecentBars(symbol, timeframe, limit);
+
+    if (Array.isArray(bars) && bars.length >= 10) {
+      return bars;
+    }
+  }
+
+  return await getCryptoRecentBars(symbol, "1Min", 30);
+}
+
+
 async function scanCryptoMarket() {
   if (!["live_crypto", "live_stock", "smart"].includes(TRADING_MODE)) {
     throw new Error("Crypto scanner is only available in live modes");
@@ -4799,7 +4824,7 @@ async function scanCryptoMarket() {
   for (const symbol of symbols) {
     try {
       const quote = await getCryptoLatestQuote(symbol);
-      const bars = await getCryptoRecentBars(symbol, "5Min", 30);
+      const bars = await getBestCryptoBars(symbol);
       const score = scoreCrypto(quote, bars);
 
       results.push({
@@ -6701,7 +6726,13 @@ const getUnifiedTechnicalScore = (signal = {}) => {
 
   return clampScore(
     Number(signal.score || 0) * 0.85 +
-      (Number(signal.barsFound || 0) >= 30 ? 15 : 0) +
+      (Number(signal.barsFound || 0) >= 30
+  ? 15
+  : Number(signal.barsFound || 0) >= 20
+  ? 10
+  : Number(signal.barsFound || 0) >= 10
+  ? 5
+  : 0)
       (signal.qualifiedToBuy !== false ? 5 : -20)
   );
 };
