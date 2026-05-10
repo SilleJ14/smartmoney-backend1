@@ -6924,7 +6924,6 @@ if (!institutionalUsdPair) {
 
       const liquidityMetrics =
         calculateCryptoLiquidityFromBars(
-
           bars,
           Number(quote.current || 0)
         );
@@ -6937,15 +6936,7 @@ if (!institutionalUsdPair) {
             100
           : 0;
 
-      const spreadPercent =
-        Number(quote.bid || 0) > 0 &&
-        Number(quote.ask || 0) > 0
-          ? ((Number(quote.ask) - Number(quote.bid)) /
-              Number(quote.ask)) *
-            100
-          : 0;
-
-results.push({
+      results.push({
   ...quote,
   score,
 
