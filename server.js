@@ -2282,6 +2282,9 @@ function calculateInstitutionalExecutionIntelligence(
   const liquidityQuality =
     Number(engineState.liquidityIntelligenceState?.averageExecutionQuality || 50);
 
+  const liquidityReviews =
+    engineState.liquidityIntelligenceState?.liquidityReviews || [];
+
   const governorThrottle =
     Number(engineState.portfolioGovernorState?.capitalThrottleMultiplier || 1);
 
@@ -2302,6 +2305,23 @@ function calculateInstitutionalExecutionIntelligence(
         0
     );
 
+    const assetClass =
+      signal.assetClass ||
+      signal.asset_class ||
+      (symbol.includes("/") ? "crypto" : "stock");
+
+    const isCrypto = assetClass === "crypto";
+
+    const matchingLiquidityReview = liquidityReviews.find(
+      (review) => normalizeSymbol(review.symbol) === symbol
+    );
+
+    const signalLiquidityQuality = Number(
+      matchingLiquidityReview?.executionQualityScore ||
+        signal.cryptoInstitutionalQualification?.volumeConfidenceScore ||
+        liquidityQuality
+    );
+
     const existingPosition = positions.find(
       (position) => normalizeSymbol(position.symbol) === symbol
     );
@@ -2310,13 +2330,14 @@ function calculateInstitutionalExecutionIntelligence(
 
     const executionConfidence = clampScore(
       score * 0.35 +
-        liquidityQuality * 0.25 +
+        signalLiquidityQuality * 0.25 +
         Number(signal.technicalScore || 0) * 0.15 +
         Number(signal.statisticalScore || 0) * 0.15 +
         governorThrottle * 10 +
         cycleThrottle * 10 -
-        correlationRisk * 0.2 -
-        spreadPercent * 15
+        correlationRisk * (isCrypto ? 0.12 : 0.2) -
+        spreadPercent * (isCrypto ? 8 : 15) +
+        (isCrypto && signal.qualifiedToBuy === true ? 8 : 0)
     );
 
     const entryStyle =
@@ -2360,7 +2381,10 @@ function calculateInstitutionalExecutionIntelligence(
       score,
       price,
       volume,
+      assetClass,
       spreadPercent,
+      signalLiquidityQuality:
+        Number(signalLiquidityQuality.toFixed(2)),
       hasPosition,
       executionConfidence: Number(executionConfidence.toFixed(2)),
       entryStyle,
@@ -2857,6 +2881,9 @@ function calculateLiquidityIntelligenceEngine(signals = []) {
 
   const liquidityReviews = analyzedSignals.map((signal) => {
     const symbol = normalizeSymbol(signal.symbol);
+    const assetClass = signal.assetClass || signal.asset_class || "stock";
+    const isCrypto = assetClass === "crypto" || symbol.includes("/");
+
     const price = Number(signal.current || signal.price || 0);
     const volume = Number(signal.volume || 0);
     const bid = Number(signal.bid || 0);
@@ -2867,26 +2894,84 @@ function calculateLiquidityIntelligenceEngine(signals = []) {
         ? ((ask - bid) / ask) * 100
         : Number(signal.spreadPercent || 0);
 
-    const dollarVolume = price * volume;
+    const reportedDollarVolume = Number(signal.dollarVolume || 0);
+    const dollarVolume =
+      reportedDollarVolume > 0
+        ? reportedDollarVolume
+        : price * volume;
 
-    const liquidityDepthScore = clampScore(
+    const cryptoQualification =
+      signal.cryptoInstitutionalQualification || {};
+
+    const cryptoVolumeSpikeRatio = Number(
+      signal.volumeSpikeRatio ||
+        cryptoQualification.volumeSpikeRatio ||
+        0
+    );
+
+    const cryptoLiquidityConfidence = isCrypto
+      ? clampScore(
+          45 +
+            (spreadPercent <= 0.15
+              ? 25
+              : spreadPercent <= 0.35
+              ? 18
+              : spreadPercent <= 0.65
+              ? 10
+              : spreadPercent <= 1
+              ? 2
+              : -20) +
+            (cryptoVolumeSpikeRatio >= 2
+              ? 18
+              : cryptoVolumeSpikeRatio >= 1
+              ? 12
+              : cryptoVolumeSpikeRatio >= 0.5
+              ? 6
+              : 0) +
+            (dollarVolume >= 1000
+              ? 15
+              : dollarVolume >= 100
+              ? 10
+              : dollarVolume > 0
+              ? 5
+              : 0) +
+            (Number(signal.barsFound || 0) >= 20 ? 8 : 0) +
+            (cryptoQualification.liquidityPass ? 10 : 0)
+        )
+      : 0;
+
+    const stockLiquidityDepthScore = clampScore(
       20 +
         (volume >= 1000000 ? 35 : volume >= 250000 ? 25 : volume >= 50000 ? 15 : 0) +
         (dollarVolume >= 5000000 ? 25 : dollarVolume >= 1000000 ? 15 : dollarVolume >= 250000 ? 8 : 0) +
         (spreadPercent <= 0.15 ? 20 : spreadPercent <= 0.35 ? 10 : spreadPercent <= 0.65 ? 0 : -20)
     );
 
+    const liquidityDepthScore = isCrypto
+      ? cryptoLiquidityConfidence
+      : stockLiquidityDepthScore;
+
     const estimatedSlippagePercent = Number(
       (
-        Math.max(0.05, spreadPercent * 0.6) +
-        (volume < 50000 ? 0.35 : volume < 250000 ? 0.18 : 0.05)
+        Math.max(0.03, spreadPercent * (isCrypto ? 0.45 : 0.6)) +
+        (isCrypto
+          ? spreadPercent <= 0.25
+            ? 0.05
+            : spreadPercent <= 0.65
+            ? 0.12
+            : 0.25
+          : volume < 50000
+          ? 0.35
+          : volume < 250000
+          ? 0.18
+          : 0.05)
       ).toFixed(3)
     );
 
     const executionQualityScore = clampScore(
       liquidityDepthScore -
-        estimatedSlippagePercent * 20 -
-        (spreadPercent > 0.65 ? 20 : 0)
+        estimatedSlippagePercent * (isCrypto ? 10 : 20) -
+        (spreadPercent > (isCrypto ? 1.25 : 0.65) ? 20 : 0)
     );
 
     const liquidityAction =
@@ -2900,6 +2985,7 @@ function calculateLiquidityIntelligenceEngine(signals = []) {
 
     return {
       symbol,
+      assetClass: isCrypto ? "crypto" : assetClass,
       price,
       volume,
       dollarVolume: Number(dollarVolume.toFixed(2)),
@@ -2908,6 +2994,9 @@ function calculateLiquidityIntelligenceEngine(signals = []) {
       estimatedSlippagePercent,
       executionQualityScore: Number(executionQualityScore.toFixed(2)),
       liquidityAction,
+      cryptoLiquidityConfidence: isCrypto
+        ? Number(cryptoLiquidityConfidence.toFixed(2))
+        : null,
     };
   });
 
@@ -2923,11 +3012,24 @@ function calculateLiquidityIntelligenceEngine(signals = []) {
         ) / liquidityReviews.length
       : 0;
 
-  const spreadPersistenceRisk =
-    liquidityReviews.filter((item) => item.spreadPercent > 0.65).length;
+  const spreadPersistenceRisk = liquidityReviews.filter(
+    (item) =>
+      item.spreadPercent >
+      (item.assetClass === "crypto" ? 1.25 : 0.65)
+  ).length;
+
+  const hasQualifiedCrypto = analyzedSignals.some(
+    (signal) =>
+      (signal.assetClass === "crypto" ||
+        signal.asset_class === "crypto" ||
+        String(signal.symbol || "").includes("/")) &&
+      signal.qualifiedToBuy === true
+  );
 
   const shouldBlockWeakLiquidity =
-    averageExecutionQuality < 45 || spreadPersistenceRisk >= 3;
+    averageExecutionQuality < 35 ||
+    spreadPersistenceRisk >= 5 ||
+    (averageExecutionQuality < 45 && !hasQualifiedCrypto);
 
   return {
     updatedAt: new Date().toISOString(),
@@ -2935,11 +3037,13 @@ function calculateLiquidityIntelligenceEngine(signals = []) {
     weakLiquidityCount: weakLiquiditySignals.length,
     spreadPersistenceRisk,
     shouldBlockWeakLiquidity,
+    hasQualifiedCrypto,
     weakestLiquiditySignals: weakLiquiditySignals.slice(0, 10),
     liquidityReviews: liquidityReviews.slice(0, 25),
     liquidityReason:
       `Execution quality ${averageExecutionQuality.toFixed(0)}/100 • ` +
-      `Weak liquidity ${weakLiquiditySignals.length}`,
+      `Weak liquidity ${weakLiquiditySignals.length} • ` +
+      `${hasQualifiedCrypto ? "Qualified crypto present" : "No qualified crypto"}`,
   };
 }
 
@@ -7395,44 +7499,63 @@ function calculateCryptoLiquidityFromBars(
     latestBar.volume || 0
   );
 
+  const nonZeroVolumes = cleanBars
+    .map((bar) => Number(bar.volume || 0))
+    .filter((volume) => volume > 0);
+
   const averageVolume =
-    cleanBars.length > 0
-      ? cleanBars.reduce(
-          (sum, bar) =>
-            sum + Number(bar.volume || 0),
+    nonZeroVolumes.length > 0
+      ? nonZeroVolumes.reduce(
+          (sum, volume) => sum + volume,
           0
-        ) / cleanBars.length
+        ) / nonZeroVolumes.length
       : 0;
+
+  const maxVolume =
+    nonZeroVolumes.length > 0
+      ? Math.max(...nonZeroVolumes)
+      : 0;
+
+  const effectiveVolume =
+    latestVolume > 0
+      ? latestVolume
+      : averageVolume > 0
+      ? averageVolume
+      : maxVolume;
 
   const volumeSpikeRatio =
-    averageVolume > 0
+    averageVolume > 0 && latestVolume > 0
       ? latestVolume / averageVolume
+      : averageVolume > 0
+      ? 1
       : 0;
 
-  const dollarVolume =
-    latestVolume *
-    Number(
-      currentPrice ||
+  const effectivePrice = Number(
+    currentPrice ||
       latestBar.close ||
+      cleanBars[cleanBars.length - 1]?.close ||
       0
-    );
+  );
+
+  const dollarVolume =
+    effectiveVolume * effectivePrice;
+
+  const volumeConfidenceScore = clampScore(
+    25 +
+      (cleanBars.length >= 20 ? 20 : cleanBars.length >= 10 ? 10 : 0) +
+      (nonZeroVolumes.length >= 10 ? 25 : nonZeroVolumes.length >= 3 ? 15 : nonZeroVolumes.length > 0 ? 8 : 0) +
+      (volumeSpikeRatio >= 2 ? 20 : volumeSpikeRatio >= 1 ? 12 : volumeSpikeRatio > 0 ? 6 : 0)
+  );
 
   return {
-    volume: Number(
-      latestVolume.toFixed(2)
-    ),
-
-    averageVolume: Number(
-      averageVolume.toFixed(2)
-    ),
-
-    volumeSpikeRatio: Number(
-      volumeSpikeRatio.toFixed(3)
-    ),
-
-    dollarVolume: Number(
-      dollarVolume.toFixed(2)
-    ),
+    volume: Number(latestVolume.toFixed(2)),
+    averageVolume: Number(averageVolume.toFixed(2)),
+    effectiveVolume: Number(effectiveVolume.toFixed(2)),
+    maxVolume: Number(maxVolume.toFixed(2)),
+    nonZeroVolumeBars: nonZeroVolumes.length,
+    volumeSpikeRatio: Number(volumeSpikeRatio.toFixed(3)),
+    dollarVolume: Number(dollarVolume.toFixed(2)),
+    volumeConfidenceScore: Number(volumeConfidenceScore.toFixed(2)),
   };
 }
 
@@ -7453,17 +7576,30 @@ function calculateCryptoInstitutionalQualification({
     liquidityMetrics.dollarVolume || 0
   );
 
+  const volumeConfidenceScore = Number(
+    liquidityMetrics.volumeConfidenceScore || 0
+  );
+
   const cleanSpreadPercent = Number(spreadPercent || 0);
 
+  const spreadPass = cleanSpreadPercent <= 0.85;
+
   const liquidityPass =
-    cleanSpreadPercent <= 1.25 &&
+    spreadPass &&
     (
-      dollarVolume >= 1000 ||
-      volumeSpikeRatio >= 0.75
+      dollarVolume >= 25 ||
+      volumeSpikeRatio >= 0.5 ||
+      volumeConfidenceScore >= 55 ||
+      cleanSpreadPercent <= 0.25
     );
 
   const momentumPass =
-    Number(score || 0) >= 70;
+    Number(score || 0) >=
+    Number(
+      engineState.selfOptimizationState?.adaptiveMinScoreToBuy ||
+        CONFIG.minScoreToBuy ||
+        70
+    );
 
   const dataPass =
     barsFound >= 10 &&
@@ -7486,11 +7622,13 @@ function calculateCryptoInstitutionalQualification({
       momentumPass,
       liquidityPass,
       macroPass,
+      spreadPass,
       barsFound,
       score,
       spreadPercent: cleanSpreadPercent,
       dollarVolume,
       volumeSpikeRatio,
+      volumeConfidenceScore,
       reason: qualifiedToBuy
         ? "Crypto institutional qualification passed"
         : "Crypto institutional qualification failed",
