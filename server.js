@@ -1543,32 +1543,34 @@ const canRotateWeakCapital = weakCapitalPreview > 0;
     Number(deploymentPriorityScore.toFixed(2)),
   reinforcementActionBias,
 suggestedAction:
-    reinforcedProbability >= 80 &&
-    hasDirectBudget &&
-    score >=
-      Number(
-        engineState.selfOptimizationState?.adaptiveMinScoreToBuy ||
-          CONFIG.minScoreToBuy
-      )
-      ? "HIGH_CONVICTION_DEPLOYMENT"
-: hasDirectBudget &&
-        score >=
-          Number(
-            engineState.selfOptimizationState?.adaptiveMinScoreToBuy ||
-              CONFIG.minScoreToBuy
-          )
-      ? "ELIGIBLE_FOR_CAPITAL"
-: canRotateWeakCapital &&
-        score >=
-          Number(
-            engineState.selfOptimizationState?.adaptiveMinScoreToBuy ||
-              CONFIG.minScoreToBuy
-          ) +
-            CONFIG.replaceWeakestMinScoreGap
-      ? "ROTATION_CANDIDATE"
-      : reinforcedProbability <= 40
-      ? "REDUCE_RISK"
-      : "WATCH_ONLY",
+  reinforcedProbability >= 80 &&
+  hasDirectBudget &&
+  score >=
+    Number(
+      engineState.selfOptimizationState?.adaptiveMinScoreToBuy ||
+        CONFIG.minScoreToBuy
+    )
+    ? "HIGH_CONVICTION_DEPLOYMENT"
+    : reinforcedProbability >= 60 &&
+      hasDirectBudget &&
+      score >=
+        Number(
+          engineState.selfOptimizationState?.adaptiveMinScoreToBuy ||
+            CONFIG.minScoreToBuy
+        )
+    ? "ELIGIBLE_FOR_CAPITAL"
+    : reinforcedProbability >= 70 &&
+      canRotateWeakCapital &&
+      score >=
+        Number(
+          engineState.selfOptimizationState?.adaptiveMinScoreToBuy ||
+            CONFIG.minScoreToBuy
+        ) +
+          CONFIG.replaceWeakestMinScoreGap
+    ? "ROTATION_CANDIDATE"
+    : reinforcedProbability <= 40
+    ? "REDUCE_RISK"
+    : "WATCH_ONLY",
   reinforcedProbability,
   reinforcementCapitalMultiplier,     
 
@@ -3378,10 +3380,6 @@ function classifyInstitutionalSetup(signal = {}) {
     ?.finalInstitutionalDecisionScore || score
 );
 
-const deploymentPriorityScore = clampScore(
-  orchestratorScore * 0.7 +
-    reinforcedProbability * 0.3
-);
 
   const technicalScore = Number(
     signal.technicalIntelligence?.institutionalEntryScore ||
@@ -9377,68 +9375,6 @@ engineState.macroRiskHistory.unshift(macroRisk);
 engineState.macroRiskHistory =
   engineState.macroRiskHistory.slice(0, 200);
 
-
-const executionIntelligence =
-  calculateInstitutionalExecutionIntelligence(
-    allSignalsForAnalytics,
-    analyticsAiPositions
-  );
-
-engineState.executionIntelligenceState =
-  executionIntelligence;
-
-engineState.executionIntelligenceHistory.unshift(
-  executionIntelligence
-);
-
-engineState.executionIntelligenceHistory =
-  engineState.executionIntelligenceHistory.slice(0, 200);  
-
-const autonomousTradingSystem =
-  calculateFullInstitutionalAutonomousTradingSystem(
-    allSignalsForAnalytics
-  );
-
-engineState.autonomousTradingSystemState =
-  autonomousTradingSystem;
-
-engineState.autonomousTradingSystemHistory.unshift(
-  autonomousTradingSystem
-);
-
-engineState.autonomousTradingSystemHistory =
-  engineState.autonomousTradingSystemHistory.slice(0, 200);  
-
-const reinforcementWeights =
-  calculateReinforcementLearningWeightEngine(
-    allSignalsForAnalytics
-  );
-
-engineState.reinforcementWeightState =
-  reinforcementWeights;
-
-engineState.reinforcementWeightHistory.unshift(
-  reinforcementWeights
-);
-
-engineState.reinforcementWeightHistory =
-  engineState.reinforcementWeightHistory.slice(0, 200);  
-
-const selfOptimization =
-  calculateAiSelfOptimizationLayer(
-    allSignalsForAnalytics
-  );
-
-engineState.selfOptimizationState =
-  selfOptimization;
-
-engineState.selfOptimizationHistory.unshift(
-  selfOptimization
-);
-
-engineState.selfOptimizationHistory =
-  engineState.selfOptimizationHistory.slice(0, 200);  
-
 const marketCycleIntelligence =
   calculateAdaptiveMarketCycleIntelligence(
     allSignalsForAnalytics
@@ -9452,7 +9388,7 @@ engineState.marketCycleIntelligenceHistory.unshift(
 );
 
 engineState.marketCycleIntelligenceHistory =
-  engineState.marketCycleIntelligenceHistory.slice(0, 200);  
+  engineState.marketCycleIntelligenceHistory.slice(0, 200);
 
 const liquidityIntelligence =
   calculateLiquidityIntelligenceEngine(
@@ -9467,7 +9403,7 @@ engineState.liquidityIntelligenceHistory.unshift(
 );
 
 engineState.liquidityIntelligenceHistory =
-  engineState.liquidityIntelligenceHistory.slice(0, 200);  
+  engineState.liquidityIntelligenceHistory.slice(0, 200);
 
 const correlationIntelligence =
   calculateCorrelationIntelligenceEngine(
@@ -9483,10 +9419,7 @@ engineState.correlationIntelligenceHistory.unshift(
 );
 
 engineState.correlationIntelligenceHistory =
-  engineState.correlationIntelligenceHistory.slice(
-    0,
-    200
-  );  
+  engineState.correlationIntelligenceHistory.slice(0, 200);
 
 const portfolioGovernor =
   calculateAutonomousPortfolioGovernor(
@@ -9503,6 +9436,67 @@ engineState.portfolioGovernorState = portfolioGovernor;
 engineState.portfolioGovernorHistory.unshift(portfolioGovernor);
 engineState.portfolioGovernorHistory =
   engineState.portfolioGovernorHistory.slice(0, 200);
+
+const selfOptimization =
+  calculateAiSelfOptimizationLayer(
+    allSignalsForAnalytics
+  );
+
+engineState.selfOptimizationState =
+  selfOptimization;
+
+engineState.selfOptimizationHistory.unshift(
+  selfOptimization
+);
+
+engineState.selfOptimizationHistory =
+  engineState.selfOptimizationHistory.slice(0, 200);
+
+const reinforcementWeights =
+  calculateReinforcementLearningWeightEngine(
+    allSignalsForAnalytics
+  );
+
+engineState.reinforcementWeightState =
+  reinforcementWeights;
+
+engineState.reinforcementWeightHistory.unshift(
+  reinforcementWeights
+);
+
+engineState.reinforcementWeightHistory =
+  engineState.reinforcementWeightHistory.slice(0, 200);
+
+const executionIntelligence =
+  calculateInstitutionalExecutionIntelligence(
+    allSignalsForAnalytics,
+    analyticsAiPositions
+  );
+
+engineState.executionIntelligenceState =
+  executionIntelligence;
+
+engineState.executionIntelligenceHistory.unshift(
+  executionIntelligence
+);
+
+engineState.executionIntelligenceHistory =
+  engineState.executionIntelligenceHistory.slice(0, 200);
+
+const autonomousTradingSystem =
+  calculateFullInstitutionalAutonomousTradingSystem(
+    allSignalsForAnalytics
+  );
+
+engineState.autonomousTradingSystemState =
+  autonomousTradingSystem;
+
+engineState.autonomousTradingSystemHistory.unshift(
+  autonomousTradingSystem
+);
+
+engineState.autonomousTradingSystemHistory =
+  engineState.autonomousTradingSystemHistory.slice(0, 200);
 
 const liveAiPerformance =
   calculateLiveAiPerformanceAnalyticsEngine(
