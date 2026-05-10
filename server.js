@@ -7296,34 +7296,6 @@ engineState.technicalIntelligenceHistory.unshift(
 engineState.technicalIntelligenceHistory =
   engineState.technicalIntelligenceHistory.slice(0, 200);
 
-  const spreadPercent = Number(
-    signal.cryptoRealism?.spreadPercent || 0
-  );
-
-  const statisticalScore =
-    Number(signal.statisticalScore || 0) +
-    Number(signal.statisticalEdgeScore || 0) +
-    Number(signal.statisticalEdge?.statisticalEdgeScore || 0);
-
-  const timeframeDecision =
-    signal.timeframeDecision || "WEAK_CONFIRMATION";
-
-  const finalInstitutionalDecisionScore =
-    Number(
-      signal.institutionalOrchestrator
-        ?.finalInstitutionalDecisionScore || 0
-    );
-
-  signal.qualifiedToBuy =
-    realismScore >= CONFIG.minScoreToBuy &&
-    finalInstitutionalDecisionScore >= 65 &&
-    spreadPercent <= 0.65 &&
-    timeframeDecision !== "TIMEFRAME_CONFLICT" &&
-    (
-      statisticalScore > 0 ||
-      realismScore >= 85
-    );
-
 const orchestratedSignals =
   allSignalsForAnalytics.map((signal) => ({
     ...signal,
