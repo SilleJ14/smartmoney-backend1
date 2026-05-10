@@ -4723,81 +4723,10 @@ async function getCombinedStockQuote(symbol) {
   const bars = await getRecentBars(symbol, "5Min", 30);
   const barStats = calculateBarStats(bars);
 
-  const latestBar = bars[bars.length - 1] || {};
-  const firstBar = bars[0] || {};
-  const rawVolume =
-  latestBar?.v ??
-  latestBar?.volume ??
-  latestBar?.vw ??
-  latestBar?.volume_crypto ??
-  latestBar?.volume_usd ??
-  latestBar?.baseVolume ??
-  latestBar?.quoteVolume ??
-  0;
+const latestBar = bars[bars.length - 1] || {};
+const firstBar = bars[0] || {};
 
-const normalizedCryptoVolume =
-  Number(rawVolume) || 0;
-
-const averageVolume =
-  bars.length > 0
-    ? bars.reduce(
-        (sum, bar) =>
-          sum +
-          Number(
-            bar.v ??
-              bar.volume ??
-              bar.volume_crypto ??
-              bar.volume_usd ??
-              bar.baseVolume ??
-              bar.quoteVolume ??
-              0
-          ),
-        0
-      ) / bars.length
-    : 0;
-
-const volumeSpikeRatio =
-  averageVolume > 0
-    ? normalizedCryptoVolume / averageVolume
-    : 0;
-  const rawVolume =
-  latestBar?.v ??
-  latestBar?.volume ??
-  latestBar?.vw ??
-  latestBar?.volume_crypto ??
-  latestBar?.volume_usd ??
-  latestBar?.baseVolume ??
-  latestBar?.quoteVolume ??
-  0;
-
-const normalizedCryptoVolume =
-  Number(rawVolume) || 0;
-
-const averageVolume =
-  bars.length > 0
-    ? bars.reduce(
-        (sum, bar) =>
-          sum +
-          Number(
-            bar.v ??
-              bar.volume ??
-              bar.volume_crypto ??
-              bar.volume_usd ??
-              0
-          ),
-        0
-      ) / bars.length
-    : 0;
-
-const volumeSpikeRatio =
-  averageVolume > 0
-    ? normalizedCryptoVolume / averageVolume
-    : 0;
-
-const dollarVolume =
-  normalizedCryptoVolume * alpacaCurrent;
-
-  const alpacaCurrent = Number(latestBar.c || 0);
+const alpacaCurrent = Number(latestBar.c || 0);
   const alpacaOpen = Number(firstBar.o || latestBar.o || 0);
   const alpacaHigh = Math.max(...bars.map((b) => Number(b.h || 0)), 0);
   const dollarVolume =
