@@ -371,6 +371,29 @@ institutionalExposureMode: engineState.institutionalExposureMode,
 
 engineFreezeDetected: engineState.engineFreezeDetected,
 engineFreezeCount: engineState.engineFreezeCount,
+phase20AutonomousOrchestrationState:
+  engineState.phase20AutonomousOrchestrationState || null,
+
+phase20AutonomousOrchestrationHistory:
+  (engineState.phase20AutonomousOrchestrationHistory || []).slice(0, 200),
+
+crossEngineMemoryState:
+  engineState.crossEngineMemoryState || null,
+
+crossEngineMemoryHistory:
+  (engineState.crossEngineMemoryHistory || []).slice(0, 200),
+
+adaptiveExecutionTimingState:
+  engineState.adaptiveExecutionTimingState || null,
+
+adaptiveExecutionTimingHistory:
+  (engineState.adaptiveExecutionTimingHistory || []).slice(0, 200),
+
+phase21AutonomousBrainState:
+  engineState.phase21AutonomousBrainState || null,
+
+phase21AutonomousBrainHistory:
+  (engineState.phase21AutonomousBrainHistory || []).slice(0, 200),
       pendingExits: engineState.pendingExits || [],
     };
 
@@ -586,6 +609,14 @@ institutionalOrchestratorState: null,
 institutionalOrchestratorHistory: [],
 autonomousTradingSystemState: null,
 autonomousTradingSystemHistory: [],
+phase20AutonomousOrchestrationState: null,
+phase20AutonomousOrchestrationHistory: [],
+crossEngineMemoryState: null,
+crossEngineMemoryHistory: [],
+adaptiveExecutionTimingState: null,
+adaptiveExecutionTimingHistory: [],
+phase21AutonomousBrainState: null,
+phase21AutonomousBrainHistory: [],
 executionIntelligenceState: null,
 executionIntelligenceHistory: [],
 reinforcementWeightState: null,
@@ -1065,64 +1096,97 @@ function estimateSectorIntelligence(q) {
   const percentChange = Number(q.percentChange || 0);
   const confirmations = q.confirmations || {};
 
-  const techLike = ["AI", "NET", "HUBS", "UPWK", "FROG", "RKLB", "RXT"];
-  const healthcareLike = ["AMPH", "SRTS", "AMN"];
-  const industrialLike = ["KODK", "CORD", "ALTG"];
-  const speculativeLike = ["TEAD", "FLUX", "KMLI", "SNDQ", "NETG"];
+  const liquidityTier =
+    volume >= 1000000
+      ? "Institutional Liquidity"
+      : volume >= 250000
+      ? "Strong Liquidity"
+      : volume >= 25000
+      ? "Moderate Liquidity"
+      : "Thin Liquidity";
+
+  const volatilityTier =
+    Math.abs(percentChange) >= 40
+      ? "Extreme Volatility"
+      : Math.abs(percentChange) >= 20
+      ? "High Volatility"
+      : Math.abs(percentChange) >= 5
+      ? "Active Momentum"
+      : "Normal Volatility";
 
   let estimatedSector = "General Market";
-  if (techLike.includes(symbol)) estimatedSector = "Technology / Innovation";
-  if (healthcareLike.includes(symbol)) estimatedSector = "Healthcare";
-  if (industrialLike.includes(symbol)) estimatedSector = "Industrial";
-  if (speculativeLike.includes(symbol) || price < 5) estimatedSector = "Speculative Small Cap";
+
+  if (price < 5 || liquidityTier === "Thin Liquidity") {
+    estimatedSector = "Speculative Small Cap";
+  } else if (
+    percentChange >= 5 &&
+    liquidityTier !== "Thin Liquidity"
+  ) {
+    estimatedSector = "Momentum Leadership";
+  } else if (
+    Math.abs(percentChange) <= 2 &&
+    liquidityTier === "Institutional Liquidity"
+  ) {
+    estimatedSector = "Large Cap Defensive";
+  }
 
   const sectorMomentumScore = clampScore(
     50 +
-    (percentChange > 0 && percentChange <= 20 ? 15 : 0) -
-    (percentChange > 40 ? 20 : 0) +
-    (confirmations.closeNearHigh ? 10 : 0)
+      (percentChange > 0 && percentChange <= 20 ? 15 : 0) -
+      (percentChange > 40 ? 20 : 0) +
+      (confirmations.closeNearHigh ? 10 : 0)
   );
 
   const sectorRiskScore = clampScore(
     75 -
-    (estimatedSector === "Speculative Small Cap" ? 25 : 0) -
-    (confirmations.fakeBreakout ? 30 : 0) -
-    (confirmations.newsRisk ? 25 : 0) -
-    (volume < 25000 ? 10 : 0)
+      (estimatedSector === "Speculative Small Cap" ? 25 : 0) -
+      (volatilityTier === "Extreme Volatility" ? 20 : 0) -
+      (confirmations.fakeBreakout ? 30 : 0) -
+      (confirmations.newsRisk ? 25 : 0) -
+      (volume < 25000 ? 10 : 0)
   );
 
   const sectorLiquidityScore = clampScore(
     40 +
-    (volume >= 1000000 ? 35 : volume >= 250000 ? 25 : volume >= 25000 ? 15 : -10) +
-    (price >= 5 ? 10 : -10)
+      (volume >= 1000000
+        ? 35
+        : volume >= 250000
+        ? 25
+        : volume >= 25000
+        ? 15
+        : -10) +
+      (price >= 5 ? 10 : -10)
   );
 
   const sectorLeadershipScore = clampScore(
     45 +
-    (percentChange >= 2 && percentChange <= 20 ? 15 : 0) +
-    (volume >= 250000 ? 10 : 0) +
-    (confirmations.aboveVwap ? 8 : 0) -
-    (percentChange > 50 ? 20 : 0)
+      (percentChange >= 2 && percentChange <= 20 ? 15 : 0) +
+      (volume >= 250000 ? 10 : 0) +
+      (confirmations.aboveVwap ? 8 : 0) -
+      (percentChange > 50 ? 20 : 0)
   );
 
   const sectorScore = clampScore(
     sectorMomentumScore * 0.3 +
-    sectorRiskScore * 0.3 +
-    sectorLiquidityScore * 0.2 +
-    sectorLeadershipScore * 0.2
+      sectorRiskScore * 0.3 +
+      sectorLiquidityScore * 0.2 +
+      sectorLeadershipScore * 0.2
   );
 
   const sectorRole =
     sectorScore >= 80
       ? "Sector Leader"
       : sectorScore >= 65
-        ? "Strong Sector Candidate"
-        : sectorScore >= 50
-          ? "Sector Watchlist"
-          : "Sector Risk Candidate";
+      ? "Strong Sector Candidate"
+      : sectorScore >= 50
+      ? "Sector Watchlist"
+      : "Sector Risk Candidate";
 
   return {
+    symbol,
     estimatedSector,
+    liquidityTier,
+    volatilityTier,
     sectorScore,
     sectorMomentumScore,
     sectorRiskScore,
@@ -1667,6 +1731,400 @@ const strongestReinforcementSignal =
       `Weak capital: $${weakCapital.toFixed(2)} • ` +
       `Remaining bot budget: $${remainingBotBudget.toFixed(2)} • ` +
       `${cashReserveStatus}`,
+  };
+}
+
+function calculateEngineFreshnessWeight(updatedAt, staleAfterSeconds = 180) {
+  const timestamp = updatedAt ? new Date(updatedAt).getTime() : 0;
+
+  if (!timestamp) return 0.35;
+
+  const ageSeconds = Math.max(0, (Date.now() - timestamp) / 1000);
+
+  if (ageSeconds <= staleAfterSeconds) return 1;
+  if (ageSeconds <= staleAfterSeconds * 2) return 0.75;
+  if (ageSeconds <= staleAfterSeconds * 4) return 0.5;
+
+  return 0.25;
+}
+
+function calculatePhase20AsyncMultiAgentOrchestration(signals = []) {
+  const analyzedSignals = Array.isArray(signals) ? signals : [];
+
+  const agents = [
+    {
+      name: "portfolioGovernor",
+      priority: 10,
+      state: engineState.portfolioGovernorState,
+      score: Number(engineState.portfolioGovernorState?.governorScore || 50),
+      blocks: engineState.portfolioGovernorState?.shouldBlockNewTrades === true,
+      weight: 1.25,
+    },
+    {
+      name: "autonomousParliament",
+      priority: 10,
+      state: engineState.autonomousTradingSystemState,
+      score: Number(engineState.autonomousTradingSystemState?.probabilityScore || 50),
+      blocks: engineState.autonomousTradingSystemState?.shouldBlockNewTrades === true,
+      weight: 1.3,
+    },
+    {
+      name: "macroRisk",
+      priority: 9,
+      state: engineState.macroRiskState,
+      score: 100 - Number(engineState.macroRiskState?.macroStressScore || 50),
+      blocks: engineState.macroRiskState?.shouldBlockNewTrades === true,
+      weight: 1.2,
+    },
+    {
+      name: "liquidity",
+      priority: 8,
+      state: engineState.liquidityIntelligenceState,
+      score: Number(engineState.liquidityIntelligenceState?.averageExecutionQuality || 50),
+      blocks: engineState.liquidityIntelligenceState?.shouldBlockWeakLiquidity === true,
+      weight: 1.05,
+    },
+    {
+      name: "correlation",
+      priority: 8,
+      state: engineState.correlationIntelligenceState,
+      score: 100 - Number(engineState.correlationIntelligenceState?.hiddenExposureRiskScore || 0),
+      blocks: engineState.correlationIntelligenceState?.shouldReduceExposure === true,
+      weight: 1.05,
+    },
+    {
+      name: "execution",
+      priority: 7,
+      state: engineState.executionIntelligenceState,
+      score: Number(engineState.executionIntelligenceState?.averageExecutionConfidence || 50),
+      blocks: Number(engineState.executionIntelligenceState?.averageExecutionConfidence || 50) < 40,
+      weight: 1,
+    },
+    {
+      name: "selfOptimization",
+      priority: 7,
+      state: engineState.selfOptimizationState,
+      score: Number(engineState.selfOptimizationState?.adaptiveRiskMultiplier || 1) * 70,
+      blocks: Number(engineState.selfOptimizationState?.adaptiveRiskMultiplier || 1) <= 0.35,
+      weight: 1,
+    },
+    {
+      name: "reinforcement",
+      priority: 5,
+      state: engineState.reinforcementWeightState,
+      score:
+        engineState.reinforcementWeightState?.learningMode === "DEFENSIVE_REWEIGHTING"
+          ? 45
+          : engineState.reinforcementWeightState?.learningMode === "REINFORCE_WINNING_FACTORS"
+          ? 78
+          : 60,
+      blocks: false,
+      weight: 0.85,
+    },
+  ];
+
+  const reviewedAgents = agents.map((agent) => {
+    const freshnessWeight = calculateEngineFreshnessWeight(agent.state?.updatedAt);
+    const weightedScore = clampScore(
+      Number(agent.score || 0) * Number(agent.weight || 1) * freshnessWeight
+    );
+
+    return {
+      name: agent.name,
+      priority: agent.priority,
+      score: clampScore(agent.score),
+      weightedScore,
+      freshnessWeight: Number(freshnessWeight.toFixed(2)),
+      blocks: agent.blocks,
+      updatedAt: agent.state?.updatedAt || null,
+    };
+  });
+
+  const blockingAgents = reviewedAgents.filter((agent) => agent.blocks);
+  const staleCriticalAgents = reviewedAgents.filter(
+    (agent) => agent.priority >= 8 && Number(agent.freshnessWeight || 0) < 0.5
+  );
+
+  const consensusScore =
+    reviewedAgents.reduce(
+      (sum, agent) =>
+        sum + Number(agent.weightedScore || 0) * Number(agent.priority || 1),
+      0
+    ) /
+    Math.max(
+      1,
+      reviewedAgents.reduce((sum, agent) => sum + Number(agent.priority || 1), 0)
+    );
+
+  const consensusMode =
+    blockingAgents.length >= 2
+      ? "BLOCKING_CONSENSUS"
+      : staleCriticalAgents.length > 0
+      ? "STALE_CRITICAL_ENGINES"
+      : consensusScore >= 80
+      ? "HIGH_CONFIDENCE_AUTONOMY"
+      : consensusScore >= 68
+      ? "CONTROLLED_AUTONOMY"
+      : consensusScore >= 55
+      ? "SELECTIVE_AUTONOMY"
+      : "DEFENSIVE_AUTONOMY";
+
+  const shouldBlockNewTrades =
+    blockingAgents.length >= 2 ||
+    consensusMode === "STALE_CRITICAL_ENGINES" ||
+    consensusScore < 45;
+
+  const orchestrationMultiplier =
+    shouldBlockNewTrades
+      ? 0
+      : consensusScore >= 82
+      ? 1.1
+      : consensusScore >= 70
+      ? 0.85
+      : consensusScore >= 58
+      ? 0.55
+      : 0.25;
+
+  return {
+    updatedAt: new Date().toISOString(),
+    phase: "20.1_ASYNC_MULTI_AGENT_ORCHESTRATION",
+    consensusMode,
+    consensusScore: Number(consensusScore.toFixed(2)),
+    orchestrationMultiplier: Number(orchestrationMultiplier.toFixed(2)),
+    shouldBlockNewTrades,
+    blockingAgents,
+    staleCriticalAgents,
+    reviewedAgents: reviewedAgents.sort((a, b) => b.priority - a.priority),
+    topSignals: analyzedSignals
+      .filter((signal) => signal.qualifiedToBuy !== false)
+      .sort((a, b) => Number(b.score || 0) - Number(a.score || 0))
+      .slice(0, 10),
+    reason:
+      `${consensusMode} • Consensus ${consensusScore.toFixed(0)}/100 • ` +
+      `${blockingAgents.length} blocking agents`,
+  };
+}
+
+function calculateCrossEngineMemoryEvolution(signals = []) {
+  const analyzedSignals = Array.isArray(signals) ? signals : [];
+  const priorTrust = engineState.crossEngineMemoryState?.engineTrust || {};
+  const recentTrades = (engineState.tradeJournalHistory || []).slice(0, 75);
+
+  const recentWinRate =
+    recentTrades.length > 0
+      ? (recentTrades.filter((trade) => Number(trade.profitPercent || 0) > 0).length /
+          recentTrades.length) *
+        100
+      : Number(engineState.tradeJournalState?.winRate || 0);
+
+  const recentAverageProfit =
+    recentTrades.length > 0
+      ? recentTrades.reduce((sum, trade) => sum + Number(trade.profitPercent || 0), 0) /
+        recentTrades.length
+      : Number(engineState.tradeJournalState?.averageProfitPercent || 0);
+
+  const engineInputs = {
+    statisticalEdge: Number(engineState.statisticalEdgeState?.averageStatisticalScore || 50),
+    technicalIntelligence: Number(engineState.technicalIntelligenceState?.averageTechnicalScore || 50),
+    orchestrator: Number(engineState.institutionalOrchestratorState?.averageOrchestratorScore || 50),
+    liquidity: Number(engineState.liquidityIntelligenceState?.averageExecutionQuality || 50),
+    execution: Number(engineState.executionIntelligenceState?.averageExecutionConfidence || 50),
+    governor: Number(engineState.portfolioGovernorState?.governorScore || 50),
+    reinforcement: Number(engineState.reinforcementWeightState?.recentWinRate || recentWinRate || 50),
+    selfOptimization: Number(engineState.selfOptimizationState?.adaptiveRiskMultiplier || 1) * 70,
+  };
+
+  const engineTrust = {};
+
+  for (const [name, rawScore] of Object.entries(engineInputs)) {
+    const previous = Number(priorTrust[name]?.trustScore || 60);
+
+    const performanceAdjustment =
+      recentTrades.length < 10
+        ? 0
+        : recentWinRate >= 60 && recentAverageProfit > 0
+        ? 4
+        : recentWinRate < 45 || recentAverageProfit < 0
+        ? -5
+        : 1;
+
+    const signalAlignment =
+      analyzedSignals.length > 0
+        ? clampScore(rawScore) >= 65
+          ? 2
+          : clampScore(rawScore) < 45
+          ? -2
+          : 0
+        : 0;
+
+    const trustScore = clampScore(
+      previous * 0.72 +
+        clampScore(rawScore) * 0.2 +
+        8 +
+        performanceAdjustment +
+        signalAlignment
+    );
+
+    engineTrust[name] = {
+      trustScore: Number(trustScore.toFixed(2)),
+      previousTrustScore: previous,
+      rawScore: Number(clampScore(rawScore).toFixed(2)),
+      performanceAdjustment,
+      signalAlignment,
+    };
+  }
+
+  const averageEngineTrust =
+    Object.values(engineTrust).reduce(
+      (sum, item) => sum + Number(item.trustScore || 0),
+      0
+    ) / Math.max(1, Object.keys(engineTrust).length);
+
+  return {
+    updatedAt: new Date().toISOString(),
+    phase: "20.2_CROSS_ENGINE_MEMORY_EVOLUTION",
+    memoryMode:
+      averageEngineTrust >= 75
+        ? "ENGINES_REINFORCING"
+        : averageEngineTrust >= 60
+        ? "ENGINES_STABLE"
+        : averageEngineTrust >= 45
+        ? "ENGINES_UNDER_REVIEW"
+        : "ENGINES_DEFENSIVE_RESET",
+    averageEngineTrust: Number(averageEngineTrust.toFixed(2)),
+    recentTradesAnalyzed: recentTrades.length,
+    recentWinRate: Number(recentWinRate.toFixed(2)),
+    recentAverageProfit: Number(recentAverageProfit.toFixed(2)),
+    engineTrust,
+  };
+}
+
+function calculateAdaptiveExecutionTimingIntelligence(signals = []) {
+  const analyzedSignals = Array.isArray(signals) ? signals : [];
+
+  const liquidityQuality =
+    Number(engineState.liquidityIntelligenceState?.averageExecutionQuality || 50);
+
+  const volatility = Number(engineState.marketVolatility || 0);
+
+  const cycleMultiplier =
+    Number(engineState.marketCycleIntelligenceState?.cycleThrottleMultiplier || 1);
+
+  const executionConfidence =
+    Number(engineState.executionIntelligenceState?.averageExecutionConfidence || 50);
+
+  const spreadRisk =
+    analyzedSignals.length > 0
+      ? analyzedSignals.reduce((sum, signal) => sum + Number(signal.spreadPercent || 0), 0) /
+        analyzedSignals.length
+      : 0;
+
+  const recommendedDelayMs = Math.round(
+    (
+      (liquidityQuality >= 75 ? 8000 : liquidityQuality >= 60 ? 12000 : 20000) +
+      (volatility >= 18 ? 20000 : volatility >= 10 ? 12000 : 5000) +
+      (spreadRisk >= 1 ? 25000 : spreadRisk >= 0.5 ? 15000 : 5000)
+    ) /
+      Math.max(0.5, cycleMultiplier) /
+      3
+  );
+
+  const timingMode =
+    liquidityQuality >= 75 && executionConfidence >= 75 && volatility < 10
+      ? "FAST_LIQUIDITY_WINDOW"
+      : volatility >= 18 || spreadRisk >= 1
+      ? "SLOW_STEALTH_EXECUTION"
+      : liquidityQuality < 55
+      ? "WAIT_FOR_LIQUIDITY"
+      : "BALANCED_TIMING";
+
+  return {
+    updatedAt: new Date().toISOString(),
+    phase: "20.3_ADAPTIVE_EXECUTION_TIMING",
+    timingMode,
+    recommendedDelayMs,
+    maxSlices:
+      timingMode === "FAST_LIQUIDITY_WINDOW"
+        ? 3
+        : timingMode === "SLOW_STEALTH_EXECUTION"
+        ? 5
+        : timingMode === "WAIT_FOR_LIQUIDITY"
+        ? 2
+        : 4,
+    shouldDelayEntries:
+      timingMode === "SLOW_STEALTH_EXECUTION" ||
+      timingMode === "WAIT_FOR_LIQUIDITY",
+    liquidityQuality,
+    executionConfidence,
+    volatility,
+    spreadRisk: Number(spreadRisk.toFixed(3)),
+    cycleMultiplier,
+  };
+}
+
+function calculatePhase21AutonomousInstitutionalBrain(signals = []) {
+  const analyzedSignals = Array.isArray(signals) ? signals : [];
+  const orchestration = engineState.phase20AutonomousOrchestrationState || {};
+  const memory = engineState.crossEngineMemoryState || {};
+  const timing = engineState.adaptiveExecutionTimingState || {};
+  const parliament = engineState.autonomousTradingSystemState || {};
+  const selfOptimization = engineState.selfOptimizationState || {};
+  const portfolioGovernor = engineState.portfolioGovernorState || {};
+
+  const averageTrust = Number(memory.averageEngineTrust || 60);
+  const consensusScore = Number(orchestration.consensusScore || parliament.probabilityScore || 50);
+  const adaptiveRiskMultiplier = Number(selfOptimization.adaptiveRiskMultiplier || 1);
+  const governorScore = Number(portfolioGovernor.governorScore || 50);
+
+  const autonomousIntelligenceScore = clampScore(
+    consensusScore * 0.35 +
+      averageTrust * 0.25 +
+      Number(parliament.probabilityScore || 50) * 0.2 +
+      governorScore * 0.1 +
+      adaptiveRiskMultiplier * 10
+  );
+
+  const brainMode =
+    orchestration.shouldBlockNewTrades || parliament.shouldBlockNewTrades
+      ? "AUTONOMOUS_DEFENSE"
+      : autonomousIntelligenceScore >= 82
+      ? "FULL_PHASE_21_AUTONOMY"
+      : autonomousIntelligenceScore >= 70
+      ? "CONTROLLED_PHASE_21_AUTONOMY"
+      : autonomousIntelligenceScore >= 58
+      ? "SELECTIVE_PHASE_21_AUTONOMY"
+      : "OBSERVATION_ONLY";
+
+  const capitalMultiplier =
+    brainMode === "FULL_PHASE_21_AUTONOMY"
+      ? 1.15
+      : brainMode === "CONTROLLED_PHASE_21_AUTONOMY"
+      ? 0.85
+      : brainMode === "SELECTIVE_PHASE_21_AUTONOMY"
+      ? 0.45
+      : 0;
+
+  return {
+    updatedAt: new Date().toISOString(),
+    phase: "21_AUTONOMOUS_INSTITUTIONAL_AI_BRAIN",
+    brainMode,
+    autonomousIntelligenceScore: Number(autonomousIntelligenceScore.toFixed(2)),
+    capitalMultiplier: Number(capitalMultiplier.toFixed(2)),
+    shouldBlockNewTrades:
+      brainMode === "AUTONOMOUS_DEFENSE" ||
+      brainMode === "OBSERVATION_ONLY",
+    consensusScore,
+    averageEngineTrust: averageTrust,
+    parliamentDecision: parliament.capitalParliamentDecision || "UNKNOWN",
+    timingMode: timing.timingMode || "UNKNOWN",
+    adaptiveRiskMultiplier,
+    topAutonomousCandidates: analyzedSignals
+      .filter((signal) => signal.qualifiedToBuy !== false)
+      .sort((a, b) => Number(b.score || 0) - Number(a.score || 0))
+      .slice(0, 10),
+    reason:
+      `${brainMode} • Intelligence ${autonomousIntelligenceScore.toFixed(0)}/100 • ` +
+      `Trust ${averageTrust.toFixed(0)}/100`,
   };
 }
 
@@ -4471,6 +4929,82 @@ if (
   };
 }
 
+function passesAutonomousParliamentGate(signal = {}) {
+  const system =
+    engineState.autonomousTradingSystemState || {};
+
+  const phase20 =
+    engineState.phase20AutonomousOrchestrationState || {};
+
+  const phase21 =
+    engineState.phase21AutonomousBrainState || {};
+
+  if (!system.updatedAt) {
+    return {
+      allowed: true,
+      multiplier: 1,
+      reason: "Autonomous parliament not initialized yet",
+    };
+  }
+
+  if (
+    system.shouldBlockNewTrades ||
+    phase20.shouldBlockNewTrades ||
+    phase21.shouldBlockNewTrades
+  ) {
+    return {
+      allowed: false,
+      multiplier: 0,
+      reason:
+        phase21.reason ||
+        phase20.reason ||
+        system.finalSystemReason ||
+        "Autonomous parliament blocked new trades",
+    };
+  }
+
+  const decision =
+    system.capitalParliamentDecision || "WATCHLIST_ONLY";
+
+  const score = Number(signal.score || 0);
+
+  if (decision === "AUTONOMOUS_REJECTION") {
+    return {
+      allowed: false,
+      multiplier: 0,
+      reason: system.finalSystemReason || "Autonomous rejection",
+    };
+  }
+
+  if (decision === "WATCHLIST_ONLY" && score < 90) {
+    return {
+      allowed: false,
+      multiplier: 0,
+      reason: "Parliament watchlist-only mode requires 90+ score",
+    };
+  }
+
+  const multiplier = Number(
+    (
+      Number(system.autonomousCapitalMultiplier || 1) *
+      Number(phase20.orchestrationMultiplier || 1) *
+      Number(phase21.capitalMultiplier || 1)
+    ).toFixed(2)
+  );
+
+  return {
+    allowed: multiplier > 0,
+    multiplier,
+    reason:
+      phase21.reason ||
+      phase20.reason ||
+      system.finalSystemReason ||
+      `Parliament approved: ${decision}`,
+    phase20,
+    phase21,
+  };
+}
+
 function getDynamicTradeAmount(account, openBotPositions = [], signalScore = 80) {
   const cash = Number(account?.cash || 0);
   const equity = Number(account?.equity || 0);
@@ -6415,6 +6949,9 @@ function calculateInstitutionalScores(q) {
 
   return {
     technicalScore,
+    momentumScore,
+    fundamentalBlendScore,
+    reinforcementWeights,
     technicalIntelligence: citadelTechnical,
     trendQualityScore: citadelTechnical.trendQualityScore,
     breakoutQualityScore: citadelTechnical.breakoutQualityScore,
@@ -6899,6 +7436,68 @@ function calculateCryptoLiquidityFromBars(
   };
 }
 
+function calculateCryptoInstitutionalQualification({
+  quote = {},
+  score = 0,
+  bars = [],
+  liquidityMetrics = {},
+  spreadPercent = 0,
+}) {
+  const barsFound = Array.isArray(bars) ? bars.length : 0;
+
+  const volumeSpikeRatio = Number(
+    liquidityMetrics.volumeSpikeRatio || 0
+  );
+
+  const dollarVolume = Number(
+    liquidityMetrics.dollarVolume || 0
+  );
+
+  const cleanSpreadPercent = Number(spreadPercent || 0);
+
+  const liquidityPass =
+    cleanSpreadPercent <= 1.25 &&
+    (
+      dollarVolume >= 1000 ||
+      volumeSpikeRatio >= 0.75
+    );
+
+  const momentumPass =
+    Number(score || 0) >= 70;
+
+  const dataPass =
+    barsFound >= 10 &&
+    Number(quote.current || 0) > 0;
+
+  const macroPass =
+    engineState.macroRiskState?.shouldBlockNewTrades !== true &&
+    engineState.marketCrashProtectionState?.shouldBlockNewTrades !== true;
+
+  const qualifiedToBuy =
+    dataPass &&
+    momentumPass &&
+    liquidityPass &&
+    macroPass;
+
+  return {
+    qualifiedToBuy,
+    cryptoInstitutionalQualification: {
+      dataPass,
+      momentumPass,
+      liquidityPass,
+      macroPass,
+      barsFound,
+      score,
+      spreadPercent: cleanSpreadPercent,
+      dollarVolume,
+      volumeSpikeRatio,
+      reason: qualifiedToBuy
+        ? "Crypto institutional qualification passed"
+        : "Crypto institutional qualification failed",
+    },
+  };
+}
+
 async function scanCryptoMarket() {
   if (!["live_crypto", "live_stock", "smart"].includes(TRADING_MODE)) {
     throw new Error("Crypto scanner is only available in live modes");
@@ -6936,27 +7535,39 @@ if (!institutionalUsdPair) {
             100
           : 0;
 
+      const cryptoQualification =
+        calculateCryptoInstitutionalQualification({
+          quote,
+          score,
+          bars,
+          liquidityMetrics,
+          spreadPercent,
+        });
+
       results.push({
-  ...quote,
-  score,
+        ...quote,
 
-  barsFound: bars.length,
+        assetClass: "crypto",
+        asset_class: "crypto",
 
-  volume: liquidityMetrics.volume,
-  averageVolume: liquidityMetrics.averageVolume,
-  volumeSpikeRatio: liquidityMetrics.volumeSpikeRatio,
-  dollarVolume: liquidityMetrics.dollarVolume,
+        score,
 
-  spreadPercent: Number(spreadPercent.toFixed(3)),
+        barsFound: bars.length,
 
-  confirmations: {
-    volumeSpikeRatio:
-      liquidityMetrics.volumeSpikeRatio,
-  },
+        volume: liquidityMetrics.volume,
+        averageVolume: liquidityMetrics.averageVolume,
+        volumeSpikeRatio: liquidityMetrics.volumeSpikeRatio,
+        dollarVolume: liquidityMetrics.dollarVolume,
 
-  qualifiedToBuy: false,
-});
+        spreadPercent: Number(spreadPercent.toFixed(3)),
 
+        confirmations: {
+          volumeSpikeRatio:
+            liquidityMetrics.volumeSpikeRatio,
+        },
+
+        ...cryptoQualification,
+      });
     } catch (err) {
       saveSkippedSymbol(symbol, err.message);
     }
@@ -7166,16 +7777,30 @@ async function scanMarket() {
 
       return {
         ...quote,
+
         score: institutional.institutionalScore,
         legacyMomentumScore: score,
-      momentumScore,
-    fundamentalBlendScore,
-    reinforcementWeights,
+
+        momentumScore:
+          institutional.momentumScore || score,
+
+        fundamentalBlendScore:
+          institutional.fundamentalBlendScore || 0,
+
+        reinforcementWeights:
+          institutional.reinforcementWeights ||
+          engineState.reinforcementWeightState?.weights ||
+          {},
+
         statisticalScore,
         statisticalEdge,
+
         ...institutional,
         ...portfolioManager,
-        qualifiedToBuy: institutional.decisionLevel !== "Visible Stock",
+
+        qualifiedToBuy:
+          institutional.autoTradeApproved === true &&
+          institutional.decisionLevel !== "Visible Stock",
       };
     } catch (err) {
       saveSkippedSymbol(symbol, err.message);
@@ -7239,6 +7864,143 @@ engineState.statisticalMemoryState =
       return b.percentChange - a.percentChange;
     })
     .slice(0, CONFIG.maxSignalsToReturn);
+}
+
+async function placeMarketBuy(symbol, dollars, score = 0) {
+  const normalizedSymbol = normalizeSymbol(symbol);
+
+  if (buyingNow.has(normalizedSymbol)) {
+    throw new Error(`${normalizedSymbol} already has a buy in progress`);
+  }
+
+  buyingNow.add(normalizedSymbol);
+
+  try {
+    const assetCheck = await isAssetBuyEligible(normalizedSymbol);
+
+    if (!assetCheck.ok) {
+      throw new Error(assetCheck.reason);
+    }
+
+    return await alpacaTradingRequest("/v2/orders", {
+      method: "POST",
+      body: JSON.stringify({
+        symbol: normalizedSymbol,
+        notional: Math.max(1, Number(dollars.toFixed(2))),
+        side: "buy",
+        type: "market",
+        time_in_force: "day",
+        client_order_id: `${AI_ORDER_PREFIX}_BUY_${normalizedSymbol}_${Math.round(score)}_${Date.now()}`,
+      }),
+    });
+  } finally {
+    setTimeout(() => buyingNow.delete(normalizedSymbol), 10000);
+  }
+}
+async function executeAdaptiveBuyOrder({
+  signal,
+  totalAmount,
+  assetClass = "stock",
+}) {
+  const symbol = normalizeSymbol(signal.symbol);
+  const amount = Number(totalAmount || 0);
+
+  if (!symbol || amount <= 0) {
+    throw new Error("Invalid adaptive buy order");
+  }
+
+  const executionReview =
+    engineState.executionIntelligenceState?.executionReviews?.find(
+      (review) => normalizeSymbol(review.symbol) === symbol
+    ) || {};
+
+  const entryStyle =
+    executionReview.entryStyle || "SINGLE_ENTRY";
+
+  if (entryStyle === "NO_EXECUTION") {
+    throw new Error("Execution intelligence blocked order");
+  }
+
+  const timing =
+    engineState.adaptiveExecutionTimingState || {};
+
+  let slices =
+    Number(executionReview.icebergSlices || 0) ||
+    (
+      entryStyle === "STEALTH_SCALE_IN"
+        ? 4
+        : entryStyle === "STAGGERED_ENTRY"
+        ? 3
+        : entryStyle === "SMALL_PROBE_ENTRY"
+        ? 2
+        : 1
+    );
+
+  if (Number(timing.maxSlices || 0) > 0) {
+    slices = Math.min(slices, Number(timing.maxSlices || slices));
+  }
+
+  const minSliceAmount =
+    assetClass === "crypto" ? 25 : 1;
+
+  if (amount / slices < minSliceAmount) {
+    slices = Math.max(1, Math.floor(amount / minSliceAmount));
+  }
+
+  slices = Math.max(1, slices);
+
+  const sliceAmount = Number((amount / slices).toFixed(2));
+
+  const defaultDelayMs =
+    entryStyle === "STEALTH_SCALE_IN"
+      ? 20000
+      : entryStyle === "STAGGERED_ENTRY"
+      ? 15000
+      : entryStyle === "SMALL_PROBE_ENTRY"
+      ? 10000
+      : 0;
+
+  const delayMs =
+    Number(timing.recommendedDelayMs || 0) > 0
+      ? Number(timing.recommendedDelayMs || 0)
+      : defaultDelayMs;
+
+  const orders = [];
+
+  for (let i = 0; i < slices; i += 1) {
+    const order =
+      assetClass === "crypto"
+        ? await placeCryptoMarketBuy(symbol, sliceAmount)
+        : await placeMarketBuy(symbol, sliceAmount, signal.score);
+
+    orders.push(order);
+
+    if (i < slices - 1 && delayMs > 0) {
+      saveRecentOrder("ADAPTIVE_EXECUTION_SLICE_WAIT", symbol, {
+        assetClass,
+        slice: i + 1,
+        slices,
+        delayMs,
+        timingMode: timing.timingMode,
+      });
+
+      await sleep(delayMs);
+    }
+  }
+
+  return {
+    symbol,
+    assetClass,
+    entryStyle,
+    timingMode: timing.timingMode || "DEFAULT_TIMING",
+    slices,
+    sliceAmount,
+    delayMs,
+    totalAmount: amount,
+    executionReview,
+    timing,
+    orders,
+  };
 }
 
 async function placeMarketSell(symbol, qty, reason = "AI_EXIT") {
@@ -8347,6 +9109,179 @@ async function replaceWeakestIfBetter(signals, positions, aiOwnedSymbols) {
     return false;
   }
 }
+
+async function autoBuySignals(signals = []) {
+  if (!["live_stock", "smart"].includes(TRADING_MODE)) return;
+
+  const clock = await getClock();
+
+  if (!clock.is_open) {
+    saveRecentOrder("AUTO_STOCK_BUY_SKIPPED", "STOCK", {
+      reason: "Market closed",
+    });
+    return;
+  }
+
+  const account = await getAccount();
+  const positions = await getPositions();
+  const aiOwnedSymbols = await getAiOwnedSymbols();
+
+  const aiPositions = positions.filter((position) =>
+    aiOwnedSymbols.has(normalizeSymbol(position.symbol))
+  );
+
+  if (aiPositions.length >= CONFIG.maxOpenTrades) {
+    const rotated = await replaceWeakestIfBetter(
+      signals,
+      positions,
+      aiOwnedSymbols
+    );
+
+    if (!rotated) {
+      saveRecentOrder("AUTO_STOCK_BUY_SKIPPED", "STOCK", {
+        reason: "Max stock positions reached, no stronger rotation found",
+      });
+    }
+
+    return;
+  }
+
+  const openSlots =
+    CONFIG.maxOpenTrades - aiPositions.length;
+
+  const candidates = signals
+    .filter((signal) => signal.qualifiedToBuy === true)
+    .filter((signal) => Number(signal.score || 0) >= CONFIG.minScoreToBuy)
+    .filter((signal) => {
+      const symbol = normalizeSymbol(signal.symbol);
+      const lastSold = engineState.lastSoldAt[symbol] || 0;
+
+      return (
+        !aiOwnedSymbols.has(symbol) &&
+        !positions.some((p) => normalizeSymbol(p.symbol) === symbol) &&
+        Date.now() - lastSold > 120000
+      );
+    })
+    .sort((a, b) => Number(b.score || 0) - Number(a.score || 0))
+    .slice(0, openSlots);
+
+  for (const candidate of candidates) {
+    const symbol = normalizeSymbol(candidate.symbol);
+
+    if (shouldSkipFromTradeMemory(symbol)) {
+      saveRecentOrder("STOCK_SKIPPED_TRADE_MEMORY", symbol, {
+        memory: engineState.tradeMemory?.[symbol],
+      });
+      continue;
+    }
+
+    const orchestratorGate =
+      passesInstitutionalOrchestratorBuyGate(candidate);
+
+    if (!orchestratorGate.allowed) {
+      saveRecentOrder("STOCK_SKIPPED_ORCHESTRATOR", symbol, {
+        reason: orchestratorGate.reason,
+      });
+      continue;
+    }
+
+    const parliamentGate =
+      passesAutonomousParliamentGate(candidate);
+
+    if (!parliamentGate.allowed) {
+      saveRecentOrder("STOCK_SKIPPED_PARLIAMENT", symbol, {
+        reason: parliamentGate.reason,
+      });
+      continue;
+    }
+
+    const portfolioManager =
+      calculateAiPortfolioManagerDecision(
+        candidate,
+        account,
+        aiPositions,
+        engineState.marketRegime || detectMarketRegime([])
+      );
+
+    const baseTradeAmount =
+      Number(portfolioManager.recommendedTradeAmount || 0) ||
+      getDynamicTradeAmount(account, aiPositions, candidate.score);
+
+    const finalTradeAmount = Number(
+      (
+        baseTradeAmount *
+        Number(orchestratorGate.orchestrator?.orchestratorMultiplier || 1) *
+        Number(parliamentGate.multiplier || 1)
+      ).toFixed(2)
+    );
+
+    if (!finalTradeAmount || finalTradeAmount <= 0) {
+      saveRecentOrder("AUTO_STOCK_BUY_SKIPPED_SIZE_ZERO", symbol, {
+        score: candidate.score,
+        baseTradeAmount,
+        portfolioManager,
+        parliamentGate,
+      });
+      continue;
+    }
+
+    try {
+      const adaptiveExecution =
+        await executeAdaptiveBuyOrder({
+          signal: candidate,
+          totalAmount: finalTradeAmount,
+          assetClass: "stock",
+        });
+
+      markAiManagedSymbol(symbol);
+
+      engineState.aiEntryScores[symbol] = {
+        score: candidate.score,
+        institutionalScore: candidate.institutionalScore,
+        technicalScore: candidate.technicalScore,
+        statisticalScore: candidate.statisticalScore,
+        setupType:
+          classifyInstitutionalSetup({
+            symbol,
+            score: candidate.score,
+            assetClass: "stock",
+            marketRegime: engineState.marketRegime?.state,
+            confirmations: candidate.confirmations || {},
+            portfolioManager,
+          }),
+        enteredAt: new Date().toISOString(),
+      };
+
+      journalTradeEntry(symbol, {
+        assetClass: "stock",
+        entryType: "AUTO_STOCK_ENTRY",
+        entryPrice: candidate.current || candidate.price,
+        score: candidate.score,
+        sector: candidate.estimatedSector || "General Market",
+        marketRegime: engineState.marketRegime?.state,
+        confirmations: candidate.confirmations || {},
+        portfolioManager,
+        tradeAmount: finalTradeAmount,
+      });
+
+      saveRecentOrder("AUTO_STOCK_BUY", symbol, {
+        price: candidate.current || candidate.price,
+        score: candidate.score,
+        tradeAmount: finalTradeAmount,
+        portfolioManager,
+        orchestratorGate,
+        parliamentGate,
+        adaptiveExecution,
+      });
+    } catch (err) {
+      saveFailedOrder("AUTO_STOCK_BUY_FAILED", symbol, err.message, {
+        score: candidate.score,
+        finalTradeAmount,
+      });
+    }
+  }
+}
+
 async function rotateWeakCryptoIfBetter(signals, positions) {
   if (!["live_crypto", "smart"].includes(TRADING_MODE)) return false;
 
@@ -8679,6 +9614,36 @@ if (!cryptoQualified) {
   continue;
 }
 
+const cryptoOrchestratorGate =
+  passesInstitutionalOrchestratorBuyGate({
+    ...crypto,
+    assetClass: "crypto",
+    asset_class: "crypto",
+  });
+
+if (!cryptoOrchestratorGate.allowed) {
+  saveRecentOrder("CRYPTO_SKIPPED_ORCHESTRATOR", symbol, {
+    reason: cryptoOrchestratorGate.reason,
+  });
+
+  continue;
+}
+
+const cryptoParliamentGate =
+  passesAutonomousParliamentGate({
+    ...crypto,
+    assetClass: "crypto",
+    asset_class: "crypto",
+  });
+
+if (!cryptoParliamentGate.allowed) {
+  saveRecentOrder("CRYPTO_SKIPPED_PARLIAMENT", symbol, {
+    reason: cryptoParliamentGate.reason,
+  });
+
+  continue;
+}
+
     // 🧠 TRADE MEMORY FILTER
     if (shouldSkipFromTradeMemory(symbol)) {
       saveRecentOrder("CRYPTO_SKIPPED_TRADE_MEMORY", symbol, {
@@ -8712,16 +9677,34 @@ if (!finalTradeAmount || finalTradeAmount <= 0) {
   continue;
 }
 
-const order = await placeCryptoMarketBuy(
-  crypto.symbol,
-  finalTradeAmount
-);
+const adaptiveExecution =
+  await executeAdaptiveBuyOrder({
+    signal: crypto,
+    totalAmount:
+      finalTradeAmount *
+      Number(cryptoParliamentGate.multiplier || 1),
+    assetClass: "crypto",
+  });
+
+markAiManagedSymbol(symbol);
+
+journalTradeEntry(symbol, {
+  assetClass: "crypto",
+  entryType: "AUTO_CRYPTO_ENTRY",
+  entryPrice: crypto.current || crypto.price,
+  score: crypto.score,
+  sector: "Crypto",
+  confirmations: crypto.confirmations || {},
+  tradeAmount: finalTradeAmount,
+});
 
 saveRecentOrder("AUTO_CRYPTO_BUY", crypto.symbol, {
   price: crypto.current,
   tradeAmount: finalTradeAmount,
   adaptiveCryptoSizing,
-  order,
+  cryptoOrchestratorGate,
+  cryptoParliamentGate,
+  adaptiveExecution,
 });
     } catch (err) {
       saveFailedOrder("AUTO_CRYPTO_BUY_FAILED", crypto.symbol, err.message);
@@ -9623,6 +10606,65 @@ engineState.autonomousTradingSystemHistory.unshift(
 engineState.autonomousTradingSystemHistory =
   engineState.autonomousTradingSystemHistory.slice(0, 200);
 
+const phase20Orchestration =
+  calculatePhase20AsyncMultiAgentOrchestration(
+    allSignalsForAnalytics
+  );
+
+engineState.phase20AutonomousOrchestrationState =
+  phase20Orchestration;
+
+engineState.phase20AutonomousOrchestrationHistory.unshift(
+  phase20Orchestration
+);
+
+engineState.phase20AutonomousOrchestrationHistory =
+  engineState.phase20AutonomousOrchestrationHistory.slice(0, 200);
+
+const crossEngineMemory =
+  calculateCrossEngineMemoryEvolution(
+    allSignalsForAnalytics
+  );
+
+engineState.crossEngineMemoryState = crossEngineMemory;
+
+engineState.crossEngineMemoryHistory.unshift(
+  crossEngineMemory
+);
+
+engineState.crossEngineMemoryHistory =
+  engineState.crossEngineMemoryHistory.slice(0, 200);
+
+const adaptiveExecutionTiming =
+  calculateAdaptiveExecutionTimingIntelligence(
+    allSignalsForAnalytics
+  );
+
+engineState.adaptiveExecutionTimingState =
+  adaptiveExecutionTiming;
+
+engineState.adaptiveExecutionTimingHistory.unshift(
+  adaptiveExecutionTiming
+);
+
+engineState.adaptiveExecutionTimingHistory =
+  engineState.adaptiveExecutionTimingHistory.slice(0, 200);
+
+const phase21AutonomousBrain =
+  calculatePhase21AutonomousInstitutionalBrain(
+    allSignalsForAnalytics
+  );
+
+engineState.phase21AutonomousBrainState =
+  phase21AutonomousBrain;
+
+engineState.phase21AutonomousBrainHistory.unshift(
+  phase21AutonomousBrain
+);
+
+engineState.phase21AutonomousBrainHistory =
+  engineState.phase21AutonomousBrainHistory.slice(0, 200);
+
 const liveAiPerformance =
   calculateLiveAiPerformanceAnalyticsEngine(
     account,
@@ -10086,6 +11128,14 @@ engineFreezeCount: engineState.engineFreezeCount,
         },
         autonomousTradingSystem:
         engineState.autonomousTradingSystemState || null,
+        phase20AutonomousOrchestration:
+        engineState.phase20AutonomousOrchestrationState || null,
+        crossEngineMemory:
+        engineState.crossEngineMemoryState || null,
+        adaptiveExecutionTiming:
+        engineState.adaptiveExecutionTimingState || null,
+        phase21AutonomousBrain:
+        engineState.phase21AutonomousBrainState || null,
         executionIntelligence:
         engineState.executionIntelligenceState || null,
         reinforcementWeights:
