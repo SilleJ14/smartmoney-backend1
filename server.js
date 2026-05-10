@@ -1982,6 +1982,62 @@ function calculateCitadelTechnicalIntelligenceEngine(q = {}) {
       `Exhaustion ${exhaustionRiskScore.toFixed(0)}/100`,
   };
 }
+function calculateCryptoSignalRealismEngine(signal = {}) {
+  const symbol = normalizeSymbol(signal.symbol);
+  const rawScore = Number(signal.score || 0);
+  const barsFound = Number(signal.barsFound || 0);
+  const bid = Number(signal.bid || 0);
+  const ask = Number(signal.ask || 0);
+  const price = Number(signal.current || signal.price || 0);
+
+  const isCrypto =
+    signal.assetClass === "crypto" ||
+    signal.asset_class === "crypto" ||
+    symbol.includes("/");
+
+  if (!isCrypto) {
+    return {
+      realismScore: rawScore,
+      cryptoRiskPenalty: 0,
+      cryptoRealismReason: "Non-crypto signal",
+    };
+  }
+
+  const spreadPercent =
+    bid > 0 && ask > 0 ? ((ask - bid) / ask) * 100 : 1;
+
+  const memeOrUltraSpeculative =
+    symbol.includes("SHIB") ||
+    symbol.includes("BONK") ||
+    symbol.includes("PEPE") ||
+    symbol.includes("TRUMP") ||
+    price < 0.01;
+
+  const weakHistoryPenalty = barsFound < 30 ? 10 : 0;
+  const spreadPenalty =
+    spreadPercent >= 0.75 ? 20 : spreadPercent >= 0.35 ? 10 : 0;
+  const memePenalty = memeOrUltraSpeculative ? 12 : 0;
+  const noStatPenalty =
+    Number(signal.statisticalScore || signal.statisticalEdgeScore || 0) <= 0
+      ? 10
+      : 0;
+
+  const cryptoRiskPenalty =
+    weakHistoryPenalty + spreadPenalty + memePenalty + noStatPenalty;
+
+  const realismScore = clampScore(rawScore - cryptoRiskPenalty);
+
+  return {
+    realismScore,
+    cryptoRiskPenalty,
+    spreadPercent: Number(spreadPercent.toFixed(3)),
+    memeOrUltraSpeculative,
+    cryptoRealismReason:
+      `Crypto realism ${realismScore}/100 • ` +
+      `Penalty ${cryptoRiskPenalty} • Spread ${spreadPercent.toFixed(3)}%`,
+  };
+}
+
 
 function calculateMultiTimeframeConfirmationEngine(signals = []) {
   const analyzedSignals = (signals || []).map((signal) => {
@@ -1989,28 +2045,43 @@ function calculateMultiTimeframeConfirmationEngine(signals = []) {
     const percentChange = Number(signal.percentChange || 0);
     const volumeRatio = Number(
       signal.confirmations?.volumeSpikeRatio ||
-      signal.volumeRatio ||
-      0
+        signal.volumeRatio ||
+        0
     );
 
+    const technicalScore = Number(
+      signal.technicalIntelligence?.institutionalEntryScore ||
+        signal.technicalScore ||
+        0
+    );
+
+    const statisticalScore = Number(
+      signal.statisticalScore ||
+        signal.statisticalEdgeScore ||
+        signal.statisticalEdge?.statisticalEdgeScore ||
+        0
+    );
+
+    const barsFound = Number(signal.barsFound || signal.confirmations?.barsFound || 0);
+
     const microTrend =
-      score >= 85 && percentChange > 1
+      percentChange > 0.25 && technicalScore >= 60
         ? "BULLISH"
-        : percentChange < -2
+        : percentChange < -1.5
         ? "BEARISH"
         : "NEUTRAL";
 
     const intradayTrend =
-      volumeRatio >= 1.5 && score >= 70
+      volumeRatio >= 1 && technicalScore >= 65
         ? "BULLISH"
-        : score < 50
+        : technicalScore < 45
         ? "BEARISH"
         : "NEUTRAL";
 
     const higherTimeframeTrend =
-      score >= 90
+      barsFound >= 20 && statisticalScore >= 60 && score >= 70
         ? "BULLISH"
-        : score <= 35
+        : statisticalScore > 0 && statisticalScore < 40
         ? "BEARISH"
         : "NEUTRAL";
 
@@ -2019,23 +2090,27 @@ function calculateMultiTimeframeConfirmationEngine(signals = []) {
       intradayTrend === "BULLISH" &&
       higherTimeframeTrend === "BULLISH";
 
+    const partialBullish =
+      [microTrend, intradayTrend, higherTimeframeTrend].filter(
+        (trend) => trend === "BULLISH"
+      ).length === 2;
+
     const alignedBearish =
       microTrend === "BEARISH" &&
       intradayTrend === "BEARISH";
 
     const timeframeConflict =
-      new Set([
-        microTrend,
-        intradayTrend,
-        higherTimeframeTrend,
-      ]).size >= 3;
+      [microTrend, intradayTrend, higherTimeframeTrend].includes("BULLISH") &&
+      [microTrend, intradayTrend, higherTimeframeTrend].includes("BEARISH");
 
     const timeframeConfidenceScore = clampScore(
-      40 +
-        (alignedBullish ? 40 : 0) -
-        (alignedBearish ? 25 : 0) -
-        (timeframeConflict ? 20 : 0) +
-        score * 0.15
+      35 +
+        (alignedBullish ? 40 : 0) +
+        (partialBullish ? 18 : 0) -
+        (alignedBearish ? 30 : 0) -
+        (timeframeConflict ? 25 : 0) +
+        technicalScore * 0.15 +
+        statisticalScore * 0.15
     );
 
     const timeframeDecision =
@@ -2050,34 +2125,28 @@ function calculateMultiTimeframeConfirmationEngine(signals = []) {
     return {
       symbol: signal.symbol,
       score,
+      technicalScore,
+      statisticalScore,
+      barsFound,
       microTrend,
       intradayTrend,
       higherTimeframeTrend,
       alignedBullish,
+      partialBullish,
       alignedBearish,
       timeframeConflict,
-      timeframeConfidenceScore:
-        Number(timeframeConfidenceScore.toFixed(2)),
+      timeframeConfidenceScore: Number(timeframeConfidenceScore.toFixed(2)),
       timeframeDecision,
     };
   });
 
   return {
     updatedAt: new Date().toISOString(),
-    alignedSignals: analyzedSignals.filter(
-      (s) => s.alignedBullish
-    ).length,
-
-    conflictedSignals: analyzedSignals.filter(
-      (s) => s.timeframeConflict
-    ).length,
-
+    alignedSignals: analyzedSignals.filter((s) => s.alignedBullish).length,
+    partiallyAlignedSignals: analyzedSignals.filter((s) => s.partialBullish).length,
+    conflictedSignals: analyzedSignals.filter((s) => s.timeframeConflict).length,
     topAlignedSignals: analyzedSignals
-      .sort(
-        (a, b) =>
-          b.timeframeConfidenceScore -
-          a.timeframeConfidenceScore
-      )
+      .sort((a, b) => b.timeframeConfidenceScore - a.timeframeConfidenceScore)
       .slice(0, 10),
   };
 }
@@ -2259,8 +2328,10 @@ function calculateInstitutionalAiPortfolioOrchestrator(signal = {}) {
     signal.institutionalScore || signal.score || 0
   );
 
-  const statisticalScore = Number(
-    signal.statisticalScore ||
+  const orchestratorStatisticalScore = Number(
+    signal.totalStatisticalScore ||
+      signal.statisticalScore ||
+      signal.statisticalEdgeScore ||
       signal.statisticalEdge?.statisticalEdgeScore ||
       0
   );
@@ -2330,22 +2401,22 @@ function calculateInstitutionalAiPortfolioOrchestrator(signal = {}) {
       0
   );
 
-const macroPenalty =
-  engineState.macroRiskState?.shouldBlockNewTrades
-    ? 60
-    : macroScore >= 80
-    ? 20
-    : macroScore >= 60
-    ? 12
-    : macroScore >= 40
-    ? 6
-    : 0;
+  const macroPenalty =
+    engineState.macroRiskState?.shouldBlockNewTrades
+      ? 60
+      : macroScore >= 80
+      ? 20
+      : macroScore >= 60
+      ? 12
+      : macroScore >= 40
+      ? 6
+      : 0;
 
-const portfolioPenalty =
-  engineState.portfolioOptimizationState?.rebalanceRequired
-    ? 8
-    : 0;
-    
+  const portfolioPenalty =
+    engineState.portfolioOptimizationState?.rebalanceRequired
+      ? 8
+      : 0;
+
   const assetClass =
     signal.assetClass || signal.asset_class || "stock";
 
@@ -2358,7 +2429,7 @@ const portfolioPenalty =
     isCryptoSignal
       ? clampScore(
           technicalScore * 0.35 +
-            statisticalScore * 0.2 +
+            orchestratorStatisticalScore * 0.2 +
             momentumScore * 0.25 +
             portfolioScore * 0.1 +
             riskScore * 0.1
@@ -2371,20 +2442,21 @@ const portfolioPenalty =
       : clampScore(
           technicalScore * 0.18 +
             macroScore * 0.1 +
-            statisticalScore * 0.1 +
+            orchestratorStatisticalScore * 0.1 +
             dcfScore * 0.16 +
             earningsScore * 0.14 +
             moatScore * 0.12 +
             dividendScore * 0.05 +
             portfolioScore * 0.15
         );
+
   const institutionalRiskPenalty = isCryptoSignal
- ? clampScore(
-    macroPenalty * 0.45 +
-      portfolioPenalty * 0.5 +
-      exhaustionRisk * 0.12 +
-      (riskScore < 40 ? 8 : 0)
-  )
+    ? clampScore(
+        macroPenalty * 0.45 +
+          portfolioPenalty * 0.5 +
+          exhaustionRisk * 0.12 +
+          (riskScore < 40 ? 8 : 0)
+      )
     : clampScore(
         macroPenalty +
           portfolioPenalty +
@@ -2394,10 +2466,22 @@ const portfolioPenalty =
           (riskScore < 50 ? 20 : 0)
       );
 
-const finalInstitutionalDecisionScore = clampScore(
-  institutionalOpportunityScore * 0.82 +
-    (100 - institutionalRiskPenalty) * 0.18
-);
+  const missingStatisticalPenalty =
+    orchestratorStatisticalScore <= 0 ? 18 : 0;
+
+  const timeframePenalty =
+    signal.timeframeDecision === "WEAK_CONFIRMATION"
+      ? 12
+      : signal.timeframeDecision === "TIMEFRAME_CONFLICT"
+      ? 25
+      : 0;
+
+  const finalInstitutionalDecisionScore = clampScore(
+    institutionalOpportunityScore * 0.82 +
+      (100 - institutionalRiskPenalty) * 0.18 -
+      missingStatisticalPenalty -
+      timeframePenalty
+  );
 
   const highConvictionThreshold = isCryptoSignal ? 72 : 78;
   const controlledThreshold = isCryptoSignal ? 62 : 68;
@@ -2428,11 +2512,11 @@ const finalInstitutionalDecisionScore = clampScore(
       ? 0.15
       : 0;
 
-return {
-  symbol: signal.symbol,
-  assetClass,
-  isCryptoSignal,
-  institutionalOpportunityScore,
+  return {
+    symbol: signal.symbol,
+    assetClass,
+    isCryptoSignal,
+    institutionalOpportunityScore,
     institutionalRiskPenalty,
     finalInstitutionalDecisionScore,
     orchestratorAction,
@@ -2440,7 +2524,7 @@ return {
     engineScores: {
       institutionalScore,
       technicalScore,
-      statisticalScore,
+      totalStatisticalScore: orchestratorStatisticalScore,
       riskScore,
       earningsScore,
       moatScore,
@@ -2455,302 +2539,14 @@ return {
       earningsRisk,
       macroPenalty,
       portfolioPenalty,
+      missingStatisticalPenalty,
+      timeframePenalty,
     },
     orchestratorReason:
       `${orchestratorAction} • Final ${finalInstitutionalDecisionScore}/100 • ` +
       `Opportunity ${institutionalOpportunityScore}/100 • Penalty ${institutionalRiskPenalty}/100`,
   };
 }
-function calculateAiPortfolioManagerDecision(signal, account, openBotPositions = [], regime = {}) {
-  const equity = Number(account?.equity || 0);
-  const cash = Number(account?.cash || 0);
-  const buyingPower = Number(account?.buying_power || 0);
-
-  const institutionalScore = Number(signal.institutionalScore || signal.score || 0);
-  const riskScore = Number(signal.riskScore || 0);
-  const statisticalScore = Number(signal.statisticalScore || 0);
-    const citadelTechnicalScore = Number(
-    signal.technicalIntelligence?.institutionalEntryScore ||
-    signal.technicalScore ||
-    0
-  );
-  const fundamentalScore = Number(signal.fundamentalScore || 0);
-  const earningsScore = Number(signal.earningsScore || 0);
-    const earningsVolatilityRiskScore = Number(
-    signal.earningsIntelligence?.earningsVolatilityRiskScore ||
-      signal.earningsVolatilityRiskScore ||
-      0
-  );
-
-  const earningsRiskMultiplier =
-    signal.earningsRiskMode === "HIGH_EARNINGS_RISK"
-      ? 0
-      : signal.earningsRiskMode === "EARNINGS_CAUTION"
-      ? 0.5
-      : 1;
-  const moatScore = Number(signal.moatScore || 0);
-  const wealthBuilderScore = Number(signal.wealthBuilderScore || signal.dividendScore || 0);
-    const competitiveAdvantageScore = Number(
-    signal.competitiveAdvantageScore ||
-      signal.moatScore ||
-      0
-  );
-
-  const moatMultiplier =
-    competitiveAdvantageScore >= 80
-      ? 1
-      : competitiveAdvantageScore >= 65
-      ? 0.85
-      : competitiveAdvantageScore >= 50
-      ? 0.65
-      : competitiveAdvantageScore >= 40
-      ? 0.4
-      : 0.2;
-  const portfolioScore = Number(signal.portfolioScore || 0);
-  const institutionalRiskScore = Number(signal.institutionalRiskScore || riskScore || 0);
-    const orchestrator =
-    calculateInstitutionalAiPortfolioOrchestrator(signal);
-  const portfolioHeat = calculatePortfolioHeatEngine(signal, openBotPositions);
-  const portfolioOptimizer =
-    engineState.portfolioOptimizationState || {};
-  const currentBotExposure = getBotExposure(openBotPositions);
-  const maxBotBudget = equity * (CONFIG.maxBotExposurePercent / 100);
-  const remainingBotBudget = Math.max(0, maxBotBudget - currentBotExposure);
- const compoundingBudget =
-  Number(
-    engineState.capitalCompoundingState
-      ?.remainingCompoundedBudget || 0
-  );
-
-const effectiveRemainingBotBudget =
-  compoundingBudget > 0
-    ? Math.min(remainingBotBudget, compoundingBudget)
-    : remainingBotBudget; 
-  const basePerTradeMax = maxBotBudget / Math.max(1, CONFIG.maxOpenTrades);
-
-  const opportunityQualityScore = clampScore(
-    institutionalScore * 0.25 +
-    citadelTechnicalScore * 0.18 +
-    statisticalScore * 0.17 +
-    riskScore * 0.16 +
-    fundamentalScore * 0.1 +
-    earningsScore * 0.08 +
-    moatScore * 0.08 +
-    wealthBuilderScore * 0.08
-  );
-
-  const portfolioFitScore = clampScore(
-    portfolioScore * 0.35 +
-    institutionalRiskScore * 0.25 +
-    wealthBuilderScore * 0.15 +
-    portfolioHeat.portfolioHeatScore * 0.25
-  );
-
-  const aiConvictionScore = clampScore(
-    opportunityQualityScore * 0.55 + portfolioFitScore * 0.45
-  );
-
-  const regimeMultiplier =
-    Number(regime.exposureMultiplier || 0) > 0
-      ? Number(regime.exposureMultiplier || 1)
-      : 0;
-
-  const macroMultiplier =
-    engineState.macroRiskState?.shouldBlockNewTrades
-      ? 0
-      : Number(engineState.macroRiskState?.macroExposureMultiplier || 1);
-
-  const convictionMultiplier =
-    aiConvictionScore >= 90
-      ? 1
-      : aiConvictionScore >= 80
-        ? 0.8
-        : aiConvictionScore >= 70
-          ? 0.6
-          : aiConvictionScore >= 60
-            ? 0.4
-            : 0.25;
-
-  const riskMultiplier =
-    institutionalRiskScore >= 80
-      ? 1
-      : institutionalRiskScore >= 65
-        ? 0.75
-        : institutionalRiskScore >= 50
-          ? 0.45
-          : 0.2;
-
-  const optimizerMultiplier =
-    portfolioOptimizer.optimizerMode === "RISK_REDUCTION"
-      ? 0.25
-      : portfolioOptimizer.optimizerMode === "DEFENSIVE"
-      ? 0.5
-      : portfolioOptimizer.optimizerMode === "BALANCED"
-      ? 0.8
-      : 1;
-
-  const heatMultiplier =
-    portfolioHeat.correlationAction === "Allow Allocation"
-      ? 1
-      : portfolioHeat.correlationAction === "Reduce Allocation"
-        ? 0.5
-        : 0;
-  const roleMultiplier =
-    signal.portfolioRole === "Core Position Candidate"
-      ? 1
-      : signal.portfolioRole === "Strong Portfolio Fit"
-        ? 0.85
-        : signal.portfolioRole === "Satellite Position"
-          ? 0.65
-          : signal.portfolioRole === "Small Tactical Position"
-            ? 0.45
-            : 0.25;
-
-  const aiAllocationPercentOfBotBudget = Number(
-    (
-      CONFIG.maxBotExposurePercent *
-      convictionMultiplier *
-      riskMultiplier *
-      roleMultiplier *
-      optimizerMultiplier *
-      earningsRiskMultiplier *
-      moatMultiplier *
-      orchestrator.orchestratorMultiplier *
-      heatMultiplier *
-      regimeMultiplier *
-      macroMultiplier
-    ).toFixed(2)
-  );
-
-  const recommendedTradeAmount = Math.max(
-    0,
-    Math.min(
-      basePerTradeMax *
-      convictionMultiplier *
-      riskMultiplier *
-      roleMultiplier *
-      optimizerMultiplier *
-      earningsRiskMultiplier *
-      moatMultiplier *
-      orchestrator.orchestratorMultiplier *
-      heatMultiplier *
-      regimeMultiplier *
-      macroMultiplier,
-      effectiveRemainingBotBudget,
-      cash,
-      buyingPower || cash
-    )
-  );  const aiPortfolioAction =
-    portfolioHeat.correlationAction === "Block Duplicate Symbol"
-      ? "Blocked Duplicate"
-
-      : recommendedTradeAmount <= 0
-      ? "No Capital Available"
-
-      : signal.earningsRiskMode === "HIGH_EARNINGS_RISK" &&
-        TRADING_MODE !== "live_crypto"
-      ? "Watch Only"
-
-      : Number(signal.valuationRiskScore || 0) >= 92 &&
-        TRADING_MODE !== "live_crypto"
-      ? "Watch Only"
-
-      : orchestrator.orchestratorAction === "AVOID" &&
-        aiConvictionScore < 58
-      ? "Watch Only"
-
-      : portfolioHeat.correlationAction === "Avoid Additional Exposure"
-      ? "Reduced Allocation"
-
-      : aiConvictionScore >= 72 &&
-        orchestrator.finalInstitutionalDecisionScore >= 60
-      ? "Deploy Capital"
-
-      : aiConvictionScore >= 55
-      ? "Small Tactical Allocation"
-
-      : "Watchlist Candidate";
-
-  return {
-    aiConvictionScore,
-        institutionalOrchestrator: orchestrator,
-    finalInstitutionalDecisionScore:
-      orchestrator.finalInstitutionalDecisionScore,
-    orchestratorAction:
-      orchestrator.orchestratorAction,
-    orchestratorMultiplier:
-      orchestrator.orchestratorMultiplier,
-    citadelTechnicalScore,
-    earningsScore,
-    earningsVolatilityRiskScore,
-    earningsRiskMode:
-      signal.earningsRiskMode || "NORMAL",
-    earningsRiskMultiplier,
-    competitiveAdvantageScore,
-    moatMultiplier,
-    moatLabel:
-      signal.moatLabel || "UNKNOWN",
-    institutionalEntryGrade:
-    signal.institutionalEntryGrade ||
-    signal.technicalIntelligence?.institutionalEntryGrade ||
-      "UNKNOWN",
-    opportunityQualityScore,
-    portfolioFitScore,
-    aiAllocationPercentOfBotBudget,
-    recommendedTradeAmount: Number(recommendedTradeAmount.toFixed(2)),
-    portfolioHeatScore: portfolioHeat.portfolioHeatScore,
-        portfolioEfficiencyScore:
-      portfolioOptimizer.portfolioEfficiencyScore || 0,
-
-    optimizerMode:
-      portfolioOptimizer.optimizerMode || "UNKNOWN",
-
-    rebalanceRequired:
-      portfolioOptimizer.rebalanceRequired || false,
-    portfolioHeatLabel: portfolioHeat.portfolioHeatLabel,
-    correlationRiskScore: portfolioHeat.correlationRiskScore,
-    concentrationRiskScore: portfolioHeat.concentrationRiskScore,
-    sameSectorOpenPositions: portfolioHeat.sameSectorOpenPositions,
-    totalOpenBotPositions: portfolioHeat.totalOpenBotPositions,
-    duplicateSymbolRisk: portfolioHeat.duplicateSymbolRisk,
-    correlationAction: portfolioHeat.correlationAction,
-    aiPortfolioAction,
- compoundingMode:
-  engineState.capitalCompoundingState?.compoundingMode ||
-  "BASELINE",
-
-compoundingMultiplier:
-  engineState.capitalCompoundingState?.compoundingMultiplier ||
-  1,
-
-  macroMode:
-  engineState.macroRiskState?.macroMode ||
-  "NEUTRAL",
-
-macroExposureMultiplier:
-  engineState.macroRiskState?.macroExposureMultiplier ??
-  1,
-
-macroStressScore:
-  engineState.macroRiskState?.macroStressScore ??
-  0,
-
-effectiveRemainingBotBudget:
-  Number(effectiveRemainingBotBudget.toFixed(2)),
-
-portfolioManagerReason:
-  `${aiPortfolioAction} • Orchestrator ${orchestrator.finalInstitutionalDecisionScore}/100 • Conviction ${aiConvictionScore}/100 • ` +
-  `Risk ${institutionalRiskScore}/100 • Technical ${citadelTechnicalScore}/100 • Earnings ${earningsScore}/100 • Moat ${competitiveAdvantageScore}/100 • Fit ${portfolioFitScore}/100 • ` +
-  `Compounding ${
-    engineState.capitalCompoundingState?.compoundingMode ||
-    "BASELINE"
-  } • Macro ${
-    engineState.macroRiskState?.macroMode ||
-    "NEUTRAL"
-  }`,
-  };
-}
-
 function passesInstitutionalOrchestratorBuyGate(signal = {}) {
   const orchestrator =
     signal.institutionalOrchestrator ||
@@ -2762,7 +2558,35 @@ function passesInstitutionalOrchestratorBuyGate(signal = {}) {
 
   const action = orchestrator.orchestratorAction || "WATCH";
 
-  const blockedActions = ["AVOID", "BLOCK", "CAPITAL_PRESERVATION"];
+  const symbolUpper = normalizeSymbol(signal.symbol);
+
+  const isCrypto =
+    signal.assetClass === "crypto" ||
+    signal.asset_class === "crypto" ||
+    symbolUpper.includes("/");
+
+  const isSpeculativeMeme =
+    symbolUpper.includes("SHIB") ||
+    symbolUpper.includes("BONK") ||
+    symbolUpper.includes("PEPE") ||
+    symbolUpper.includes("TRUMP");
+
+  const statisticalScore =
+    Number(signal.statisticalScore || 0) +
+    Number(signal.statisticalEdgeScore || 0) +
+    Number(signal.statisticalEdge?.statisticalEdgeScore || 0);
+
+  const timeframeDecision =
+    signal.timeframeDecision ||
+    signal.multiTimeframe?.timeframeDecision ||
+    "WEAK_CONFIRMATION";
+
+  const blockedActions = [
+    "AVOID",
+    "BLOCK",
+    "BLOCK_TRADE",
+    "CAPITAL_PRESERVATION",
+  ];
 
   if (blockedActions.includes(action)) {
     return {
@@ -2772,7 +2596,54 @@ function passesInstitutionalOrchestratorBuyGate(signal = {}) {
     };
   }
 
-  if (finalScore < 60) {
+if (
+  isSpeculativeMeme &&
+  (
+    Number(signal.statisticalScore || 0) +
+    Number(signal.statisticalEdgeScore || 0) +
+    Number(signal.statisticalEdge?.statisticalEdgeScore || 0)
+  ) <= 0
+){
+    return {
+      allowed: false,
+      reason: "Speculative meme crypto blocked: no statistical confirmation",
+      orchestrator,
+    };
+  }
+
+  if (isCrypto && timeframeDecision === "TIMEFRAME_CONFLICT") {
+    return {
+      allowed: false,
+      reason: "Crypto blocked: timeframe conflict",
+      orchestrator,
+    };
+  }
+
+  if (isCrypto && timeframeDecision === "WEAK_CONFIRMATION" && finalScore < 75) {
+    return {
+      allowed: false,
+      reason: `Crypto weak timeframe confirmation: ${finalScore}/100`,
+      orchestrator,
+    };
+  }
+
+ if (
+  isCrypto &&
+  (
+    Number(signal.statisticalScore || 0) +
+    Number(signal.statisticalEdgeScore || 0) +
+    Number(signal.statisticalEdge?.statisticalEdgeScore || 0)
+  ) <= 0 &&
+  finalScore < 78
+) {
+    return {
+      allowed: false,
+      reason: `Crypto missing statistical edge: ${finalScore}/100`,
+      orchestrator,
+    };
+  }
+
+  if (finalScore < 65) {
     return {
       allowed: false,
       reason: `Orchestrator score too low: ${finalScore}`,
@@ -2786,6 +2657,7 @@ function passesInstitutionalOrchestratorBuyGate(signal = {}) {
     orchestrator,
   };
 }
+
 function getDynamicTradeAmount(account, openBotPositions = [], signalScore = 80) {
   const cash = Number(account?.cash || 0);
   const equity = Number(account?.equity || 0);
@@ -7046,6 +6918,24 @@ const allSignalsForAnalytics =
     : Array.isArray(engineState.lastSignals)
     ? engineState.lastSignals
     : [];
+
+for (const signal of allSignalsForAnalytics) {
+  const cryptoRealism = calculateCryptoSignalRealismEngine(signal);
+
+  signal.cryptoRealism = cryptoRealism;
+  signal.realismAdjustedScore = cryptoRealism.realismScore;
+
+  if (
+    signal.assetClass === "crypto" ||
+    signal.asset_class === "crypto" ||
+    String(signal.symbol || "").includes("/")
+  ) {
+    signal.score = cryptoRealism.realismScore;
+    signal.cryptoRiskPenalty = cryptoRealism.cryptoRiskPenalty;
+    signal.cryptoRealismReason = cryptoRealism.cryptoRealismReason;
+  }
+}
+
 const updatedInstitutionalWatchlist =
   updateInstitutionalWatchlist(allSignalsForAnalytics);
 
@@ -7197,13 +7087,27 @@ const orchestratedSignals =
   }));
 
 const deployableOrchestratedSignals =
-  orchestratedSignals.filter(
-    (signal) =>
-      Number(
-        signal.institutionalOrchestrator
-          ?.finalInstitutionalDecisionScore || 0
-      ) >= 65
-  );
+  orchestratedSignals.filter((signal) => {
+    const finalScore = Number(
+      signal.institutionalOrchestrator?.finalInstitutionalDecisionScore || 0
+    );
+
+    const action =
+      signal.institutionalOrchestrator?.orchestratorAction || "BLOCK_TRADE";
+
+    const timeframeDecision =
+      signal.timeframeDecision ||
+      engineState.multiTimeframeState?.topAlignedSignals?.find(
+        (item) => normalizeSymbol(item.symbol) === normalizeSymbol(signal.symbol)
+      )?.timeframeDecision ||
+      "WEAK_CONFIRMATION";
+
+    return (
+      finalScore >= 70 &&
+      action !== "BLOCK_TRADE" &&
+      timeframeDecision !== "TIMEFRAME_CONFLICT"
+    );
+  });
 
 const averageOrchestratorScore =
   orchestratedSignals.length > 0
