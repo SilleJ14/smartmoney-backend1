@@ -2253,22 +2253,22 @@ function calculateInstitutionalAiPortfolioOrchestrator(signal = {}) {
       0
   );
 
-  const macroPenalty =
-    engineState.macroRiskState?.shouldBlockNewTrades
-      ? 100
-      : macroScore >= 80
-      ? 35
-      : macroScore >= 60
-      ? 20
-      : macroScore >= 40
-      ? 10
-      : 0;
+const macroPenalty =
+  engineState.macroRiskState?.shouldBlockNewTrades
+    ? 60
+    : macroScore >= 80
+    ? 20
+    : macroScore >= 60
+    ? 12
+    : macroScore >= 40
+    ? 6
+    : 0;
 
-  const portfolioPenalty =
-    engineState.portfolioOptimizationState?.rebalanceRequired
-      ? 15
-      : 0;
-
+const portfolioPenalty =
+  engineState.portfolioOptimizationState?.rebalanceRequired
+    ? 8
+    : 0;
+    
   const assetClass =
     signal.assetClass || signal.asset_class || "stock";
 
@@ -2302,12 +2302,12 @@ function calculateInstitutionalAiPortfolioOrchestrator(signal = {}) {
             portfolioScore * 0.15
         );
   const institutionalRiskPenalty = isCryptoSignal
-    ? clampScore(
-        macroPenalty * 0.7 +
-          portfolioPenalty +
-          exhaustionRisk * 0.2 +
-          (riskScore < 45 ? 15 : 0)
-      )
+ ? clampScore(
+    macroPenalty * 0.45 +
+      portfolioPenalty * 0.5 +
+      exhaustionRisk * 0.12 +
+      (riskScore < 40 ? 8 : 0)
+  )
     : clampScore(
         macroPenalty +
           portfolioPenalty +
@@ -2317,10 +2317,11 @@ function calculateInstitutionalAiPortfolioOrchestrator(signal = {}) {
           (riskScore < 50 ? 20 : 0)
       );
 
-  const finalInstitutionalDecisionScore = clampScore(
-    institutionalOpportunityScore -
-      institutionalRiskPenalty * 0.4
-  );
+const finalInstitutionalDecisionScore = clampScore(
+  institutionalOpportunityScore * 0.82 +
+    (100 - institutionalRiskPenalty) * 0.18
+);
+
   const highConvictionThreshold = isCryptoSignal ? 72 : 78;
   const controlledThreshold = isCryptoSignal ? 62 : 68;
   const tacticalThreshold = isCryptoSignal ? 50 : 55;
@@ -4761,36 +4762,95 @@ async function getCryptoRecentBars(symbol, timeframe = "5Min", limit = 30) {
 }
 
 function scoreCrypto(quote, bars = []) {
-  if (!bars.length) return 0;
+  if (!Array.isArray(bars) || bars.length < 3) {
+    return 0;
+  }
 
-  const latest = bars[bars.length - 1];
-  const first = bars[0];
+  const cleanBars = bars
+    .map((bar) => ({
+      o: Number(bar.o || 0),
+      h: Number(bar.h || 0),
+      l: Number(bar.l || 0),
+      c: Number(bar.c || 0),
+      v: Number(bar.v || 0),
+    }))
+    .filter((bar) => bar.c > 0);
+
+  if (cleanBars.length < 3) {
+    return 0;
+  }
+
+  const first = cleanBars[0];
+  const latest = cleanBars[cleanBars.length - 1];
+  const previous = cleanBars[cleanBars.length - 2];
 
   const current = Number(latest.c || quote.current || 0);
-  const open = Number(first.o || 0);
-  const high = Math.max(...bars.map((b) => Number(b.h || 0)));
-  const low = Math.min(...bars.map((b) => Number(b.l || 0)));
+  const open = Number(first.o || first.c || 0);
+
+  const high = Math.max(...cleanBars.map((bar) => bar.h || bar.c));
+  const low = Math.min(...cleanBars.map((bar) => bar.l || bar.c));
 
   const momentumPercent =
     open > 0 ? ((current - open) / open) * 100 : 0;
 
+  const shortWindow = cleanBars.slice(-5);
+  const shortFirst = shortWindow[0];
+  const shortMomentumPercent =
+    shortFirst?.c > 0
+      ? ((current - shortFirst.c) / shortFirst.c) * 100
+      : 0;
+
   const closeNearHigh =
-    high > low ? ((current - low) / (high - low)) * 100 : 0;
+    high > low ? ((current - low) / (high - low)) * 100 : 50;
 
-  let score = 0;
+  const greenBars = cleanBars.filter(
+    (bar) => Number(bar.c || 0) >= Number(bar.o || 0)
+  ).length;
 
-  if (momentumPercent > 0) score += 25;
-  if (momentumPercent >= 0.25) score += 20;
-  if (momentumPercent >= 0.5) score += 20;
-  if (momentumPercent >= 1) score += 10;
+  const greenRatio = greenBars / cleanBars.length;
 
-  if (closeNearHigh >= 70) score += 15;
-  if (closeNearHigh >= 85) score += 10;
+  const previousClose = Number(previous.c || current);
+  const lastBarMomentum =
+    previousClose > 0 ? ((current - previousClose) / previousClose) * 100 : 0;
 
-  if (momentumPercent < -0.25) score -= 25;
-  if (closeNearHigh < 40) score -= 15;
+  const avgVolume =
+    cleanBars.reduce((sum, bar) => sum + Number(bar.v || 0), 0) /
+    Math.max(1, cleanBars.length);
 
-  return Math.min(100, Math.max(0, Math.round(score)));
+  const latestVolume = Number(latest.v || 0);
+
+  const volumeRatio =
+    avgVolume > 0 ? latestVolume / avgVolume : 1;
+
+  let score = 35;
+
+  if (cleanBars.length >= 10) score += 8;
+  if (cleanBars.length >= 15) score += 5;
+  if (cleanBars.length >= 20) score += 5;
+
+  if (momentumPercent > 0) score += 12;
+  if (momentumPercent >= 0.2) score += 10;
+  if (momentumPercent >= 0.5) score += 10;
+  if (momentumPercent >= 1) score += 8;
+
+  if (shortMomentumPercent > 0) score += 8;
+  if (shortMomentumPercent >= 0.25) score += 7;
+
+  if (greenRatio >= 0.55) score += 8;
+  if (greenRatio >= 0.65) score += 7;
+
+  if (closeNearHigh >= 55) score += 6;
+  if (closeNearHigh >= 70) score += 8;
+  if (closeNearHigh >= 85) score += 6;
+
+  if (volumeRatio >= 1.1) score += 5;
+  if (volumeRatio >= 1.5) score += 6;
+
+  if (lastBarMomentum < -0.6) score -= 10;
+  if (momentumPercent < -0.5) score -= 12;
+  if (closeNearHigh < 30) score -= 8;
+
+  return clampScore(Math.round(score));
 }
 
 async function getBestCryptoBars(symbol) {
