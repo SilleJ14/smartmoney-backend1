@@ -178,9 +178,17 @@ capitalCompoundingHistory:
 multiTimeframeHistory:
   (engineState.multiTimeframeHistory || []).slice(0, 200),
 
-  statisticalEdgeState:
-  engineState.statisticalEdgeState || null,
+statisticalMemoryState:
+  engineState.statisticalMemoryState || {
+    updatedAt: null,
+    setupHistory: [],
+    setupPerformance: {},
+    expectancyHistory: [],
+    probabilityHistory: [],
+  },
 
+statisticalEdgeState:
+  engineState.statisticalEdgeState || null,
 statisticalEdgeHistory:
   (engineState.statisticalEdgeHistory || []).slice(0, 200),
 
@@ -791,6 +799,42 @@ function journalTradeExit(symbol, exit = {}) {
     enteredAt: entry.enteredAt || null,
     exitedAt: new Date().toISOString(),
   };
+
+if (!engineState.statisticalMemoryState) {
+  engineState.statisticalMemoryState = {
+    updatedAt: new Date().toISOString(),
+    setupHistory: [],
+    setupPerformance: {},
+    expectancyHistory: [],
+    probabilityHistory: [],
+  };
+}
+
+const setupType = classifyInstitutionalSetup({
+  symbol: cleanSymbol,
+  score: closedTrade.score,
+  assetClass: closedTrade.assetClass,
+  marketRegime: closedTrade.marketRegime,
+  confirmations: closedTrade.confirmations,
+  portfolioManager: closedTrade.portfolioManager,
+});
+
+engineState.statisticalMemoryState.setupHistory.unshift({
+  timestamp: new Date().toISOString(),
+  symbol: cleanSymbol,
+  setupType,
+  profitPercent,
+  score: closedTrade.score,
+  assetClass: closedTrade.assetClass,
+  marketRegime: closedTrade.marketRegime,
+  exitReason: closedTrade.exitReason,
+});
+
+engineState.statisticalMemoryState.setupHistory =
+  engineState.statisticalMemoryState.setupHistory.slice(0, 500);
+
+engineState.statisticalMemoryState.updatedAt =
+  new Date().toISOString();
 
   engineState.tradeJournalHistory.unshift(closedTrade);
   engineState.tradeJournalHistory =
@@ -1982,6 +2026,65 @@ function calculateCitadelTechnicalIntelligenceEngine(q = {}) {
       `Exhaustion ${exhaustionRiskScore.toFixed(0)}/100`,
   };
 }
+
+function classifyInstitutionalSetup(signal = {}) {
+  const score = Number(signal.score || 0);
+
+  const technicalScore = Number(
+    signal.technicalIntelligence?.institutionalEntryScore ||
+      signal.technicalScore ||
+      0
+  );
+
+  const statisticalScore = Number(
+    signal.statisticalScore ||
+      signal.statisticalEdgeScore ||
+      signal.statisticalEdge?.statisticalEdgeScore ||
+      0
+  );
+
+  const momentumScore = Number(
+    signal.momentumScore || score || 0
+  );
+
+  const volumeRatio = Number(
+    signal.confirmations?.volumeSpikeRatio ||
+      signal.volumeRatio ||
+      0
+  );
+
+  if (
+    momentumScore >= 85 &&
+    technicalScore >= 75 &&
+    volumeRatio >= 1.5
+  ) {
+    return "MOMENTUM_BREAKOUT";
+  }
+
+  if (
+    statisticalScore >= 70 &&
+    technicalScore >= 65
+  ) {
+    return "STATISTICAL_EDGE";
+  }
+
+  if (
+    momentumScore >= 60 &&
+    technicalScore >= 60
+  ) {
+    return "TREND_CONTINUATION";
+  }
+
+  if (
+    technicalScore < 40 &&
+    momentumScore < 40
+  ) {
+    return "WEAK_STRUCTURE";
+  }
+
+  return "GENERAL_SETUP";
+}
+
 function calculateCryptoSignalRealismEngine(signal = {}) {
   const symbol = normalizeSymbol(signal.symbol);
   const rawScore = Number(signal.score || 0);
@@ -2323,6 +2426,88 @@ function calculateBlackRockPortfolioOptimizer(
   };
 }
 
+function calculateStatisticalExpectancyEngine(signal = {}) {
+  const setupType =
+    signal.setupType ||
+    classifyInstitutionalSetup(signal);
+
+  const setupHistory =
+    engineState.statisticalMemoryState?.setupHistory || [];
+
+  const matchingHistory = setupHistory.filter(
+    (item) => item.setupType === setupType
+  );
+
+  if (matchingHistory.length < 5) {
+    return {
+      setupType,
+      expectedValue: 0,
+      winRate: 0,
+      averageWin: 0,
+      averageLoss: 0,
+      statisticalConfidence: 0,
+      sampleSize: matchingHistory.length,
+      expectancyState: "INSUFFICIENT_DATA",
+    };
+  }
+
+  const wins = matchingHistory.filter(
+    (item) => Number(item.profitPercent || 0) > 0
+  );
+
+  const losses = matchingHistory.filter(
+    (item) => Number(item.profitPercent || 0) <= 0
+  );
+
+  const averageWin =
+    wins.length > 0
+      ? wins.reduce(
+          (sum, item) =>
+            sum + Number(item.profitPercent || 0),
+          0
+        ) / wins.length
+      : 0;
+
+  const averageLoss =
+    losses.length > 0
+      ? Math.abs(
+          losses.reduce(
+            (sum, item) =>
+              sum + Number(item.profitPercent || 0),
+            0
+          ) / losses.length
+        )
+      : 0;
+
+  const winRate =
+    matchingHistory.length > 0
+      ? wins.length / matchingHistory.length
+      : 0;
+
+  const expectedValue =
+    (winRate * averageWin) -
+    ((1 - winRate) * averageLoss);
+
+  const statisticalConfidence = clampScore(
+    matchingHistory.length * 4
+  );
+
+  return {
+    setupType,
+    expectedValue: Number(expectedValue.toFixed(2)),
+    winRate: Number((winRate * 100).toFixed(2)),
+    averageWin: Number(averageWin.toFixed(2)),
+    averageLoss: Number(averageLoss.toFixed(2)),
+    sampleSize: matchingHistory.length,
+    statisticalConfidence,
+    expectancyState:
+      expectedValue > 0
+        ? "POSITIVE_EXPECTANCY"
+        : "NEGATIVE_EXPECTANCY",
+  };
+}
+
+
 function calculateInstitutionalAiPortfolioOrchestrator(signal = {}) {
   const institutionalScore = Number(
     signal.institutionalScore || signal.score || 0
@@ -2436,19 +2621,43 @@ function calculateInstitutionalAiPortfolioOrchestrator(signal = {}) {
         )
       : 0;
 
-  const institutionalOpportunityScore =
-    isCryptoSignal
-      ? cryptoAdaptiveOpportunityScore
-      : clampScore(
-          technicalScore * 0.18 +
-            macroScore * 0.1 +
-            orchestratorStatisticalScore * 0.1 +
-            dcfScore * 0.16 +
-            earningsScore * 0.14 +
-            moatScore * 0.12 +
-            dividendScore * 0.05 +
-            portfolioScore * 0.15
-        );
+const statisticalExpectancy =
+  calculateStatisticalExpectancyEngine(signal);
+
+const expectancyBoost =
+  statisticalExpectancy.expectedValue > 0
+    ? Math.min(
+        statisticalExpectancy.expectedValue * 2,
+        15
+      )
+    : Math.max(
+        statisticalExpectancy.expectedValue * 2,
+        -20
+      );
+
+const institutionalOpportunityScore =
+  isCryptoSignal
+    ? clampScore(
+        technicalScore * 0.22 +
+          orchestratorStatisticalScore * 0.22 +
+          momentumScore * 0.18 +
+          portfolioScore * 0.08 +
+          riskScore * 0.08 +
+          expectancyBoost +
+          statisticalExpectancy.statisticalConfidence * 0.08
+      )
+    : clampScore(
+        technicalScore * 0.16 +
+          macroScore * 0.08 +
+          orchestratorStatisticalScore * 0.18 +
+          dcfScore * 0.12 +
+          earningsScore * 0.1 +
+          moatScore * 0.1 +
+          dividendScore * 0.05 +
+          portfolioScore * 0.12 +
+          expectancyBoost +
+          statisticalExpectancy.statisticalConfidence * 0.09
+      );
 
   const institutionalRiskPenalty = isCryptoSignal
     ? clampScore(
@@ -4995,7 +5204,7 @@ async function scanCryptoMarket() {
         ...quote,
         score,
         barsFound: bars.length,
-        qualifiedToBuy: score >= 45,
+        qualifiedToBuy: false,
       });
     } catch (err) {
       saveSkippedSymbol(symbol, err.message);
@@ -5235,7 +5444,15 @@ async function scanMarket() {
           0
         ) / statisticalEdgeSignals.length
       : 0;
-
+engineState.statisticalMemoryState =
+  saved.statisticalMemoryState || {
+    updatedAt: null,
+    setupHistory: [],
+    setupPerformance: {},
+    expectancyHistory: [],
+    probabilityHistory: [],
+  };
+  
   engineState.statisticalEdgeState = {
     updatedAt: new Date().toISOString(),
     qualifyingSignals: statisticalEdgeSignals.length,
@@ -7079,6 +7296,43 @@ engineState.technicalIntelligenceHistory.unshift(
 engineState.technicalIntelligenceHistory =
   engineState.technicalIntelligenceHistory.slice(0, 200);
 
+for (const signal of orchestratedSignals) {
+  const realismScore = Number(
+    signal.realismAdjustedScore ||
+    signal.cryptoRealism?.realismScore ||
+    signal.score ||
+    0
+  );
+
+  const spreadPercent = Number(
+    signal.cryptoRealism?.spreadPercent || 0
+  );
+
+  const statisticalScore =
+    Number(signal.statisticalScore || 0) +
+    Number(signal.statisticalEdgeScore || 0) +
+    Number(signal.statisticalEdge?.statisticalEdgeScore || 0);
+
+  const timeframeDecision =
+    signal.timeframeDecision || "WEAK_CONFIRMATION";
+
+  const finalInstitutionalDecisionScore =
+    Number(
+      signal.institutionalOrchestrator
+        ?.finalInstitutionalDecisionScore || 0
+    );
+
+  signal.qualifiedToBuy =
+    realismScore >= CONFIG.minScoreToBuy &&
+    finalInstitutionalDecisionScore >= 65 &&
+    spreadPercent <= 0.65 &&
+    timeframeDecision !== "TIMEFRAME_CONFLICT" &&
+    (
+      statisticalScore > 0 ||
+      realismScore >= 85
+    );
+}
+
 const orchestratedSignals =
   allSignalsForAnalytics.map((signal) => ({
     ...signal,
@@ -7121,6 +7375,16 @@ const averageOrchestratorScore =
         0
       ) / orchestratedSignals.length
     : 0;
+
+    if (!engineState.statisticalMemoryState) {
+  engineState.statisticalMemoryState = {
+    updatedAt: new Date().toISOString(),
+    setupHistory: [],
+    setupPerformance: {},
+    expectancyHistory: [],
+    probabilityHistory: [],
+  };
+}
 
 engineState.institutionalOrchestratorState = {
   updatedAt: new Date().toISOString(),
@@ -8064,6 +8328,14 @@ institutionalWatchlist:
   analyticsSnapshots:
   engineState.analyticsSnapshots?.slice(0, 20) || [],
 
+statisticalMemoryState:
+  engineState.statisticalMemoryState || {
+    updatedAt: null,
+    setupHistory: [],
+    setupPerformance: {},
+    expectancyHistory: [],
+    probabilityHistory: [],
+  },
   statisticalEdgeState:
   engineState.statisticalEdgeState || null,
 
