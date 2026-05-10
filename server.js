@@ -370,8 +370,8 @@ const CONFIG = {
 
   // EXIT SETTINGS
 takeProfitPercent: Number(process.env.TAKE_PROFIT_PERCENT || 8),
-stopLossPercent: Number(process.env.STOP_LOSS_PERCENT || -2),
-trailingStopPercent: Number(process.env.TRAILING_STOP_PERCENT || -2),
+stopLossPercent: Number(process.env.STOP_LOSS_PERCENT || 2),
+trailingStopPercent: Number(process.env.TRAILING_STOP_PERCENT || 2),
 
   // RUNNER STRATEGY
   runnerTriggerPercent: Number(process.env.RUNNER_TRIGGER_PERCENT || 6),
