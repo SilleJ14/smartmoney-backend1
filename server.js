@@ -2750,6 +2750,42 @@ portfolioManagerReason:
   }`,
   };
 }
+
+function passesInstitutionalOrchestratorBuyGate(signal = {}) {
+  const orchestrator =
+    signal.institutionalOrchestrator ||
+    calculateInstitutionalAiPortfolioOrchestrator(signal);
+
+  const finalScore = Number(
+    orchestrator.finalInstitutionalDecisionScore || 0
+  );
+
+  const action = orchestrator.orchestratorAction || "WATCH";
+
+  const blockedActions = ["AVOID", "BLOCK", "CAPITAL_PRESERVATION"];
+
+  if (blockedActions.includes(action)) {
+    return {
+      allowed: false,
+      reason: `Orchestrator blocked: ${action}`,
+      orchestrator,
+    };
+  }
+
+  if (finalScore < 60) {
+    return {
+      allowed: false,
+      reason: `Orchestrator score too low: ${finalScore}`,
+      orchestrator,
+    };
+  }
+
+  return {
+    allowed: true,
+    reason: `Orchestrator approved: ${action} ${finalScore}/100`,
+    orchestrator,
+  };
+}
 function getDynamicTradeAmount(account, openBotPositions = [], signalScore = 80) {
   const cash = Number(account?.cash || 0);
   const equity = Number(account?.equity || 0);
@@ -6245,33 +6281,57 @@ async function replaceWeakestIfBetter(signals, positions, aiOwnedSymbols) {
 
   const topCandidate = signals
     .filter((s) => s.qualifiedToBuy === true)
-    .filter((s) => s.score >= CONFIG.minScoreToBuy)
+    .filter((s) => Number(s.score || 0) >= CONFIG.minScoreToBuy)
     .filter((s) => !aiOwnedSymbols.has(normalizeSymbol(s.symbol)))
-    .slice(0, CONFIG.topAutoTradeCandidates)[0];
+    .sort((a, b) => Number(b.score || 0) - Number(a.score || 0))[0];
 
   if (!topCandidate) return false;
 
   const weakest = aiPositions.reduce((weak, pos) => {
-    const weakScore =
-      aiEntryScores[normalizeSymbol(weak.symbol)] ||
-      engineState.aiEntryScores[normalizeSymbol(weak.symbol)] ||
-      0;
+    const weakSymbol = normalizeSymbol(weak.symbol);
+    const posSymbol = normalizeSymbol(pos.symbol);
 
-    const posScore =
-      aiEntryScores[normalizeSymbol(pos.symbol)] ||
-      engineState.aiEntryScores[normalizeSymbol(pos.symbol)] ||
-      0;
+    const weakScore = Number(
+      aiEntryScores[weakSymbol] ||
+        engineState.aiEntryScores?.[weakSymbol]?.score ||
+        engineState.aiEntryScores?.[weakSymbol] ||
+        0
+    );
+
+    const posScore = Number(
+      aiEntryScores[posSymbol] ||
+        engineState.aiEntryScores?.[posSymbol]?.score ||
+        engineState.aiEntryScores?.[posSymbol] ||
+        0
+    );
 
     return posScore < weakScore ? pos : weak;
   });
 
   const weakestSymbol = normalizeSymbol(weakest.symbol);
-  const weakestScore =
-    aiEntryScores[weakestSymbol] ||
-    engineState.aiEntryScores[weakestSymbol] ||
-    0;
 
-  const scoreGap = topCandidate.score - weakestScore;
+  const weakestScore = Number(
+    aiEntryScores[weakestSymbol] ||
+      engineState.aiEntryScores?.[weakestSymbol]?.score ||
+      engineState.aiEntryScores?.[weakestSymbol] ||
+      0
+  );
+
+  const scoreGap = Number(topCandidate.score || 0) - weakestScore;
+
+  const rebalanceCheck = canRunSwingSafeRotation(weakest);
+
+  if (!rebalanceCheck.allowed) {
+    saveRecentOrder("REBALANCE_SKIPPED_SWING_SAFE", weakestSymbol, {
+      replacementSymbol: topCandidate.symbol,
+      replacementScore: topCandidate.score,
+      weakestScore,
+      scoreGap,
+      reason: rebalanceCheck.reason,
+    });
+
+    return false;
+  }
 
   if (scoreGap < CONFIG.replaceWeakestMinScoreGap) return false;
 
@@ -6298,11 +6358,12 @@ async function replaceWeakestIfBetter(signals, positions, aiOwnedSymbols) {
     delete engineState.aiEntryScores[weakestSymbol];
     delete engineState.runnerPositions[weakestSymbol];
 
+    markSwingSafeRotationUsed(weakestSymbol, topCandidate.symbol);
+
     setTimeout(async () => {
       try {
-        const account = engineState.cachedAccount || (await getAccount());
-        const freshPositions =
-          engineState.cachedPositions || (await getPositions());
+        const account = await getAccount();
+        const freshPositions = await getPositions();
         const freshAiOwnedSymbols = await getAiOwnedSymbols();
 
         const freshAiPositions = freshPositions.filter((p) =>
@@ -6312,17 +6373,19 @@ async function replaceWeakestIfBetter(signals, positions, aiOwnedSymbols) {
         const portfolioManager = calculateAiPortfolioManagerDecision(
           topCandidate,
           account,
-          openBotPositions,
+          freshAiPositions,
           engineState.marketRegime || detectMarketRegime([])
         );
 
-        const tradeAmount = portfolioManager.recommendedTradeAmount;
+        const tradeAmount = Number(
+          portfolioManager.recommendedTradeAmount || 0
+        );
 
         if (tradeAmount <= 0) {
           saveFailedOrder(
             "ROTATION_BUY_FAILED",
             topCandidate.symbol,
-            "Bot budget used up or no cash available"
+            "No capital available after rebalance"
           );
           return;
         }
@@ -6332,221 +6395,41 @@ async function replaceWeakestIfBetter(signals, positions, aiOwnedSymbols) {
           tradeAmount,
           topCandidate.score
         );
-      saveRecentOrder("AUTO_BUY_INSTITUTIONAL_ALLOCATOR", stock.symbol, {
-        price: stock.current,
-        score: stock.score,
-        confirmations: stock.confirmations || null,
-        tradeAmount,
-        maxBotExposurePercent: CONFIG.maxBotExposurePercent,
-        portfolioManager: refreshedPortfolioManager,
-        buyOrder,
-      });
-      
-      } catch (err) {
-        saveFailedOrder("ROTATION_BUY_FAILED", topCandidate.symbol, err.message, {
-          replacedSymbol: weakestSymbol,
+
+        saveRecentOrder("ROTATED_IN_STRONGER_POSITION", topCandidate.symbol, {
+          price: topCandidate.current,
           score: topCandidate.score,
+          replacedSymbol: weakestSymbol,
+          tradeAmount,
+          portfolioManager,
+          buyOrder,
         });
+      } catch (err) {
+        saveFailedOrder(
+          "ROTATION_BUY_FAILED",
+          topCandidate.symbol,
+          err.message,
+          {
+            replacedSymbol: weakestSymbol,
+            score: topCandidate.score,
+          }
+        );
       }
     }, 2500);
 
     return true;
   } catch (err) {
-    saveFailedOrder("ROTATION_SELL_FAILED", weakestSymbol, err.message, {
-      replacementSymbol: topCandidate.symbol,
-      replacementScore: topCandidate.score,
-    });
+    saveFailedOrder(
+      "ROTATION_SELL_FAILED",
+      weakestSymbol,
+      err.message,
+      {
+        replacementSymbol: topCandidate.symbol,
+        replacementScore: topCandidate.score,
+      }
+    );
 
     return false;
-  }
-}
-
-
-async function autoBuySignals(signals) {
-  const regime = engineState.marketRegime || detectMarketRegime(signals);
-
-  if (regime.state === "panic/high volatility" || regime.exposureMultiplier <= 0) {
-    saveRecentOrder("BUY_SKIPPED_MARKET_REGIME", "ALL", {
-      marketRegime: regime.label,
-      riskMessage: regime.riskMessage,
-    });
-    return;
-  }
-  const positions = await getPositions();
-  const aiOwnedSymbols = await getAiOwnedSymbols();
-
-  const openSymbols = new Set(positions.map((p) => normalizeSymbol(p.symbol)));
-
-  const aiPositions = positions.filter((p) =>
-    aiOwnedSymbols.has(normalizeSymbol(p.symbol))
-  );
-
-  if (aiPositions.length >= CONFIG.maxOpenTrades) {
-    await replaceWeakestIfBetter(signals, positions, aiOwnedSymbols);
-    return;
-  }
-
-  const openSlots = CONFIG.maxOpenTrades - aiPositions.length;
-  const buyCandidates = signals
-    .filter((s) => s.autoTradeApproved === true)
-    .filter((s) => s.decisionLevel === "Auto-Trade Approved")
-    .filter((s) => s.score >= CONFIG.minScoreToBuy)
-    .filter((s) => s.qualifiedToBuy === true)
-    .filter((s) => s.confirmations?.fakeBreakout !== true)
-    .filter((s) => s.confirmations?.newsRisk !== true)
-    .filter((s) => !openSymbols.has(normalizeSymbol(s.symbol)))
-  .filter((s) => {
-  const cooldown =
-    engineState.symbolCooldowns[
-      normalizeSymbol(s.symbol)
-    ];
-
-  if (!cooldown) return true;
-
-  return (
-    Date.now() - new Date(cooldown).getTime() >
-    engineState.cooldownMinutes * 60 * 1000
-  );
-})  
-    .filter((s) => !shouldSkipFromTradeMemory(s.symbol))
-    .filter((s) => isNormalStockSymbol(s.symbol))
-    .slice(0, Math.min(openSlots, CONFIG.topAutoTradeCandidates));
-
-  for (const stock of buyCandidates) {
-
-    const portfolioManager = calculateAiPortfolioManagerDecision(
-      stock,
-      engineState.cachedAccount || (await getAccount()),
-      aiPositions,
-      regime
-    );
-
-    if (
-      portfolioManager.aiPortfolioAction === "Watch Only" ||
-      portfolioManager.aiPortfolioAction === "No Capital Available"
-    ) {
-    saveRecentOrder("BUY_SKIPPED_AI_PORTFOLIO_MANAGER", stock.symbol, {
-  portfolioManager,
-  message: "Skipped by AI Portfolio Manager",
-});
-      continue;
-    }
-    const pullback = Number(
-      stock.confirmations?.pullbackFromHighPercent || 0
-    );
-
-    // Skip weak pullbacks
-    if (pullback > 3) {
-      saveRecentOrder("BUY_SKIPPED_PULLBACK", stock.symbol, {
-        pullback,
-        message: "Skipped — too much pullback from high",
-      });
-      continue;
-    }
-    const symbol = normalizeSymbol(stock.symbol);
-
-    // 🧠 STOCK TRADE MEMORY FILTER
-    if (shouldSkipFromTradeMemory(symbol)) {
-      saveRecentOrder("BUY_SKIPPED_TRADE_MEMORY", symbol, {
-        message: "Skipped because this stock recently produced repeated losses.",
-        memory: engineState.tradeMemory?.[symbol],
-      });
-      continue;
-    }
-
-    // 🧠 STOCK COOLDOWN — no rebuy for 30 minutes after selling
-    const lastSoldAt = Number(engineState.lastSoldAt?.[symbol] || 0);
-    const minutesSinceSold = lastSoldAt
-      ? (Date.now() - lastSoldAt) / 1000 / 60
-      : Infinity;
-
-    if (minutesSinceSold < 30) {
-      saveRecentOrder("BUY_SKIPPED_COOLDOWN", symbol, {
-        minutesSinceSold: Number(minutesSinceSold.toFixed(1)),
-        message: "Skipped stock rebuy during cooldown.",
-      });
-      continue;
-    }
-    try {
-      const account = engineState.cachedAccount || (await getAccount());
-      const freshPositions =
-        engineState.cachedPositions || (await getPositions());
-      const freshAiOwnedSymbols = await getAiOwnedSymbols();
-
-      const freshAiPositions = freshPositions.filter((p) =>
-        freshAiOwnedSymbols.has(normalizeSymbol(p.symbol))
-      );
-      const refreshedPortfolioManager = calculateAiPortfolioManagerDecision(
-  stock,
-  account,
-  aiPositions,
-  regime
-);
-
-const tradeAmount = Number(
-  refreshedPortfolioManager.recommendedTradeAmount || 0
-);
-
-engineState.aiDecisionHistory.unshift({
-  type: "INSTITUTIONAL_PORTFOLIO_ALLOCATOR",
-  symbol: stock.symbol,
-  at: new Date().toISOString(),
-  score: stock.score,
-  tradeAmount,
-  portfolioManager: refreshedPortfolioManager,
-});
-
-engineState.aiDecisionHistory = engineState.aiDecisionHistory.slice(0, 500);
-saveEngineState("INSTITUTIONAL_PORTFOLIO_ALLOCATOR_DECISION");
-
-      if (tradeAmount <= 0) {
-        saveFailedOrder(
-          "AUTO_BUY_FAILED",
-          stock.symbol,
-          "Bot budget used up or no cash available",
-          {
-            price: stock.current,
-            score: stock.score,
-            maxBotExposurePercent: CONFIG.maxBotExposurePercent,
-          }
-        );
-        continue;
-      }
-const buyOrder = await placeMarketBuy(
-  stock.symbol,
-  tradeAmount,
-  stock.score
-);
-
-saveRecentOrder("AUTO_BUY_INSTITUTIONAL_ALLOCATOR", stock.symbol, {
-  price: stock.current,
-  score: stock.score,
-  confirmations: stock.confirmations || null,
-  tradeAmount,
-  maxBotExposurePercent: CONFIG.maxBotExposurePercent,
-  portfolioManager: refreshedPortfolioManager,
-  buyOrder,
-});
-
-journalTradeEntry(stock.symbol, {
-  entryType: "AUTO_BUY_INSTITUTIONAL_ALLOCATOR",
-  assetClass: "stock",
-  entryPrice: stock.current,
-  score: stock.score,
-  strategy: "institutional_allocator",
-  sector: stock.estimatedSector || "General Market",
-  marketRegime:
-    engineState.marketRegime?.state || "unknown",
-  confirmations: stock.confirmations || {},
-  portfolioManager: refreshedPortfolioManager,
-  tradeAmount,
-});
-    } catch (err) {
-      saveFailedOrder("AUTO_BUY_FAILED", stock.symbol, err.message, {
-        price: stock.current,
-        score: stock.score,
-      });
-    }
   }
 }
 async function rotateWeakCryptoIfBetter(signals, positions) {
@@ -6783,6 +6666,7 @@ async function autoBuyCryptoSignals(signals) {
   if (!["live_crypto", "live_stock", "smart"].includes(TRADING_MODE)) return;
 
   const account = await getAccount();
+
   const positions = await getPositions();
   const openSymbols = new Set(positions.map((p) => normalizeSymbol(p.symbol)));
   const cash = Number(account.cash || 0);
@@ -6842,24 +6726,43 @@ async function autoBuyCryptoSignals(signals) {
   for (const crypto of buyCandidates) {
     const symbol = normalizeSymbol(crypto.symbol);
 
-    // 🧠 APPROVED CRYPTO LIST
-    const allowedCryptoSymbols = new Set([
-      "BTCUSD",
-      "ETHUSD",
-      "SOLUSD",
-      "DOGEUSD",
-      "ADAUSD",
-      "AVAXUSD",
-      "LINKUSD",
-      "LTCUSD",
-    ]);
+const cryptoInstitutionalScore = Number(
+  crypto.institutionalScore ||
+  crypto.score ||
+  0
+);
 
-    if (!allowedCryptoSymbols.has(symbol)) {
-      saveRecentOrder("CRYPTO_SKIPPED_SYMBOL_FILTER", symbol, {
-        message: "Skipped non-approved crypto pair",
-      });
-      continue;
-    }
+const cryptoTechnicalScore = Number(
+  crypto.technicalScore ||
+  crypto.technicalIntelligence?.institutionalEntryScore ||
+  0
+);
+
+const cryptoStatisticalScore = Number(
+  crypto.statisticalScore ||
+  crypto.statisticalEdge?.statisticalEdgeScore ||
+  0
+);
+
+const cryptoBarsFound = Number(crypto.barsFound || 0);
+
+const cryptoQualified =
+  cryptoInstitutionalScore >= 60 &&
+  cryptoTechnicalScore >= 55 &&
+  cryptoStatisticalScore >= 50 &&
+  cryptoBarsFound >= 10 &&
+  crypto.qualifiedToBuy !== false;
+
+if (!cryptoQualified) {
+  saveRecentOrder("CRYPTO_SKIPPED_INSTITUTIONAL_FILTER", symbol, {
+    institutionalScore: cryptoInstitutionalScore,
+    technicalScore: cryptoTechnicalScore,
+    statisticalScore: cryptoStatisticalScore,
+    barsFound: cryptoBarsFound,
+  });
+
+  continue;
+}
 
     // 🧠 TRADE MEMORY FILTER
     if (shouldSkipFromTradeMemory(symbol)) {
