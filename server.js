@@ -369,15 +369,15 @@ const CONFIG = {
   maxBotExposurePercent: Number(process.env.MAX_BOT_EXPOSURE_PERCENT || 2),
 
   // EXIT SETTINGS
-  takeProfitPercent: Number(process.env.TAKE_PROFIT_PERCENT || 6),
-  stopLossPercent: Number(process.env.STOP_LOSS_PERCENT || -0.5),
-  trailingStopPercent: Number(process.env.TRAILING_STOP_PERCENT || -0.5),
+takeProfitPercent: Number(process.env.TAKE_PROFIT_PERCENT || 8),
+stopLossPercent: Number(process.env.STOP_LOSS_PERCENT || -4),
+trailingStopPercent: Number(process.env.TRAILING_STOP_PERCENT || -2),
 
   // RUNNER STRATEGY
   runnerTriggerPercent: Number(process.env.RUNNER_TRIGGER_PERCENT || 6),
-  runnerTrailingStopPercent: Number(
-    process.env.RUNNER_TRAILING_STOP_PERCENT || 0.5
-  ),
+runnerTrailingStopPercent: Number(
+  process.env.RUNNER_TRAILING_STOP_PERCENT || 3
+),
 
   dailyLossLimitPercent: Number(process.env.DAILY_LOSS_LIMIT_PERCENT || 2),
 
@@ -402,9 +402,10 @@ const CONFIG = {
   defensiveExposureMultiplier: Number(
     process.env.DEFENSIVE_EXPOSURE_MULTIPLIER || 0.4
   ),
-  panicExposureMultiplier: Number(
-    process.env.PANIC_EXPOSURE_MULTIPLIER || 0
-  ),
+ panicExposureMultiplier: Number(
+  process.env.PANIC_EXPOSURE_MULTIPLIER || 0.15
+),
+
   // ADVANCED FILTERS (FIXED)
   // ADVANCED FILTERS
   enableAdvancedFilters: process.env.ENABLE_ADVANCED_FILTERS !== "false",
