@@ -5883,7 +5883,7 @@ async function autoExitPositions(marketOpen) {
     const isAiOwned = aiOwnedSymbols.has(symbol);
     const isManualManaged = engineState.aiManagedSymbols?.includes(symbol);
     const qty = Number(pos.qty);
-
+    const currentPrice = Number(pos.current_price);
 
     const unrealizedPercent = Number(pos.unrealized_plpc) * 100;
 
