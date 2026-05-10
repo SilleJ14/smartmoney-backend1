@@ -2262,18 +2262,27 @@ function calculateInstitutionalAiPortfolioOrchestrator(signal = {}) {
       ? 15
       : 0;
 
+  const assetClass =
+    signal.assetClass || signal.asset_class || "stock";
+
+  const isCryptoSignal =
+    assetClass === "crypto" ||
+    String(signal.symbol || "").includes("/") ||
+    TRADING_MODE === "live_crypto";
+
   const cryptoAdaptiveOpportunityScore =
-    TRADING_MODE === "live_crypto"
+    isCryptoSignal
       ? clampScore(
           technicalScore * 0.35 +
-            statisticalScore * 0.3 +
-            momentumScore * 0.2 +
-            portfolioScore * 0.15
+            statisticalScore * 0.2 +
+            momentumScore * 0.25 +
+            portfolioScore * 0.1 +
+            riskScore * 0.1
         )
       : 0;
 
   const institutionalOpportunityScore =
-    TRADING_MODE === "live_crypto"
+    isCryptoSignal
       ? cryptoAdaptiveOpportunityScore
       : clampScore(
           technicalScore * 0.18 +
@@ -2285,31 +2294,41 @@ function calculateInstitutionalAiPortfolioOrchestrator(signal = {}) {
             dividendScore * 0.05 +
             portfolioScore * 0.15
         );
-
-  const institutionalRiskPenalty = clampScore(
-    macroPenalty +
-      portfolioPenalty +
-      exhaustionRisk * 0.15 +
-      valuationRisk * 0.15 +
-      earningsRisk * 0.12 +
-      (riskScore < 50 ? 20 : 0)
-  );
+  const institutionalRiskPenalty = isCryptoSignal
+    ? clampScore(
+        macroPenalty * 0.7 +
+          portfolioPenalty +
+          exhaustionRisk * 0.2 +
+          (riskScore < 45 ? 15 : 0)
+      )
+    : clampScore(
+        macroPenalty +
+          portfolioPenalty +
+          exhaustionRisk * 0.15 +
+          valuationRisk * 0.15 +
+          earningsRisk * 0.12 +
+          (riskScore < 50 ? 20 : 0)
+      );
 
   const finalInstitutionalDecisionScore = clampScore(
     institutionalOpportunityScore -
       institutionalRiskPenalty * 0.4
   );
+  const highConvictionThreshold = isCryptoSignal ? 72 : 78;
+  const controlledThreshold = isCryptoSignal ? 62 : 68;
+  const tacticalThreshold = isCryptoSignal ? 50 : 55;
+  const watchlistThreshold = isCryptoSignal ? 38 : 42;
 
   const orchestratorAction =
     engineState.macroRiskState?.shouldBlockNewTrades
       ? "BLOCKED_BY_MACRO_RISK"
-      : finalInstitutionalDecisionScore >= 78
+      : finalInstitutionalDecisionScore >= highConvictionThreshold
       ? "DEPLOY_HIGH_CONVICTION"
-      : finalInstitutionalDecisionScore >= 68
+      : finalInstitutionalDecisionScore >= controlledThreshold
       ? "DEPLOY_CONTROLLED"
-      : finalInstitutionalDecisionScore >= 55
+      : finalInstitutionalDecisionScore >= tacticalThreshold
       ? "SMALL_TACTICAL"
-      : finalInstitutionalDecisionScore >= 42
+      : finalInstitutionalDecisionScore >= watchlistThreshold
       ? "WATCHLIST_ONLY"
       : "AVOID";
 
@@ -2324,9 +2343,11 @@ function calculateInstitutionalAiPortfolioOrchestrator(signal = {}) {
       ? 0.15
       : 0;
 
-  return {
-    symbol: signal.symbol,
-    institutionalOpportunityScore,
+return {
+  symbol: signal.symbol,
+  assetClass,
+  isCryptoSignal,
+  institutionalOpportunityScore,
     institutionalRiskPenalty,
     finalInstitutionalDecisionScore,
     orchestratorAction,
