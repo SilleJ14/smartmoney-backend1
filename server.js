@@ -1223,6 +1223,83 @@ function calculatePortfolioHeatEngine(signal, openBotPositions = []) {
   };
 }
 
+function calculateInstitutionalRebalanceIntelligence(
+  account = {},
+  openPositions = [],
+  signals = []
+) {
+  const equity = Number(account?.equity || 0);
+  const positions = Array.isArray(openPositions) ? openPositions : [];
+  const candidates = Array.isArray(signals) ? signals : [];
+
+  const topSignal = [...candidates].sort(
+    (a, b) => Number(b.score || 0) - Number(a.score || 0)
+  )[0];
+
+  const reviews = positions.map((position) => {
+    const symbol = normalizeSymbol(position.symbol);
+    const profitPercent = Number(position.unrealized_plpc || 0) * 100;
+    const marketValue = Math.abs(Number(position.market_value || 0));
+
+    const entryScore =
+      Number(engineState.aiEntryScores?.[symbol]?.score || 0);
+
+    const currentSignal = candidates.find(
+      (signal) => normalizeSymbol(signal.symbol) === symbol
+    );
+
+    const currentScore = Number(
+      currentSignal?.score || entryScore || 0
+    );
+
+    const topScore = Number(topSignal?.score || 0);
+    const scoreGap = topScore - currentScore;
+
+    const action =
+      profitPercent >= 6 && currentScore >= 75
+        ? "PROTECT_WINNER"
+        : profitPercent <= -3 && scoreGap >= CONFIG.replaceWeakestMinScoreGap
+        ? "ROTATE_TO_STRONGER_SIGNAL"
+        : profitPercent <= -4
+        ? "REDUCE_WEAK_POSITION"
+        : currentScore >= 70
+        ? "KEEP"
+        : "WATCH";
+
+    return {
+      symbol,
+      profitPercent: Number(profitPercent.toFixed(2)),
+      marketValue: Number(marketValue.toFixed(2)),
+      entryScore,
+      currentScore,
+      topAlternativeSymbol: topSignal?.symbol || null,
+      topAlternativeScore: topScore,
+      scoreGap,
+      action,
+    };
+  });
+
+  const state = {
+    updatedAt: new Date().toISOString(),
+    equity,
+    openPositionCount: positions.length,
+    reviewedPositions: reviews,
+    protectWinners: reviews.filter((r) => r.action === "PROTECT_WINNER"),
+    weakPositions: reviews.filter(
+      (r) =>
+        r.action === "REDUCE_WEAK_POSITION" ||
+        r.action === "ROTATE_TO_STRONGER_SIGNAL"
+    ),
+    rebalanceRequired: reviews.some(
+      (r) =>
+        r.action === "REDUCE_WEAK_POSITION" ||
+        r.action === "ROTATE_TO_STRONGER_SIGNAL"
+    ),
+  };
+
+  return state;
+}
+
 function calculateSmartCapitalRedistributionEngine(
   account,
   openBotPositions = [],
