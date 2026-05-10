@@ -6908,6 +6908,13 @@ async function scanCryptoMarket() {
   engineState.skippedSymbols = [];
 
   for (const symbol of symbols) {
+
+    const institutionalUsdPair =
+  String(symbol || "").endsWith("/USD");
+
+if (!institutionalUsdPair) {
+  continue;
+}
     try {
       const quote = await getCryptoLatestQuote(symbol);
       const bars = await getBestCryptoBars(symbol);
