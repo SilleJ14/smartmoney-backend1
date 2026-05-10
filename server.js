@@ -3059,11 +3059,37 @@ function calculateCorrelationIntelligenceEngine(
     ? signals
     : [];
 
+const tradingMode =
+  TRADING_MODE ||
+  engineState.currentTradingMode ||
+  "paper_stock";
+
+const filteredPositions =
+  tradingMode === "live_crypto"
+    ? positions.filter((position) => {
+        const symbol = normalizeSymbol(position.symbol);
+
+        return (
+          symbol.includes("/") ||
+          String(position.asset_class || "")
+            .toLowerCase()
+            .includes("crypto") ||
+          String(position.assetClass || "")
+            .toLowerCase()
+            .includes("crypto")
+        );
+      })
+    : positions.filter((position) => {
+        const symbol = normalizeSymbol(position.symbol);
+
+        return !symbol.includes("/");
+      });    
+
   const sectorBuckets = {};
   const cryptoPositions = [];
   const overlapWarnings = [];
 
-  for (const position of positions) {
+for (const position of filteredPositions) {
     const symbol = normalizeSymbol(position.symbol);
 
     const sectorInfo = estimateSectorIntelligence({
