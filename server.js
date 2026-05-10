@@ -2438,18 +2438,55 @@ function calculateStatisticalExpectancyEngine(signal = {}) {
     (item) => item.setupType === setupType
   );
 
-  if (matchingHistory.length < 5) {
-    return {
-      setupType,
-      expectedValue: 0,
-      winRate: 0,
-      averageWin: 0,
-      averageLoss: 0,
-      statisticalConfidence: 0,
-      sampleSize: matchingHistory.length,
-      expectancyState: "INSUFFICIENT_DATA",
-    };
-  }
+if (matchingHistory.length < 5) {
+  const score = Number(signal.realismAdjustedScore || signal.score || 0);
+
+  const technicalScore = Number(
+    signal.technicalIntelligence?.institutionalEntryScore ||
+      signal.technicalScore ||
+      0
+  );
+
+  const spreadPercent = Number(
+    signal.cryptoRealism?.spreadPercent || 0
+  );
+
+  const bootstrapConfidence = clampScore(
+    score * 0.35 +
+      technicalScore * 0.25 +
+      (spreadPercent <= 0.25 ? 20 : spreadPercent <= 0.5 ? 10 : -10) +
+      (setupType === "MOMENTUM_BREAKOUT" ? 15 : 0) +
+      (setupType === "TREND_CONTINUATION" ? 10 : 0)
+  );
+
+  return {
+    setupType,
+    expectedValue:
+      bootstrapConfidence >= 75
+        ? 1.25
+        : bootstrapConfidence >= 65
+        ? 0.65
+        : 0,
+    winRate:
+      bootstrapConfidence >= 75
+        ? 58
+        : bootstrapConfidence >= 65
+        ? 52
+        : 0,
+    averageWin:
+      bootstrapConfidence >= 65 ? 3 : 0,
+    averageLoss:
+      bootstrapConfidence >= 65 ? 2 : 0,
+    statisticalConfidence: bootstrapConfidence,
+    sampleSize: matchingHistory.length,
+    expectancyState:
+      bootstrapConfidence >= 75
+        ? "BOOTSTRAP_POSITIVE_EXPECTANCY"
+        : bootstrapConfidence >= 65
+        ? "BOOTSTRAP_WATCHLIST_EXPECTANCY"
+        : "INSUFFICIENT_DATA",
+  };
+}
 
   const wins = matchingHistory.filter(
     (item) => Number(item.profitPercent || 0) > 0
@@ -8323,6 +8360,14 @@ app.get("/trade-journal", async (req, res) => {
   engineState.marketVolatility,
   institutionalExposureMode:
   engineState.institutionalExposureMode,
+  statisticalMemoryState:
+  engineState.statisticalMemoryState || {
+    updatedAt: null,
+    setupHistory: [],
+    setupPerformance: {},
+    expectancyHistory: [],
+    probabilityHistory: [],
+  },
 institutionalWatchlist:
   engineState.institutionalWatchlist,
   analyticsSnapshots:
