@@ -2125,7 +2125,7 @@ function calculateBlackRockPortfolioOptimizer(
   ? 10
   : Number(signal.barsFound || 0) >= 10
   ? 5
-  : 0)
+  : 0) +
                 (signal.qualifiedToBuy !== false ? 10 : -15)
             );
 
@@ -6732,7 +6732,7 @@ const getUnifiedTechnicalScore = (signal = {}) => {
   ? 10
   : Number(signal.barsFound || 0) >= 10
   ? 5
-  : 0)
+  : 0) +
       (signal.qualifiedToBuy !== false ? 5 : -20)
   );
 };
