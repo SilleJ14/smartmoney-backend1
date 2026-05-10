@@ -6809,6 +6809,40 @@ async function getBestCryptoBars(symbol) {
   return await getCryptoRecentBars(symbol, "1Min", 30);
 }
 
+function calculateCryptoLiquidityFromBars(bars = [], currentPrice = 0) {
+  const cleanBars = Array.isArray(bars)
+    ? bars
+        .map((bar) => ({
+          close: Number(bar.c || bar.close || 0),
+          volume: Number(bar.v || bar.volume || 0),
+        }))
+        .filter((bar) => bar.close > 0)
+    : [];
+
+  const latestBar = cleanBars[cleanBars.length - 1] || {};
+  const latestVolume = Number(latestBar.volume || 0);
+
+  const averageVolume =
+    cleanBars.length > 0
+      ? cleanBars.reduce(
+          (sum, bar) => sum + Number(bar.volume || 0),
+          0
+        ) / cleanBars.length
+      : 0;
+
+  const volumeSpikeRatio =
+    averageVolume > 0 ? latestVolume / averageVolume : 0;
+
+  const dollarVolume =
+    latestVolume * Number(currentPrice || latestBar.close || 0);
+
+  return {
+    volume: Number(latestVolume.toFixed(2)),
+    averageVolume: Number(averageVolume.toFixed(2)),
+    volumeSpikeRatio: Number(volumeSpikeRatio.toFixed(3)),
+    dollarVolume: Number(dollarVolume.toFixed(2)),
+  };
+}
 
 async function scanCryptoMarket() {
   if (!["live_crypto", "live_stock", "smart"].includes(TRADING_MODE)) {
@@ -6826,10 +6860,32 @@ async function scanCryptoMarket() {
       const bars = await getBestCryptoBars(symbol);
       const score = scoreCrypto(quote, bars);
 
+      const liquidityMetrics =
+        calculateCryptoLiquidityFromBars(
+          bars,
+          Number(quote.current || 0)
+        );
+
+      const spreadPercent =
+        Number(quote.bid || 0) > 0 &&
+        Number(quote.ask || 0) > 0
+          ? ((Number(quote.ask) - Number(quote.bid)) /
+              Number(quote.ask)) *
+            100
+          : 0;
+
       results.push({
         ...quote,
         score,
         barsFound: bars.length,
+        volume: liquidityMetrics.volume,
+        averageVolume: liquidityMetrics.averageVolume,
+        volumeSpikeRatio: liquidityMetrics.volumeSpikeRatio,
+        dollarVolume: liquidityMetrics.dollarVolume,
+        spreadPercent: Number(spreadPercent.toFixed(3)),
+        confirmations: {
+          volumeSpikeRatio: liquidityMetrics.volumeSpikeRatio,
+        },
         qualifiedToBuy: false,
       });
     } catch (err) {
