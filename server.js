@@ -1327,6 +1327,8 @@ function calculateAiSectorRotationEngine(stockSignals = []) {
   };
 }
 
+
+
 function calculatePortfolioHeatEngine(signal, openBotPositions = []) {
   const symbol = normalizeSymbol(signal.symbol);
   const estimatedSector = signal.estimatedSector || "General Market";
@@ -1392,6 +1394,80 @@ function calculatePortfolioHeatEngine(signal, openBotPositions = []) {
         : portfolioHeatScore >= 50
           ? "Reduce Allocation"
           : "Avoid Additional Exposure";
+
+function calculateAiPortfolioManagerDecision(
+  signal,
+  account = {},
+  openBotPositions = [],
+  marketRegime = {}
+) {
+  const portfolioHeat = calculatePortfolioHeatEngine(
+    signal,
+    openBotPositions
+  );
+
+  const cash = Number(account.cash || 0);
+  const equity = Number(account.equity || cash || 0);
+
+  const marketStress =
+    Number(marketRegime.stressScore || 0);
+
+  let allocationMultiplier = 1;
+
+  if (marketStress >= 75) allocationMultiplier = 0.25;
+  else if (marketStress >= 60) allocationMultiplier = 0.5;
+  else if (marketStress >= 40) allocationMultiplier = 0.75;
+
+  if (portfolioHeat.portfolioHeatScore < 50) {
+    allocationMultiplier *= 0.5;
+  }
+
+  const maxBotBudget =
+    equity * (CONFIG.maxBotExposurePercent / 100);
+
+  const recommendedTradeAmount = Number(
+    Math.max(
+      0,
+      Math.min(
+        cash,
+        maxBotBudget * allocationMultiplier * 0.2
+      )
+    ).toFixed(2)
+  );
+
+  const portfolioScore = clampScore(
+    portfolioHeat.portfolioHeatScore * 0.7 +
+    (100 - marketStress) * 0.3
+  );
+
+  const approved =
+    recommendedTradeAmount > 0 &&
+    portfolioHeat.portfolioHeatScore >= 45;
+
+  return {
+    approved,
+    autoTradeApproved: approved,
+    portfolioAction:
+      approved ? "ALLOW" : "REDUCE_RISK",
+    aiPortfolioAction:
+      approved ? "ALLOW" : "REDUCE_RISK",
+    portfolioScore,
+    recommendedTradeAmount,
+    aiAllocationPercentOfBotBudget:
+      Number(
+        (
+          (recommendedTradeAmount /
+            Math.max(maxBotBudget, 1)) *
+          100
+        ).toFixed(2)
+      ),
+    portfolioHeat,
+    marketStress,
+    allocationMultiplier,
+    portfolioManagerReason:
+      `${portfolioHeat.portfolioHeatLabel} • Market Stress ${marketStress}/100`,
+  };
+}
 
   return {
     portfolioHeatScore,
