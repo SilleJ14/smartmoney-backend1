@@ -2875,11 +2875,11 @@ function calculateAdaptiveMarketCycleIntelligence(signals = []) {
       exhaustedSignals * 5
   );
 
-  const panicScore = clampScore(
-    Math.max(0, -averagePercentChange) * 8 +
-      Number(engineState.marketStressLevel || 0) +
-      Number(engineState.macroRiskState?.macroStressScore || 0) * 0.35
-  );
+const panicScore = clampScore(
+  Math.max(0, -averagePercentChange) * 3 +
+    Number(engineState.marketStressLevel || 0) * 0.5 +
+    Number(engineState.macroRiskState?.macroStressScore || 0) * 0.15
+);
 
   const euphoriaScore = clampScore(
     Math.max(0, averagePercentChange) * 5 +
@@ -2899,7 +2899,7 @@ function calculateAdaptiveMarketCycleIntelligence(signals = []) {
   );
 
   const marketCyclePhase =
-    panicScore >= 75
+    panicScore >= 85
       ? "PANIC"
       : distributionScore >= 70
       ? "DISTRIBUTION"
@@ -2913,7 +2913,7 @@ function calculateAdaptiveMarketCycleIntelligence(signals = []) {
 
   const cycleThrottleMultiplier =
     marketCyclePhase === "PANIC"
-      ? 0
+  ? 0.35
       : marketCyclePhase === "DISTRIBUTION"
       ? 0.25
       : marketCyclePhase === "EUPHORIA_EXHAUSTION"
