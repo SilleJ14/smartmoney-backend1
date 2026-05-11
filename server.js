@@ -8156,7 +8156,7 @@ const institutional = calculateInstitutionalScores({
       };
 
       return {
-        ...q,
+        ...quote,
 
         score: institutional.institutionalScore,
         legacyMomentumScore: score,
