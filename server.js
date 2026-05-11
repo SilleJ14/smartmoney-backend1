@@ -5390,15 +5390,27 @@ const latestBar = bars[bars.length - 1] || {};
 const firstBar = bars[0] || {};
 
 const alpacaCurrent = Number(latestBar.c || 0);
-  const alpacaOpen = Number(firstBar.o || latestBar.o || 0);
-  const alpacaHigh = Math.max(...bars.map((b) => Number(b.h || 0)), 0);
-  const dollarVolume =
-  normalizedCryptoVolume * alpacaCurrent;
-  const alpacaLow = Math.min(
-    ...bars.map((b) => Number(b.l || Infinity))
-  );
 
-  const safeAlpacaLow = Number.isFinite(alpacaLow) ? alpacaLow : 0;
+const alpacaOpen = Number(
+  firstBar.o || latestBar.o || 0
+);
+
+const alpacaHigh = Math.max(
+  ...bars.map((b) => Number(b.h || 0)),
+  0
+);
+
+const dollarVolume =
+  Number(barStats.lastVolume || barStats.avgVolume || 0) *
+  alpacaCurrent;
+
+const alpacaLow = Math.min(
+  ...bars.map((b) => Number(b.l || Infinity))
+);
+
+const safeAlpacaLow = Number.isFinite(alpacaLow)
+  ? alpacaLow
+  : 0;
 
   const current = Number(finnhub?.current || alpacaCurrent || 0);
   const open = Number(finnhub?.open || alpacaOpen || 0);
