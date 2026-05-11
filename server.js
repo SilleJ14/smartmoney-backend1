@@ -3001,6 +3001,20 @@ function calculateLiquidityIntelligenceEngine(signals = []) {
         ? reportedDollarVolume
         : price * volume;
 
+ const percentChange =
+  Math.abs(
+    Number(
+      quote.percent_change_24h ||
+      quote.changePercent ||
+      quote.percentChange ||
+      0
+    )
+  );
+
+const stableBehaviorDetected =
+  percentChange <= 0.35 &&
+  Number(spreadPercent || 0) <= 0.12;       
+
     const cryptoQualification =
       signal.cryptoInstitutionalQualification || {};
 
@@ -7761,14 +7775,13 @@ function calculateCryptoInstitutionalQualification({
 
   const spreadPass = cleanSpreadPercent <= 0.85;
 
-  const liquidityPass =
-    spreadPass &&
-    (
-      dollarVolume >= 25 ||
-      volumeSpikeRatio >= 0.5 ||
-      volumeConfidenceScore >= 55 ||
-      cleanSpreadPercent <= 0.25
-    );
+const liquidityPass =
+  spreadPass &&
+  dollarVolume >= 50 &&
+  (
+    volumeSpikeRatio >= 0.15 ||
+    volumeConfidenceScore >= 60
+  );
 
   const momentumPass =
     Number(score || 0) >=
@@ -10346,6 +10359,15 @@ for (const signal of allSignalsForAnalytics) {
     signal.score = cryptoRealism.realismScore;
     signal.cryptoRiskPenalty = cryptoRealism.cryptoRiskPenalty;
     signal.cryptoRealismReason = cryptoRealism.cryptoRealismReason;
+
+    signal.qualifiedToBuy =
+      signal.qualifiedToBuy === true &&
+      Number(signal.score || 0) >=
+        Number(
+          engineState.selfOptimizationState?.adaptiveMinScoreToBuy ||
+            CONFIG.minScoreToBuy ||
+            70
+        );
   }
 }
 
