@@ -9514,12 +9514,19 @@ async function autoBuySignals(signals = []) {
   if (!["live_stock", "smart"].includes(TRADING_MODE)) return;
 
   const clock = await getClock();
+  const allowClosedMarketStockBuying = true;
 
-  if (!clock.is_open) {
+  if (!clock.is_open && !allowClosedMarketStockBuying) {
     saveRecentOrder("AUTO_STOCK_BUY_SKIPPED", "STOCK", {
       reason: "Market closed",
     });
     return;
+  }
+
+  if (!clock.is_open && allowClosedMarketStockBuying) {
+    saveRecentOrder("AUTO_STOCK_AFTER_HOURS_ALLOWED", "STOCK", {
+      reason: "Temporary override: stock buying allowed while market is closed",
+    });
   }
 
   const account = await getAccount();
@@ -10241,7 +10248,7 @@ async function engineTick() {
       cryptoSignals = await scanCryptoMarket();
     }
 
-    if (effectiveMode === "live_stock") {
+    if (effectiveMode === "live_stock" || TRADING_MODE === "smart") {
       stockSignals = await scanMarket();
     }
 const scanStartedAt = Date.now();
