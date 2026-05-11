@@ -4192,17 +4192,7 @@ function calculateCryptoSignalRealismEngine(signal = {}) {
 
   const spreadPercent =
     bid > 0 && ask > 0 ? ((ask - bid) / ask) * 100 : 1;
-
-  const stableBehaviorDetected =
-  Math.abs(
-    Number(
-      signal.percent_change_24h ||
-        signal.changePercent ||
-        signal.percentChange ||
-        0
-    )
-  ) <= 0.35 &&
-  spreadPercent <= 0.12;    
+ 
 const stableBehaviorDetected =
   Math.abs(
     Number(
@@ -4231,7 +4221,7 @@ const memePenalty =
     Number(signal.statisticalScore || signal.statisticalEdgeScore || 0) <= 0
       ? 10
       : 0;
-      
+
 const cryptoRiskPenalty =
   weakHistoryPenalty +
   spreadPenalty +
