@@ -11633,32 +11633,7 @@ engineFreezeCount: engineState.engineFreezeCount,
       });
     }
   });
-app.get("/trade-journal", async (req, res) => {
-  try {
-    ensureTradeJournalState();
 
-    res.json({
-      ok: true,
-      tradeJournalState: engineState.tradeJournalState,
-      openEntries: engineState.tradeJournalOpenEntries,
-      recentClosedTrades:
-        engineState.tradeJournalHistory.slice(0, 100),
-      strategyPerformanceState:
-        engineState.strategyPerformanceState,
-      regimePerformanceState:
-        engineState.regimePerformanceState,
-      sectorPerformanceState:
-        engineState.sectorPerformanceState,
-      confirmationPerformanceState:
-        engineState.confirmationPerformanceState,
-    });
-  } catch (err) {
-    res.status(500).json({
-      ok: false,
-      error: err.message,
-    });
-  }
-});
   // ===== CRYPTO ROUTE END =====
 
   app.get("/positions", async (req, res) => {
