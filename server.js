@@ -8127,11 +8127,11 @@ async function scanMarket() {
 
       const score = scoreStock(quote);
 
-const statisticalEdge = q.statisticalEdge || null;
-const statisticalScore = Number(q.statisticalScore || 0);
+const statisticalEdge = quote.statisticalEdge || null;
+const statisticalScore = Number(quote.statisticalScore || 0);
 
 const institutional = calculateInstitutionalScores({
-  ...q,
+  ...quote,
   score,
 });
 
@@ -8269,17 +8269,53 @@ async function placeMarketBuy(symbol, dollars, score = 0) {
       throw new Error(assetCheck.reason);
     }
 
+    const clock = await getClock();
+    const marketOpen = Boolean(clock?.is_open);
+    const cleanNotional = Math.max(1, Number(dollars.toFixed(2)));
+
+    let orderPayload = {
+      symbol: normalizedSymbol,
+      notional: cleanNotional,
+      side: "buy",
+      type: "market",
+      time_in_force: "day",
+      client_order_id: `${AI_ORDER_PREFIX}_BUY_${normalizedSymbol}_${Math.round(score)}_${Date.now()}`,
+    };
+
+    if (!marketOpen) {
+      const latestQuote = await getCombinedStockQuote(normalizedSymbol);
+      const referencePrice = Number(
+        latestQuote.ask ||
+          latestQuote.current ||
+          latestQuote.price ||
+          0
+      );
+
+      if (!referencePrice || referencePrice <= 0) {
+        throw new Error(`No valid after-hours limit price for ${normalizedSymbol}`);
+      }
+
+      const limitPrice = Number((referencePrice * 1.01).toFixed(2));
+      const qty = Math.max(1, Math.floor(cleanNotional / limitPrice));
+
+      orderPayload = {
+        symbol: normalizedSymbol,
+        qty: String(qty),
+        side: "buy",
+        type: "limit",
+        limit_price: String(limitPrice),
+        time_in_force: "day",
+        extended_hours: true,
+        client_order_id: `${AI_ORDER_PREFIX}_EXT_BUY_${normalizedSymbol}_${Math.round(score)}_${Date.now()}`,
+      };
+    }
+
     return await alpacaTradingRequest("/v2/orders", {
       method: "POST",
-      body: JSON.stringify({
-        symbol: normalizedSymbol,
-        notional: Math.max(1, Number(dollars.toFixed(2))),
-        side: "buy",
-        type: "market",
-        time_in_force: "day",
-        client_order_id: `${AI_ORDER_PREFIX}_BUY_${normalizedSymbol}_${Math.round(score)}_${Date.now()}`,
-      }),
+      body: JSON.stringify(orderPayload),
     });
+
+
   } finally {
     setTimeout(() => buyingNow.delete(normalizedSymbol), 10000);
   }
@@ -10009,8 +10045,19 @@ async function autoBuyCryptoSignals(signals) {
     return;
   }
   const buyCandidates = signals
-    .filter((s) => s.qualifiedToBuy === true)
-    .filter((s) => Number(s.score || 0) >= 70)
+    .filter((s) => {
+      const score = Number(s.score || 0);
+      const spread = Number(s.spreadPercent || 0);
+      const institutionalPassed =
+        s.qualifiedToBuy === true ||
+        s.cryptoInstitutionalQualification?.momentumPass === true;
+
+      return (
+        institutionalPassed &&
+        score >= CONFIG.minScoreToBuy &&
+        spread <= 0.85
+      );
+    })
     .filter((s) => {
       const sym = normalizeSymbol(s.symbol);
       const lastSold = engineState.lastSoldAt[sym] || 0;
@@ -11275,9 +11322,9 @@ engineState.analyticsSnapshots =
         await autoBuyCryptoSignals(cryptoSignals);
       }
 
+
       if (
-        effectiveMode === "live_stock" &&
-        marketOpen &&
+        (effectiveMode === "live_stock" || TRADING_MODE === "smart") &&
         !tradingStoppedForDay &&
         !engineState.stockTradingStoppedForDay
       ) {
@@ -11285,10 +11332,13 @@ engineState.analyticsSnapshots =
 
         engineState.aiDecisionHistory.unshift({
           timestamp: new Date().toISOString(),
-          type: "AUTO_BUY_EXECUTED",
+          type: marketOpen
+            ? "AUTO_STOCK_BUY_EXECUTED"
+            : "AUTO_STOCK_BUY_EXTENDED_HOURS_EXECUTED",
           signalCount: stockSignals.length,
           tradingMode: TRADING_MODE,
           effectiveMode,
+          marketOpen,
         });
 
         engineState.aiDecisionHistory =
