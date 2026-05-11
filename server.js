@@ -7112,7 +7112,8 @@ function calculateInstitutionalScores(q) {
     statisticalScore,
     ...edge,
     fundamentalScore,
-    dcfValuation: institutionalDcf,
+fundamentalScore,
+dcfValuation: institutionalDcf,
 dcfValuationScore,
 valuationRiskScore:
   institutionalDcf.valuationRiskScore,
@@ -7124,15 +7125,22 @@ valuationLabel:
   institutionalDcf.valuationLabel,
 valuationAction:
   institutionalDcf.valuationAction,
-    intrinsicValue: dcf.intrinsicValue,
-    valuationGapPercent: dcf.valuationGapPercent,
-    valuationLabel: dcf.valuationLabel,
-    valuationScore: dcf.valuationScore,
-    balanceSheetHealthScore: dcf.balanceSheetHealthScore,
-    cashFlowScore: dcf.cashFlowScore,
-    revenueGrowthScore: dcf.revenueGrowthScore,
-    marginScore: dcf.marginScore,
-    debtRiskScore: dcf.debtRiskScore,
+intrinsicValue:
+  institutionalDcf.baseDcf?.intrinsicValue || 0,
+valuationGapPercent:
+  institutionalDcf.baseDcf?.valuationGapPercent || 0,
+valuationScore:
+  institutionalDcf.dcfValuationScore || dcfValuationScore,
+balanceSheetHealthScore:
+  institutionalDcf.baseDcf?.balanceSheetHealthScore || 50,
+cashFlowScore:
+  institutionalDcf.baseDcf?.cashFlowScore || 50,
+revenueGrowthScore:
+  institutionalDcf.baseDcf?.revenueGrowthScore || 50,
+marginScore:
+  institutionalDcf.baseDcf?.marginScore || 50,
+debtRiskScore:
+  institutionalDcf.baseDcf?.debtRiskScore || 50,
     earningsScore,
     earningsIntelligence: earnings,
     earningsRiskMode: earnings.earningsRiskMode,
