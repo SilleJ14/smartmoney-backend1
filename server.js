@@ -4193,24 +4193,51 @@ function calculateCryptoSignalRealismEngine(signal = {}) {
   const spreadPercent =
     bid > 0 && ask > 0 ? ((ask - bid) / ask) * 100 : 1;
 
-  const memeOrUltraSpeculative =
-    symbol.includes("SHIB") ||
-    symbol.includes("BONK") ||
-    symbol.includes("PEPE") ||
-    symbol.includes("TRUMP") ||
-    price < 0.01;
+  const stableBehaviorDetected =
+  Math.abs(
+    Number(
+      signal.percent_change_24h ||
+        signal.changePercent ||
+        signal.percentChange ||
+        0
+    )
+  ) <= 0.35 &&
+  spreadPercent <= 0.12;    
+const stableBehaviorDetected =
+  Math.abs(
+    Number(
+      signal.percent_change_24h ||
+        signal.changePercent ||
+        signal.percentChange ||
+        0
+    )
+  ) <= 0.35 &&
+  spreadPercent <= 0.12;
+
+const memeOrUltraSpeculative =
+  price < 0.01 ||
+  spreadPercent >= 0.7 ||
+  barsFound < 15;
 
   const weakHistoryPenalty = barsFound < 30 ? 10 : 0;
   const spreadPenalty =
     spreadPercent >= 0.75 ? 20 : spreadPercent >= 0.35 ? 10 : 0;
-  const memePenalty = memeOrUltraSpeculative ? 12 : 0;
+ const stableBehaviorPenalty =
+  stableBehaviorDetected ? 45 : 0;
+
+const memePenalty =
+  memeOrUltraSpeculative ? 12 : 0;
   const noStatPenalty =
     Number(signal.statisticalScore || signal.statisticalEdgeScore || 0) <= 0
       ? 10
       : 0;
-
-  const cryptoRiskPenalty =
-    weakHistoryPenalty + spreadPenalty + memePenalty + noStatPenalty;
+      
+const cryptoRiskPenalty =
+  weakHistoryPenalty +
+  spreadPenalty +
+  stableBehaviorPenalty +
+  memePenalty +
+  noStatPenalty;
 
   const realismScore = clampScore(rawScore - cryptoRiskPenalty);
 
