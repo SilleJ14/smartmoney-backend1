@@ -7866,6 +7866,27 @@ if (!institutionalUsdPair) {
       const bars = await getBestCryptoBars(symbol);
       const score = scoreCrypto(quote, bars);
 
+      const firstBarClose = Number(
+  bars?.[0]?.c ||
+    bars?.[0]?.close ||
+    0
+);
+
+const latestPrice = Number(
+  quote.current || 0
+);
+
+const cryptoPercentChange =
+  firstBarClose > 0 &&
+  latestPrice > 0
+    ? (
+        (
+          latestPrice -
+          firstBarClose
+        ) / firstBarClose
+      ) * 100
+    : 0;
+
       const liquidityMetrics =
         calculateCryptoLiquidityFromBars(
           bars,
@@ -7894,7 +7915,8 @@ if (!institutionalUsdPair) {
 
         assetClass: "crypto",
         asset_class: "crypto",
-
+        percentChange: Number(cryptoPercentChange.toFixed(2)),
+       changePercent: Number(cryptoPercentChange.toFixed(2)),
         score,
 
         barsFound: bars.length,
