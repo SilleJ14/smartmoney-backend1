@@ -1952,21 +1952,21 @@ function calculatePhase20AsyncMultiAgentOrchestration(signals = []) {
       ? "SELECTIVE_AUTONOMY"
       : "DEFENSIVE_AUTONOMY";
 
-  const shouldBlockNewTrades =
-    blockingAgents.length >= 3 ||
-    consensusMode === "STALE_CRITICAL_ENGINES" ||
-    consensusScore < 30;
+const shouldBlockNewTrades =
+  blockingAgents.length >= 4 ||
+  consensusMode === "STALE_CRITICAL_ENGINES" ||
+  consensusScore < 25;
 
-  const orchestrationMultiplier =
-    shouldBlockNewTrades
-      ? 0
-      : consensusScore >= 82
-      ? 1.1
-      : consensusScore >= 70
-      ? 0.85
-      : consensusScore >= 58
-      ? 0.55
-      : 0.25;
+const orchestrationMultiplier =
+  shouldBlockNewTrades
+    ? 0.2
+    : consensusScore >= 82
+    ? 1.1
+    : consensusScore >= 70
+    ? 0.9
+    : consensusScore >= 58
+    ? 0.65
+    : 0.35;
 
   return {
     updatedAt: new Date().toISOString(),
@@ -2182,14 +2182,14 @@ const brainMode =
     ? "SELECTIVE_PHASE_21_AUTONOMY"
     : "OBSERVATION_ONLY";
 
-  const capitalMultiplier =
-    brainMode === "FULL_PHASE_21_AUTONOMY"
-      ? 1.15
-      : brainMode === "CONTROLLED_PHASE_21_AUTONOMY"
-      ? 0.85
-      : brainMode === "SELECTIVE_PHASE_21_AUTONOMY"
-      ? 0.60
-      : 0.2;
+const capitalMultiplier =
+  brainMode === "FULL_PHASE_21_AUTONOMY"
+    ? 1.15
+    : brainMode === "CONTROLLED_PHASE_21_AUTONOMY"
+    ? 0.9
+    : brainMode === "SELECTIVE_PHASE_21_AUTONOMY"
+    ? 0.6
+    : 0.2;
 
   return {
     updatedAt: new Date().toISOString(),
@@ -3471,29 +3471,32 @@ function calculateAutonomousPortfolioGovernor(
       (sectorSaturationRisk ? 35 : 75) * 0.1
   );
 
-  const capitalThrottleMultiplier =
-    macroRisk?.shouldBlockNewTrades || crashProtection?.shouldBlockNewTrades
-      ? 0
-      : governorScore >= 85
-      ? 1
-      : governorScore >= 70
-      ? 0.75
-      : governorScore >= 55
-      ? 0.5
-      : governorScore >= 40
-      ? 0.25
-      : 0;
+const capitalThrottleMultiplier =
+  macroRisk?.shouldBlockNewTrades || crashProtection?.shouldBlockNewTrades
+    ? 0.25
+    : governorScore >= 85
+    ? 1
+    : governorScore >= 70
+    ? 0.75
+    : governorScore >= 55
+    ? 0.5
+    : governorScore >= 40
+    ? 0.25
+    : 0.15;
 
-  const governorMode =
-    capitalThrottleMultiplier === 0
-      ? "CAPITAL_LOCKDOWN"
-      : governorScore >= 85
-      ? "FULL_PORTFOLIO_GREENLIGHT"
-      : governorScore >= 70
-      ? "CONTROLLED_EXPANSION"
-      : governorScore >= 55
-      ? "SELECTIVE_DEPLOYMENT"
-      : "DEFENSIVE_THROTTLE";
+    
+const governorMode =
+  capitalThrottleMultiplier <= 0.15
+    ? "CAPITAL_LOCKDOWN"
+    : governorScore >= 85
+    ? "FULL_PORTFOLIO_GREENLIGHT"
+    : governorScore >= 70
+    ? "CONTROLLED_EXPANSION"
+    : governorScore >= 55
+    ? "SELECTIVE_DEPLOYMENT"
+    : governorScore >= 40
+    ? "DEFENSIVE_THROTTLE"
+    : "PROBE_DEPLOYMENT";
 
 const shouldBlockNewTrades =
   capitalThrottleMultiplier === 0 ||
