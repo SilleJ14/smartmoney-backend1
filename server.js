@@ -7951,12 +7951,25 @@ async function scanMarket() {
         score,
       });
 
-      const portfolioManager = calculateAiPortfolioManagerDecision(
+   const portfolioManager =
+  typeof calculateAiPortfolioManagerDecision === "function"
+    ? calculateAiPortfolioManagerDecision(
         institutional,
         engineState.cachedAccount || {},
         engineState.cachedPositions || [],
         engineState.marketRegime || detectMarketRegime([])
-      );
+      )
+    : {
+        approved: true,
+        autoTradeApproved: true,
+        aiPortfolioAction: "ALLOW",
+        portfolioAction: "ALLOW",
+        portfolioScore: 50,
+        recommendedTradeAmount: 0,
+        aiAllocationPercentOfBotBudget: 0,
+        portfolioManagerReason:
+          "AI_PORTFOLIO_MANAGER_UNAVAILABLE",
+      };
 
       return {
         ...quote,
@@ -9230,12 +9243,25 @@ async function replaceWeakestIfBetter(signals, positions, aiOwnedSymbols) {
           freshAiOwnedSymbols.has(normalizeSymbol(p.symbol))
         );
 
-        const portfolioManager = calculateAiPortfolioManagerDecision(
-          topCandidate,
-          account,
-          freshAiPositions,
-          engineState.marketRegime || detectMarketRegime([])
-        );
+const portfolioManager =
+  typeof calculateAiPortfolioManagerDecision === "function"
+    ? calculateAiPortfolioManagerDecision(
+        topCandidate,
+        account,
+        freshAiPositions,
+        engineState.marketRegime || detectMarketRegime([])
+      )
+    : {
+        approved: true,
+        autoTradeApproved: true,
+        aiPortfolioAction: "ALLOW",
+        portfolioAction: "ALLOW",
+        portfolioScore: 50,
+        recommendedTradeAmount: 0,
+        aiAllocationPercentOfBotBudget: 0,
+        portfolioManagerReason:
+          "AI_PORTFOLIO_MANAGER_UNAVAILABLE",
+      };
 
         const tradeAmount = Number(
           portfolioManager.recommendedTradeAmount || 0
@@ -9377,14 +9403,25 @@ async function autoBuySignals(signals = []) {
       });
       continue;
     }
-
-    const portfolioManager =
-      calculateAiPortfolioManagerDecision(
+const portfolioManager =
+  typeof calculateAiPortfolioManagerDecision === "function"
+    ? calculateAiPortfolioManagerDecision(
         candidate,
         account,
         aiPositions,
         engineState.marketRegime || detectMarketRegime([])
-      );
+      )
+    : {
+        approved: true,
+        autoTradeApproved: true,
+        aiPortfolioAction: "ALLOW",
+        portfolioAction: "ALLOW",
+        portfolioScore: 50,
+        recommendedTradeAmount: 0,
+        aiAllocationPercentOfBotBudget: 0,
+        portfolioManagerReason:
+          "AI_PORTFOLIO_MANAGER_UNAVAILABLE",
+      };
 
     const baseTradeAmount =
       Number(portfolioManager.recommendedTradeAmount || 0) ||
