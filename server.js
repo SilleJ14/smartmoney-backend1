@@ -3484,7 +3484,7 @@ const capitalThrottleMultiplier =
     ? 0.25
     : 0.15;
 
-    
+
 const governorMode =
   capitalThrottleMultiplier <= 0.15
     ? "CAPITAL_LOCKDOWN"
@@ -8125,10 +8125,17 @@ async function scanMarket() {
 
         ...institutional,
         ...portfolioManager,
-
-        qualifiedToBuy:
-          institutional.autoTradeApproved === true &&
-          institutional.decisionLevel !== "Visible Stock",
+qualifiedToBuy:
+  (
+    institutional.autoTradeApproved === true ||
+    portfolioManager.autoTradeApproved === true ||
+    portfolioManager.approved === true ||
+    portfolioManager.aiPortfolioAction === "ALLOW" ||
+    portfolioManager.portfolioAction === "ALLOW"
+  ) &&
+  institutional.decisionLevel !== "Visible Stock" &&
+  engineState.phase20AutonomousOrchestrationState?.shouldBlockNewTrades !== true &&
+  engineState.phase21AutonomousBrainState?.shouldBlockNewTrades !== true,
       };
     } catch (err) {
       saveSkippedSymbol(symbol, err.message);
