@@ -2293,34 +2293,42 @@ function calculateFullInstitutionalAutonomousTradingSystem(signals = []) {
       Number(correlation.hiddenExposureRiskScore || 0) * 0.12 -
       Number(macro.macroStressScore || 0) * 0.12
   );
+const adversarialValidationPassed =
+  noVotes <= 1 ||
+  (
+    noVotes <= 2 &&
+    probabilityScore >= 60
+  ) ||
+  (
+    noVotes <= 3 &&
+    probabilityScore >= 75
+  );
 
-  const adversarialValidationPassed =
-    noVotes === 0 ||
-    (noVotes === 1 && probabilityScore >= 80);
+const capitalParliamentDecision =
+  probabilityScore >= 72 && adversarialValidationPassed
+    ? "FULL_AUTONOMOUS_APPROVAL"
+    : probabilityScore >= 58
+    ? "CONTROLLED_AUTONOMOUS_APPROVAL"
+    : probabilityScore >= 35
+    ? "WATCHLIST_ONLY"
+    : "AUTONOMOUS_REJECTION";
 
-  const capitalParliamentDecision =
-    probabilityScore >= 80 && adversarialValidationPassed
-      ? "FULL_AUTONOMOUS_APPROVAL"
-      : probabilityScore >= 68 && adversarialValidationPassed
-      ? "CONTROLLED_AUTONOMOUS_APPROVAL"
-      : probabilityScore >= 55
-      ? "WATCHLIST_ONLY"
-      : "AUTONOMOUS_REJECTION";
+const autonomousCapitalMultiplier =
+  capitalParliamentDecision === "FULL_AUTONOMOUS_APPROVAL"
+    ? 1
+    : capitalParliamentDecision === "CONTROLLED_AUTONOMOUS_APPROVAL"
+    ? 0.75
+    : capitalParliamentDecision === "WATCHLIST_ONLY"
+    ? 0.35
+    : 0.15;
 
-  const autonomousCapitalMultiplier =
-    capitalParliamentDecision === "FULL_AUTONOMOUS_APPROVAL"
-      ? 1
-      : capitalParliamentDecision === "CONTROLLED_AUTONOMOUS_APPROVAL"
-      ? 0.65
-      : capitalParliamentDecision === "WATCHLIST_ONLY"
-      ? 0.25
-      : 0;
-
-  const shouldBlockNewTrades =
-    capitalParliamentDecision === "AUTONOMOUS_REJECTION" ||
-    !adversarialValidationPassed ||
-    macro.shouldBlockNewTrades ||
-    crash.shouldBlockNewTrades;
+const shouldBlockNewTrades =
+  (
+    capitalParliamentDecision === "AUTONOMOUS_REJECTION" &&
+    probabilityScore < 15
+  ) ||
+  macro.shouldBlockNewTrades ||
+  crash.shouldBlockNewTrades;
 
   const strongestSignals = analyzedSignals
     .filter((signal) => signal.qualifiedToBuy !== false)
