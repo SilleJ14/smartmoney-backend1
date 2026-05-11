@@ -9487,9 +9487,37 @@ async function autoBuySignals(signals = []) {
   const openSlots =
     CONFIG.maxOpenTrades - aiPositions.length;
 
-  const candidates = signals
-    .filter((signal) => signal.qualifiedToBuy === true)
-    .filter((signal) => Number(signal.score || 0) >= CONFIG.minScoreToBuy)
+const executableSymbols = new Set(
+  (
+    engineState.executionIntelligenceState?.topExecutableSignals || []
+  ).map((signal) => normalizeSymbol(signal.symbol))
+);
+
+const candidates = signals
+  .filter((signal) => {
+    const symbol = normalizeSymbol(signal.symbol);
+    const score = Number(signal.score || 0);
+    const adaptiveMinScore = Number(
+      engineState.selfOptimizationState?.adaptiveMinScoreToBuy ||
+        CONFIG.minScoreToBuy
+    );
+
+    const executionApproved = executableSymbols.has(symbol);
+    const normalQualified = signal.qualifiedToBuy === true;
+
+    return (
+      normalQualified ||
+      (
+        executionApproved &&
+        score >= adaptiveMinScore &&
+        signal.confirmations?.fakeBreakout !== true &&
+        engineState.phase21AutonomousBrainState?.shouldBlockNewTrades !== true &&
+        engineState.phase20AutonomousOrchestrationState?.shouldBlockNewTrades !== true
+      )
+    );
+  })
+  .filter((signal) => Number(signal.score || 0) >= CONFIG.minScoreToBuy)
+    
     .filter((signal) => {
       const symbol = normalizeSymbol(signal.symbol);
       const lastSold = engineState.lastSoldAt[symbol] || 0;
