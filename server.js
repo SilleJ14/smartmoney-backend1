@@ -1333,7 +1333,9 @@ function calculatePortfolioHeatEngine(signal, openBotPositions = []) {
   const symbol = normalizeSymbol(signal.symbol);
   const estimatedSector = signal.estimatedSector || "General Market";
 
-  const openPositions = Array.isArray(openBotPositions) ? openBotPositions : [];
+  const openPositions = Array.isArray(openBotPositions)
+    ? openBotPositions
+    : [];
 
   const openSymbols = openPositions
     .map((position) => normalizeSymbol(position.symbol))
@@ -1346,8 +1348,12 @@ function calculatePortfolioHeatEngine(signal, openBotPositions = []) {
 
     const estimatedPositionSector = estimateSectorIntelligence({
       symbol: positionSymbol,
-      current: Number(position.current_price || position.avg_entry_price || 0),
-      price: Number(position.current_price || position.avg_entry_price || 0),
+      current: Number(
+        position.current_price || position.avg_entry_price || 0
+      ),
+      price: Number(
+        position.current_price || position.avg_entry_price || 0
+      ),
       volume: 0,
       percentChange: 0,
       confirmations: {},
@@ -1361,39 +1367,52 @@ function calculatePortfolioHeatEngine(signal, openBotPositions = []) {
 
   const concentrationRiskScore = clampScore(
     100 -
-    openPositionCount * 12 -
-    sameSectorCount * 18 -
-    (duplicateSymbolRisk ? 40 : 0)
+      openPositionCount * 12 -
+      sameSectorCount * 18 -
+      (duplicateSymbolRisk ? 40 : 0)
   );
 
   const correlationRiskScore = clampScore(
     100 -
-    sameSectorCount * 22 -
-    (estimatedSector === "Speculative Small Cap" ? 20 : 0) -
-    (duplicateSymbolRisk ? 35 : 0)
+      sameSectorCount * 22 -
+      (estimatedSector === "Speculative Small Cap" ? 20 : 0) -
+      (duplicateSymbolRisk ? 35 : 0)
   );
 
   const portfolioHeatScore = clampScore(
-    concentrationRiskScore * 0.55 + correlationRiskScore * 0.45
+    concentrationRiskScore * 0.55 +
+      correlationRiskScore * 0.45
   );
 
   const portfolioHeatLabel =
     portfolioHeatScore >= 80
       ? "Low Portfolio Heat"
       : portfolioHeatScore >= 65
-        ? "Moderate Portfolio Heat"
-        : portfolioHeatScore >= 50
-          ? "Elevated Portfolio Heat"
-          : "High Portfolio Heat";
+      ? "Moderate Portfolio Heat"
+      : portfolioHeatScore >= 50
+      ? "Elevated Portfolio Heat"
+      : "High Portfolio Heat";
 
   const correlationAction =
     duplicateSymbolRisk
       ? "Block Duplicate Symbol"
       : portfolioHeatScore >= 65
-        ? "Allow Allocation"
-        : portfolioHeatScore >= 50
-          ? "Reduce Allocation"
-          : "Avoid Additional Exposure";
+      ? "Allow Allocation"
+      : portfolioHeatScore >= 50
+      ? "Reduce Allocation"
+      : "Avoid Additional Exposure";
+
+  return {
+    portfolioHeatScore,
+    portfolioHeatLabel,
+    correlationRiskScore,
+    concentrationRiskScore,
+    sameSectorOpenPositions: sameSectorCount,
+    totalOpenBotPositions: openPositionCount,
+    duplicateSymbolRisk,
+    correlationAction,
+  };
+}
 
 function calculateAiPortfolioManagerDecision(
   signal,
@@ -1409,8 +1428,12 @@ function calculateAiPortfolioManagerDecision(
   const cash = Number(account.cash || 0);
   const equity = Number(account.equity || cash || 0);
 
-  const marketStress =
-    Number(marketRegime.stressScore || 0);
+  const marketStress = Number(
+    marketRegime.stressScore ||
+      marketRegime.macroStressScore ||
+      engineState.marketStressLevel ||
+      0
+  );
 
   let allocationMultiplier = 1;
 
@@ -1437,7 +1460,7 @@ function calculateAiPortfolioManagerDecision(
 
   const portfolioScore = clampScore(
     portfolioHeat.portfolioHeatScore * 0.7 +
-    (100 - marketStress) * 0.3
+      (100 - marketStress) * 0.3
   );
 
   const approved =
@@ -1447,37 +1470,21 @@ function calculateAiPortfolioManagerDecision(
   return {
     approved,
     autoTradeApproved: approved,
-    portfolioAction:
-      approved ? "ALLOW" : "REDUCE_RISK",
-    aiPortfolioAction:
-      approved ? "ALLOW" : "REDUCE_RISK",
+    portfolioAction: approved ? "ALLOW" : "REDUCE_RISK",
+    aiPortfolioAction: approved ? "ALLOW" : "REDUCE_RISK",
     portfolioScore,
     recommendedTradeAmount,
-    aiAllocationPercentOfBotBudget:
-      Number(
-        (
-          (recommendedTradeAmount /
-            Math.max(maxBotBudget, 1)) *
-          100
-        ).toFixed(2)
-      ),
+    aiAllocationPercentOfBotBudget: Number(
+      (
+        (recommendedTradeAmount / Math.max(maxBotBudget, 1)) *
+        100
+      ).toFixed(2)
+    ),
     portfolioHeat,
     marketStress,
     allocationMultiplier,
     portfolioManagerReason:
       `${portfolioHeat.portfolioHeatLabel} • Market Stress ${marketStress}/100`,
-  };
-}
-
-  return {
-    portfolioHeatScore,
-    portfolioHeatLabel,
-    correlationRiskScore,
-    concentrationRiskScore,
-    sameSectorOpenPositions: sameSectorCount,
-    totalOpenBotPositions: openPositionCount,
-    duplicateSymbolRisk,
-    correlationAction,
   };
 }
 
