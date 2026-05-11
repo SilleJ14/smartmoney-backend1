@@ -2102,15 +2102,15 @@ function calculateAdaptiveExecutionTimingIntelligence(signals = []) {
         analyzedSignals.length
       : 0;
 
-  const recommendedDelayMs = Math.round(
-    (
-      (liquidityQuality >= 75 ? 8000 : liquidityQuality >= 60 ? 12000 : 20000) +
-      (volatility >= 18 ? 20000 : volatility >= 10 ? 12000 : 5000) +
-      (spreadRisk >= 1 ? 25000 : spreadRisk >= 0.5 ? 15000 : 5000)
-    ) /
-      Math.max(0.5, cycleMultiplier) /
-      3
-  );
+ const recommendedDelayMs = Math.round(
+  (
+    (liquidityQuality >= 75 ? 4000 : liquidityQuality >= 60 ? 7000 : 10000) +
+    (volatility >= 18 ? 8000 : volatility >= 10 ? 6000 : 3000) +
+    (spreadRisk >= 1 ? 12000 : spreadRisk >= 0.5 ? 8000 : 3000)
+  ) /
+    Math.max(0.65, cycleMultiplier) /
+    3
+);
 
   const timingMode =
     liquidityQuality >= 75 && executionConfidence >= 75 && volatility < 10
@@ -2184,7 +2184,7 @@ function calculatePhase21AutonomousInstitutionalBrain(signals = []) {
       : brainMode === "CONTROLLED_PHASE_21_AUTONOMY"
       ? 0.85
       : brainMode === "SELECTIVE_PHASE_21_AUTONOMY"
-      ? 0.45
+      ? 0.60
       : 0.2;
 
   return {
@@ -3031,12 +3031,40 @@ function calculateLiquidityIntelligenceEngine(signals = []) {
         )
       : 0;
 
-    const stockLiquidityDepthScore = clampScore(
-      20 +
-        (volume >= 1000000 ? 35 : volume >= 250000 ? 25 : volume >= 50000 ? 15 : 0) +
-        (dollarVolume >= 5000000 ? 25 : dollarVolume >= 1000000 ? 15 : dollarVolume >= 250000 ? 8 : 0) +
-        (spreadPercent <= 0.15 ? 20 : spreadPercent <= 0.35 ? 10 : spreadPercent <= 0.65 ? 0 : -20)
-    );
+const stockLiquidityDepthScore = clampScore(
+  25 +
+    (
+      volume >= 1000000
+        ? 35
+        : volume >= 250000
+        ? 28
+        : volume >= 75000
+        ? 20
+        : volume >= 25000
+        ? 12
+        : 0
+    ) +
+    (
+      dollarVolume >= 3000000
+        ? 25
+        : dollarVolume >= 1000000
+        ? 18
+        : dollarVolume >= 350000
+        ? 12
+        : dollarVolume >= 100000
+        ? 6
+        : 0
+    ) +
+    (
+      spreadPercent <= 0.15
+        ? 20
+        : spreadPercent <= 0.35
+        ? 12
+        : spreadPercent <= 0.65
+        ? 4
+        : -15
+    )
+);
 
     const liquidityDepthScore = isCrypto
       ? cryptoLiquidityConfidence
