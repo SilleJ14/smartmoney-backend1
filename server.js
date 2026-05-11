@@ -3004,9 +3004,9 @@ function calculateLiquidityIntelligenceEngine(signals = []) {
  const percentChange =
   Math.abs(
     Number(
-      quote.percent_change_24h ||
-      quote.changePercent ||
-      quote.percentChange ||
+      signal.percent_change_24h ||
+      signal.changePercent ||
+      signal.percentChange ||
       0
     )
   );
