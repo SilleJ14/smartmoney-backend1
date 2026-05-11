@@ -8127,13 +8127,13 @@ async function scanMarket() {
 
       const score = scoreStock(quote);
 
-      const statisticalEdge = quote.statisticalEdge || null;
-      const statisticalScore = Number(quote.statisticalScore || 0);
+const statisticalEdge = q.statisticalEdge || null;
+const statisticalScore = Number(q.statisticalScore || 0);
 
-      const institutional = calculateInstitutionalScores({
-        ...quote,
-        score,
-      });
+const institutional = calculateInstitutionalScores({
+  ...q,
+  score,
+});
 
    const portfolioManager =
   typeof calculateAiPortfolioManagerDecision === "function"
@@ -8156,7 +8156,7 @@ async function scanMarket() {
       };
 
       return {
-        ...quote,
+        ...q,
 
         score: institutional.institutionalScore,
         legacyMomentumScore: score,
