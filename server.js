@@ -1953,9 +1953,9 @@ function calculatePhase20AsyncMultiAgentOrchestration(signals = []) {
       : "DEFENSIVE_AUTONOMY";
 
   const shouldBlockNewTrades =
-    blockingAgents.length >= 2 ||
+    blockingAgents.length >= 3 ||
     consensusMode === "STALE_CRITICAL_ENGINES" ||
-    consensusScore < 45;
+    consensusScore < 30;
 
   const orchestrationMultiplier =
     shouldBlockNewTrades
@@ -2185,7 +2185,7 @@ function calculatePhase21AutonomousInstitutionalBrain(signals = []) {
       ? 0.85
       : brainMode === "SELECTIVE_PHASE_21_AUTONOMY"
       ? 0.45
-      : 0;
+      : 0.2;
 
   return {
     updatedAt: new Date().toISOString(),
