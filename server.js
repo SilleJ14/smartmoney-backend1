@@ -8442,15 +8442,47 @@ async function placeMarketSell(symbol, qty, reason = "AI_EXIT") {
       throw new Error(assetCheck.reason);
     }
 
+    const clock = await getClock();
+    const marketOpen = Boolean(clock?.is_open);
+    const cleanNotional = Math.max(1, Number(dollars.toFixed(2)));
+
+    if (marketOpen) {
+      return await alpacaTradingRequest("/v2/orders", {
+        method: "POST",
+        body: JSON.stringify({
+          symbol: normalizedSymbol,
+          notional: cleanNotional,
+          side: "buy",
+          type: "market",
+          time_in_force: "day",
+          client_order_id: `${AI_ORDER_PREFIX}_BUY_${normalizedSymbol}_${Math.round(score)}_${Date.now()}`,
+        }),
+      });
+    }
+
+    const latestQuote = await getCombinedStockQuote(normalizedSymbol);
+    const referencePrice = Number(
+      latestQuote.ask || latestQuote.current || latestQuote.price || 0
+    );
+
+    if (!referencePrice || referencePrice <= 0) {
+      throw new Error(`No valid after-hours limit price for ${normalizedSymbol}`);
+    }
+
+    const limitPrice = Number((referencePrice * 1.01).toFixed(2));
+    const qty = Math.max(1, Math.floor(cleanNotional / limitPrice));
+
     return await alpacaTradingRequest("/v2/orders", {
       method: "POST",
       body: JSON.stringify({
         symbol: normalizedSymbol,
         qty: String(qty),
-        side: "sell",
-        type: "market",
+        side: "buy",
+        type: "limit",
+        limit_price: String(limitPrice),
         time_in_force: "day",
-        client_order_id: `${AI_ORDER_PREFIX}_${reason}_${normalizedSymbol}_${Date.now()}`,
+        extended_hours: true,
+        client_order_id: `${AI_ORDER_PREFIX}_EXT_BUY_${normalizedSymbol}_${Math.round(score)}_${Date.now()}`,
       }),
     });
   } finally {
