@@ -2167,16 +2167,20 @@ function calculatePhase21AutonomousInstitutionalBrain(signals = []) {
       adaptiveRiskMultiplier * 10
   );
 
-  const brainMode =
-    orchestration.shouldBlockNewTrades || parliament.shouldBlockNewTrades
-      ? "AUTONOMOUS_DEFENSE"
-      : autonomousIntelligenceScore >= 82
-      ? "FULL_PHASE_21_AUTONOMY"
-      : autonomousIntelligenceScore >= 70
-      ? "CONTROLLED_PHASE_21_AUTONOMY"
-      : autonomousIntelligenceScore >= 58
-      ? "SELECTIVE_PHASE_21_AUTONOMY"
-      : "OBSERVATION_ONLY";
+const brainMode =
+  orchestration.shouldBlockNewTrades ||
+  (
+    parliament.shouldBlockNewTrades &&
+    Number(parliament.probabilityScore || 0) < 15
+  )
+    ? "AUTONOMOUS_DEFENSE"
+    : autonomousIntelligenceScore >= 75
+    ? "FULL_PHASE_21_AUTONOMY"
+    : autonomousIntelligenceScore >= 60
+    ? "CONTROLLED_PHASE_21_AUTONOMY"
+    : autonomousIntelligenceScore >= 42
+    ? "SELECTIVE_PHASE_21_AUTONOMY"
+    : "OBSERVATION_ONLY";
 
   const capitalMultiplier =
     brainMode === "FULL_PHASE_21_AUTONOMY"
@@ -2193,9 +2197,15 @@ function calculatePhase21AutonomousInstitutionalBrain(signals = []) {
     brainMode,
     autonomousIntelligenceScore: Number(autonomousIntelligenceScore.toFixed(2)),
     capitalMultiplier: Number(capitalMultiplier.toFixed(2)),
-    shouldBlockNewTrades:
-      brainMode === "AUTONOMOUS_DEFENSE" ||
-      brainMode === "OBSERVATION_ONLY",
+shouldBlockNewTrades:
+  (
+    brainMode === "AUTONOMOUS_DEFENSE" &&
+    Number(parliament.probabilityScore || 0) < 15
+  ) ||
+  (
+    brainMode === "OBSERVATION_ONLY" &&
+    autonomousIntelligenceScore < 35
+  ),
     consensusScore,
     averageEngineTrust: averageTrust,
     parliamentDecision: parliament.capitalParliamentDecision || "UNKNOWN",
@@ -2741,20 +2751,20 @@ function calculateAiSelfOptimizationLayer(signals = []) {
     adaptiveRiskMultiplier *= 1.1;
   }
 
-  if (
-    marketCycle === "PANIC" ||
-    marketCycle === "DISTRIBUTION" ||
-    marketCycle === "EUPHORIA_EXHAUSTION"
-  ) {
-    adaptiveMinScoreToBuy += 5;
-    adaptiveRiskMultiplier *= 0.6;
-    adaptiveTrailingStopPercent = Math.max(1, adaptiveTrailingStopPercent - 0.5);
-  }
+if (
+  marketCycle === "PANIC" ||
+  marketCycle === "DISTRIBUTION" ||
+  marketCycle === "EUPHORIA_EXHAUSTION"
+) {
+  adaptiveMinScoreToBuy += 2;
+  adaptiveRiskMultiplier *= 0.75;
+  adaptiveTrailingStopPercent = Math.max(1, adaptiveTrailingStopPercent - 0.5);
+}
 
-  if (liquidityQuality < 50) {
-    adaptiveMinScoreToBuy += 4;
-    adaptiveRiskMultiplier *= 0.7;
-  }
+if (liquidityQuality < 50) {
+  adaptiveMinScoreToBuy += 1;
+  adaptiveRiskMultiplier *= 0.85;
+}
 
   if (correlationRisk >= 70) {
     adaptiveMinScoreToBuy += 4;
@@ -2765,10 +2775,10 @@ function calculateAiSelfOptimizationLayer(signals = []) {
     adaptiveRiskMultiplier *= 1.05;
   }
 
-  adaptiveMinScoreToBuy = Math.min(
-    95,
-    Math.max(60, Math.round(adaptiveMinScoreToBuy))
-  );
+ adaptiveMinScoreToBuy = Math.min(
+  CONFIG.minScoreToBuy + 4,
+  Math.max(60, Math.round(adaptiveMinScoreToBuy))
+);
 
   adaptiveRiskMultiplier = Number(
     Math.min(1.25, Math.max(0.25, adaptiveRiskMultiplier)).toFixed(2)
