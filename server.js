@@ -4013,12 +4013,44 @@ for (const position of filteredPositions) {
         ) / sectorClusters.length
       : 0;
 
-  const hiddenExposureRiskScore =
-    clampScore(
-      averageClusterRisk +
-        concentratedClusters.length * 10 +
-        cryptoPositions.length * 8
-    );
+   const accountEquity = Number(
+    account.equity ||
+      account.portfolio_value ||
+      0
+  );
+
+  const exposurePercent =
+    accountEquity > 0
+      ? (totalExposure / accountEquity) * 100
+      : 0;
+
+  const smallAccountRelief =
+    accountEquity <= 5000 ? 25 : 0;
+
+  const eliteMomentumRelief =
+    topSignals.some((signal) => {
+      const score = Number(signal.score || 0);
+
+      return (
+        score >= 72 &&
+        Number(signal.breakoutProbability || 0) >= 80 &&
+        Number(signal.continuationProbability || 0) >= 75
+      );
+    })
+      ? 15
+      : 0;
+
+  const hiddenExposureRiskScore = clampScore(
+    sectorClusters.reduce(
+      (max, cluster) =>
+        Math.max(max, cluster.contagionRiskScore),
+      0
+    ) +
+      (exposurePercent >= 40 ? 20 : 0) +
+      (exposurePercent >= 60 ? 20 : 0) -
+      smallAccountRelief -
+      eliteMomentumRelief
+  );
 
   const drawdownContagionRisk =
     hiddenExposureRiskScore >= 80
