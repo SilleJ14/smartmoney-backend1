@@ -1288,6 +1288,82 @@ function isMorningStrikeWindow() {
   return minutes >= startMinutes && minutes <= endMinutes;
 }
 
+function calculateGapContinuationIntelligence(signal = {}) {
+  const confirmations = signal.confirmations || {};
+
+  const percentChange = Number(
+    signal.percentChange ||
+      signal.changePercent ||
+      0
+  );
+
+  const relativeVolume = Number(
+    signal.relativeVolume ||
+      signal.volumeRatio ||
+      signal.volumeSpikeRatio ||
+      confirmations.volumeSpikeRatio ||
+      0
+  );
+
+  const closeNearHighPercent = Number(
+    confirmations.closeNearHighPercent || 0
+  );
+
+  const pullbackFromHighPercent = Number(
+    confirmations.pullbackFromHighPercent || 0
+  );
+
+  const aboveVwap = confirmations.aboveVwap === true;
+  const fakeBreakout = confirmations.fakeBreakout === true;
+
+  const gapContinuationScore = clampScore(
+    45 +
+      (percentChange >= 5 ? 10 : 0) +
+      (percentChange >= 15 ? 10 : 0) +
+      (relativeVolume >= 2 ? 12 : 0) +
+      (relativeVolume >= 4 ? 10 : 0) +
+      (closeNearHighPercent >= 80 ? 12 : 0) +
+      (aboveVwap ? 10 : 0) -
+      (pullbackFromHighPercent >= 3 ? 15 : 0) -
+      (pullbackFromHighPercent >= 6 ? 15 : 0) -
+      (fakeBreakout ? 25 : 0) -
+      (percentChange >= 80 ? 20 : 0)
+  );
+
+  const gapFadeRisk = clampScore(
+    35 +
+      (percentChange >= 50 ? 15 : 0) +
+      (percentChange >= 80 ? 25 : 0) +
+      (pullbackFromHighPercent >= 3 ? 15 : 0) +
+      (pullbackFromHighPercent >= 6 ? 20 : 0) +
+      (relativeVolume < 1.5 ? 15 : 0) +
+      (fakeBreakout ? 25 : 0) -
+      (aboveVwap ? 10 : 0) -
+      (closeNearHighPercent >= 80 ? 10 : 0)
+  );
+
+  const openingRangeBreakoutProbability = clampScore(
+    gapContinuationScore * 0.7 +
+      (100 - gapFadeRisk) * 0.3
+  );
+
+  const gapContinuationLabel =
+    openingRangeBreakoutProbability >= 80
+      ? "HIGH_CONTINUATION_GAP"
+      : openingRangeBreakoutProbability >= 65
+      ? "WATCH_CONTINUATION_GAP"
+      : gapFadeRisk >= 70
+      ? "HIGH_FADE_RISK"
+      : "NEUTRAL_GAP";
+
+  return {
+    gapContinuationScore,
+    gapFadeRisk,
+    openingRangeBreakoutProbability,
+    gapContinuationLabel,
+  };
+}
+
 function calculateFloatRotationIntelligence(signal = {}) {
   const symbol = normalizeSymbol(signal.symbol);
 
@@ -1511,6 +1587,9 @@ function calculatePremarketMomentumEngine(signal = {}) {
     const floatRotation =
     calculateFloatRotationIntelligence(signal);
 
+  const gapContinuation =
+    calculateGapContinuationIntelligence(signal);    
+
   const liquidityQuality = clampScore(
     35 +
       (volume >= 1000000 ? 35 : 0) +
@@ -1539,12 +1618,13 @@ function calculatePremarketMomentumEngine(signal = {}) {
   );
 
   const openingDriveProbability = clampScore(
-    gapStrengthScore * 0.25 +
-      relativeVolumeScore * 0.3 +
-      catalystStrength * 0.2 +
-      premarketTrendScore * 0.15 +
-      liquidityQuality * 0.1 -
-      fadeRisk * 0.15
+    gapStrengthScore * 0.2 +
+      relativeVolumeScore * 0.22 +
+      catalystStrength * 0.16 +
+      premarketTrendScore * 0.14 +
+      liquidityQuality * 0.08 +
+      gapContinuation.openingRangeBreakoutProbability * 0.2 -
+      fadeRisk * 0.12
   );
 
   const morningMomentumScore = clampScore(
@@ -1576,6 +1656,7 @@ function calculatePremarketMomentumEngine(signal = {}) {
     catalystHits,
     negativeCatalystHits,
     floatRotation,
+    gapContinuation,
     catalystQualityScore,
     catalystRiskLabel,
     liquidityQuality,
@@ -1613,6 +1694,7 @@ function updatePremarketMomentumState(signals = []) {
         openingDriveProbability:
           premarketMomentum.openingDriveProbability,
         morningTier:
+
           premarketMomentum.morningTier,
       };
     })
