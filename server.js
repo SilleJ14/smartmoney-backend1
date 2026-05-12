@@ -3587,15 +3587,17 @@ const parliamentPenalty =
     : 1;
 
 capitalThrottleMultiplier *=
-  liquidityPenalty *
-  marketCyclePenalty *
-  parliamentPenalty;
-  
+  Math.max(
+    0.55,
+    liquidityPenalty *
+      marketCyclePenalty *
+      parliamentPenalty
+  );
+
 capitalThrottleMultiplier = Math.max(
-  0.15,
+  0.35,
   Math.min(capitalThrottleMultiplier, 1)
 );
-
   
   return {
     updatedAt: new Date().toISOString(),
