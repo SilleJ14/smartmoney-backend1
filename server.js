@@ -3535,7 +3535,7 @@ function calculateAutonomousPortfolioGovernor(
       (sectorSaturationRisk ? 35 : 75) * 0.1
   );
 
-const capitalThrottleMultiplier =
+let capitalThrottleMultiplier =
   macroRisk?.shouldBlockNewTrades || crashProtection?.shouldBlockNewTrades
     ? 0.25
     : governorScore >= 85
