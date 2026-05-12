@@ -1508,10 +1508,14 @@ const availableBotCap = Math.max(
   maxBotBudget - currentBotExposure
 );
 
-const recommendedTradeAmount = Number(
-  availableBotCap.toFixed(2)
+const remainingSlots = Math.max(
+  1,
+  CONFIG.maxStockOpenTrades - openBotPositions.length
 );
 
+const recommendedTradeAmount = Number(
+  (availableBotCap / remainingSlots).toFixed(2)
+);
   const portfolioScore = clampScore(
     portfolioHeat.portfolioHeatScore * 0.7 +
       (100 - marketStress) * 0.3
