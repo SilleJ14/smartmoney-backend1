@@ -2565,7 +2565,14 @@ function calculateInstitutionalExecutionIntelligence(
   const executableSignals = executionReviews.filter(
     (review) => review.entryStyle !== "NO_EXECUTION"
   );
-
+for (const review of executionReviews) {
+  if (
+    review.entryStyle === "NO_EXECUTION" &&
+    review.executionConfidence >= 50
+  ) {
+    review.entryStyle = "SMALL_PROBE_ENTRY";
+  }
+}
   const averageExecutionConfidence =
     executionReviews.length > 0
       ? executionReviews.reduce(
