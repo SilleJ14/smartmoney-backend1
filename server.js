@@ -1498,18 +1498,19 @@ function calculateAiPortfolioManagerDecision(
     allocationMultiplier *= 0.5;
   }
 
-  const maxBotBudget =
-    equity * (CONFIG.maxBotExposurePercent / 100);
+const maxBotBudget =
+  equity * (CONFIG.maxBotExposurePercent / 100);
 
-  const recommendedTradeAmount = Number(
-    Math.max(
-      0,
-      Math.min(
-        cash,
-        maxBotBudget * allocationMultiplier * 0.2
-      )
-    ).toFixed(2)
-  );
+const currentBotExposure = getBotExposure(openBotPositions);
+
+const availableBotCap = Math.max(
+  0,
+  maxBotBudget - currentBotExposure
+);
+
+const recommendedTradeAmount = Number(
+  availableBotCap.toFixed(2)
+);
 
   const portfolioScore = clampScore(
     portfolioHeat.portfolioHeatScore * 0.7 +
