@@ -5226,18 +5226,21 @@ function passesInstitutionalOrchestratorBuyGate(signal = {}) {
     orchestrator.probabilityReinforcement?.confidenceDrift || 0
   );
 
-  if (
-    reinforcementMode === "WEAKENING" ||
-    (reinforcedProbability < 45 && confidenceDrift <= -5)
-  ) {
-    return {
-      allowed: false,
-      reason:
-        `Probability reinforcement blocked: ${reinforcementMode} ` +
-        `${reinforcedProbability}/100 drift ${confidenceDrift}`,
-      orchestrator,
-    };
-  }
+if (
+  (reinforcementMode === "WEAKENING" ||
+    (reinforcedProbability < 45 && confidenceDrift <= -5)) &&
+  Number(signal?.score || 0) < 75 &&
+  Number(signal?.breakoutProbability || 0) < 85 &&
+  Number(signal?.executionConfidence || signal?.executionIntelligence?.executionConfidence || 0) < 70
+) {
+  return {
+    allowed: false,
+    reason:
+      `Probability reinforcement blocked: ${reinforcementMode} ` +
+      `${reinforcedProbability}/100 drift ${confidenceDrift}`,
+    orchestrator,
+  };
+}
 
   if (blockedActions.includes(action)) {
     return {
