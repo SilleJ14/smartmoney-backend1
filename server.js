@@ -2559,11 +2559,17 @@ function calculateInstitutionalExecutionIntelligence(
         ) / executionReviews.length
       : 0;
 
-  const combinedThrottle =
-      normalizedThrottle
+  const adaptiveRiskMultiplier =
+    Number(
+      engineState.selfOptimizationState
+        ?.adaptiveRiskMultiplier || 1
+    );
 
-const normalizedThrottle =
-  Math.max(0.45, combinedThrottle);    
+  const combinedThrottle =
+   normalizedThrottle
+
+  const normalizedThrottle =
+    Math.max(0.45, combinedThrottle);
 
   const executionMode =
     averageExecutionConfidence >= 80
