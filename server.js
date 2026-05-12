@@ -2375,9 +2375,9 @@ const adversarialValidationPassed =
 const capitalParliamentDecision =
   probabilityScore >= 72 && adversarialValidationPassed
     ? "FULL_AUTONOMOUS_APPROVAL"
-    : probabilityScore >= 58
+    : probabilityScore >= 45
     ? "CONTROLLED_AUTONOMOUS_APPROVAL"
-    : probabilityScore >= 35
+    : probabilityScore >= 25
     ? "WATCHLIST_ONLY"
     : "AUTONOMOUS_REJECTION";
 
@@ -2387,7 +2387,7 @@ const autonomousCapitalMultiplier =
     : capitalParliamentDecision === "CONTROLLED_AUTONOMOUS_APPROVAL"
     ? 0.75
     : capitalParliamentDecision === "WATCHLIST_ONLY"
-    ? 0.35
+    ? 0.6
     : 0.15;
 
 const shouldBlockNewTrades =
