@@ -749,7 +749,7 @@ async function runInBatches(items, batchSize, worker) {
 
     results.push(...batchResults.filter(Boolean));
 
-    await sleep(500);
+    await sleep(1200);
   }
 
   return results;
@@ -5305,7 +5305,7 @@ if (
     };
   }
 
-  if (finalScore < 65) {
+  if (finalScore < 60) {
     return {
       allowed: false,
       reason: `Orchestrator score too low: ${finalScore}`,
@@ -8426,8 +8426,8 @@ async function placeMarketBuy(symbol, dollars, score = 0) {
       method: "POST",
       body: JSON.stringify(orderPayload),
     });
-  } finally {
-    setTimeout(() => buyingNow.delete(normalizedSymbol), 10000);
+  } finally {    
+    buyingNow.delete(normalizedSymbol);
   }
 }
 
