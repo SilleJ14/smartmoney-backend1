@@ -1427,8 +1427,8 @@ function calculatePortfolioHeatEngine(signal, openBotPositions = []) {
 
   const correlationRiskScore = clampScore(
     100 -
-      sameSectorCount * 22 -
-      (estimatedSector === "Speculative Small Cap" ? 20 : 0) -
+      sameSectorCount * 14 -
+      (estimatedSector === "Speculative Small Cap" ? 12 : 0) -
       (duplicateSymbolRisk ? 35 : 0)
   );
 
