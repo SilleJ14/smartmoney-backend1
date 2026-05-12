@@ -1548,12 +1548,11 @@ function calculatePremarketMomentumEngine(signal = {}) {
   );
 
   const morningMomentumScore = clampScore(
-    gapStrengthScore * 0.22 +
-      relativeVolumeScore * 0.22 +
-      continuationStrength * 0.2 +
-      liquidityQuality * 0.12 +
-      catalystStrength * 0.12 +
-      floatRotation.floatRotationScore * 0.12
+    gapStrengthScore * 0.24 +
+      relativeVolumeScore * 0.24 +
+      liquidityQuality * 0.16 +
+      catalystStrength * 0.16 +
+      floatRotation.floatRotationScore * 0.2
   );
 
   const morningTier =
