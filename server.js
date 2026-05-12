@@ -1288,6 +1288,73 @@ function isMorningStrikeWindow() {
   return minutes >= startMinutes && minutes <= endMinutes;
 }
 
+function calculateFloatRotationIntelligence(signal = {}) {
+  const symbol = normalizeSymbol(signal.symbol);
+
+  const price = Number(signal.current || signal.price || 0);
+
+  const volume = Number(
+    signal.volume ||
+      signal.barVolume ||
+      0
+  );
+
+  const relativeVolume = Number(
+    signal.volumeRatio ||
+      signal.relativeVolume ||
+      signal.volumeSpikeRatio ||
+      signal.confirmations?.volumeSpikeRatio ||
+      0
+  );
+
+  const percentChange = Number(
+    signal.percentChange ||
+      signal.changePercent ||
+      signal.change ||
+      0
+  );
+
+  const floatRotationScore = clampScore(
+    40 +
+      (relativeVolume >= 2 ? 18 : 0) +
+      (relativeVolume >= 4 ? 18 : 0) +
+      (percentChange >= 15 ? 12 : 0) +
+      (percentChange >= 30 ? 12 : 0) +
+      (volume >= 50000 ? 8 : 0) -
+      (price > 150 ? 12 : 0)
+  );
+
+  const squeezeProbability = clampScore(
+    floatRotationScore +
+      (relativeVolume >= 5 ? 20 : 0) +
+      (percentChange >= 25 ? 15 : 0)
+  );
+
+  const dilutionRisk = clampScore(
+    20 +
+      (price < 2 ? 20 : 0) +
+      (relativeVolume >= 8 ? 15 : 0)
+  );
+
+  const floatRotationLabel =
+    squeezeProbability >= 85
+      ? "HIGH_SQUEEZE_ROTATION"
+      : squeezeProbability >= 70
+      ? "ROTATION_BREAKOUT"
+      : dilutionRisk >= 70
+      ? "DILUTION_RISK"
+      : "NORMAL_ROTATION";
+
+  return {
+    symbol,
+    floatRotationScore,
+    squeezeProbability,
+    dilutionRisk,
+    floatRotationLabel,
+    relativeVolume,
+  };
+}
+
 function calculatePremarketMomentumEngine(signal = {}) {
   const symbol = normalizeSymbol(signal.symbol);
 
@@ -1394,6 +1461,30 @@ function calculatePremarketMomentumEngine(signal = {}) {
     riskyHeadlineText.includes(word)
   );
 
+  const catalystQualityScore = clampScore(
+    45 +
+      catalystHits.length * 10 -
+      negativeCatalystHits.length * 18 +
+      (riskyHeadlineText.includes("offering") ? -25 : 0) +
+      (riskyHeadlineText.includes("reverse split") ? -25 : 0) +
+      (riskyHeadlineText.includes("bankruptcy") ? -35 : 0) +
+      (riskyHeadlineText.includes("fda approval") ? 25 : 0) +
+      (riskyHeadlineText.includes("contract") ? 18 : 0) +
+      (riskyHeadlineText.includes("acquisition") ? 20 : 0) +
+      (riskyHeadlineText.includes("buyout") ? 25 : 0) +
+      (riskyHeadlineText.includes("earnings") && percentChange > 0 ? 15 : 0)
+  );
+
+  const catalystRiskLabel =
+    catalystQualityScore >= 80
+      ? "STRONG_POSITIVE_CATALYST"
+      : catalystQualityScore >= 65
+      ? "POSITIVE_CATALYST"
+      : catalystQualityScore <= 30
+      ? "DANGEROUS_CATALYST"
+      : "NO_CLEAR_CATALYST";
+
+
   const gapStrengthScore = clampScore(
     40 +
       (percentChange >= Number(CONFIG.minPremarketGapPercent || 5) ? 15 : 0) +
@@ -1412,11 +1503,13 @@ function calculatePremarketMomentumEngine(signal = {}) {
   );
 
   const catalystStrength = clampScore(
-    45 +
-      catalystHits.length * 12 -
-      negativeCatalystHits.length * 18 +
-      (catalystHits.length > 0 && percentChange > 0 ? 10 : 0)
+    catalystQualityScore +
+      (catalystRiskLabel === "STRONG_POSITIVE_CATALYST" ? 10 : 0) -
+      (catalystRiskLabel === "DANGEROUS_CATALYST" ? 20 : 0)
   );
+
+    const floatRotation =
+    calculateFloatRotationIntelligence(signal);
 
   const liquidityQuality = clampScore(
     35 +
@@ -1455,12 +1548,12 @@ function calculatePremarketMomentumEngine(signal = {}) {
   );
 
   const morningMomentumScore = clampScore(
-    relativeVolumeScore * 0.3 +
-      catalystStrength * 0.25 +
-      premarketTrendScore * 0.2 +
-      gapStrengthScore * 0.15 +
-      liquidityQuality * 0.1 -
-      fadeRisk * 0.1
+    gapStrengthScore * 0.22 +
+      relativeVolumeScore * 0.22 +
+      continuationStrength * 0.2 +
+      liquidityQuality * 0.12 +
+      catalystStrength * 0.12 +
+      floatRotation.floatRotationScore * 0.12
   );
 
   const morningTier =
@@ -1483,6 +1576,9 @@ function calculatePremarketMomentumEngine(signal = {}) {
     catalystStrength,
     catalystHits,
     negativeCatalystHits,
+    floatRotation,
+    catalystQualityScore,
+    catalystRiskLabel,
     liquidityQuality,
     premarketTrendScore,
     fadeRisk,
