@@ -5880,6 +5880,70 @@ if (
   };
 }
 
+function calculateMorningStrikeOverrideGate(signal = {}, ownedSymbols = new Set()) {
+  const symbol = normalizeSymbol(signal.symbol);
+
+  const isOwned =
+    ownedSymbols.has(symbol) ||
+    engineState.aiManagedSymbols?.includes(symbol);
+
+  if (isOwned) {
+    return {
+      allowed: false,
+      multiplier: 0,
+      reason: `${symbol} already owned. Morning strike override skipped.`,
+    };
+  }
+
+  const premarket =
+    signal.premarketMomentum ||
+    calculatePremarketMomentumEngine(signal);
+
+  const isEliteMorningCandidate =
+    premarket.morningTier === "TIER_1_ATTACK" ||
+    (
+      Number(premarket.morningMomentumScore || 0) >= 78 &&
+      Number(premarket.openingDriveProbability || 0) >= 70
+    );
+
+  const hasStrongMomentum =
+    Number(signal.breakoutProbability || 0) >= 80 ||
+    Number(signal.continuationProbability || 0) >= 75 ||
+    Number(signal.technicalScore || 0) >= 75;
+
+  const hasLiquidity =
+    Number(signal.volume || 0) >= Number(CONFIG.minVolume || 4000);
+
+  const blockedByFakeBreakout =
+    signal.confirmations?.fakeBreakout === true;
+
+  if (
+    isMorningStrikeWindow() &&
+    isEliteMorningCandidate &&
+    hasStrongMomentum &&
+    hasLiquidity &&
+    !blockedByFakeBreakout
+  ) {
+    return {
+      allowed: true,
+      multiplier: 0.65,
+      reason:
+        `MORNING_STRIKE_OVERRIDE approved for ${symbol} • ` +
+        `Morning ${premarket.morningMomentumScore}/100 • ` +
+        `OpenDrive ${premarket.openingDriveProbability}/100`,
+      premarket,
+    };
+  }
+
+  return {
+    allowed: false,
+    multiplier: 0,
+    reason:
+      `Morning strike override not active for ${symbol}.`,
+    premarket,
+  };
+}
+
 function passesAutonomousParliamentGate(signal = {}) {
   const system =
     engineState.autonomousTradingSystemState || {};
@@ -10575,8 +10639,31 @@ let successfulStockBuysThisCycle = 0;
       continue;
     }
 
-    const parliamentGate =
+    let parliamentGate =
       passesAutonomousParliamentGate(candidate);
+
+    const morningStrikeOverrideGate =
+      calculateMorningStrikeOverrideGate(
+        candidate,
+        new Set([
+          ...Array.from(aiOwnedSymbols || []),
+          ...positions.map((p) => normalizeSymbol(p.symbol)),
+        ])
+      );
+
+    if (!parliamentGate.allowed && morningStrikeOverrideGate.allowed) {
+      parliamentGate = {
+        allowed: true,
+        multiplier: morningStrikeOverrideGate.multiplier,
+        reason: morningStrikeOverrideGate.reason,
+        morningStrikeOverride: morningStrikeOverrideGate,
+      };
+
+      saveRecentOrder("MORNING_STRIKE_OVERRIDE_APPROVED", symbol, {
+        reason: morningStrikeOverrideGate.reason,
+        premarket: morningStrikeOverrideGate.premarket,
+      });
+    }
 
     if (!parliamentGate.allowed) {
       saveRecentOrder("STOCK_SKIPPED_PARLIAMENT", symbol, {
@@ -10639,6 +10726,10 @@ const portfolioManager =
       engineState.aiEntryScores[symbol] = {
         score: candidate.score,
         institutionalScore: candidate.institutionalScore,
+        entryType: morningStrikeOverrideGate.allowed
+          ? "MORNING_STRIKE"
+          : "AUTO_STOCK_ENTRY",
+        morningStrike: morningStrikeOverrideGate.allowed,   
         technicalScore: candidate.technicalScore,
         statisticalScore: candidate.statisticalScore,
         setupType:
