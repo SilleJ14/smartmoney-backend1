@@ -417,11 +417,13 @@ let tradingModeLocked =
   runtimeConfig.tradingModeLocked ?? false;
 
 function getEffectiveTradingMode(marketOpen) {
-  if (TRADING_MODE === "smart") {
-    return "smart";
-  }
+  const selectedMode = String(TRADING_MODE || "live_stock");
 
-  return TRADING_MODE;
+  if (selectedMode === "smart") return "smart";
+  if (selectedMode === "live_crypto") return "live_crypto";
+  if (selectedMode === "live_stock") return "live_stock";
+
+  return "live_stock";
 }
 
 function getAlpacaKeys() {
@@ -7935,7 +7937,7 @@ const liquidityPass =
 }
 
 async function scanCryptoMarket() {
-  if (!["live_crypto", "live_stock", "smart"].includes(TRADING_MODE)) {
+  if (!["live_crypto", "smart"].includes(TRADING_MODE)) {
     throw new Error("Crypto scanner is only available in live modes");
   }
 
@@ -8035,7 +8037,7 @@ const cryptoPercentChange =
 }
 
 async function placeCryptoMarketBuy(symbol, dollars) {
-  if (!["live_crypto", "live_stock", "smart"].includes(TRADING_MODE)) {
+ if (!["live_crypto", "smart"].includes(TRADING_MODE)) { 
     throw new Error("Crypto buying is only allowed in live modes");
   }
 
@@ -10141,7 +10143,7 @@ function calculateAdaptiveCryptoPositionSize(signal = {}, account = {}) {
 }
 
 async function autoBuyCryptoSignals(signals) {
-  if (!["live_crypto", "live_stock", "smart"].includes(TRADING_MODE)) return;
+  if (!["live_crypto", "smart"].includes(TRADING_MODE)) return;
 
   const account = await getAccount();
 
@@ -10457,22 +10459,27 @@ async function engineTick() {
 
     await autoExitPositions(marketOpen);
 
-    const cryptoEnabled = effectiveMode === "live_crypto";
+const stockModeEnabled =
+  effectiveMode === "live_stock" || effectiveMode === "smart";
 
-    if (cryptoEnabled) {
-      await autoExitCryptoPositions();
-    }
+const cryptoModeEnabled =
+  effectiveMode === "live_crypto" || effectiveMode === "smart";
 
-    let stockSignals = [];
-    let cryptoSignals = [];
+if (cryptoModeEnabled) {
+  await autoExitCryptoPositions();
+}
 
-     if (effectiveMode === "live_crypto" || TRADING_MODE === "smart") {
-      cryptoSignals = await scanCryptoMarket();
-    }
+let stockSignals = [];
+let cryptoSignals = [];
 
-    if (effectiveMode === "live_stock" || TRADING_MODE === "smart") {
-      stockSignals = await scanMarket();
-    }
+if (cryptoModeEnabled) {
+  cryptoSignals = await scanCryptoMarket();
+}
+
+if (stockModeEnabled) {
+  stockSignals = await scanMarket();
+}
+    
 const scanStartedAt = Date.now();
 
 engineState.marketBreadth = {
