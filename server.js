@@ -1428,7 +1428,7 @@ function calculatePortfolioHeatEngine(signal, openBotPositions = []) {
   const correlationRiskScore = clampScore(
     100 -
       sameSectorCount * 22 -
-      (estimatedSector === "Speculative Small Cap" ? 12 : 0) -
+      (estimatedSector === "Speculative Small Cap" ? 20 : 0) -
       (duplicateSymbolRisk ? 35 : 0)
   );
 
@@ -1513,9 +1513,16 @@ const remainingSlots = Math.max(
   CONFIG.maxStockOpenTrades - openBotPositions.length
 );
 
+const targetAllocationPerTrade =
+  maxBotBudget / CONFIG.maxStockOpenTrades;
+
 const recommendedTradeAmount = Number(
-  (availableBotCap / remainingSlots).toFixed(2)
+  Math.min(
+    availableBotCap,
+    targetAllocationPerTrade
+  ).toFixed(2)
 );
+
   const portfolioScore = clampScore(
     portfolioHeat.portfolioHeatScore * 0.7 +
       (100 - marketStress) * 0.3
