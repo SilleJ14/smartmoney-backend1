@@ -448,13 +448,13 @@ const CONFIG = {
   maxCryptoOpenTrades: Number(process.env.MAX_CRYPTO_OPEN_TRADES || 3),
 
   minStockPrice: Number(process.env.MIN_STOCK_PRICE || 1),
-  maxStockPrice: Number(process.env.MAX_STOCK_PRICE || 0),
+  maxStockPrice: Number(process.env.MAX_STOCK_PRICE || 1000),
 
   minScoreToBuy: Number(process.env.MIN_SCORE_TO_BUY || 65),
   replaceWeakestMinScoreGap: Number(process.env.REPLACE_SCORE_GAP || 5),
 
   maxBotExposurePercent: Number(
-    process.env.MAX_BOT_EXPOSURE_PERCENT || 6
+    process.env.MAX_BOT_EXPOSURE_PERCENT || 15
   ),
 
   takeProfitPercent: Number(
