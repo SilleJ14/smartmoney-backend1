@@ -4032,8 +4032,9 @@ for (const position of filteredPositions) {
   const smallAccountRelief =
     accountEquity <= 5000 ? 25 : 0;
 
+
   const eliteMomentumRelief =
-    topSignals.some((signal) => {
+    (signals || []).some((signal) => {
       const score = Number(signal.score || 0);
 
       return (
