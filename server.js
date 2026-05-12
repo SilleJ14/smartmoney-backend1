@@ -405,16 +405,16 @@ phase21AutonomousBrainHistory:
   }
 }
 
-const runtimeConfig = loadRuntimeConfig();
+let runtimeConfig = loadRuntimeConfig();
 const persistedEngineState = loadPersistedEngineState();
 
 
 // 🔥 Trading Mode (PERSISTED)
-let TRADING_MODE = runtimeConfig.tradingMode || process.env.TRADING_MODE || "smart";
+let TRADING_MODE =
+  runtimeConfig.tradingMode || "live_stock";
 
 let tradingModeLocked =
-  runtimeConfig.tradingModeLocked === true ||
-  process.env.TRADING_MODE_LOCKED === "true";
+  runtimeConfig.tradingModeLocked ?? false;
 
 function getEffectiveTradingMode(marketOpen) {
   if (TRADING_MODE === "smart") {
@@ -436,75 +436,125 @@ function getTradingBaseUrl() {
 const ALPACA_DATA_BASE_URL =
   process.env.ALPACA_DATA_BASE_URL || "https://data.alpaca.markets";
 
-let autoTradingEnabled = process.env.AUTO_TRADING === "true";
+let autoTradingEnabled =
+  runtimeConfig.autoTradingEnabled ?? true;
 
 const AI_ORDER_PREFIX = "SM_AI";
 
-
 const CONFIG = {
-  maxOpenTrades: Number(process.env.MAX_OPEN_TRADES || 2),
+  maxOpenTrades: Number(process.env.MAX_OPEN_TRADES || 8),
+  maxStockOpenTrades: Number(process.env.MAX_STOCK_OPEN_TRADES || 5),
+  maxCryptoOpenTrades: Number(process.env.MAX_CRYPTO_OPEN_TRADES || 3),
 
   minStockPrice: Number(process.env.MIN_STOCK_PRICE || 1),
-  maxStockPrice: 0,
+  maxStockPrice: Number(process.env.MAX_STOCK_PRICE || 0),
 
-  minScoreToBuy: Number(process.env.MIN_SCORE_TO_BUY || 70),
+  minScoreToBuy: Number(process.env.MIN_SCORE_TO_BUY || 65),
   replaceWeakestMinScoreGap: Number(process.env.REPLACE_SCORE_GAP || 5),
 
-  maxBotExposurePercent: Number(process.env.MAX_BOT_EXPOSURE_PERCENT || 2),
+  maxBotExposurePercent: Number(
+    process.env.MAX_BOT_EXPOSURE_PERCENT || 6
+  ),
 
-  // EXIT SETTINGS
-takeProfitPercent: Number(process.env.TAKE_PROFIT_PERCENT || 8),
-stopLossPercent: Number(process.env.STOP_LOSS_PERCENT || 2),
-trailingStopPercent: Number(process.env.TRAILING_STOP_PERCENT || 2),
+  takeProfitPercent: Number(
+    process.env.TAKE_PROFIT_PERCENT || 8
+  ),
 
-  // RUNNER STRATEGY
-  runnerTriggerPercent: Number(process.env.RUNNER_TRIGGER_PERCENT || 6),
-runnerTrailingStopPercent: Number(
-  process.env.RUNNER_TRAILING_STOP_PERCENT || 3
-),
+  stopLossPercent: Number(
+    process.env.STOP_LOSS_PERCENT || 2
+  ),
 
-  dailyLossLimitPercent: Number(process.env.DAILY_LOSS_LIMIT_PERCENT || 2),
+  trailingStopPercent: Number(
+    process.env.TRAILING_STOP_PERCENT || 2
+  ),
 
-  profitLockTriggerPercent: Number(process.env.PROFIT_LOCK_TRIGGER_PERCENT || 2),
-  profitLockProtectPercent: Number(process.env.PROFIT_LOCK_PROTECT_PERCENT || 50),
+  runnerTriggerPercent: Number(
+    process.env.RUNNER_TRIGGER_PERCENT || 6
+  ),
+
+  runnerTrailingStopPercent: Number(
+    process.env.RUNNER_TRAILING_STOP_PERCENT || 3
+  ),
+
+  dailyLossLimitPercent: Number(
+    process.env.DAILY_LOSS_LIMIT_PERCENT || 2
+  ),
+
+  profitLockTriggerPercent: Number(
+    process.env.PROFIT_LOCK_TRIGGER_PERCENT || 2
+  ),
+
+  profitLockProtectPercent: Number(
+    process.env.PROFIT_LOCK_PROTECT_PERCENT || 50
+  ),
 
   moversTop: Number(process.env.MOVERS_TOP || 50),
-  minVolume: Number(process.env.MIN_VOLUME || 5000),
-  minScanVolume: Number(process.env.MIN_SCAN_VOLUME || 5000),
-  maxPercentChange: Number(process.env.MAX_PERCENT_CHANGE || 80),
-  maxSignalsToReturn: Number(process.env.MAX_SIGNALS_TO_RETURN || 80),
 
-  topAutoTradeCandidates: Number(process.env.TOP_AUTO_TRADE_CANDIDATES || 5),
+  minVolume: Number(process.env.MIN_VOLUME || 4000),
+
+  minScanVolume: Number(process.env.MIN_SCAN_VOLUME || 4000),
+
+  maxPercentChange: Number(
+    process.env.MAX_PERCENT_CHANGE || 80
+  ),
+
+  maxSignalsToReturn: Number(
+    process.env.MAX_SIGNALS_TO_RETURN || 75
+  ),
+
+  topAutoTradeCandidates: Number(
+    process.env.TOP_AUTO_TRADE_CANDIDATES || 5
+  ),
+
   enableMarketRegimeEngine:
     process.env.ENABLE_MARKET_REGIME_ENGINE !== "false",
+
   aggressiveBullishExposureMultiplier: Number(
     process.env.AGGRESSIVE_BULLISH_EXPOSURE_MULTIPLIER || 1
   ),
+
   cautiousBullishExposureMultiplier: Number(
     process.env.CAUTIOUS_BULLISH_EXPOSURE_MULTIPLIER || 0.75
   ),
+
   defensiveExposureMultiplier: Number(
     process.env.DEFENSIVE_EXPOSURE_MULTIPLIER || 0.4
   ),
- panicExposureMultiplier: Number(
-  process.env.PANIC_EXPOSURE_MULTIPLIER || 0.15
-),
 
-  // ADVANCED FILTERS (FIXED)
-  // ADVANCED FILTERS
-  enableAdvancedFilters: process.env.ENABLE_ADVANCED_FILTERS !== "false",
-  minVolumeSpikeRatio: Number(process.env.MIN_VOLUME_SPIKE_RATIO || 0.5),
-  minCloseNearHighPercent: Number(process.env.MIN_CLOSE_NEAR_HIGH_PERCENT || 25),
-  fakeBreakoutMaxHighPullbackPercent: Number(
-    process.env.FAKE_BREAKOUT_MAX_HIGH_PULLBACK_PERCENT || 2
+  panicExposureMultiplier: Number(
+    process.env.PANIC_EXPOSURE_MULTIPLIER || 0.15
   ),
-  maxGapUpPercent: Number(process.env.MAX_GAP_UP_PERCENT || 30),
 
-  // 🔥 IMPORTANT FIX
-  requireAboveVwap: process.env.REQUIRE_ABOVE_VWAP === "true",
+  enableAdvancedFilters:
+    process.env.ENABLE_ADVANCED_FILTERS !== "false",
 
-  enableNewsRiskFilter: process.env.ENABLE_NEWS_RISK_FILTER === "true",
-  newsLookbackDays: Number(process.env.NEWS_LOOKBACK_DAYS || 3),
+  minVolumeSpikeRatio: Number(
+    process.env.MIN_VOLUME_SPIKE_RATIO || 0.13
+  ),
+
+  minCloseNearHighPercent: Number(
+    process.env.MIN_CLOSE_NEAR_HIGH_PERCENT || 20
+  ),
+
+  fakeBreakoutMaxHighPullbackPercent: Number(
+    process.env.FAKE_BREAKOUT_MAX_HIGH_PULLBACK_PERCENT || 0.5
+  ),
+
+  maxGapUpPercent: Number(
+    process.env.MAX_GAP_UP_PERCENT || 30
+  ),
+
+  requireAboveVwap:
+    process.env.REQUIRE_ABOVE_VWAP === "true",
+
+  enableNewsRiskFilter:
+    process.env.ENABLE_NEWS_RISK_FILTER === "true",
+
+  newsLookbackDays: Number(
+    process.env.NEWS_LOOKBACK_DAYS || 3
+  ),
+
+  ...runtimeConfig,
 };
 // LINE BEFORE
 let engineState = {
@@ -9605,7 +9655,15 @@ async function autoBuySignals(signals = []) {
     aiOwnedSymbols.has(normalizeSymbol(position.symbol))
   );
 
-  if (aiPositions.length >= CONFIG.maxOpenTrades) {
+    const aiStockPositions = aiPositions.filter((position) => {
+    const symbol = normalizeSymbol(position.symbol);
+    return !symbol.includes("/") && position.asset_class !== "crypto";
+  });
+
+  if (
+    aiPositions.length >= CONFIG.maxOpenTrades ||
+    aiStockPositions.length >= CONFIG.maxStockOpenTrades
+  ) {
     const rotated = await replaceWeakestIfBetter(
       signals,
       positions,
@@ -9621,8 +9679,11 @@ async function autoBuySignals(signals = []) {
     return;
   }
 
-  const openSlots =
-    CONFIG.maxOpenTrades - aiPositions.length;
+
+  const openSlots = Math.min(
+    CONFIG.maxOpenTrades - aiPositions.length,
+    CONFIG.maxStockOpenTrades - aiStockPositions.length
+  );
 
 const executableSymbols = new Set(
   (
@@ -10030,6 +10091,37 @@ async function autoBuyCryptoSignals(signals) {
   if (!["live_crypto", "live_stock", "smart"].includes(TRADING_MODE)) return;
 
   const account = await getAccount();
+
+    const positions = await getPositions();
+  const aiOwnedSymbols = await getAiOwnedSymbols();
+
+  const aiPositions = positions.filter((position) =>
+    aiOwnedSymbols.has(normalizeSymbol(position.symbol))
+  );
+
+  const aiCryptoPositions = aiPositions.filter((position) => {
+    const symbol = normalizeSymbol(position.symbol);
+    return symbol.includes("/") || position.asset_class === "crypto";
+  });
+
+  if (
+    aiPositions.length >= CONFIG.maxOpenTrades ||
+    aiCryptoPositions.length >= CONFIG.maxCryptoOpenTrades
+  ) {
+    saveRecentOrder("AUTO_CRYPTO_BUY_SKIPPED", "CRYPTO", {
+      reason: "Max crypto or total AI positions reached",
+      cryptoOpen: aiCryptoPositions.length,
+      totalOpen: aiPositions.length,
+      maxCryptoOpenTrades: CONFIG.maxCryptoOpenTrades,
+      maxOpenTrades: CONFIG.maxOpenTrades,
+    });
+    return;
+  }
+
+  const openCryptoSlots = Math.min(
+    CONFIG.maxOpenTrades - aiPositions.length,
+    CONFIG.maxCryptoOpenTrades - aiCryptoPositions.length
+  );
 
   const positions = await getPositions();
   const openSymbols = new Set(positions.map((p) => normalizeSymbol(p.symbol)));
@@ -11958,6 +12050,10 @@ statisticalEdgeHistory:
     }
 
     autoTradingEnabled = true;
+        runtimeConfig = saveRuntimeConfig({
+      ...runtimeConfig,
+      autoTradingEnabled,
+    });
     saveEngineState("AUTO_TRADING_ENABLED");
 
     res.json({
@@ -11965,6 +12061,26 @@ statisticalEdgeHistory:
       autoTradingEnabled,
     });
   });
+  app.post("/reset-runtime-config", (req, res) => {
+  try {
+    if (fs.existsSync(CONFIG_FILE)) {
+      fs.unlinkSync(CONFIG_FILE);
+    }
+
+    runtimeConfig = {};
+
+    res.json({
+      success: true,
+      message:
+        "runtime-config.json deleted successfully. Restart backend now.",
+    });
+  } catch (err) {
+    res.status(500).json({
+      success: false,
+      error: err.message,
+    });
+  }
+});
   app.get("/config", (req, res) => {
     res.json({
       message: "Current remote config",
@@ -11983,6 +12099,8 @@ statisticalEdgeHistory:
       "trailingStopPercent",
       "takeProfitPercent",
       "maxOpenTrades",
+      "maxStockOpenTrades",
+      "maxCryptoOpenTrades",
       "runnerTriggerPercent",
       "runnerTrailingStopPercent",
       "dailyLossLimitPercent",
@@ -12026,10 +12144,11 @@ statisticalEdgeHistory:
         CONFIG[key] = value;
       }
     }
-  saveRuntimeConfig({
+  runtimeConfig = saveRuntimeConfig({
     ...CONFIG,
     tradingMode: TRADING_MODE,
     tradingModeLocked,
+    autoTradingEnabled,
   });
     res.json({
       
