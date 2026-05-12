@@ -5879,6 +5879,81 @@ if (
     orchestrator,
   };
 }
+function calculateEliteMomentumExceptionGate(signal = {}, ownedSymbols = new Set()) {
+  const symbol = normalizeSymbol(signal.symbol);
+
+  const isOwned =
+    ownedSymbols.has(symbol) ||
+    engineState.aiManagedSymbols?.includes(symbol);
+
+  if (isOwned) {
+    return {
+      allowed: false,
+      multiplier: 0,
+      reason: `${symbol} already owned. Elite momentum exception skipped.`,
+    };
+  }
+
+  const premarket =
+    signal.premarketMomentum ||
+    calculatePremarketMomentumEngine(signal);
+
+  const score = Number(signal.score || 0);
+  const technicalScore = Number(signal.technicalScore || 0);
+  const breakoutProbability = Number(signal.breakoutProbability || 0);
+  const continuationProbability = Number(signal.continuationProbability || 0);
+  const volume = Number(signal.volume || 0);
+
+  const strongMorningScore =
+    Number(premarket.morningMomentumScore || 0) >= 72 ||
+    score >= 72;
+
+  const strongOpeningDrive =
+    Number(premarket.openingDriveProbability || 0) >= 65 ||
+    continuationProbability >= 75;
+
+  const strongTechnicalMomentum =
+    technicalScore >= 75 ||
+    breakoutProbability >= 80;
+
+  const cleanBreakout =
+    signal.confirmations?.fakeBreakout !== true &&
+    signal.confirmations?.newsRisk !== true;
+
+  const liquidEnough =
+    volume >= Number(CONFIG.minVolume || 4000);
+
+  const exceptionWindow =
+    isPremarketMomentumWindow() ||
+    isMorningStrikeWindow();
+
+  const allowed =
+    exceptionWindow &&
+    strongMorningScore &&
+    strongOpeningDrive &&
+    strongTechnicalMomentum &&
+    cleanBreakout &&
+    liquidEnough;
+
+  return {
+    allowed,
+    multiplier: allowed ? 0.55 : 0,
+    reason: allowed
+      ? `ELITE_MOMENTUM_EXCEPTION approved for ${symbol} • Score ${score}/100 • OpenDrive ${premarket.openingDriveProbability}/100 • Continuation ${continuationProbability}/100`
+      : `Elite momentum exception not qualified for ${symbol}.`,
+    premarket,
+    checks: {
+      exceptionWindow,
+      strongMorningScore,
+      strongOpeningDrive,
+      strongTechnicalMomentum,
+      cleanBreakout,
+      liquidEnough,
+      isOwned,
+    },
+  };
+}
+
 
 function calculateMorningStrikeOverrideGate(signal = {}, ownedSymbols = new Set()) {
   const symbol = normalizeSymbol(signal.symbol);
@@ -10665,6 +10740,25 @@ let successfulStockBuysThisCycle = 0;
       });
     }
 
+    if (
+      !parliamentGate.allowed &&
+      !morningStrikeOverrideGate.allowed &&
+      eliteMomentumExceptionGate.allowed
+    ) {
+      parliamentGate = {
+        allowed: true,
+        multiplier: eliteMomentumExceptionGate.multiplier,
+        reason: eliteMomentumExceptionGate.reason,
+        eliteMomentumException: eliteMomentumExceptionGate,
+      };
+
+      saveRecentOrder("ELITE_MOMENTUM_EXCEPTION_APPROVED", symbol, {
+        reason: eliteMomentumExceptionGate.reason,
+        checks: eliteMomentumExceptionGate.checks,
+        premarket: eliteMomentumExceptionGate.premarket,
+      });
+    }    
+
     if (!parliamentGate.allowed) {
       saveRecentOrder("STOCK_SKIPPED_PARLIAMENT", symbol, {
         reason: parliamentGate.reason,
@@ -10728,8 +10822,11 @@ const portfolioManager =
         institutionalScore: candidate.institutionalScore,
         entryType: morningStrikeOverrideGate.allowed
           ? "MORNING_STRIKE"
+          : eliteMomentumExceptionGate.allowed
+          ? "ELITE_MOMENTUM_EXCEPTION"
           : "AUTO_STOCK_ENTRY",
-        morningStrike: morningStrikeOverrideGate.allowed,   
+        morningStrike: morningStrikeOverrideGate.allowed,
+        eliteMomentumException: eliteMomentumExceptionGate.allowed, 
         technicalScore: candidate.technicalScore,
         statisticalScore: candidate.statisticalScore,
         setupType:
