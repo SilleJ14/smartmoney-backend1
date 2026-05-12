@@ -4014,8 +4014,8 @@ for (const position of filteredPositions) {
       : 0;
 
   const accountData =
-    runtimeAccountSnapshot ||
     engineState.lastKnownAccount ||
+    global.accountSnapshot ||
     {};
 
   const accountEquity = Number(
