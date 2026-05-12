@@ -10123,7 +10123,6 @@ async function autoBuyCryptoSignals(signals) {
     CONFIG.maxCryptoOpenTrades - aiCryptoPositions.length
   );
 
-  const positions = await getPositions();
   const openSymbols = new Set(positions.map((p) => normalizeSymbol(p.symbol)));
   const cash = Number(account.cash || 0);
   const maxCryptoPositions = CONFIG.maxOpenTrades;
