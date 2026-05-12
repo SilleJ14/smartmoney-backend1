@@ -2173,7 +2173,7 @@ function calculateAdaptiveExecutionTimingIntelligence(signals = []) {
 const timingMode =
   liquidityQuality >= 75 && executionConfidence >= 75 && volatility < 10
     ? "FAST_LIQUIDITY_WINDOW"
-    : liquidityQuality < 45 || spreadRisk >= 1.5
+    : spreadRisk >= 1.5
     ? "WAIT_FOR_LIQUIDITY"
     : "BALANCED_EXECUTION";
 
@@ -2578,8 +2578,9 @@ function calculateInstitutionalExecutionIntelligence(
     cycleThrottle *
     adaptiveRiskMultiplier;
 
-  const normalizedThrottle =
-    Math.max(0.45, combinedThrottle);
+
+const normalizedThrottle =
+  Math.max(0.75, combinedThrottle);
 
   const executionMode =
     averageExecutionConfidence >= 80
