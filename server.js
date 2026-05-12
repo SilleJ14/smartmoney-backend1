@@ -2559,6 +2559,12 @@ function calculateInstitutionalExecutionIntelligence(
         ) / executionReviews.length
       : 0;
 
+  const combinedThrottle =
+      normalizedThrottle
+
+const normalizedThrottle =
+  Math.max(0.45, combinedThrottle);    
+
   const executionMode =
     averageExecutionConfidence >= 80
       ? "INSTITUTIONAL_STEALTH_EXECUTION"
@@ -11475,6 +11481,35 @@ engineState.analyticsSnapshots =
       approvedCryptoSignals.length > 0 &&
       !tradingStoppedForDay &&
       !engineState.cryptoTradingStoppedForDay;
+
+    const bestStockSignal = stockSignals
+      .filter(
+        (s) =>
+          s.qualifiedToBuy === true &&
+          s.autoTradeApproved === true
+      )
+      .sort((a, b) => b.score - a.score)[0];
+
+    const bestCryptoSignal = cryptoSignals
+      .filter(
+        (s) =>
+          s.qualifiedToBuy === true &&
+          s.autoTradeApproved === true
+      )
+      .sort((a, b) => b.score - a.score)[0];
+
+    const bestStockScore =
+      bestStockSignal?.score || 0;
+
+    const bestCryptoScore =
+      bestCryptoSignal?.score || 0;
+
+    if (TRADING_MODE === "smart") {
+      effectiveMode =
+        bestStockScore >= bestCryptoScore
+          ? "live_stock"
+          : "live_crypto";
+    }
 
     if (
       autoTradingEnabled &&
