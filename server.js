@@ -2826,7 +2826,7 @@ if (liquidityQuality < 50) {
   }
 
  adaptiveMinScoreToBuy = Math.min(
-  CONFIG.minScoreToBuy + 4,
+  CONFIG.minScoreToBuy,
   Math.max(60, Math.round(adaptiveMinScoreToBuy))
 );
 
@@ -3564,18 +3564,39 @@ const governorMode =
 
 const shouldBlockNewTrades =
   capitalThrottleMultiplier === 0 ||
-  sectorSaturationRisk ||
   exposurePercent >= CONFIG.maxBotExposurePercent ||
   engineState.correlationIntelligenceState
-    ?.shouldReduceExposure ||
+    ?.shouldReduceExposure === true;
+
+    const liquidityPenalty =
   engineState.liquidityIntelligenceState
-    ?.shouldBlockWeakLiquidity ||
-engineState.marketCycleIntelligenceState
-    ?.shouldBlockNewTrades ||
+    ?.shouldBlockWeakLiquidity
+    ? 0.7
+    : 1;
+
+const marketCyclePenalty =
+  engineState.marketCycleIntelligenceState
+    ?.shouldBlockNewTrades
+    ? 0.7
+    : 1;
+
+const parliamentPenalty =
   engineState.autonomousTradingSystemState
-    ?.shouldBlockNewTrades;
+    ?.shouldBlockNewTrades
+    ? 0.6
+    : 1;
 
+capitalThrottleMultiplier *=
+  liquidityPenalty *
+  marketCyclePenalty *
+  parliamentPenalty;
+  
+capitalThrottleMultiplier = Math.max(
+  0.15,
+  Math.min(capitalThrottleMultiplier, 1)
+);
 
+  
   return {
     updatedAt: new Date().toISOString(),
     governorMode,
@@ -12100,6 +12121,9 @@ statisticalEdgeHistory:
       "maxOpenTrades",
       "maxStockOpenTrades",
       "maxCryptoOpenTrades",
+      "autoTradingEnabled",
+      "tradingMode",
+      "tradingModeLocked",
       "runnerTriggerPercent",
       "runnerTrailingStopPercent",
       "dailyLossLimitPercent",
@@ -12158,60 +12182,79 @@ statisticalEdgeHistory:
   app.post("/mode", (req, res) => {
     const { mode } = req.body;
 
-    const validModes = ["smart", "live_stock", "live_crypto"];
-    if (tradingModeLocked) {
-      return res.status(403).json({
-        error: "Trading mode is locked",
-        mode: TRADING_MODE,
-        message: "Unlock trading mode before changing it.",
-      });
-    }
+const validModes = ["smart", "live_stock", "live_crypto"];
 
-    if (!validModes.includes(mode)) {
-      return res.status(400).json({
-        error: "Invalid mode",
-        validModes,
-      });
-    }
+if (tradingModeLocked) {
+  return res.status(403).json({
+    error: "Trading mode is locked",
+    mode: TRADING_MODE,
+    message: "Unlock trading mode before changing it.",
+  });
+}
 
-    TRADING_MODE = mode;
-      saveRuntimeConfig({
+if (!validModes.includes(mode)) {
+  return res.status(400).json({
+    error: "Invalid mode",
+    validModes,
+  });
+}
+
+TRADING_MODE = mode;
+
+runtimeConfig = saveRuntimeConfig({
+  ...runtimeConfig,
+  tradingMode: TRADING_MODE,
+  tradingModeLocked,
+  autoTradingEnabled,
+});
+
+saveEngineState("TRADING_MODE_CHANGED");
+
+console.log("MODE SWITCHED:", TRADING_MODE);
+
+res.json({
+  message: "Trading mode updated",
+  mode: TRADING_MODE,
+  tradingModeLocked,
+  autoTradingEnabled,
+});
+});
+
+app.post("/mode-lock/on", (req, res) => {
+  tradingModeLocked = true;
+
+  runtimeConfig = saveRuntimeConfig({
+    ...runtimeConfig,
     tradingMode: TRADING_MODE,
     tradingModeLocked,
+    autoTradingEnabled,
   });
 
-  saveEngineState("TRADING_MODE_CHANGED");
-    saveRuntimeConfig({ tradingMode: TRADING_MODE });
+  res.json({
+    message: "Trading mode locked",
+    mode: TRADING_MODE,
+    tradingModeLocked,
+    autoTradingEnabled,
+  });
+});
 
-    console.log("MODE SWITCHED:", TRADING_MODE);
-    res.json({
-      message: "Trading mode updated",
-      mode: TRADING_MODE,
-    });
+app.post("/mode-lock/off", (req, res) => {
+  tradingModeLocked = false;
+
+  runtimeConfig = saveRuntimeConfig({
+    ...runtimeConfig,
+    tradingMode: TRADING_MODE,
+    tradingModeLocked,
+    autoTradingEnabled,
   });
 
-  app.post("/mode-lock/on", (req, res) => {
-    tradingModeLocked = true;
-    saveRuntimeConfig({ tradingModeLocked });
-
-    res.json({
-      message: "Trading mode locked",
-      mode: TRADING_MODE,
-      tradingModeLocked,
-    });
+  res.json({
+    message: "Trading mode unlocked",
+    mode: TRADING_MODE,
+    tradingModeLocked,
+    autoTradingEnabled,
   });
-
-  app.post("/mode-lock/off", (req, res) => {
-    tradingModeLocked = false;
-    saveRuntimeConfig({ tradingModeLocked });
-
-    res.json({
-      message: "Trading mode unlocked",
-      mode: TRADING_MODE,
-      tradingModeLocked,
-    });
-  });
-
+});
   app.post("/manual-buy-stock", async (req, res) => {
     try {
       const { symbol, dollars, shares, buyMode } = req.body;
