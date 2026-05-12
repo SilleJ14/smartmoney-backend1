@@ -2163,38 +2163,39 @@ function calculateAdaptiveExecutionTimingIntelligence(signals = []) {
     3
 );
 
-  const timingMode =
-    liquidityQuality >= 75 && executionConfidence >= 75 && volatility < 10
-      ? "FAST_LIQUIDITY_WINDOW"
-      : volatility >= 18 || spreadRisk >= 1
-      ? "SLOW_STEALTH_EXECUTION"
-      : liquidityQuality < 55
-      ? "WAIT_FOR_LIQUIDITY"
-      : "BALANCED_TIMING";
+const timingMode =
+  liquidityQuality >= 75 && executionConfidence >= 75 && volatility < 10
+    ? "FAST_LIQUIDITY_WINDOW"
+    : liquidityQuality < 45 || spreadRisk >= 1.5
+    ? "WAIT_FOR_LIQUIDITY"
+    : "BALANCED_EXECUTION";
 
-  return {
-    updatedAt: new Date().toISOString(),
-    phase: "20.3_ADAPTIVE_EXECUTION_TIMING",
-    timingMode,
-    recommendedDelayMs,
-    maxSlices:
-      timingMode === "FAST_LIQUIDITY_WINDOW"
-        ? 3
-        : timingMode === "SLOW_STEALTH_EXECUTION"
-        ? 5
-        : timingMode === "WAIT_FOR_LIQUIDITY"
-        ? 2
-        : 4,
-    shouldDelayEntries:
-      timingMode === "SLOW_STEALTH_EXECUTION" ||
-      timingMode === "WAIT_FOR_LIQUIDITY",
-    liquidityQuality,
-    executionConfidence,
-    volatility,
-    spreadRisk: Number(spreadRisk.toFixed(3)),
-    cycleMultiplier,
-  };
+return {
+  updatedAt: new Date().toISOString(),
+  phase: "20.3_ADAPTIVE_EXECUTION_TIMING",
+  timingMode,
+  recommendedDelayMs:
+    timingMode === "FAST_LIQUIDITY_WINDOW"
+      ? 1000
+      : timingMode === "WAIT_FOR_LIQUIDITY"
+      ? 5000
+      : 2500,
+  maxSlices:
+    timingMode === "FAST_LIQUIDITY_WINDOW"
+      ? 2
+      : timingMode === "WAIT_FOR_LIQUIDITY"
+      ? 2
+      : 2,
+  shouldDelayEntries: timingMode === "WAIT_FOR_LIQUIDITY",
+  liquidityQuality,
+  executionConfidence,
+  volatility,
+  spreadRisk: Number(spreadRisk.toFixed(3)),
+  cycleMultiplier,
+};
+
 }
+
 
 function calculatePhase21AutonomousInstitutionalBrain(signals = []) {
   const analyzedSignals = Array.isArray(signals) ? signals : [];
