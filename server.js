@@ -9814,6 +9814,7 @@ const candidates = frozenApprovedSignals
     .sort((a, b) => Number(b.score || 0) - Number(a.score || 0))
     .slice(0, openSlots);
 
+let successfulStockBuysThisCycle = 0;
   for (const candidate of candidates) {
     const symbol = normalizeSymbol(candidate.symbol);
 
@@ -9933,6 +9934,11 @@ const portfolioManager =
         parliamentGate,
         adaptiveExecution,
       });
+      successfulStockBuysThisCycle += 1;
+
+if (successfulStockBuysThisCycle >= openSlots) {
+  break;
+}
     } catch (err) {
       saveFailedOrder("AUTO_STOCK_BUY_FAILED", symbol, err.message, {
         score: candidate.score,
