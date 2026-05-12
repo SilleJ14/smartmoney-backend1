@@ -419,6 +419,12 @@ continuationHoldHistory:
 activeContinuationHoldSymbol:
   engineState.activeContinuationHoldSymbol || null,  
 
+smartExitIntelligenceState:
+  engineState.smartExitIntelligenceState || null,
+
+smartExitIntelligenceHistory:
+  (engineState.smartExitIntelligenceHistory || []).slice(0, 200),  
+
 phase21AutonomousBrainHistory:
   (engineState.phase21AutonomousBrainHistory || []).slice(0, 200),
       pendingExits: engineState.pendingExits || [],
@@ -740,6 +746,8 @@ executionIntelligenceState: null,
 continuationHoldState: null,
 continuationHoldHistory: [],
 activeContinuationHoldSymbol: null,
+smartExitIntelligenceState: null,
+smartExitIntelligenceHistory: [],
 premarketMomentumState: null,
 premarketMomentumHistory: [],
 morningStrikeState: null,
@@ -10061,6 +10069,90 @@ function calculateContinuationHoldExitDecision({
   };
 }
 
+function calculateSmartExitIntelligence({
+  symbol,
+  unrealizedPercent = 0,
+  dropFromHigh = 0,
+  isRunner = false,
+  isContinuationHold = false,
+  trendQualityHold = {},
+  trendHoldDecision = {},
+  adaptiveSwingRisk = {},
+}) {
+  const entryScore = Number(engineState.aiEntryScores?.[symbol]?.score || 0);
+  const technicalScore = Number(engineState.aiEntryScores?.[symbol]?.technicalScore || 0);
+  const statisticalScore = Number(engineState.aiEntryScores?.[symbol]?.statisticalScore || 0);
+  const trendPersistenceScore = Number(
+    engineState.trendPersistenceState?.heldSymbols?.[symbol]?.trendPersistenceScore || 0
+  );
+
+  const exitQualityScore = clampScore(
+    50 +
+      (unrealizedPercent >= 2 ? 10 : 0) +
+      (unrealizedPercent >= 5 ? 12 : 0) +
+      (unrealizedPercent >= 10 ? 15 : 0) +
+      (entryScore >= 75 ? 8 : 0) +
+      (technicalScore >= 70 ? 8 : 0) +
+      (statisticalScore >= 70 ? 8 : 0) +
+      (trendPersistenceScore >= 70 ? 10 : 0) -
+      (dropFromHigh >= 1.5 ? 10 : 0) -
+      (dropFromHigh >= 3 ? 18 : 0)
+  );
+
+  const continuationFailure =
+    isContinuationHold &&
+    unrealizedPercent < 1 &&
+    dropFromHigh >= 1.2;
+
+  const runnerFailure =
+    isRunner &&
+    unrealizedPercent >= 3 &&
+    dropFromHigh >= Number(adaptiveSwingRisk.runnerTrailingStopPercent || CONFIG.runnerTrailingStopPercent || 3);
+
+  const shouldPartialProfit =
+    unrealizedPercent >= 5 &&
+    dropFromHigh >= 0.6 &&
+    !engineState.runnerPositions?.[symbol]?.partialProfitTaken;
+
+  const shouldForceExit =
+    continuationFailure ||
+    runnerFailure ||
+    exitQualityScore <= 35;
+
+  const shouldExtendHold =
+    !shouldForceExit &&
+    unrealizedPercent > 0 &&
+    (
+      trendHoldDecision.shouldHold === true ||
+      trendQualityHold.shouldExtendHold === true ||
+      exitQualityScore >= 78
+    );
+
+  const exitMode =
+    shouldForceExit
+      ? "SMART_FORCE_EXIT"
+      : shouldPartialProfit
+      ? "SMART_PARTIAL_PROFIT"
+      : shouldExtendHold
+      ? "SMART_EXTEND_HOLD"
+      : "STANDARD_EXIT_RULES";
+
+  return {
+    symbol,
+    phase: "17.6_SMART_EXIT_INTELLIGENCE",
+    exitQualityScore,
+    exitMode,
+    shouldPartialProfit,
+    shouldForceExit,
+    shouldExtendHold,
+    continuationFailure,
+    runnerFailure,
+    reason:
+      `${exitMode} • ExitQuality ${exitQualityScore}/100 • ` +
+      `Profit ${unrealizedPercent.toFixed(2)}% • Drop ${dropFromHigh.toFixed(2)}%`,
+  };
+}
+
 function calculateTrendPersistenceHoldDecision({
   unrealizedPercent = 0,
   dropFromHigh = 0,
@@ -10248,22 +10340,50 @@ const shouldNormalTrailingExit =
     const dynamicRunnerTrailingStopPercent =
       trendHoldDecision.runnerTrailingStopPercent;
 
+    const smartExitDecision =
+      calculateSmartExitIntelligence({
+        symbol,
+        unrealizedPercent,
+        dropFromHigh,
+        isRunner,
+        isContinuationHold:
+          normalizeSymbol(engineState.activeContinuationHoldSymbol) === symbol,
+        trendQualityHold,
+        trendHoldDecision,
+        adaptiveSwingRisk,
+      });
+
+    engineState.smartExitIntelligenceState = smartExitDecision;
+
+    engineState.smartExitIntelligenceHistory.unshift({
+      ...smartExitDecision,
+      updatedAt: new Date().toISOString(),
+    });
+
+    engineState.smartExitIntelligenceHistory =
+      engineState.smartExitIntelligenceHistory.slice(0, 200);      
+
     const shouldRunnerTrailingExit =
       isRunner && dropFromHigh >= dynamicRunnerTrailingStopPercent;
  if (
-  (trendHoldDecision.shouldHold ||
+  (
+    trendHoldDecision.shouldHold ||
     trendQualityHold.shouldExtendHold ||
-    continuationHoldExitDecision.shouldProtectHold) &&
+    continuationHoldExitDecision.shouldProtectHold ||
+    smartExitDecision.shouldExtendHold
+  ) &&
   !shouldStopLoss &&
-  !continuationHoldExitDecision.shouldExit
+  !continuationHoldExitDecision.shouldExit &&
+  !smartExitDecision.shouldForceExit
 ) {
-      saveRecentOrder("TREND_PERSISTENCE_HOLD", symbol, {
+      saveRecentOrder("SMART_EXIT_HOLD", symbol, {
         qty,
         price: currentPrice,
         highWater,
         dropFromHigh,
         profitPercent: unrealizedPercent,
         isRunner,
+        smartExitDecision,
         trendHoldMode: trendHoldDecision.mode,
         trendHoldReason: trendHoldDecision.reason,
         dynamicRunnerTrailingStopPercent,
@@ -10272,12 +10392,59 @@ const shouldNormalTrailingExit =
       continue;
     }
 
+        if (
+      smartExitDecision.shouldPartialProfit &&
+      marketOpen &&
+      qty >= 2
+    ) {
+      try {
+        const partialQty = Math.max(1, Math.floor(qty * 0.5));
+
+        const partialOrder = await placeMarketSell(
+          symbol,
+          partialQty,
+          "SMART_PARTIAL_PROFIT"
+        );
+
+        engineState.runnerPositions[symbol] = {
+          ...(engineState.runnerPositions[symbol] || {}),
+          partialProfitTaken: true,
+          partialProfitTakenAt: new Date().toISOString(),
+          partialProfitPercent: unrealizedPercent,
+          partialProfitQty: partialQty,
+        };
+
+        saveRecentOrder("SMART_PARTIAL_PROFIT_TAKEN", symbol, {
+          partialQty,
+          remainingQty: qty - partialQty,
+          price: currentPrice,
+          profitPercent: unrealizedPercent,
+          dropFromHigh,
+          smartExitDecision,
+          partialOrder,
+        });
+
+        saveEngineState("SMART_PARTIAL_PROFIT_TAKEN");
+
+        continue;
+      } catch (err) {
+        saveFailedOrder("SMART_PARTIAL_PROFIT_FAILED", symbol, err.message, {
+          qty,
+          price: currentPrice,
+          profitPercent: unrealizedPercent,
+          dropFromHigh,
+          smartExitDecision,
+        });
+      }
+    }
+
     if (
       !shouldStopLoss &&
       !shouldProtectProfit &&
       !shouldNormalTrailingExit &&
       !shouldRunnerTrailingExit &&
-      !continuationHoldExitDecision.shouldExit
+      !continuationHoldExitDecision.shouldExit &&
+      !smartExitDecision.shouldForceExit
     ) {
       continue;
     }
@@ -10285,6 +10452,9 @@ const shouldNormalTrailingExit =
     let reason = "AI_EXIT";
 
     if (shouldStopLoss) reason = "STOP_LOSS";
+    else if (smartExitDecision.continuationFailure) reason = "CONTINUATION_FAILURE_EXIT";
+    else if (smartExitDecision.runnerFailure) reason = "RUNNER_FAILURE_EXIT";
+    else if (smartExitDecision.shouldForceExit) reason = "SMART_FORCE_EXIT";
     else if (continuationHoldExitDecision.shouldExit) reason = "NON_SELECTED_CONTINUATION_EXIT";
     else if (shouldRunnerTrailingExit) reason = "RUNNER_TRAILING_STOP";
     else if (shouldProtectProfit) reason = "PROFIT_PROTECTION";
@@ -10397,6 +10567,7 @@ saveRecentOrder(reason, symbol, {
         highWater,
         dropFromHigh,
         profitPercent: unrealizedPercent,
+        smartExitDecision,      
         isRunner,
         order,
       });
