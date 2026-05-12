@@ -1517,6 +1517,17 @@ function calculateAiPortfolioManagerDecision(
   const approved =
     recommendedTradeAmount > 0 &&
     portfolioHeat.portfolioHeatScore >= 45;
+    
+const availableBotCap = Math.max(
+  0,
+  Number(risk?.maxBotBudget || maxBotBudget || 0) -
+    Number(risk?.currentBotExposure || 0)
+);
+
+recommendedTradeAmount = Math.min(
+  Number(recommendedTradeAmount || 0),
+  availableBotCap
+); 
 
   return {
     approved,
