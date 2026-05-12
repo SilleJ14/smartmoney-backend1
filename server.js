@@ -2566,7 +2566,9 @@ function calculateInstitutionalExecutionIntelligence(
     );
 
   const combinedThrottle =
-   normalizedThrottle
+    governorThrottle *
+    cycleThrottle *
+    adaptiveRiskMultiplier;
 
   const normalizedThrottle =
     Math.max(0.45, combinedThrottle);
