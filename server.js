@@ -4013,9 +4013,14 @@ for (const position of filteredPositions) {
         ) / sectorClusters.length
       : 0;
 
-   const accountEquity = Number(
-    account.equity ||
-      account.portfolio_value ||
+  const accountData =
+    runtimeAccountSnapshot ||
+    engineState.lastKnownAccount ||
+    {};
+
+  const accountEquity = Number(
+    accountData.equity ||
+      accountData.portfolio_value ||
       0
   );
 
