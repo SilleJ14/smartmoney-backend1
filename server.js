@@ -10163,7 +10163,7 @@ async function autoBuyCryptoSignals(signals) {
 
   const openSymbols = new Set(positions.map((p) => normalizeSymbol(p.symbol)));
   const cash = Number(account.cash || 0);
-  const maxCryptoPositions = CONFIG.maxOpenTrades;
+  const maxCryptoPositions = CONFIG.maxCryptoOpenTrades;
 
   const cryptoPositions = positions.filter((p) =>
     normalizeSymbol(p.symbol).endsWith("USD")
@@ -10251,18 +10251,17 @@ const cryptoStatisticalScore = Number(
 const cryptoBarsFound = Number(crypto.barsFound || 0);
 
 const cryptoQualified =
-  cryptoInstitutionalScore >= 60 &&
-  cryptoTechnicalScore >= 55 &&
-  cryptoStatisticalScore >= 50 &&
-  cryptoBarsFound >= 10 &&
-  crypto.qualifiedToBuy !== false;
+  crypto.qualifiedToBuy === true &&
+  Number(crypto.score || 0) >= CONFIG.minScoreToBuy &&
+  Number(crypto.spreadPercent || 0) <= 0.85 &&
+  cryptoBarsFound >= 10;
 
 if (!cryptoQualified) {
   saveRecentOrder("CRYPTO_SKIPPED_INSTITUTIONAL_FILTER", symbol, {
-    institutionalScore: cryptoInstitutionalScore,
-    technicalScore: cryptoTechnicalScore,
-    statisticalScore: cryptoStatisticalScore,
+    score: crypto.score,
+    spreadPercent: crypto.spreadPercent,
     barsFound: cryptoBarsFound,
+    qualifiedToBuy: crypto.qualifiedToBuy,
   });
 
   continue;
@@ -11477,7 +11476,7 @@ engineState.analyticsSnapshots =
     const approvedCryptoSignals = cryptoSignals.filter(
       (signal) =>
         signal.qualifiedToBuy === true &&
-        signal.autoTradeApproved === true &&
+        signal.autoTradeApproved !== false &&
         Number(signal.score || 0) >= CONFIG.minScoreToBuy
     );
 
