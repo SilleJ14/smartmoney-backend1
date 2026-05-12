@@ -9745,13 +9745,23 @@ async function autoBuySignals(signals = []) {
     CONFIG.maxStockOpenTrades - aiStockPositions.length
   );
 
+const frozenOpenSlots = openSlots;
+
+const frozenApprovedSignals = signals
+  .filter(
+    (signal) =>
+      signal.qualifiedToBuy === true &&
+      signal.autoTradeApproved === true &&
+      Number(signal.score || 0) >= CONFIG.minScoreToBuy
+  )
+  .slice(0, frozenOpenSlots);
 const executableSymbols = new Set(
   (
     engineState.executionIntelligenceState?.topExecutableSignals || []
   ).map((signal) => normalizeSymbol(signal.symbol))
 );
 
-const candidates = signals
+const candidates = frozenApprovedSignals
   .filter((signal) => {
     const symbol = normalizeSymbol(signal.symbol);
     const score = Number(signal.score || 0);
