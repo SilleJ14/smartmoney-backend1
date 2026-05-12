@@ -1315,20 +1315,35 @@ function calculatePremarketMomentumEngine(signal = {}) {
       )
   );
 
-  const volume = Number(signal.volume || 0);
+  const confirmations = signal.confirmations || {};
+
+  const volume = Number(
+    signal.volume ||
+      signal.barVolume ||
+      confirmations.lastVolume ||
+      0
+  );
+
   const averageVolume = Number(
     signal.averageVolume ||
       signal.avgVolume ||
       signal.avgDailyVolume ||
+      signal.avgBarVolume ||
+      confirmations.avgVolume ||
       0
   );
 
-  const relativeVolume =
-    averageVolume > 0
-      ? Number((volume / averageVolume).toFixed(2))
-      : Number(signal.relativeVolume || signal.volumeSpikeRatio || 0);
-
-  const confirmations = signal.confirmations || {};
+  const relativeVolume = Number(
+    signal.relativeVolume ||
+      signal.volumeRatio ||
+      signal.volumeSpikeRatio ||
+      confirmations.volumeSpikeRatio ||
+      (
+        averageVolume > 0 && volume > 0
+          ? (volume / averageVolume).toFixed(2)
+          : 0
+      )
+  );
 
   const riskyHeadlineText = (
     confirmations.riskyNewsHeadlines ||
