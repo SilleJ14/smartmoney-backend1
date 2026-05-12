@@ -8340,7 +8340,6 @@ engineState.statisticalMemoryState =
     })
     .slice(0, CONFIG.maxSignalsToReturn);
 }
-
 async function placeMarketBuy(symbol, dollars, score = 0) {
   const normalizedSymbol = normalizeSymbol(symbol);
 
@@ -8357,44 +8356,58 @@ async function placeMarketBuy(symbol, dollars, score = 0) {
       throw new Error(assetCheck.reason);
     }
 
+    const asset = assetCheck.asset || {};
+    const fractionable = asset.fractionable === true;
+
     const clock = await getClock();
     const marketOpen = Boolean(clock?.is_open);
-    const cleanNotional = Math.max(1, Number(dollars.toFixed(2)));
+    const cleanNotional = Math.max(1, Number(Number(dollars).toFixed(2)));
+
+    const quote = await getCombinedStockQuote(normalizedSymbol);
+    const referencePrice = Number(
+      quote.ask || quote.current || quote.price || 0
+    );
+
+    if (!referencePrice || referencePrice <= 0) {
+      throw new Error(`No valid buy price for ${normalizedSymbol}`);
+    }
 
     let orderPayload = {
       symbol: normalizedSymbol,
-      notional: cleanNotional,
       side: "buy",
-      type: "market",
       time_in_force: "day",
       client_order_id: `${AI_ORDER_PREFIX}_BUY_${normalizedSymbol}_${Math.round(score)}_${Date.now()}`,
     };
 
-    if (!marketOpen) {
-      const latestQuote = await getCombinedStockQuote(normalizedSymbol);
-      const referencePrice = Number(
-        latestQuote.ask ||
-          latestQuote.current ||
-          latestQuote.price ||
-          0
-      );
+    if (marketOpen && fractionable) {
+      orderPayload = {
+        ...orderPayload,
+        notional: cleanNotional,
+        type: "market",
+      };
+    } else {
+      const buyPrice = marketOpen
+        ? referencePrice
+        : Number((referencePrice * 1.01).toFixed(2));
 
-      if (!referencePrice || referencePrice <= 0) {
-        throw new Error(`No valid after-hours limit price for ${normalizedSymbol}`);
+      const qty = Math.floor(cleanNotional / buyPrice);
+
+      if (!qty || qty < 1) {
+        throw new Error(
+          `${normalizedSymbol} is not fractionable or requires whole-share buying. $${cleanNotional} is not enough for 1 share at about $${buyPrice}.`
+        );
       }
 
-      const limitPrice = Number((referencePrice * 1.01).toFixed(2));
-      const qty = Math.max(1, Math.floor(cleanNotional / limitPrice));
-
       orderPayload = {
-        symbol: normalizedSymbol,
+        ...orderPayload,
         qty: String(qty),
-        side: "buy",
-        type: "limit",
-        limit_price: String(limitPrice),
-        time_in_force: "day",
-        extended_hours: true,
-        client_order_id: `${AI_ORDER_PREFIX}_EXT_BUY_${normalizedSymbol}_${Math.round(score)}_${Date.now()}`,
+        type: marketOpen ? "market" : "limit",
+        ...(marketOpen
+          ? {}
+          : {
+              limit_price: String(buyPrice),
+              extended_hours: true,
+            }),
       };
     }
 
@@ -8402,12 +8415,11 @@ async function placeMarketBuy(symbol, dollars, score = 0) {
       method: "POST",
       body: JSON.stringify(orderPayload),
     });
-
-
   } finally {
     setTimeout(() => buyingNow.delete(normalizedSymbol), 10000);
   }
 }
+
 async function executeAdaptiveBuyOrder({
   signal,
   totalAmount,
