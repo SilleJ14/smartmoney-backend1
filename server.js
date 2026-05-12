@@ -418,8 +418,9 @@ let tradingModeLocked =
 
 function getEffectiveTradingMode(marketOpen) {
   if (TRADING_MODE === "smart") {
-    return marketOpen ? "live_stock" : "live_crypto";
+    return "smart";
   }
+
   return TRADING_MODE;
 }
 
@@ -10394,7 +10395,7 @@ async function engineTick() {
     const account = await getAccount();
     const clock = await getClock();
     const marketOpen = Boolean(clock.is_open);
-    const effectiveMode = getEffectiveTradingMode(marketOpen);
+    let effectiveMode = getEffectiveTradingMode(marketOpen);
     const todayKey = new Date().toISOString().slice(0, 10);
 
     if (engineState.lastTradingDayKey !== todayKey) {
@@ -10451,7 +10452,7 @@ async function engineTick() {
     let stockSignals = [];
     let cryptoSignals = [];
 
-    if (effectiveMode === "live_crypto") {
+     if (effectiveMode === "live_crypto" || TRADING_MODE === "smart") {
       cryptoSignals = await scanCryptoMarket();
     }
 
@@ -11518,6 +11519,7 @@ engineState.analyticsSnapshots =
           ? "live_stock"
           : "live_crypto";
     }
+        engineState.effectiveMode = effectiveMode;
 
     if (
       autoTradingEnabled &&
