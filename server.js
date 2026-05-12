@@ -11446,34 +11446,43 @@ engineState.analyticsSnapshots =
   engineState.analyticsSnapshots.slice(0, 300);
     saveEngineState("SCAN_COMPLETED");
 
-       const marketStressLocked =
+    const marketStressLocked =
       engineState.marketStressLevel >= 25;
 
     const volatilityLocked =
       engineState.marketVolatility >= 18;
 
+    const approvedStockSignals = stockSignals.filter(
+      (signal) =>
+        signal.qualifiedToBuy === true &&
+        signal.autoTradeApproved === true &&
+        Number(signal.score || 0) >= CONFIG.minScoreToBuy
+    );
+
+    const approvedCryptoSignals = cryptoSignals.filter(
+      (signal) =>
+        signal.qualifiedToBuy === true &&
+        signal.autoTradeApproved === true &&
+        Number(signal.score || 0) >= CONFIG.minScoreToBuy
+    );
+
+    const shouldRunStockAutoBuy =
+      approvedStockSignals.length > 0 &&
+      !tradingStoppedForDay &&
+      !engineState.stockTradingStoppedForDay;
+
+    const shouldRunCryptoAutoBuy =
+      approvedCryptoSignals.length > 0 &&
+      !tradingStoppedForDay &&
+      !engineState.cryptoTradingStoppedForDay;
+
     if (
       autoTradingEnabled &&
       !engineState.dailyLossLocked &&
       !engineState.profitLocked &&
-      !marketStressLocked &&
-      !volatilityLocked &&
       !riskLocked
     ) {
-      if (
-        effectiveMode === "live_crypto" &&
-        !tradingStoppedForDay &&
-        !engineState.cryptoTradingStoppedForDay
-      ) {
-        await autoBuyCryptoSignals(cryptoSignals);
-      }
-
-
-      if (
-        (effectiveMode === "live_stock" || TRADING_MODE === "smart") &&
-        !tradingStoppedForDay &&
-        !engineState.stockTradingStoppedForDay
-      ) {
+      if (shouldRunStockAutoBuy) {
         await autoBuySignals(stockSignals);
 
         engineState.aiDecisionHistory.unshift({
@@ -11482,6 +11491,7 @@ engineState.analyticsSnapshots =
             ? "AUTO_STOCK_BUY_EXECUTED"
             : "AUTO_STOCK_BUY_EXTENDED_HOURS_EXECUTED",
           signalCount: stockSignals.length,
+          approvedSignalCount: approvedStockSignals.length,
           tradingMode: TRADING_MODE,
           effectiveMode,
           marketOpen,
@@ -11490,11 +11500,44 @@ engineState.analyticsSnapshots =
         engineState.aiDecisionHistory =
           engineState.aiDecisionHistory.slice(0, 300);
       }
+
+      if (shouldRunCryptoAutoBuy) {
+        await autoBuyCryptoSignals(cryptoSignals);
+
+        engineState.aiDecisionHistory.unshift({
+          timestamp: new Date().toISOString(),
+          type: "AUTO_CRYPTO_BUY_EXECUTED",
+          signalCount: cryptoSignals.length,
+          approvedSignalCount: approvedCryptoSignals.length,
+          tradingMode: TRADING_MODE,
+          effectiveMode,
+          marketOpen,
+        });
+
+        engineState.aiDecisionHistory =
+          engineState.aiDecisionHistory.slice(0, 300);
+      }
+
+      if (!shouldRunStockAutoBuy && !shouldRunCryptoAutoBuy) {
+        saveRecentOrder("AUTO_BUY_SKIPPED_NO_APPROVED_SIGNALS", "ALL", {
+          stockApprovedCount: approvedStockSignals.length,
+          cryptoApprovedCount: approvedCryptoSignals.length,
+          tradingMode: TRADING_MODE,
+          effectiveMode,
+          marketOpen,
+        });
+      }
     }
 
-    if (autoTradingEnabled && !marketOpen && TRADING_MODE !== "smart") {
-      saveRecentOrder("BUY_SKIPPED_MARKET_CLOSED", "ALL", {
-        message: "Market closed. Stock buys skipped.",
+    if (
+      autoTradingEnabled &&
+      !marketOpen &&
+      !shouldRunStockAutoBuy &&
+      !shouldRunCryptoAutoBuy
+    ) {
+      saveRecentOrder("BUY_SKIPPED_NO_APPROVED_EXTENDED_HOURS_SIGNAL", "ALL", {
+        message:
+          "Market closed, but extended-hours stock buying is allowed when approved stock signals exist.",
       });
     }
   } catch (err) {
