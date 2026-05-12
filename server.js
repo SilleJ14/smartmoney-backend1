@@ -392,6 +392,33 @@ adaptiveExecutionTimingHistory:
 phase21AutonomousBrainState:
   engineState.phase21AutonomousBrainState || null,
 
+premarketMomentumState:
+  engineState.premarketMomentumState || null,
+
+premarketMomentumHistory:
+  (engineState.premarketMomentumHistory || []).slice(0, 200),
+
+morningStrikeState:
+  engineState.morningStrikeState || null,
+
+morningStrikeHistory:
+  (engineState.morningStrikeHistory || []).slice(0, 200),
+
+morningTradesToday:
+  engineState.morningTradesToday || 0,
+
+lastMorningTradeDateKey:
+  engineState.lastMorningTradeDateKey || null,  
+
+continuationHoldState:
+  engineState.continuationHoldState || null,
+
+continuationHoldHistory:
+  (engineState.continuationHoldHistory || []).slice(0, 200),
+
+activeContinuationHoldSymbol:
+  engineState.activeContinuationHoldSymbol || null,  
+
 phase21AutonomousBrainHistory:
   (engineState.phase21AutonomousBrainHistory || []).slice(0, 200),
       pendingExits: engineState.pendingExits || [],
@@ -504,9 +531,48 @@ const CONFIG = {
   maxSignalsToReturn: Number(
     process.env.MAX_SIGNALS_TO_RETURN || 75
   ),
+  
 
   topAutoTradeCandidates: Number(
     process.env.TOP_AUTO_TRADE_CANDIDATES || 5
+  ),
+
+
+  continuationHoldStartHourET: Number(
+    process.env.CONTINUATION_HOLD_START_HOUR_ET || 11
+  ),
+
+  maxContinuationHoldStocks: Number(
+    process.env.MAX_CONTINUATION_HOLD_STOCKS || 1
+  ),
+
+  minContinuationHoldScore: Number(
+    process.env.MIN_CONTINUATION_HOLD_SCORE || 72
+  ),
+  
+  
+    maxMorningTradesPerDay: Number(
+    process.env.MAX_MORNING_TRADES_PER_DAY || 2
+  ),
+
+  morningStrikeStartHourET: Number(
+    process.env.MORNING_STRIKE_START_HOUR_ET || 9
+  ),
+
+  morningStrikeEndHourET: Number(
+    process.env.MORNING_STRIKE_END_HOUR_ET || 11
+  ),
+
+  minPremarketGapPercent: Number(
+    process.env.MIN_PREMARKET_GAP_PERCENT || 5
+  ),
+
+  minPremarketRelativeVolume: Number(
+    process.env.MIN_PREMARKET_RELATIVE_VOLUME || 3
+  ),
+
+  eliteMorningStrikeLimit: Number(
+    process.env.ELITE_MORNING_STRIKE_LIMIT || 2
   ),
 
   enableMarketRegimeEngine:
@@ -671,6 +737,15 @@ adaptiveExecutionTimingHistory: [],
 phase21AutonomousBrainState: null,
 phase21AutonomousBrainHistory: [],
 executionIntelligenceState: null,
+continuationHoldState: null,
+continuationHoldHistory: [],
+activeContinuationHoldSymbol: null,
+premarketMomentumState: null,
+premarketMomentumHistory: [],
+morningStrikeState: null,
+morningStrikeHistory: [],
+morningTradesToday: 0,
+lastMorningTradeDateKey: null,
 executionIntelligenceHistory: [],
 reinforcementWeightState: null,
 reinforcementWeightHistory: [],
@@ -834,6 +909,44 @@ function rememberTradeResult(symbol, result) {
   }
 
   engineState.tradeMemory[normalized] = current;
+}
+
+function resetMorningTradeCounterIfNewDay() {
+  const todayKey = getTodayKeyET();
+
+  if (engineState.lastMorningTradeDateKey !== todayKey) {
+    engineState.lastMorningTradeDateKey = todayKey;
+    engineState.morningTradesToday = 0;
+
+    saveRecentOrder("MORNING_TRADE_COUNTER_RESET", "STOCK", {
+      todayKey,
+      maxMorningTradesPerDay: CONFIG.maxMorningTradesPerDay,
+    });
+
+    saveEngineState("MORNING_TRADE_COUNTER_RESET");
+  }
+}
+
+function canTakeMoreMorningTrades() {
+  resetMorningTradeCounterIfNewDay();
+
+  return Number(engineState.morningTradesToday || 0) <
+    Number(CONFIG.maxMorningTradesPerDay || 2);
+}
+
+function markMorningTradeUsed(symbol) {
+  resetMorningTradeCounterIfNewDay();
+
+  engineState.morningTradesToday =
+    Number(engineState.morningTradesToday || 0) + 1;
+
+  saveRecentOrder("MORNING_TRADE_USED", symbol, {
+    morningTradesToday: engineState.morningTradesToday,
+    maxMorningTradesPerDay: CONFIG.maxMorningTradesPerDay,
+    dateKey: engineState.lastMorningTradeDateKey,
+  });
+
+  saveEngineState("MORNING_TRADE_USED");
 }
 
 function shouldSkipFromTradeMemory(symbol) {
@@ -1142,6 +1255,439 @@ function getBotExposure(openPositions = []) {
     return sum + Math.abs(Number(position.market_value || 0));
   }, 0);
 }
+
+function getEasternMarketMinutes() {
+  const parts = new Intl.DateTimeFormat("en-US", {
+    timeZone: "America/New_York",
+    hour: "2-digit",
+    minute: "2-digit",
+    hour12: false,
+  }).formatToParts(new Date());
+
+  const hour = Number(parts.find((part) => part.type === "hour")?.value || 0);
+  const minute = Number(parts.find((part) => part.type === "minute")?.value || 0);
+
+  return hour * 60 + minute;
+}
+
+function isPremarketMomentumWindow() {
+  const minutes = getEasternMarketMinutes();
+
+  return minutes >= 4 * 60 && minutes < 9 * 60 + 30;
+}
+
+function isMorningStrikeWindow() {
+  const minutes = getEasternMarketMinutes();
+
+  const startMinutes =
+    Number(CONFIG.morningStrikeStartHourET || 9) * 60 + 30;
+
+  const endMinutes =
+    Number(CONFIG.morningStrikeEndHourET || 11) * 60;
+
+  return minutes >= startMinutes && minutes <= endMinutes;
+}
+
+function calculatePremarketMomentumEngine(signal = {}) {
+  const symbol = normalizeSymbol(signal.symbol);
+
+  const currentPrice = Number(
+    signal.current ||
+      signal.price ||
+      signal.c ||
+      0
+  );
+
+  const previousClose = Number(
+    signal.previousClose ||
+      signal.prevClose ||
+      signal.pc ||
+      0
+  );
+
+  const percentChange = Number(
+    signal.percentChange ||
+      signal.changePercent ||
+      (
+        previousClose > 0 && currentPrice > 0
+          ? ((currentPrice - previousClose) / previousClose) * 100
+          : 0
+      )
+  );
+
+  const volume = Number(signal.volume || 0);
+  const averageVolume = Number(
+    signal.averageVolume ||
+      signal.avgVolume ||
+      signal.avgDailyVolume ||
+      0
+  );
+
+  const relativeVolume =
+    averageVolume > 0
+      ? Number((volume / averageVolume).toFixed(2))
+      : Number(signal.relativeVolume || signal.volumeSpikeRatio || 0);
+
+  const confirmations = signal.confirmations || {};
+
+  const riskyHeadlineText = (
+    confirmations.riskyNewsHeadlines ||
+    signal.newsHeadlines ||
+    []
+  )
+    .join(" ")
+    .toLowerCase();
+
+  const catalystWords = [
+    "earnings",
+    "revenue",
+    "guidance",
+    "fda",
+    "approval",
+    "contract",
+    "partnership",
+    "acquisition",
+    "buyout",
+    "merger",
+    "upgrade",
+    "analyst",
+    "ai",
+    "patent",
+    "trial",
+    "phase 2",
+    "phase 3",
+    "record",
+  ];
+
+  const negativeCatalystWords = [
+    "offering",
+    "bankruptcy",
+    "delisting",
+    "investigation",
+    "lawsuit",
+    "downgrade",
+    "misses",
+    "cuts guidance",
+    "weak guidance",
+  ];
+
+  const catalystHits = catalystWords.filter((word) =>
+    riskyHeadlineText.includes(word)
+  );
+
+  const negativeCatalystHits = negativeCatalystWords.filter((word) =>
+    riskyHeadlineText.includes(word)
+  );
+
+  const gapStrengthScore = clampScore(
+    40 +
+      (percentChange >= Number(CONFIG.minPremarketGapPercent || 5) ? 15 : 0) +
+      (percentChange >= 10 ? 15 : 0) +
+      (percentChange >= 20 ? 10 : 0) +
+      (percentChange >= 40 ? 5 : 0) -
+      (percentChange <= 0 ? 25 : 0)
+  );
+
+  const relativeVolumeScore = clampScore(
+    35 +
+      (relativeVolume >= Number(CONFIG.minPremarketRelativeVolume || 3) ? 20 : 0) +
+      (relativeVolume >= 5 ? 15 : 0) +
+      (relativeVolume >= 10 ? 15 : 0) +
+      (volume >= Number(CONFIG.minVolume || 4000) ? 10 : -15)
+  );
+
+  const catalystStrength = clampScore(
+    45 +
+      catalystHits.length * 12 -
+      negativeCatalystHits.length * 18 +
+      (catalystHits.length > 0 && percentChange > 0 ? 10 : 0)
+  );
+
+  const liquidityQuality = clampScore(
+    35 +
+      (volume >= 1000000 ? 35 : 0) +
+      (volume >= 250000 ? 20 : 0) +
+      (volume >= 50000 ? 10 : 0) +
+      (currentPrice >= Number(CONFIG.minStockPrice || 1) ? 10 : -20)
+  );
+
+  const premarketTrendScore = clampScore(
+    40 +
+      (percentChange > 0 ? 15 : -20) +
+      (relativeVolume >= 3 ? 15 : 0) +
+      (confirmations.closeNearHigh ? 10 : 0) +
+      (confirmations.aboveVwap ? 10 : 0) -
+      (confirmations.fakeBreakout ? 20 : 0)
+  );
+
+  const fadeRisk = clampScore(
+    35 +
+      (percentChange >= 50 ? 20 : 0) +
+      (relativeVolume < 1.5 ? 20 : 0) +
+      (confirmations.fakeBreakout ? 25 : 0) +
+      (negativeCatalystHits.length > 0 ? 20 : 0) -
+      (relativeVolume >= 5 ? 15 : 0) -
+      (catalystHits.length > 0 ? 10 : 0)
+  );
+
+  const openingDriveProbability = clampScore(
+    gapStrengthScore * 0.25 +
+      relativeVolumeScore * 0.3 +
+      catalystStrength * 0.2 +
+      premarketTrendScore * 0.15 +
+      liquidityQuality * 0.1 -
+      fadeRisk * 0.15
+  );
+
+  const morningMomentumScore = clampScore(
+    relativeVolumeScore * 0.3 +
+      catalystStrength * 0.25 +
+      premarketTrendScore * 0.2 +
+      gapStrengthScore * 0.15 +
+      liquidityQuality * 0.1 -
+      fadeRisk * 0.1
+  );
+
+  const morningTier =
+    morningMomentumScore >= 82 && openingDriveProbability >= 75
+      ? "TIER_1_ATTACK"
+      : morningMomentumScore >= 68
+      ? "TIER_2_WATCH"
+      : "IGNORE";
+
+  return {
+    symbol,
+    phase: "16.2_PREMARKET_MOMENTUM_ENGINE",
+    premarketGapPercent: Number(percentChange.toFixed(2)),
+    premarketPrice: Number(currentPrice.toFixed(4)),
+    previousClose: Number(previousClose.toFixed(4)),
+    premarketVolume: volume,
+    relativeVolume,
+    gapStrengthScore,
+    relativeVolumeScore,
+    catalystStrength,
+    catalystHits,
+    negativeCatalystHits,
+    liquidityQuality,
+    premarketTrendScore,
+    fadeRisk,
+    openingDriveProbability,
+    morningMomentumScore,
+    morningTier,
+    isPremarketWindow: isPremarketMomentumWindow(),
+    isMorningStrikeWindow: isMorningStrikeWindow(),
+    reason:
+      `${morningTier} • Gap ${percentChange.toFixed(2)}% • ` +
+      `RVOL ${relativeVolume}x • Catalyst ${catalystStrength}/100 • ` +
+      `OpenDrive ${openingDriveProbability}/100`,
+  };
+}
+
+function updatePremarketMomentumState(signals = []) {
+  const analyzedSignals = Array.isArray(signals) ? signals : [];
+
+  const reviewedCandidates = analyzedSignals
+    .filter((signal) => {
+      const assetClass = signal.assetClass || signal.asset_class || "stock";
+      return assetClass === "stock";
+    })
+    .map((signal) => {
+      const premarketMomentum =
+        calculatePremarketMomentumEngine(signal);
+
+      return {
+        ...signal,
+        premarketMomentum,
+        morningMomentumScore:
+          premarketMomentum.morningMomentumScore,
+        openingDriveProbability:
+          premarketMomentum.openingDriveProbability,
+        morningTier:
+          premarketMomentum.morningTier,
+      };
+    })
+    .sort(
+      (a, b) =>
+        Number(b.morningMomentumScore || 0) -
+        Number(a.morningMomentumScore || 0)
+    );
+
+  const eliteCandidates = reviewedCandidates
+    .filter(
+      (signal) =>
+        signal.premarketMomentum?.morningTier === "TIER_1_ATTACK"
+    )
+    .slice(0, Number(CONFIG.eliteMorningStrikeLimit || 2));
+
+  const state = {
+    updatedAt: new Date().toISOString(),
+    phase: "16.2_PREMARKET_MOMENTUM_ENGINE",
+    isPremarketWindow: isPremarketMomentumWindow(),
+    isMorningStrikeWindow: isMorningStrikeWindow(),
+    reviewedCount: reviewedCandidates.length,
+    eliteCount: eliteCandidates.length,
+    eliteCandidates,
+    watchlistCandidates: reviewedCandidates.slice(0, 10),
+    topTwoSymbols: eliteCandidates.map((signal) => signal.symbol),
+    reason:
+      `Premarket engine reviewed ${reviewedCandidates.length} stocks • ` +
+      `${eliteCandidates.length} elite morning strike candidates`,
+  };
+
+  engineState.premarketMomentumState = state;
+
+  engineState.premarketMomentumHistory.unshift(state);
+  engineState.premarketMomentumHistory =
+    engineState.premarketMomentumHistory.slice(0, 200);
+
+  return state;
+}
+
+function isContinuationHoldWindow() {
+  const minutes = getEasternMarketMinutes();
+
+  return minutes >=
+    Number(CONFIG.continuationHoldStartHourET || 11) * 60;
+}
+
+function calculateContinuationHoldScore(signal = {}) {
+  const symbol = normalizeSymbol(signal.symbol);
+  const score = Number(signal.score || 0);
+  const percentChange = Number(signal.percentChange || 0);
+  const volume = Number(signal.volume || 0);
+  const relativeVolume = Number(
+    signal.relativeVolume ||
+      signal.volumeSpikeRatio ||
+      signal.premarketMomentum?.relativeVolume ||
+      0
+  );
+
+  const confirmations = signal.confirmations || {};
+
+  const trendPersistenceScore = Number(
+    signal.trendPersistenceScore ||
+      engineState.trendPersistenceState?.heldSymbols?.[symbol]
+        ?.trendPersistenceScore ||
+      0
+  );
+
+  const statisticalScore = Number(
+    signal.statisticalScore ||
+      signal.statisticalEdge?.statisticalScore ||
+      0
+  );
+
+  const technicalScore = Number(
+    signal.technicalScore ||
+      signal.technicalIntelligence?.technicalScore ||
+      0
+  );
+
+  const continuationScore = clampScore(
+    score * 0.25 +
+      statisticalScore * 0.18 +
+      technicalScore * 0.18 +
+      trendPersistenceScore * 0.14 +
+      (confirmations.aboveVwap ? 8 : 0) +
+      (confirmations.closeNearHigh ? 8 : 0) +
+      (relativeVolume >= 3 ? 8 : 0) +
+      (percentChange > 0 ? 6 : -10) +
+      (volume >= 250000 ? 5 : 0) -
+      (confirmations.fakeBreakout ? 18 : 0) -
+      (confirmations.newsRisk ? 12 : 0)
+  );
+
+  const holdTier =
+    continuationScore >= 82
+      ? "ELITE_HOLD"
+      : continuationScore >= Number(CONFIG.minContinuationHoldScore || 72)
+      ? "QUALIFIED_HOLD"
+      : "NO_HOLD";
+
+  return {
+    symbol,
+    phase: "16.6_CONTINUATION_HOLD_ENGINE",
+    continuationScore,
+    holdTier,
+    score,
+    statisticalScore,
+    technicalScore,
+    trendPersistenceScore,
+    relativeVolume,
+    percentChange,
+    aboveVwap: confirmations.aboveVwap === true,
+    closeNearHigh: confirmations.closeNearHigh === true,
+    fakeBreakout: confirmations.fakeBreakout === true,
+    newsRisk: confirmations.newsRisk === true,
+    reason:
+      `${holdTier} • Continuation ${continuationScore}/100 • ` +
+      `Score ${score}/100 • RVOL ${relativeVolume}x`,
+  };
+}
+
+function updateContinuationHoldState(signals = []) {
+  const analyzedSignals = Array.isArray(signals) ? signals : [];
+
+  const rankedHolds = analyzedSignals
+    .filter((signal) => {
+      const assetClass = signal.assetClass || signal.asset_class || "stock";
+      return assetClass === "stock";
+    })
+    .map((signal) => ({
+      ...signal,
+      continuationHold:
+        calculateContinuationHoldScore(signal),
+    }))
+    .filter(
+      (signal) =>
+        signal.continuationHold.holdTier !== "NO_HOLD"
+    )
+    .sort(
+      (a, b) =>
+        Number(b.continuationHold.continuationScore || 0) -
+        Number(a.continuationHold.continuationScore || 0)
+    );
+
+  const selectedHold = rankedHolds[0] || null;
+
+  engineState.activeContinuationHoldSymbol =
+    selectedHold?.symbol || null;
+
+  const state = {
+    updatedAt: new Date().toISOString(),
+    phase: "16.6_CONTINUATION_HOLD_ENGINE",
+    isContinuationHoldWindow: isContinuationHoldWindow(),
+    reviewedCount: analyzedSignals.length,
+    qualifiedHoldCount: rankedHolds.length,
+    selectedHoldSymbol: selectedHold?.symbol || null,
+    selectedHold:
+      selectedHold
+        ? {
+            symbol: selectedHold.symbol,
+            score: selectedHold.score,
+            continuationHold:
+              selectedHold.continuationHold,
+          }
+        : null,
+    topHoldCandidates: rankedHolds.slice(
+      0,
+      Number(CONFIG.maxContinuationHoldStocks || 1)
+    ),
+    reason:
+      selectedHold
+        ? `Continuation hold selected: ${selectedHold.symbol}`
+        : "No continuation hold selected.",
+  };
+
+  engineState.continuationHoldState = state;
+
+  engineState.continuationHoldHistory.unshift(state);
+  engineState.continuationHoldHistory =
+    engineState.continuationHoldHistory.slice(0, 200);
+
+  return state;
+}
+
 function estimateSectorIntelligence(q) {
   const symbol = normalizeSymbol(q.symbol);
   const price = Number(q.current || q.price || 0);
@@ -8358,6 +8904,24 @@ engineState.statisticalMemoryState =
     200
   );
 
+  const continuationHoldState =
+    updateContinuationHoldState(results);
+
+  saveRecentOrder("CONTINUATION_HOLD_UPDATED", "STOCK", {
+    reviewedCount: continuationHoldState.reviewedCount,
+    qualifiedHoldCount: continuationHoldState.qualifiedHoldCount,
+    selectedHoldSymbol: continuationHoldState.selectedHoldSymbol,
+  });  
+
+    const premarketMomentumState =
+    updatePremarketMomentumState(results);
+
+  saveRecentOrder("PREMARKET_MOMENTUM_UPDATED", "STOCK", {
+    reviewedCount: premarketMomentumState.reviewedCount,
+    eliteCount: premarketMomentumState.eliteCount,
+    topTwoSymbols: premarketMomentumState.topTwoSymbols,
+  });
+
   return results
     .sort((a, b) => {
       if (b.score !== a.score) return b.score - a.score;
@@ -9043,6 +9607,91 @@ function calculateTrendQualityHoldDuration(signal = {}) {
   };
 }
 
+function calculateMorningProfitLockDecision({
+  symbol,
+  unrealizedPercent = 0,
+  dropFromHigh = 0,
+  isMorningStrike = false,
+}) {
+  if (!isMorningStrikeWindow() && !isMorningStrike) {
+    return {
+      shouldExit: false,
+      reason: "Not a morning strike profit-lock window.",
+      mode: "NORMAL_EXIT_RULES",
+    };
+  }
+
+  const strongMorningProfit = unrealizedPercent >= 4;
+  const moderateMorningProfit = unrealizedPercent >= 2.5;
+
+  const shouldExit =
+    (strongMorningProfit && dropFromHigh >= 0.7) ||
+    (moderateMorningProfit && dropFromHigh >= 1);
+
+  return {
+    shouldExit,
+    mode: shouldExit
+      ? "MORNING_PROFIT_LOCK_EXIT"
+      : "MORNING_PROFIT_LOCK_MONITOR",
+    reason: shouldExit
+      ? `Morning profit protected for ${symbol}.`
+      : `Morning profit still healthy for ${symbol}.`,
+    strongMorningProfit,
+    moderateMorningProfit,
+    profitPercent: Number(unrealizedPercent.toFixed(2)),
+    dropFromHigh: Number(dropFromHigh.toFixed(2)),
+  };
+}
+
+
+function calculateContinuationHoldExitDecision({
+  symbol,
+  unrealizedPercent = 0,
+  dropFromHigh = 0,
+}) {
+  const cleanSymbol = normalizeSymbol(symbol);
+  const selectedHoldSymbol =
+    normalizeSymbol(engineState.activeContinuationHoldSymbol);
+
+  if (!isContinuationHoldWindow()) {
+    return {
+      shouldExit: false,
+      shouldProtectHold: false,
+      mode: "BEFORE_CONTINUATION_HOLD_WINDOW",
+      reason: "Continuation hold window has not started.",
+    };
+  }
+
+  const isSelectedHold =
+    selectedHoldSymbol &&
+    cleanSymbol === selectedHoldSymbol;
+
+  if (isSelectedHold) {
+    return {
+      shouldExit: false,
+      shouldProtectHold: true,
+      mode: "SELECTED_CONTINUATION_HOLD",
+      reason: `${cleanSymbol} is the selected continuation hold stock.`,
+    };
+  }
+
+  const shouldExit =
+    unrealizedPercent > 0
+      ? dropFromHigh >= 1
+      : unrealizedPercent <= -1;
+
+  return {
+    shouldExit,
+    shouldProtectHold: false,
+    mode: shouldExit
+      ? "EXIT_NON_SELECTED_MORNING_STOCK"
+      : "NON_SELECTED_STOCK_MONITOR",
+    reason: shouldExit
+      ? `${cleanSymbol} is not the selected continuation hold after 11AM.`
+      : `${cleanSymbol} is not selected, but exit trigger has not fired yet.`,
+  };
+}
+
 function calculateTrendPersistenceHoldDecision({
   unrealizedPercent = 0,
   dropFromHigh = 0,
@@ -9171,8 +9820,28 @@ const adaptiveSwingRisk = calculateAdaptiveSwingRisk(
     }
 
     const isRunner = Boolean(engineState.runnerPositions[symbol]);
-
     const shouldStopLoss = unrealizedPercent <= adaptiveSwingRisk.stopLossPercent;
+       const continuationHoldExitDecision =
+      calculateContinuationHoldExitDecision({
+        symbol,
+        unrealizedPercent,
+        dropFromHigh,
+      }); 
+    const isMorningStrikePosition =
+      engineState.aiEntryScores?.[symbol]?.entryType === "MORNING_STRIKE" ||
+      engineState.aiEntryScores?.[symbol]?.morningStrike === true ||
+      engineState.morningStrikeState?.selectedSymbols?.some(
+        (selectedSymbol) =>
+          normalizeSymbol(selectedSymbol) === symbol
+      );
+
+    const morningProfitLockDecision =
+      calculateMorningProfitLockDecision({
+        symbol,
+        unrealizedPercent,
+        dropFromHigh,
+        isMorningStrike: isMorningStrikePosition,
+      });   
     const shouldProtectProfit =
       unrealizedPercent >= 2 &&
       dropFromHigh >= 0.8;
@@ -9214,8 +9883,10 @@ const shouldNormalTrailingExit =
       isRunner && dropFromHigh >= dynamicRunnerTrailingStopPercent;
  if (
   (trendHoldDecision.shouldHold ||
-    trendQualityHold.shouldExtendHold) &&
-  !shouldStopLoss
+    trendQualityHold.shouldExtendHold ||
+    continuationHoldExitDecision.shouldProtectHold) &&
+  !shouldStopLoss &&
+  !continuationHoldExitDecision.shouldExit
 ) {
       saveRecentOrder("TREND_PERSISTENCE_HOLD", symbol, {
         qty,
@@ -9236,7 +9907,8 @@ const shouldNormalTrailingExit =
       !shouldStopLoss &&
       !shouldProtectProfit &&
       !shouldNormalTrailingExit &&
-      !shouldRunnerTrailingExit
+      !shouldRunnerTrailingExit &&
+      !continuationHoldExitDecision.shouldExit
     ) {
       continue;
     }
@@ -9244,6 +9916,7 @@ const shouldNormalTrailingExit =
     let reason = "AI_EXIT";
 
     if (shouldStopLoss) reason = "STOP_LOSS";
+    else if (continuationHoldExitDecision.shouldExit) reason = "NON_SELECTED_CONTINUATION_EXIT";
     else if (shouldRunnerTrailingExit) reason = "RUNNER_TRAILING_STOP";
     else if (shouldProtectProfit) reason = "PROFIT_PROTECTION";
     else if (shouldNormalTrailingExit) reason = "TRAILING_STOP";
@@ -9706,6 +10379,16 @@ const portfolioManager =
 async function autoBuySignals(signals = []) {
   if (!["live_stock", "smart"].includes(TRADING_MODE)) return;
 
+  resetMorningTradeCounterIfNewDay();
+
+  if (!canTakeMoreMorningTrades()) {
+    saveRecentOrder("AUTO_STOCK_BUY_SKIPPED_DAILY_LIMIT", "STOCK", {
+      morningTradesToday: engineState.morningTradesToday,
+      maxMorningTradesPerDay: CONFIG.maxMorningTradesPerDay,
+    });
+    return;
+  }  
+
   const clock = await getClock();
   const allowClosedMarketStockBuying = true;
 
@@ -9776,7 +10459,7 @@ const executableSymbols = new Set(
   ).map((signal) => normalizeSymbol(signal.symbol))
 );
 
-const candidates = frozenApprovedSignals
+const baseCandidates = frozenApprovedSignals
   .filter((signal) => {
     const symbol = normalizeSymbol(signal.symbol);
     const score = Number(signal.score || 0);
@@ -9800,19 +10483,76 @@ const candidates = frozenApprovedSignals
     );
   })
   .filter((signal) => Number(signal.score || 0) >= CONFIG.minScoreToBuy)
-    
-    .filter((signal) => {
-      const symbol = normalizeSymbol(signal.symbol);
-      const lastSold = engineState.lastSoldAt[symbol] || 0;
+  .filter((signal) => {
+    const symbol = normalizeSymbol(signal.symbol);
+    const lastSold = engineState.lastSoldAt[symbol] || 0;
 
-      return (
-        !aiOwnedSymbols.has(symbol) &&
-        !positions.some((p) => normalizeSymbol(p.symbol) === symbol) &&
-        Date.now() - lastSold > 120000
-      );
-    })
-    .sort((a, b) => Number(b.score || 0) - Number(a.score || 0))
-    .slice(0, openSlots);
+    return (
+      !aiOwnedSymbols.has(symbol) &&
+      !positions.some((p) => normalizeSymbol(p.symbol) === symbol) &&
+      Date.now() - lastSold > 120000
+    );
+  });
+
+const morningStrikeSymbols = new Set(
+  (
+    engineState.premarketMomentumState?.eliteCandidates || []
+  ).map((signal) => normalizeSymbol(signal.symbol))
+);
+
+const morningStrikeCandidates = baseCandidates
+  .filter((signal) =>
+    morningStrikeSymbols.has(normalizeSymbol(signal.symbol))
+  )
+  .sort(
+    (a, b) =>
+      Number(b.morningMomentumScore || b.premarketMomentum?.morningMomentumScore || b.score || 0) -
+      Number(a.morningMomentumScore || a.premarketMomentum?.morningMomentumScore || a.score || 0)
+  )
+  .slice(0, Math.min(openSlots, Number(CONFIG.eliteMorningStrikeLimit || 2)));
+
+const fallbackCandidates = baseCandidates
+  .filter(
+    (signal) =>
+      !morningStrikeSymbols.has(normalizeSymbol(signal.symbol))
+  )
+  .sort((a, b) => Number(b.score || 0) - Number(a.score || 0))
+  .slice(0, Math.max(0, openSlots - morningStrikeCandidates.length));
+
+const remainingMorningTrades = Math.max(
+  0,
+  Number(CONFIG.maxMorningTradesPerDay || 2) -
+    Number(engineState.morningTradesToday || 0)
+);
+
+const effectiveOpenSlots = Math.min(
+  openSlots,
+  remainingMorningTrades
+);
+
+const candidates = [
+  ...morningStrikeCandidates,
+  ...fallbackCandidates,
+].slice(0, effectiveOpenSlots);
+
+engineState.morningStrikeState = {
+  updatedAt: new Date().toISOString(),
+  phase: "16.3_TOP_TWO_MORNING_STRIKE_SELECTOR",
+  isMorningStrikeWindow: isMorningStrikeWindow(),
+  openSlots,
+  baseCandidateCount: baseCandidates.length,
+  morningStrikeCandidateCount: morningStrikeCandidates.length,
+  fallbackCandidateCount: fallbackCandidates.length,
+  selectedSymbols: candidates.map((signal) => signal.symbol),
+  topMorningStrikeSymbols: Array.from(morningStrikeSymbols).slice(0, 5),
+  reason:
+    `Selected ${candidates.length} stock candidates • ` +
+    `${morningStrikeCandidates.length} from elite morning strike list`,
+};
+
+engineState.morningStrikeHistory.unshift(engineState.morningStrikeState);
+engineState.morningStrikeHistory =
+  engineState.morningStrikeHistory.slice(0, 200);
 
 let successfulStockBuysThisCycle = 0;
   for (const candidate of candidates) {
@@ -9934,6 +10674,8 @@ const portfolioManager =
         parliamentGate,
         adaptiveExecution,
       });
+
+      markMorningTradeUsed(symbol);
       successfulStockBuysThisCycle += 1;
 
 if (successfulStockBuysThisCycle >= openSlots) {
@@ -12281,6 +13023,12 @@ statisticalEdgeHistory:
       "maxPercentChange",
       "maxSignalsToReturn",
       "topAutoTradeCandidates",
+      "maxMorningTradesPerDay",
+      "morningStrikeStartHourET",
+      "morningStrikeEndHourET",
+      "minPremarketGapPercent",
+      "minPremarketRelativeVolume",
+      "eliteMorningStrikeLimit",
       "enableMarketRegimeEngine",
       "aggressiveBullishExposureMultiplier",
       "cautiousBullishExposureMultiplier",
@@ -12728,6 +13476,76 @@ saveRecentOrder("MANUAL_DAILY_LOCK_RESET", "ACCOUNT", {
       engineState,
     });
   });
+
+  app.get("/morning-strike", async (req, res) => {
+  try {
+    resetMorningTradeCounterIfNewDay();
+
+    res.json({
+      ok: true,
+
+      premarketMomentumState:
+        engineState.premarketMomentumState || null,
+
+      morningStrikeState:
+        engineState.morningStrikeState || null,
+
+      continuationHoldState:
+        engineState.continuationHoldState || null,
+
+      activeContinuationHoldSymbol:
+        engineState.activeContinuationHoldSymbol || null,
+
+      morningTradeLimit: {
+        morningTradesToday:
+          engineState.morningTradesToday || 0,
+        maxMorningTradesPerDay:
+          CONFIG.maxMorningTradesPerDay,
+        remainingMorningTrades:
+          Math.max(
+            0,
+            Number(CONFIG.maxMorningTradesPerDay || 2) -
+              Number(engineState.morningTradesToday || 0)
+          ),
+        lastMorningTradeDateKey:
+          engineState.lastMorningTradeDateKey || null,
+      },
+
+      windows: {
+        isPremarketWindow:
+          isPremarketMomentumWindow(),
+        isMorningStrikeWindow:
+          isMorningStrikeWindow(),
+        isContinuationHoldWindow:
+          isContinuationHoldWindow(),
+      },
+
+      premarketMomentumHistory:
+        (engineState.premarketMomentumHistory || []).slice(
+          0,
+          20
+        ),
+
+      morningStrikeHistory:
+        (engineState.morningStrikeHistory || []).slice(
+          0,
+          20
+        ),
+
+      continuationHoldHistory:
+        (engineState.continuationHoldHistory || []).slice(
+          0,
+          20
+        ),
+    });
+  } catch (err) {
+    res.status(500).json({
+      ok: false,
+      error: err.message,
+    });
+  }
+});
+
   app.get("/trade-journal", async (req, res) => {
   try {
     ensureTradeJournalState();
