@@ -2473,12 +2473,19 @@ function updatePremarketDominanceState(signals = []) {
       const assetClass = signal.assetClass || signal.asset_class || "stock";
       return assetClass === "stock";
     })
-    .map((signal) => ({
-      ...signal,
-      premarketDominance:
-        signal.premarketDominance ||
-        calculatePremarketDominanceEngine(signal),
-    }))
+.map((signal) => {
+  const premarketDominance =
+    signal.premarketDominance ||
+    calculatePremarketDominanceEngine(signal);
+
+  return {
+    ...signal,
+    premarketDominance,
+    premarketDominanceScore:
+      Number(premarketDominance?.premarketDominanceScore || 0),
+  };
+
+})
     .sort(
       (a, b) =>
         Number(b.premarketDominance?.premarketDominanceScore || 0) -
@@ -12351,6 +12358,24 @@ qualifiedToBuy:
   results.length = 0;
   results.push(...themeBoostedResults);
 
+  
+  const refreshedFullInstitutionalAiBrainState =
+    updateFullInstitutionalAiBrainState(results);
+
+  for (const signal of results) {
+    const rankedSignal =
+      refreshedFullInstitutionalAiBrainState.rankedOpportunities.find(
+        (item) => normalizeSymbol(item.symbol) === normalizeSymbol(signal.symbol)
+      );
+
+    if (rankedSignal?.fullInstitutionalAiBrain) {
+      signal.fullInstitutionalAiBrain =
+        rankedSignal.fullInstitutionalAiBrain;
+
+      signal.institutionalBrainScore =
+        Number(rankedSignal.institutionalBrainScore || 0);
+    }
+  }
 
   const statisticalEdgeSignals = results.filter(
     (signal) => Number(signal.statisticalScore || 0) >= 70
