@@ -12198,6 +12198,15 @@ qualifiedToBuy:
     signal.adaptiveRunnerScore =
       adaptiveRunnerLearning.breakoutProbability;
 
+    signal.runnerScore =
+      Number(
+        signal.explosiveRunnerScore ||
+        signal.explosiveRunnerPrediction?.explosiveRunnerScore ||
+        signal.adaptiveRunnerScore ||
+        adaptiveRunnerLearning.breakoutProbability ||
+        0
+      );
+
     if (
       Number(adaptiveRunnerLearning.adaptiveRunnerBoost || 0) !== 0
     ) {
