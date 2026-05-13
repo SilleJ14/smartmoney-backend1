@@ -425,6 +425,12 @@ smartExitIntelligenceState:
 smartExitIntelligenceHistory:
   (engineState.smartExitIntelligenceHistory || []).slice(0, 200),  
 
+institutionalExitOrchestratorState:
+  engineState.institutionalExitOrchestratorState || null,
+
+institutionalExitOrchestratorHistory:
+  (engineState.institutionalExitOrchestratorHistory || []).slice(0, 200),  
+
 phase21AutonomousBrainHistory:
   (engineState.phase21AutonomousBrainHistory || []).slice(0, 200),
       pendingExits: engineState.pendingExits || [],
@@ -748,6 +754,8 @@ continuationHoldHistory: [],
 activeContinuationHoldSymbol: null,
 smartExitIntelligenceState: null,
 smartExitIntelligenceHistory: [],
+institutionalExitOrchestratorState: null,
+institutionalExitOrchestratorHistory: [],
 premarketMomentumState: null,
 premarketMomentumHistory: [],
 morningStrikeState: null,
@@ -10153,6 +10161,159 @@ function calculateSmartExitIntelligence({
   };
 }
 
+function calculateInstitutionalExitOrchestrator({
+  symbol,
+  qty = 0,
+  unrealizedPercent = 0,
+  dropFromHigh = 0,
+  isRunner = false,
+  smartExitDecision = {},
+  trendHoldDecision = {},
+  continuationHoldExitDecision = {},
+  adaptiveSwingRisk = {},
+}) {
+  const cleanSymbol = normalizeSymbol(symbol);
+
+  const latestSignal = (engineState.lastSignals || []).find(
+    (signal) => normalizeSymbol(signal.symbol) === cleanSymbol
+  );
+
+  const executionReview =
+    engineState.executionIntelligenceState?.executionReviews?.find(
+      (review) => normalizeSymbol(review.symbol) === cleanSymbol
+    );
+
+  const score = Number(
+    latestSignal?.score ||
+      engineState.aiEntryScores?.[cleanSymbol]?.score ||
+      0
+  );
+
+  const technicalScore = Number(
+    latestSignal?.technicalScore ||
+      engineState.aiEntryScores?.[cleanSymbol]?.technicalScore ||
+      0
+  );
+
+  const continuationProbability = Number(
+    latestSignal?.continuationProbability || 0
+  );
+
+  const executionConfidence = Number(
+    executionReview?.executionConfidence || 0
+  );
+
+  const liquidityQuality = Number(
+    executionReview?.signalLiquidityQuality ||
+      engineState.liquidityIntelligenceState?.averageExecutionQuality ||
+      50
+  );
+
+  const exitPressureScore = clampScore(
+    35 +
+      (dropFromHigh >= 0.8 ? 10 : 0) +
+      (dropFromHigh >= 1.5 ? 15 : 0) +
+      (dropFromHigh >= 3 ? 20 : 0) +
+      (unrealizedPercent <= -1 ? 20 : 0) +
+      (smartExitDecision.shouldForceExit ? 30 : 0) +
+      (continuationHoldExitDecision.shouldExit ? 20 : 0) -
+      (score >= 75 ? 10 : 0) -
+      (technicalScore >= 75 ? 10 : 0) -
+      (continuationProbability >= 75 ? 12 : 0) -
+      (executionConfidence >= 70 ? 8 : 0)
+  );
+
+  const runnerProtectionScore = clampScore(
+    45 +
+      (isRunner ? 20 : 0) +
+      (unrealizedPercent >= 6 ? 15 : 0) +
+      (unrealizedPercent >= 10 ? 15 : 0) +
+      (continuationProbability >= 75 ? 12 : 0) +
+      (technicalScore >= 75 ? 10 : 0) -
+      (dropFromHigh >= 2 ? 15 : 0) -
+      (dropFromHigh >= 4 ? 25 : 0)
+  );
+
+  const currentLadder =
+    engineState.runnerPositions?.[cleanSymbol]?.institutionalExitLadder || {};
+
+  const shouldScaleFirstProfit =
+    unrealizedPercent >= 4 &&
+    !currentLadder.firstScaleTaken &&
+    qty >= 2 &&
+    exitPressureScore >= 45;
+
+  const shouldScaleSecondProfit =
+    unrealizedPercent >= 8 &&
+    !currentLadder.secondScaleTaken &&
+    qty >= 2 &&
+    dropFromHigh >= 0.75;
+
+  const shouldProtectRunner =
+    isRunner &&
+    runnerProtectionScore >= 70 &&
+    exitPressureScore < 70;
+
+  const shouldForceExit =
+    smartExitDecision.shouldForceExit ||
+    continuationHoldExitDecision.shouldExit ||
+    exitPressureScore >= 85;
+
+  const shouldHold =
+    !shouldForceExit &&
+    (
+      shouldProtectRunner ||
+      trendHoldDecision.shouldHold ||
+      smartExitDecision.shouldExtendHold
+    );
+
+  const scalePercent =
+    shouldScaleSecondProfit
+      ? 0.5
+      : shouldScaleFirstProfit
+      ? 0.35
+      : 0;
+
+  const exitOrchestrationMode =
+    shouldForceExit
+      ? "INSTITUTIONAL_FORCE_EXIT"
+      : shouldScaleSecondProfit
+      ? "SECOND_PROFIT_SCALE"
+      : shouldScaleFirstProfit
+      ? "FIRST_PROFIT_SCALE"
+      : shouldHold
+      ? "INSTITUTIONAL_RUNNER_HOLD"
+      : "STANDARD_EXIT_MONITOR";
+
+  return {
+    symbol: cleanSymbol,
+    phase: "17.7_INSTITUTIONAL_EXIT_ORCHESTRATOR",
+    exitOrchestrationMode,
+    exitPressureScore,
+    runnerProtectionScore,
+    shouldForceExit,
+    shouldHold,
+    shouldProtectRunner,
+    shouldScaleProfit:
+      shouldScaleFirstProfit || shouldScaleSecondProfit,
+    scalePercent,
+    scaleLevel:
+      shouldScaleSecondProfit
+        ? "SECOND_SCALE"
+        : shouldScaleFirstProfit
+        ? "FIRST_SCALE"
+        : "NO_SCALE",
+    score,
+    technicalScore,
+    continuationProbability,
+    executionConfidence,
+    liquidityQuality,
+    reason:
+      `${exitOrchestrationMode} • Pressure ${exitPressureScore}/100 • ` +
+      `RunnerProtect ${runnerProtectionScore}/100 • Profit ${unrealizedPercent.toFixed(2)}%`,
+  };
+}
+
 function calculateTrendPersistenceHoldDecision({
   unrealizedPercent = 0,
   dropFromHigh = 0,
@@ -10361,7 +10522,31 @@ const shouldNormalTrailingExit =
     });
 
     engineState.smartExitIntelligenceHistory =
-      engineState.smartExitIntelligenceHistory.slice(0, 200);      
+      engineState.smartExitIntelligenceHistory.slice(0, 200); 
+      
+    const institutionalExitDecision =
+      calculateInstitutionalExitOrchestrator({
+        symbol,
+        qty,
+        unrealizedPercent,
+        dropFromHigh,
+        isRunner,
+        smartExitDecision,
+        trendHoldDecision,
+        continuationHoldExitDecision,
+        adaptiveSwingRisk,
+      });
+
+    engineState.institutionalExitOrchestratorState =
+      institutionalExitDecision;
+
+    engineState.institutionalExitOrchestratorHistory.unshift({
+      ...institutionalExitDecision,
+      updatedAt: new Date().toISOString(),
+    });
+
+    engineState.institutionalExitOrchestratorHistory =
+      engineState.institutionalExitOrchestratorHistory.slice(0, 200);      
 
     const shouldRunnerTrailingExit =
       isRunner && dropFromHigh >= dynamicRunnerTrailingStopPercent;
@@ -10370,11 +10555,13 @@ const shouldNormalTrailingExit =
     trendHoldDecision.shouldHold ||
     trendQualityHold.shouldExtendHold ||
     continuationHoldExitDecision.shouldProtectHold ||
-    smartExitDecision.shouldExtendHold
+    smartExitDecision.shouldExtendHold ||
+    institutionalExitDecision.shouldHold
   ) &&
   !shouldStopLoss &&
   !continuationHoldExitDecision.shouldExit &&
-  !smartExitDecision.shouldForceExit
+  !smartExitDecision.shouldForceExit &&
+  !institutionalExitDecision.shouldForceExit
 ) {
       saveRecentOrder("SMART_EXIT_HOLD", symbol, {
         qty,
@@ -10391,6 +10578,65 @@ const shouldNormalTrailingExit =
 
       continue;
     }
+    if (
+      institutionalExitDecision.shouldScaleProfit &&
+      marketOpen &&
+      qty >= 2
+    ) {
+      try {
+        const scaleQty = Math.max(
+          1,
+          Math.floor(qty * institutionalExitDecision.scalePercent)
+        );
+
+        const scaleOrder = await placeMarketSell(
+          symbol,
+          scaleQty,
+          institutionalExitDecision.scaleLevel
+        );
+
+        engineState.runnerPositions[symbol] = {
+          ...(engineState.runnerPositions[symbol] || {}),
+          institutionalExitLadder: {
+            ...(engineState.runnerPositions[symbol]?.institutionalExitLadder || {}),
+            firstScaleTaken:
+              institutionalExitDecision.scaleLevel === "FIRST_SCALE"
+                ? true
+                : engineState.runnerPositions[symbol]?.institutionalExitLadder?.firstScaleTaken || false,
+            secondScaleTaken:
+              institutionalExitDecision.scaleLevel === "SECOND_SCALE"
+                ? true
+                : engineState.runnerPositions[symbol]?.institutionalExitLadder?.secondScaleTaken || false,
+            lastScaleTakenAt: new Date().toISOString(),
+            lastScaleProfitPercent: unrealizedPercent,
+            lastScaleQty: scaleQty,
+          },
+        };
+
+        saveRecentOrder("INSTITUTIONAL_PROFIT_SCALE_OUT", symbol, {
+          scaleQty,
+          remainingQty: qty - scaleQty,
+          price: currentPrice,
+          profitPercent: unrealizedPercent,
+          dropFromHigh,
+          institutionalExitDecision,
+          scaleOrder,
+        });
+
+        saveEngineState("INSTITUTIONAL_PROFIT_SCALE_OUT");
+
+        continue;
+      } catch (err) {
+        saveFailedOrder("INSTITUTIONAL_PROFIT_SCALE_FAILED", symbol, err.message, {
+          qty,
+          price: currentPrice,
+          profitPercent: unrealizedPercent,
+          dropFromHigh,
+          institutionalExitDecision,
+        });
+      }
+    }
+
 
         if (
       smartExitDecision.shouldPartialProfit &&
@@ -10444,7 +10690,8 @@ const shouldNormalTrailingExit =
       !shouldNormalTrailingExit &&
       !shouldRunnerTrailingExit &&
       !continuationHoldExitDecision.shouldExit &&
-      !smartExitDecision.shouldForceExit
+      !smartExitDecision.shouldForceExit &&
+      !institutionalExitDecision.shouldForceExit
     ) {
       continue;
     }
@@ -10455,6 +10702,7 @@ const shouldNormalTrailingExit =
     else if (smartExitDecision.continuationFailure) reason = "CONTINUATION_FAILURE_EXIT";
     else if (smartExitDecision.runnerFailure) reason = "RUNNER_FAILURE_EXIT";
     else if (smartExitDecision.shouldForceExit) reason = "SMART_FORCE_EXIT";
+    else if (institutionalExitDecision.shouldForceExit) reason = "INSTITUTIONAL_FORCE_EXIT";    
     else if (continuationHoldExitDecision.shouldExit) reason = "NON_SELECTED_CONTINUATION_EXIT";
     else if (shouldRunnerTrailingExit) reason = "RUNNER_TRAILING_STOP";
     else if (shouldProtectProfit) reason = "PROFIT_PROTECTION";
@@ -10567,7 +10815,8 @@ saveRecentOrder(reason, symbol, {
         highWater,
         dropFromHigh,
         profitPercent: unrealizedPercent,
-        smartExitDecision,      
+        smartExitDecision,  
+        institutionalExitDecision,            
         isRunner,
         order,
       });
