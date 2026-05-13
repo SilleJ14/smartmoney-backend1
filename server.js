@@ -15458,6 +15458,21 @@ let successfulStockBuysThisCycle = 0;
       });
       continue;
     }
+
+    const provisionalTradeAmount =
+      getDynamicTradeAmount(account, aiPositions, candidate.score);
+
+    const institutionalExecutionPlan =
+      calculateInstitutionalExecutionPlan(
+        candidate,
+        provisionalTradeAmount
+      );
+
+    candidate.institutionalExecutionPlan =
+      institutionalExecutionPlan;
+    candidate.executionConfidence =
+      institutionalExecutionPlan.executionConfidence;
+
 const portfolioManager =
   typeof calculateAiPortfolioManagerDecision === "function"
     ? calculateAiPortfolioManagerDecision(
@@ -15480,13 +15495,7 @@ const portfolioManager =
 
     const baseTradeAmount =
       Number(portfolioManager.recommendedTradeAmount || 0) ||
-      getDynamicTradeAmount(account, aiPositions, candidate.score);
-
-    const institutionalExecutionPlan =
-      calculateInstitutionalExecutionPlan(
-        candidate,
-        baseTradeAmount
-      );
+      provisionalTradeAmount;
 
     if (
       institutionalExecutionPlan.executionMode ===
@@ -17263,6 +17272,54 @@ engineState.analyticsSnapshots =
 
     const volatilityLocked =
       engineState.marketVolatility >= 18;
+
+    const portfolioRefreshAccount =
+      engineState.cachedAccount || account;
+
+    const portfolioRefreshPositions =
+      Array.isArray(engineState.cachedPositions)
+        ? engineState.cachedPositions.filter((position) => {
+            const symbol = normalizeSymbol(position.symbol);
+
+            if (!symbol) return false;
+
+            if (
+              Array.isArray(engineState.aiManagedSymbols) &&
+              engineState.aiManagedSymbols.includes(symbol)
+            ) {
+              return true;
+            }
+
+            return String(position.asset_class || "").toLowerCase() === "us_equity";
+          })
+        : [];
+
+    for (const signal of stockSignals) {
+      if (
+        !signal.institutionalExecutionPlan &&
+        typeof calculateInstitutionalExecutionPlan === "function"
+      ) {
+        const refreshExecutionPlan =
+          calculateInstitutionalExecutionPlan(signal, 0);
+
+        signal.institutionalExecutionPlan = refreshExecutionPlan;
+        signal.executionConfidence =
+          refreshExecutionPlan.executionConfidence;
+      }
+
+      const refreshedPortfolioManager =
+        calculateAiPortfolioManagerDecision(
+          signal,
+          portfolioRefreshAccount,
+          portfolioRefreshPositions,
+          engineState.marketRegime || detectMarketRegime(stockSignals)
+        );
+
+      Object.assign(signal, refreshedPortfolioManager);
+    }
+
+    engineState.lastSignals = signals;
+    engineState.lastStockSignals = stockSignals;
 
     const approvedStockSignals = stockSignals.filter(
       (signal) =>
