@@ -674,7 +674,7 @@ const CONFIG = {
   
   
     maxMorningTradesPerDay: Number(
-    process.env.MAX_MORNING_TRADES_PER_DAY || 2
+    process.env.MAX_MORNING_TRADES_PER_DAY || 5
   ),
 
   morningStrikeStartHourET: Number(
@@ -2498,7 +2498,7 @@ function updatePremarketDominanceState(signals = []) {
         signal.premarketDominance?.dominanceTier
       )
     )
-    .slice(0, Number(CONFIG.eliteMorningStrikeLimit || 2));
+    .slice(0, Number(CONFIG.eliteMorningStrikeLimit || 5));
 
   const state = {
     updatedAt: new Date().toISOString(),
@@ -2566,7 +2566,7 @@ function updatePremarketMomentumState(signals = []) {
       (signal) =>
         signal.premarketMomentum?.morningTier === "TIER_1_ATTACK"
     )
-    .slice(0, Number(CONFIG.eliteMorningStrikeLimit || 2));
+    .slice(0, Number(CONFIG.eliteMorningStrikeLimit || 5));
 
   const state = {
     updatedAt: new Date().toISOString(),
@@ -4390,26 +4390,47 @@ const remainingSlots = Math.max(
   CONFIG.maxStockOpenTrades - openBotPositions.length
 );
 
-const targetAllocationPerTrade =
-  maxBotBudget / CONFIG.maxStockOpenTrades;
+const candidatePotentialScore =
+  clampScore(
+    Number(candidate.score || 0) * 0.35 +
+    Number(candidate.runnerScore || 0) * 0.2 +
+    Number(candidate.institutionalBrainScore || 0) * 0.2 +
+    Number(candidate.premarketDominanceScore || 0) * 0.15 +
+    Number(candidate.executionConfidence || 0) * 0.1
+  );
 
-const tacticalEliteFloor =
-  tacticalEliteRunnerOverride
-    ? Math.min(
-        availableBotCap,
-        targetAllocationPerTrade * 0.35
-      )
-    : 0;
+const qualifiedCandidates = candidates.filter(
+  (item) =>
+    Number(item.score || 0) >=
+    Number(CONFIG.minScoreToBuy || 0)
+);
+
+const totalPotentialScore = Math.max(
+  1,
+  qualifiedCandidates.reduce(
+    (sum, item) =>
+      sum +
+      clampScore(
+        Number(item.score || 0) * 0.35 +
+        Number(item.runnerScore || 0) * 0.2 +
+        Number(item.institutionalBrainScore || 0) * 0.2 +
+        Number(item.premarketDominanceScore || 0) * 0.15 +
+        Number(item.executionConfidence || 0) * 0.1
+      ),
+    0
+  )
+);
+
+const allocationWeight =
+  candidatePotentialScore / totalPotentialScore;
+
+const weightedTargetAllocation =
+  availableBotCap * allocationWeight;
 
 const recommendedTradeAmount = Number(
-  (
-    Math.max(
-      tacticalEliteFloor,
-      Math.min(
-        availableBotCap,
-        targetAllocationPerTrade
-      ) * allocationMultiplier
-    )
+  Math.min(
+    availableBotCap,
+    Math.max(5, weightedTargetAllocation)
   ).toFixed(2)
 );
 
@@ -17928,7 +17949,7 @@ function calculateFullInstitutionalAiBrain(signals = []) {
     rankedOpportunities: rankedOpportunities.slice(0, 20),
     masterOpportunities: masterOpportunities.slice(0, 10),
     topTwoSymbols: masterOpportunities
-      .slice(0, 2)
+      .slice(0, 5)
       .map((signal) => signal.symbol),
     crossEngineLearningActive: true,
     unifiedConsensusActive: true,
