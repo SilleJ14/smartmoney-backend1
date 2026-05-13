@@ -254,6 +254,12 @@ executionIntelligenceState:
 executionIntelligenceHistory:
   (engineState.executionIntelligenceHistory || []).slice(0, 200),  
 
+ institutionalExecutionLayerState:
+  engineState.institutionalExecutionLayerState || null,
+
+institutionalExecutionLayerHistory:
+  (engineState.institutionalExecutionLayerHistory || []).slice(0, 200),
+
 reinforcementWeightState:
   engineState.reinforcementWeightState || null,
 
@@ -271,6 +277,18 @@ marketCycleIntelligenceState:
 
 marketCycleIntelligenceHistory:
   (engineState.marketCycleIntelligenceHistory || []).slice(0, 200),  
+
+autonomousMarketIntelligenceState:
+  engineState.autonomousMarketIntelligenceState || null,
+
+autonomousMarketIntelligenceHistory:
+  (engineState.autonomousMarketIntelligenceHistory || []).slice(0, 200),
+
+marketPersonalityMemory:
+  engineState.marketPersonalityMemory || {},
+
+recurringSetupMemory:
+  engineState.recurringSetupMemory || {},
 
 liquidityIntelligenceState:
   engineState.liquidityIntelligenceState || null,
@@ -290,6 +308,12 @@ correlationIntelligenceHistory:
 portfolioGovernorHistory:
   (engineState.portfolioGovernorHistory || []).slice(0, 200),
 
+autonomousCapitalRotationState:
+  engineState.autonomousCapitalRotationState || null,
+
+autonomousCapitalRotationHistory:
+  (engineState.autonomousCapitalRotationHistory || []).slice(0, 200),
+  
 macroRiskHistory:
   (engineState.macroRiskHistory || []).slice(0, 200),
 
@@ -349,6 +373,11 @@ lastScanRecoveryAt:
   engineState.lastScanRecoveryAt || null,
 aiDecisionHistory:
   (engineState.aiDecisionHistory || []).slice(0, 500),
+
+institutionalDashboardSnapshots:
+  (
+    engineState.institutionalDashboardSnapshots || []
+  ).slice(0, 200),  
   
 recentOrders: (engineState.recentOrders || []).slice(0, 100),
 failedOrders: (engineState.failedOrders || []).slice(0, 100),
@@ -397,6 +426,12 @@ premarketMomentumState:
 
 premarketMomentumHistory:
   (engineState.premarketMomentumHistory || []).slice(0, 200),
+
+premarketDominanceState:
+  engineState.premarketDominanceState || null,
+
+premarketDominanceHistory:
+  (engineState.premarketDominanceHistory || []).slice(0, 200),  
 
 morningStrikeState:
   engineState.morningStrikeState || null,
@@ -463,6 +498,48 @@ explosiveRunnerState:
 
 explosiveRunnerHistory:
   (engineState.explosiveRunnerHistory || []).slice(0, 200),  
+
+adaptiveRunnerLearningState:
+  engineState.adaptiveRunnerLearningState || null,
+
+adaptiveRunnerLearningHistory:
+  (engineState.adaptiveRunnerLearningHistory || []).slice(0, 200),
+
+adaptiveRunnerPatternMemory:
+  engineState.adaptiveRunnerPatternMemory || {},  
+
+multiDayAccumulationState:
+  engineState.multiDayAccumulationState || null,
+
+multiDayAccumulationHistory:
+  (engineState.multiDayAccumulationHistory || []).slice(0, 200),
+
+multiDayAccumulationMemory:
+  engineState.multiDayAccumulationMemory || {},  
+
+themeMomentumState:
+  engineState.themeMomentumState || null,
+
+themeMomentumHistory:
+  (engineState.themeMomentumHistory || []).slice(0, 200),  
+
+universeExpansionState:
+  engineState.universeExpansionState || null,
+
+universeExpansionHistory:
+  (engineState.universeExpansionHistory || []).slice(0, 200),
+
+smartUniverseNarrowingState:
+  engineState.smartUniverseNarrowingState || null,
+
+smartUniverseNarrowingHistory:
+  (engineState.smartUniverseNarrowingHistory || []).slice(0, 200),  
+
+fullInstitutionalAiBrainState:
+  engineState.fullInstitutionalAiBrainState || null,
+
+fullInstitutionalAiBrainHistory:
+  (engineState.fullInstitutionalAiBrainHistory || []).slice(0, 200),  
 
 phase21AutonomousBrainHistory:
   (engineState.phase21AutonomousBrainHistory || []).slice(0, 200),
@@ -781,6 +858,8 @@ adaptiveExecutionTimingState: null,
 adaptiveExecutionTimingHistory: [],
 phase21AutonomousBrainState: null,
 phase21AutonomousBrainHistory: [],
+fullInstitutionalAiBrainState: null,
+fullInstitutionalAiBrainHistory: [],
 executionIntelligenceState: null,
 continuationHoldState: null,
 continuationHoldHistory: [],
@@ -799,27 +878,46 @@ exitParliamentState: null,
 exitParliamentHistory: [],
 explosiveRunnerState: null,
 explosiveRunnerHistory: [],
+multiDayAccumulationState: null,
+multiDayAccumulationHistory: [],
+multiDayAccumulationMemory: {},
+themeMomentumState: null,
+themeMomentumHistory: [],
+universeExpansionState: null,
+universeExpansionHistory: [],
+smartUniverseNarrowingState: null,
+smartUniverseNarrowingHistory: [],
 premarketMomentumState: null,
 adaptiveOvernightHoldState: null,
 adaptiveOvernightHoldHistory: [],
 premarketMomentumHistory: [],
+premarketDominanceState: null,
+premarketDominanceHistory: [],
 morningStrikeState: null,
 morningStrikeHistory: [],
 morningTradesToday: 0,
 lastMorningTradeDateKey: null,
 executionIntelligenceHistory: [],
+institutionalExecutionLayerState: null,
+institutionalExecutionLayerHistory: [],
 reinforcementWeightState: null,
 reinforcementWeightHistory: [],
 selfOptimizationState: null,
 selfOptimizationHistory: [],
 marketCycleIntelligenceState: null,
 marketCycleIntelligenceHistory: [],
+autonomousMarketIntelligenceState: null,
+autonomousMarketIntelligenceHistory: [],
+marketPersonalityMemory: {},
+recurringSetupMemory: {},
 liquidityIntelligenceState: null,
 liquidityIntelligenceHistory: [],
 correlationIntelligenceState: null,
 correlationIntelligenceHistory: [],
 portfolioGovernorState: null,
 portfolioGovernorHistory: [],
+autonomousCapitalRotationState: null,
+autonomousCapitalRotationHistory: [],
 macroRiskState: null,
 macroRiskHistory: [],
 signalQualityHistory: [],
@@ -1735,6 +1833,168 @@ function calculatePremarketMomentumEngine(signal = {}) {
   };
 }
 
+
+function calculatePremarketDominanceEngine(signal = {}) {
+  const symbol = normalizeSymbol(signal.symbol);
+
+  const premarket =
+    signal.premarketMomentum ||
+    calculatePremarketMomentumEngine(signal);
+
+  const confirmations = signal.confirmations || {};
+
+  const percentChange = Number(
+    signal.percentChange ||
+      premarket.premarketGapPercent ||
+      0
+  );
+
+  const relativeVolume = Number(
+    signal.relativeVolume ||
+      signal.volumeRatio ||
+      signal.volumeSpikeRatio ||
+      premarket.relativeVolume ||
+      confirmations.volumeSpikeRatio ||
+      0
+  );
+
+  const volume = Number(
+    signal.volume ||
+      signal.barVolume ||
+      premarket.premarketVolume ||
+      0
+  );
+
+  const bid = Number(signal.bid || 0);
+  const ask = Number(signal.ask || 0);
+  const current = Number(signal.current || signal.price || 0);
+
+  const spreadPercent =
+    bid > 0 && ask > 0 && current > 0
+      ? ((ask - bid) / current) * 100
+      : 0;
+
+  const bidStrengthScore = clampScore(
+    50 +
+      (bid > 0 && ask > 0 ? 10 : 0) +
+      (spreadPercent > 0 && spreadPercent <= 0.4 ? 15 : 0) +
+      (spreadPercent > 0.4 && spreadPercent <= 1 ? 8 : 0) -
+      (spreadPercent > 1.5 ? 18 : 0) -
+      (spreadPercent > 3 ? 25 : 0)
+  );
+
+  const overnightInstitutionalActivityScore = clampScore(
+    40 +
+      (percentChange >= 4 ? 12 : 0) +
+      (percentChange >= 8 ? 12 : 0) +
+      (percentChange >= 15 ? 10 : 0) +
+      (relativeVolume >= 2 ? 12 : 0) +
+      (relativeVolume >= 5 ? 14 : 0) +
+      (volume >= 250000 ? 10 : 0) +
+      (volume >= 1000000 ? 10 : 0) -
+      (percentChange >= 70 ? 18 : 0)
+  );
+
+  const gapQualityScore = clampScore(
+    Number(premarket.gapStrengthScore || 0) * 0.35 +
+      Number(premarket.gapContinuation?.openingRangeBreakoutProbability || 0) * 0.35 +
+      Number(premarket.catalystStrength || 0) * 0.2 +
+      Number(premarket.liquidityQuality || 0) * 0.1 -
+      Number(premarket.fadeRisk || 0) * 0.15
+  );
+
+  const premarketDominanceScore = clampScore(
+    Number(premarket.openingDriveProbability || 0) * 0.28 +
+      Number(premarket.morningMomentumScore || 0) * 0.24 +
+      bidStrengthScore * 0.14 +
+      overnightInstitutionalActivityScore * 0.18 +
+      gapQualityScore * 0.16
+  );
+
+  const dominanceTier =
+    premarketDominanceScore >= 85
+      ? "PREMARKET_SNIPER"
+      : premarketDominanceScore >= 75
+      ? "DOMINANT_PREMARKET_LEADER"
+      : premarketDominanceScore >= 65
+      ? "PREMARKET_WATCH"
+      : "NO_DOMINANCE_EDGE";
+
+  return {
+    symbol,
+    phase: "26_PREMARKET_DOMINANCE_ENGINE",
+    premarketDominanceScore,
+    dominanceTier,
+    bidStrengthScore,
+    overnightInstitutionalActivityScore,
+    gapQualityScore,
+    spreadPercent: Number(spreadPercent.toFixed(3)),
+    openingDriveProbability: premarket.openingDriveProbability,
+    morningMomentumScore: premarket.morningMomentumScore,
+    premarket,
+    reason:
+      `${dominanceTier} • Dominance ${premarketDominanceScore}/100 • ` +
+      `Bid ${bidStrengthScore}/100 • Overnight ${overnightInstitutionalActivityScore}/100`,
+  };
+}
+
+function updatePremarketDominanceState(signals = []) {
+  const reviewed = (Array.isArray(signals) ? signals : [])
+    .filter((signal) => {
+      const assetClass = signal.assetClass || signal.asset_class || "stock";
+      return assetClass === "stock";
+    })
+    .map((signal) => ({
+      ...signal,
+      premarketDominance:
+        signal.premarketDominance ||
+        calculatePremarketDominanceEngine(signal),
+    }))
+    .sort(
+      (a, b) =>
+        Number(b.premarketDominance?.premarketDominanceScore || 0) -
+        Number(a.premarketDominance?.premarketDominanceScore || 0)
+    );
+
+  const sniperCandidates = reviewed
+    .filter((signal) =>
+      ["PREMARKET_SNIPER", "DOMINANT_PREMARKET_LEADER"].includes(
+        signal.premarketDominance?.dominanceTier
+      )
+    )
+    .slice(0, Number(CONFIG.eliteMorningStrikeLimit || 2));
+
+  const state = {
+    updatedAt: new Date().toISOString(),
+    phase: "26_PREMARKET_DOMINANCE_ENGINE",
+    isPremarketWindow: isPremarketMomentumWindow(),
+    isMorningStrikeWindow: isMorningStrikeWindow(),
+    reviewedCount: reviewed.length,
+    sniperCount: sniperCandidates.length,
+    sniperCandidates,
+    topTwoSymbols: sniperCandidates.map((signal) => signal.symbol),
+    dominanceRadar: reviewed.slice(0, 10),
+    reason:
+      `Premarket dominance reviewed ${reviewed.length} stocks • ` +
+      `${sniperCandidates.length} sniper candidates found.`,
+  };
+
+  engineState.premarketDominanceState = state;
+
+  if (!Array.isArray(engineState.premarketDominanceHistory)) {
+    engineState.premarketDominanceHistory = [];
+  }
+
+  engineState.premarketDominanceHistory.unshift(state);
+  engineState.premarketDominanceHistory =
+    engineState.premarketDominanceHistory.slice(0, 200);
+
+  saveEngineState("PREMARKET_DOMINANCE_UPDATED");
+
+  return state;
+}
+
+
 function updatePremarketMomentumState(signals = []) {
   const analyzedSignals = Array.isArray(signals) ? signals : [];
 
@@ -1863,6 +2123,218 @@ function calculateAccumulationEngine(signal = {}) {
       `${accumulationLabel} • Accumulation ${accumulationScore}/100 • ` +
       `RVOL ${relativeVolume}x • Seen ${repeatedAppearances} times`,
   };
+}
+
+function updateMultiDayAccumulationMemory(signal = {}) {
+  const symbol = normalizeSymbol(signal.symbol);
+  if (!symbol) return null;
+
+  if (!engineState.multiDayAccumulationMemory) {
+    engineState.multiDayAccumulationMemory = {};
+  }
+
+  const todayKey = getTodayKeyET();
+
+  const accumulation =
+    signal.accumulationIntelligence ||
+    calculateAccumulationEngine(signal);
+
+  const percentChange = Number(signal.percentChange || 0);
+  const current = Number(signal.current || signal.price || 0);
+  const volume = Number(signal.volume || signal.barVolume || 0);
+
+  const relativeVolume = Number(
+    signal.relativeVolume ||
+      signal.volumeRatio ||
+      signal.volumeSpikeRatio ||
+      signal.confirmations?.volumeSpikeRatio ||
+      accumulation.relativeVolume ||
+      0
+  );
+
+  const closeNearHighPercent = Number(
+    signal.confirmations?.closeNearHighPercent || 0
+  );
+
+  const pullbackFromHighPercent = Number(
+    signal.confirmations?.pullbackFromHighPercent || 0
+  );
+
+  const aboveVwap = signal.confirmations?.aboveVwap === true;
+  const fakeBreakout = signal.confirmations?.fakeBreakout === true;
+
+  const previous =
+    engineState.multiDayAccumulationMemory[symbol] || {
+      symbol,
+      firstSeenAt: new Date().toISOString(),
+      lastSeenAt: null,
+      seenDays: [],
+      accumulationEvents: 0,
+      stealthVolumeEvents: 0,
+      supportHoldEvents: 0,
+      failedBreakoutEvents: 0,
+      highestAccumulationScore: 0,
+      lastPrice: 0,
+      preBreakoutScore: 0,
+    };
+
+  const isAccumulationEvent =
+    Number(accumulation.accumulationScore || 0) >= 60;
+
+  const isStealthVolume =
+    relativeVolume >= 1.3 &&
+    relativeVolume <= 5 &&
+    percentChange >= -3 &&
+    percentChange <= 18;
+
+  const isSupportHolding =
+    current > 0 &&
+    pullbackFromHighPercent <= 8 &&
+    closeNearHighPercent >= 50 &&
+    fakeBreakout !== true;
+
+  const isFailedBreakout =
+    fakeBreakout === true ||
+    pullbackFromHighPercent >= 12;
+
+  const seenDays = [
+    ...new Set([...(previous.seenDays || []), todayKey]),
+  ].slice(-20);
+
+  const next = {
+    ...previous,
+    symbol,
+    lastSeenAt: new Date().toISOString(),
+    seenDays,
+    accumulationEvents:
+      Number(previous.accumulationEvents || 0) +
+      (isAccumulationEvent ? 1 : 0),
+    stealthVolumeEvents:
+      Number(previous.stealthVolumeEvents || 0) +
+      (isStealthVolume ? 1 : 0),
+    supportHoldEvents:
+      Number(previous.supportHoldEvents || 0) +
+      (isSupportHolding ? 1 : 0),
+    failedBreakoutEvents:
+      Number(previous.failedBreakoutEvents || 0) +
+      (isFailedBreakout ? 1 : 0),
+    highestAccumulationScore: Math.max(
+      Number(previous.highestAccumulationScore || 0),
+      Number(accumulation.accumulationScore || 0)
+    ),
+    lastPrice: current,
+    lastVolume: volume,
+    lastRelativeVolume: relativeVolume,
+    lastAccumulation: accumulation,
+    aboveVwap,
+    closeNearHighPercent,
+    pullbackFromHighPercent,
+  };
+
+  const persistenceScore = clampScore(
+    seenDays.length * 9 +
+      Number(next.accumulationEvents || 0) * 6 +
+      Number(next.stealthVolumeEvents || 0) * 7 +
+      Number(next.supportHoldEvents || 0) * 6 -
+      Number(next.failedBreakoutEvents || 0) * 10
+  );
+
+  const supportHoldingScore = clampScore(
+    40 +
+      Number(next.supportHoldEvents || 0) * 8 +
+      (aboveVwap ? 10 : 0) +
+      (closeNearHighPercent >= 70 ? 12 : 0) -
+      (pullbackFromHighPercent >= 8 ? 12 : 0) -
+      Number(next.failedBreakoutEvents || 0) * 8
+  );
+
+  const preBreakoutScore = clampScore(
+    Number(accumulation.accumulationScore || 0) * 0.35 +
+      persistenceScore * 0.25 +
+      supportHoldingScore * 0.2 +
+      Math.min(relativeVolume * 10, 100) * 0.2
+  );
+
+  const accumulationMemoryLabel =
+    preBreakoutScore >= 82
+      ? "MULTI_DAY_PRE_BREAKOUT"
+      : preBreakoutScore >= 70
+      ? "STEALTH_ACCUMULATION_MEMORY"
+      : preBreakoutScore >= 58
+      ? "DEVELOPING_ACCUMULATION"
+      : "LOW_ACCUMULATION_MEMORY";
+
+  next.persistenceScore = persistenceScore;
+  next.supportHoldingScore = supportHoldingScore;
+  next.preBreakoutScore = preBreakoutScore;
+  next.accumulationMemoryLabel = accumulationMemoryLabel;
+  next.reason =
+    `${accumulationMemoryLabel} • Pre-breakout ${preBreakoutScore}/100 • ` +
+    `${seenDays.length} seen days • ${next.accumulationEvents} accumulation events`;
+
+  engineState.multiDayAccumulationMemory[symbol] = next;
+
+  return next;
+}
+
+function updateMultiDayAccumulationState(signals = []) {
+  const stockSignals = (Array.isArray(signals) ? signals : []).filter(
+    (signal) => (signal.assetClass || signal.asset_class || "stock") === "stock"
+  );
+
+  const reviewed = stockSignals
+    .map((signal) => {
+      const memory = updateMultiDayAccumulationMemory(signal);
+
+      return {
+        ...signal,
+        multiDayAccumulation: memory,
+        multiDayAccumulationScore: Number(memory?.preBreakoutScore || 0),
+      };
+    })
+    .sort(
+      (a, b) =>
+        Number(b.multiDayAccumulationScore || 0) -
+        Number(a.multiDayAccumulationScore || 0)
+    );
+
+  const preBreakoutCandidates = reviewed
+    .filter(
+      (signal) =>
+        Number(signal.multiDayAccumulationScore || 0) >= 70
+    )
+    .slice(0, 10);
+
+  const state = {
+    updatedAt: new Date().toISOString(),
+    phase: "27_MULTI_DAY_ACCUMULATION_MEMORY",
+    reviewedCount: reviewed.length,
+    memorySymbolCount: Object.keys(
+      engineState.multiDayAccumulationMemory || {}
+    ).length,
+    preBreakoutCount: preBreakoutCandidates.length,
+    preBreakoutCandidates,
+    topTwoSymbols: preBreakoutCandidates
+      .slice(0, 2)
+      .map((signal) => signal.symbol),
+    reason:
+      `Multi-day accumulation memory reviewed ${reviewed.length} stocks • ` +
+      `${preBreakoutCandidates.length} pre-breakout candidates found.`,
+  };
+
+  engineState.multiDayAccumulationState = state;
+
+  if (!Array.isArray(engineState.multiDayAccumulationHistory)) {
+    engineState.multiDayAccumulationHistory = [];
+  }
+
+  engineState.multiDayAccumulationHistory.unshift(state);
+  engineState.multiDayAccumulationHistory =
+    engineState.multiDayAccumulationHistory.slice(0, 200);
+
+  saveEngineState("MULTI_DAY_ACCUMULATION_UPDATED");
+
+  return state;
 }
 
 function calculateVolatilityCompressionEngine(signal = {}) {
@@ -1997,6 +2469,245 @@ function calculateCatalystRankingEngine(signal = {}) {
     reason: `${catalystLabel} • Catalyst ${catalystScore}/100`,
   };
 }
+
+function classifyRunnerPattern(signal = {}) {
+  const percentChange = Number(signal.percentChange || 0);
+  const relativeVolume = Number(
+    signal.relativeVolume ||
+      signal.volumeSpikeRatio ||
+      signal.confirmations?.volumeSpikeRatio ||
+      0
+  );
+
+  const accumulationScore = Number(
+    signal.multiDayAccumulationScore ||
+      signal.multiDayAccumulation?.preBreakoutScore ||
+      signal.accumulationIntelligence?.accumulationScore ||
+      0
+  );
+
+  const compressionScore = Number(
+    signal.volatilityCompression?.compressionScore || 0
+  );
+
+  const premarketScore = Number(
+    signal.premarketDominance?.premarketDominanceScore ||
+      signal.premarketMomentum?.openingDriveProbability ||
+      0
+  );
+
+  if (accumulationScore >= 70 && compressionScore >= 65) {
+    return "ACCUMULATION_COMPRESSION_RUNNER";
+  }
+
+  if (premarketScore >= 75 && relativeVolume >= 3) {
+    return "PREMARKET_DOMINANCE_RUNNER";
+  }
+
+  if (relativeVolume >= 5 && percentChange >= 15) {
+    return "HIGH_VOLUME_BREAKOUT_RUNNER";
+  }
+
+  if (percentChange >= 8 && percentChange <= 25 && relativeVolume >= 2) {
+    return "CONTROLLED_MOMENTUM_RUNNER";
+  }
+
+  return "GENERAL_RUNNER_PATTERN";
+}
+
+function getAdaptiveRunnerLearningBias(signal = {}) {
+  const pattern = classifyRunnerPattern(signal);
+
+  const memory =
+    engineState.adaptiveRunnerPatternMemory?.[pattern] || {
+      wins: 0,
+      losses: 0,
+      totalProfitPercent: 0,
+      averageProfitPercent: 0,
+      trustScore: 50,
+    };
+
+  const trustScore = Number(memory.trustScore || 50);
+
+  const adaptiveRunnerBoost =
+    trustScore >= 75 ? 6 :
+    trustScore >= 65 ? 4 :
+    trustScore >= 55 ? 2 :
+    trustScore <= 35 ? -5 :
+    trustScore <= 45 ? -2 :
+    0;
+
+  return {
+    pattern,
+    trustScore,
+    adaptiveRunnerBoost,
+    memory,
+    reason:
+      `${pattern} trust ${trustScore}/100 • Adaptive runner boost ${adaptiveRunnerBoost}`,
+  };
+}
+
+function updateAdaptiveRunnerPatternMemoryFromJournal() {
+  if (!engineState.adaptiveRunnerPatternMemory) {
+    engineState.adaptiveRunnerPatternMemory = {};
+  }
+
+  const closedTrades = engineState.tradeJournalHistory || [];
+
+  for (const trade of closedTrades.slice(0, 250)) {
+    const pattern =
+      trade.runnerPattern ||
+      trade.confirmations?.runnerPattern ||
+      trade.portfolioManager?.runnerPattern ||
+      "GENERAL_RUNNER_PATTERN";
+
+    if (!engineState.adaptiveRunnerPatternMemory[pattern]) {
+      engineState.adaptiveRunnerPatternMemory[pattern] = {
+        pattern,
+        wins: 0,
+        losses: 0,
+        totalProfitPercent: 0,
+        averageProfitPercent: 0,
+        trustScore: 50,
+        lastUpdated: null,
+      };
+    }
+
+    const memory = engineState.adaptiveRunnerPatternMemory[pattern];
+    const profitPercent = Number(trade.profitPercent || 0);
+
+    if (profitPercent > 0) {
+      memory.wins += 1;
+    } else if (profitPercent < 0) {
+      memory.losses += 1;
+    }
+
+    memory.totalProfitPercent += profitPercent;
+
+    const totalTrades = Math.max(1, memory.wins + memory.losses);
+
+    memory.averageProfitPercent = Number(
+      (memory.totalProfitPercent / totalTrades).toFixed(2)
+    );
+
+    const winRate = (memory.wins / totalTrades) * 100;
+
+    memory.trustScore = clampScore(
+      45 +
+        (winRate - 50) * 0.45 +
+        memory.averageProfitPercent * 4 +
+        Math.min(totalTrades, 20)
+    );
+
+    memory.lastUpdated = new Date().toISOString();
+  }
+
+  return engineState.adaptiveRunnerPatternMemory;
+}
+
+function calculateAdaptiveRunnerLearning(signal = {}) {
+  const learningBias = getAdaptiveRunnerLearningBias(signal);
+
+  const baseRunnerScore = Number(
+    signal.explosiveRunnerPrediction?.explosiveRunnerScore ||
+      signal.explosiveRunnerScore ||
+      0
+  );
+
+  const breakoutProbability = clampScore(
+    baseRunnerScore +
+      Number(learningBias.adaptiveRunnerBoost || 0)
+  );
+
+  const adaptiveRunnerTier =
+    breakoutProbability >= 85
+      ? "LEARNED_ELITE_RUNNER"
+      : breakoutProbability >= 72
+      ? "LEARNED_RUNNER_SETUP"
+      : breakoutProbability >= 60
+      ? "DEVELOPING_LEARNED_RUNNER"
+      : "NO_LEARNED_RUNNER_EDGE";
+
+  return {
+    phase: "28_ADAPTIVE_RUNNER_LEARNING",
+    pattern: learningBias.pattern,
+    trustScore: learningBias.trustScore,
+    adaptiveRunnerBoost: learningBias.adaptiveRunnerBoost,
+    breakoutProbability,
+    adaptiveRunnerTier,
+    memory: learningBias.memory,
+    reason:
+      `${adaptiveRunnerTier} • Pattern ${learningBias.pattern} • ` +
+      `Breakout probability ${breakoutProbability}/100`,
+  };
+}
+
+function updateAdaptiveRunnerLearningState(signals = []) {
+  updateAdaptiveRunnerPatternMemoryFromJournal();
+
+  const reviewed = (Array.isArray(signals) ? signals : [])
+    .filter((signal) => {
+      const assetClass = signal.assetClass || signal.asset_class || "stock";
+      return assetClass === "stock";
+    })
+    .map((signal) => {
+      const adaptiveRunnerLearning =
+        calculateAdaptiveRunnerLearning(signal);
+
+      return {
+        ...signal,
+        adaptiveRunnerLearning,
+        adaptiveRunnerScore:
+          adaptiveRunnerLearning.breakoutProbability,
+      };
+    })
+    .sort(
+      (a, b) =>
+        Number(b.adaptiveRunnerScore || 0) -
+        Number(a.adaptiveRunnerScore || 0)
+    );
+
+  const learnedRunnerCandidates = reviewed
+    .filter((signal) =>
+      ["LEARNED_ELITE_RUNNER", "LEARNED_RUNNER_SETUP"].includes(
+        signal.adaptiveRunnerLearning?.adaptiveRunnerTier
+      )
+    )
+    .slice(0, 10);
+
+  const state = {
+    updatedAt: new Date().toISOString(),
+    phase: "28_ADAPTIVE_RUNNER_LEARNING",
+    reviewedCount: reviewed.length,
+    patternCount: Object.keys(
+      engineState.adaptiveRunnerPatternMemory || {}
+    ).length,
+    learnedRunnerCount: learnedRunnerCandidates.length,
+    learnedRunnerCandidates,
+    topTwoSymbols: learnedRunnerCandidates
+      .slice(0, 2)
+      .map((signal) => signal.symbol),
+    patternMemory: engineState.adaptiveRunnerPatternMemory || {},
+    reason:
+      `Adaptive runner learning reviewed ${reviewed.length} stocks and found ` +
+      `${learnedRunnerCandidates.length} learned runner setups.`,
+  };
+
+  engineState.adaptiveRunnerLearningState = state;
+
+  if (!Array.isArray(engineState.adaptiveRunnerLearningHistory)) {
+    engineState.adaptiveRunnerLearningHistory = [];
+  }
+
+  engineState.adaptiveRunnerLearningHistory.unshift(state);
+  engineState.adaptiveRunnerLearningHistory =
+    engineState.adaptiveRunnerLearningHistory.slice(0, 200);
+
+  saveEngineState("ADAPTIVE_RUNNER_LEARNING_UPDATED");
+
+  return state;
+}
+
 
 function calculateExplosiveRunnerPrediction(signal = {}) {
   const accumulation =
@@ -2497,7 +3208,453 @@ function calculateAiSectorRotationEngine(stockSignals = []) {
   };
 }
 
+function detectThemeForSymbol(signal = {}) {
+  const symbol = normalizeSymbol(signal.symbol);
+  const text = [
+    symbol,
+    signal.name,
+    signal.description,
+    signal.estimatedSector,
+    signal.sector,
+    ...(signal.newsHeadlines || []),
+    ...(signal.confirmations?.riskyNewsHeadlines || []),
+  ]
+    .join(" ")
+    .toLowerCase();
 
+  const themes = [
+    {
+      name: "AI",
+      keywords: ["ai", "artificial intelligence", "machine learning", "data center", "chip", "semiconductor", "nvidia"],
+    },
+    {
+      name: "Biotech",
+      keywords: ["biotech", "fda", "clinical", "trial", "phase 2", "phase 3", "drug", "therapy", "pharma"],
+    },
+    {
+      name: "Energy",
+      keywords: ["energy", "oil", "gas", "solar", "uranium", "nuclear", "battery", "lithium"],
+    },
+    {
+      name: "Crypto",
+      keywords: ["crypto", "bitcoin", "blockchain", "ethereum", "mining", "coinbase"],
+    },
+    {
+      name: "Defense",
+      keywords: ["defense", "military", "aerospace", "drone", "missile", "security"],
+    },
+    {
+      name: "Small Cap Momentum",
+      keywords: ["speculative small cap", "momentum leadership", "low float", "runner"],
+    },
+  ];
+
+  const matched = themes
+    .map((theme) => ({
+      theme: theme.name,
+      hits: theme.keywords.filter((word) => text.includes(word)),
+    }))
+    .filter((item) => item.hits.length > 0)
+    .sort((a, b) => b.hits.length - a.hits.length);
+
+  return matched[0]?.theme || signal.estimatedSector || "General Market";
+}
+
+function calculateThemeMomentumEngine(signals = []) {
+  const stockSignals = (Array.isArray(signals) ? signals : []).filter(
+    (signal) => (signal.assetClass || signal.asset_class || "stock") === "stock"
+  );
+
+  const themeMap = {};
+
+  for (const signal of stockSignals) {
+    const theme = detectThemeForSymbol(signal);
+
+    if (!themeMap[theme]) {
+      themeMap[theme] = {
+        theme,
+        symbols: [],
+        totalScore: 0,
+        totalMomentum: 0,
+        totalRunnerScore: 0,
+        totalOpeningDrive: 0,
+        totalVolumePower: 0,
+        count: 0,
+      };
+    }
+
+    const runnerScore = Number(
+      signal.explosiveRunnerScore ||
+        signal.explosiveRunnerPrediction?.explosiveRunnerScore ||
+        0
+    );
+
+    const openingDrive = Number(
+      signal.openingDriveProbability ||
+        signal.premarketMomentum?.openingDriveProbability ||
+        0
+    );
+
+    const volumePower = Number(
+      signal.relativeVolume ||
+        signal.volumeSpikeRatio ||
+        signal.confirmations?.volumeSpikeRatio ||
+        0
+    );
+
+    themeMap[theme].symbols.push(signal.symbol);
+    themeMap[theme].totalScore += Number(signal.score || 0);
+    themeMap[theme].totalMomentum += Number(signal.momentumScore || signal.score || 0);
+    themeMap[theme].totalRunnerScore += runnerScore;
+    themeMap[theme].totalOpeningDrive += openingDrive;
+    themeMap[theme].totalVolumePower += Math.min(volumePower * 10, 100);
+    themeMap[theme].count += 1;
+  }
+
+  const rankedThemes = Object.values(themeMap)
+    .map((theme) => {
+      const count = Math.max(1, theme.count);
+
+      const averageScore = theme.totalScore / count;
+      const averageMomentum = theme.totalMomentum / count;
+      const averageRunnerScore = theme.totalRunnerScore / count;
+      const averageOpeningDrive = theme.totalOpeningDrive / count;
+      const averageVolumePower = theme.totalVolumePower / count;
+
+      const themeMomentumScore = clampScore(
+        averageScore * 0.25 +
+          averageMomentum * 0.2 +
+          averageRunnerScore * 0.25 +
+          averageOpeningDrive * 0.2 +
+          averageVolumePower * 0.1
+      );
+
+      const themeBias =
+        themeMomentumScore >= 82
+          ? "INSTITUTIONAL_ATTACK"
+          : themeMomentumScore >= 68
+          ? "STRONG_ROTATION"
+          : themeMomentumScore >= 55
+          ? "WATCH_THEME"
+          : "WEAK_THEME";
+
+      return {
+        theme: theme.theme,
+        symbols: [...new Set(theme.symbols)].slice(0, 15),
+        signalCount: theme.count,
+        averageScore: Number(averageScore.toFixed(2)),
+        averageMomentum: Number(averageMomentum.toFixed(2)),
+        averageRunnerScore: Number(averageRunnerScore.toFixed(2)),
+        averageOpeningDrive: Number(averageOpeningDrive.toFixed(2)),
+        averageVolumePower: Number(averageVolumePower.toFixed(2)),
+        themeMomentumScore: Number(themeMomentumScore.toFixed(2)),
+        themeBias,
+      };
+    })
+    .sort((a, b) => b.themeMomentumScore - a.themeMomentumScore);
+
+  const leadingThemes = rankedThemes.filter((theme) =>
+    ["INSTITUTIONAL_ATTACK", "STRONG_ROTATION"].includes(theme.themeBias)
+  );
+
+  const state = {
+    updatedAt: new Date().toISOString(),
+    phase: "25_THEME_MOMENTUM_INTELLIGENCE",
+    reviewedCount: stockSignals.length,
+    leadingThemeCount: leadingThemes.length,
+    leadingThemes: leadingThemes.slice(0, 6),
+    themeHeatmap: rankedThemes.slice(0, 12),
+    themeLeadershipRanking: rankedThemes.slice(0, 10),
+    correlatedStockBoostingEnabled: true,
+    reason:
+      `Theme engine reviewed ${stockSignals.length} stock signals and found ` +
+      `${leadingThemes.length} leading institutional themes.`,
+  };
+
+  engineState.themeMomentumState = state;
+
+  if (!Array.isArray(engineState.themeMomentumHistory)) {
+    engineState.themeMomentumHistory = [];
+  }
+
+  engineState.themeMomentumHistory.unshift(state);
+  engineState.themeMomentumHistory =
+    engineState.themeMomentumHistory.slice(0, 200);
+
+  saveEngineState("THEME_MOMENTUM_UPDATED");
+
+  return state;
+}
+
+function applyThemeMomentumBoost(signal = {}) {
+  const themeState = engineState.themeMomentumState || {};
+  const leadingThemes = themeState.leadingThemes || [];
+
+  const signalTheme = detectThemeForSymbol(signal);
+
+  const matchedTheme = leadingThemes.find(
+    (theme) => theme.theme === signalTheme
+  );
+
+  if (!matchedTheme) {
+    return {
+      ...signal,
+      themeMomentum: {
+        theme: signalTheme,
+        themeBoost: 0,
+        themeBias: "NO_THEME_BOOST",
+      },
+    };
+  }
+
+  const themeBoost = Math.min(
+    8,
+    Math.max(2, Number(matchedTheme.themeMomentumScore || 0) / 12)
+  );
+
+  const boostedScore = clampScore(Number(signal.score || 0) + themeBoost);
+
+  return {
+    ...signal,
+    score: boostedScore,
+    themeMomentum: {
+      theme: signalTheme,
+      themeBoost: Number(themeBoost.toFixed(2)),
+      themeBias: matchedTheme.themeBias,
+      themeMomentumScore: matchedTheme.themeMomentumScore,
+      reason:
+        `${signalTheme} theme boost +${themeBoost.toFixed(2)} from ${matchedTheme.themeBias}`,
+    },
+  };
+}
+
+function calculateAssetClassStrength(signals = [], assetClass = "stock") {
+  const filtered = (Array.isArray(signals) ? signals : []).filter(
+    (signal) =>
+      (signal.assetClass || signal.asset_class || "stock") === assetClass
+  );
+
+  if (filtered.length === 0) {
+    return {
+      assetClass,
+      strength: 0,
+      averageScore: 0,
+      averageMomentum: 0,
+      eliteCount: 0,
+    };
+  }
+
+  const totalScore = filtered.reduce(
+    (sum, signal) => sum + Number(signal.score || 0),
+    0
+  );
+
+  const totalMomentum = filtered.reduce(
+    (sum, signal) =>
+      sum +
+      Number(
+        signal.premarketDominance?.premarketDominanceScore ||
+          signal.explosiveRunnerPrediction?.explosiveRunnerScore ||
+          signal.adaptiveRunnerScore ||
+          signal.score ||
+          0
+      ),
+    0
+  );
+
+  const eliteCount = filtered.filter(
+    (signal) => Number(signal.score || 0) >= 75
+  ).length;
+
+  const averageScore = totalScore / filtered.length;
+  const averageMomentum = totalMomentum / filtered.length;
+
+  const strength = clampScore(
+    averageScore * 0.45 +
+      averageMomentum * 0.4 +
+      Math.min(eliteCount * 5, 25)
+  );
+
+  return {
+    assetClass,
+    strength,
+    averageScore: Number(averageScore.toFixed(2)),
+    averageMomentum: Number(averageMomentum.toFixed(2)),
+    eliteCount,
+  };
+}
+
+function calculateAutonomousCapitalRotation(signals = []) {
+  const stockStrength =
+    calculateAssetClassStrength(signals, "stock");
+
+  const cryptoStrength =
+    calculateAssetClassStrength(signals, "crypto");
+
+  const marketRegime =
+    engineState.marketRegime?.state || "unknown";
+
+  const marketStressLevel = Number(
+    engineState.marketStressLevel || 0
+  );
+
+  let stockAllocation = 50;
+  let cryptoAllocation = 20;
+  let cashReserve = 30;
+
+  if (stockStrength.strength > cryptoStrength.strength + 15) {
+    stockAllocation += 20;
+    cryptoAllocation -= 10;
+    cashReserve -= 10;
+  }
+
+  if (cryptoStrength.strength > stockStrength.strength + 15) {
+    cryptoAllocation += 20;
+    stockAllocation -= 10;
+    cashReserve -= 10;
+  }
+
+  if (marketStressLevel >= 70) {
+    cashReserve += 25;
+    stockAllocation -= 15;
+    cryptoAllocation -= 10;
+  }
+
+  if (
+    ["panic", "high_risk", "crash_risk"].includes(
+      String(marketRegime).toLowerCase()
+    )
+  ) {
+    cashReserve += 20;
+    stockAllocation -= 12;
+    cryptoAllocation -= 8;
+  }
+
+  if (
+    ["bullish", "aggressive_bullish"].includes(
+      String(marketRegime).toLowerCase()
+    )
+  ) {
+    stockAllocation += 10;
+    cashReserve -= 10;
+  }
+
+  stockAllocation = Math.max(10, stockAllocation);
+  cryptoAllocation = Math.max(0, cryptoAllocation);
+  cashReserve = Math.max(5, cashReserve);
+
+  const total =
+    stockAllocation + cryptoAllocation + cashReserve;
+
+  stockAllocation = (stockAllocation / total) * 100;
+  cryptoAllocation = (cryptoAllocation / total) * 100;
+  cashReserve = (cashReserve / total) * 100;
+
+  const dominantAllocator =
+    stockAllocation > cryptoAllocation
+      ? "STOCK_DOMINANT"
+      : cryptoAllocation > stockAllocation
+      ? "CRYPTO_DOMINANT"
+      : "BALANCED";
+
+  const capitalEfficiencyScore = clampScore(
+    stockStrength.strength * 0.45 +
+      cryptoStrength.strength * 0.25 +
+      (100 - marketStressLevel) * 0.3
+  );
+
+  return {
+    phase: "29_AUTONOMOUS_CAPITAL_ROTATION_AI",
+    stockStrength,
+    cryptoStrength,
+    stockAllocation: Number(stockAllocation.toFixed(2)),
+    cryptoAllocation: Number(cryptoAllocation.toFixed(2)),
+    cashReserve: Number(cashReserve.toFixed(2)),
+    dominantAllocator,
+    capitalEfficiencyScore,
+    institutionalRiskBudgeting:
+      marketStressLevel < 40
+        ? "AGGRESSIVE"
+        : marketStressLevel < 70
+        ? "MODERATE"
+        : "DEFENSIVE",
+    reason:
+      `${dominantAllocator} • Stocks ${stockAllocation.toFixed(1)}% • ` +
+      `Crypto ${cryptoAllocation.toFixed(1)}% • ` +
+      `Cash ${cashReserve.toFixed(1)}%`,
+  };
+}
+
+function updateAutonomousCapitalRotationState(signals = []) {
+  const allocation =
+    calculateAutonomousCapitalRotation(signals);
+
+  const state = {
+    updatedAt: new Date().toISOString(),
+    ...allocation,
+  };
+
+  engineState.autonomousCapitalRotationState = state;
+
+  if (!Array.isArray(engineState.autonomousCapitalRotationHistory)) {
+    engineState.autonomousCapitalRotationHistory = [];
+  }
+
+  engineState.autonomousCapitalRotationHistory.unshift(state);
+  engineState.autonomousCapitalRotationHistory =
+    engineState.autonomousCapitalRotationHistory.slice(0, 200);
+
+  saveEngineState("AUTONOMOUS_CAPITAL_ROTATION_UPDATED");
+
+  return state;
+}
+
+function applyAutonomousCapitalRotation(signal = {}) {
+  const allocation =
+    engineState.autonomousCapitalRotationState;
+
+  if (!allocation) return signal;
+
+  const assetClass =
+    signal.assetClass || signal.asset_class || "stock";
+
+  let allocationBoost = 0;
+
+  if (
+    assetClass === "stock" &&
+    allocation.stockAllocation >= 60
+  ) {
+    allocationBoost = 4;
+  }
+
+  if (
+    assetClass === "crypto" &&
+    allocation.cryptoAllocation >= 35
+  ) {
+    allocationBoost = 4;
+  }
+
+  if (allocation.cashReserve >= 45) {
+    allocationBoost -= 4;
+  }
+
+  return {
+    ...signal,
+    score: clampScore(
+      Number(signal.score || 0) + allocationBoost
+    ),
+    autonomousCapitalRotation: {
+      allocationBoost,
+      dominantAllocator: allocation.dominantAllocator,
+      stockAllocation: allocation.stockAllocation,
+      cryptoAllocation: allocation.cryptoAllocation,
+      cashReserve: allocation.cashReserve,
+      reason:
+        `Allocation boost ${allocationBoost} • ` +
+        `${allocation.dominantAllocator}`,
+    },
+  };
+}
 
 function calculatePortfolioHeatEngine(signal, openBotPositions = []) {
   const symbol = normalizeSymbol(signal.symbol);
@@ -3401,6 +4558,186 @@ shouldBlockNewTrades:
       `${brainMode} • Intelligence ${autonomousIntelligenceScore.toFixed(0)}/100 • ` +
       `Trust ${averageTrust.toFixed(0)}/100`,
   };
+}
+
+function calculateInstitutionalExecutionPlan(signal = {}, tradeAmount = 0) {
+  const symbol = normalizeSymbol(signal.symbol);
+
+  const price = Number(signal.current || signal.price || 0);
+  const volume = Number(signal.volume || signal.barVolume || 0);
+
+  const bid = Number(signal.bid || 0);
+  const ask = Number(signal.ask || 0);
+
+  const spreadPercent =
+    bid > 0 && ask > 0 && price > 0
+      ? ((ask - bid) / price) * 100
+      : 0;
+
+  const dollarVolume = Number(
+    signal.dollarVolume ||
+      (price > 0 && volume > 0 ? price * volume : 0)
+  );
+
+  const liquidityScore = clampScore(
+    35 +
+      (dollarVolume >= 500000 ? 20 : 0) +
+      (dollarVolume >= 2000000 ? 20 : 0) +
+      (volume >= 100000 ? 10 : 0) +
+      (volume >= 500000 ? 10 : 0) -
+      (spreadPercent > 0.75 ? 12 : 0) -
+      (spreadPercent > 1.5 ? 20 : 0) -
+      (spreadPercent > 3 ? 30 : 0)
+  );
+
+  const slippageRiskScore = clampScore(
+    25 +
+      (spreadPercent > 0.5 ? 15 : 0) +
+      (spreadPercent > 1 ? 20 : 0) +
+      (spreadPercent > 2 ? 25 : 0) +
+      (dollarVolume < 500000 ? 20 : 0) -
+      (dollarVolume >= 2000000 ? 15 : 0)
+  );
+
+  const executionConfidence = clampScore(
+    liquidityScore * 0.65 +
+      (100 - slippageRiskScore) * 0.35
+  );
+
+  const shouldUseIceberg =
+    tradeAmount >= 500 &&
+    liquidityScore < 75;
+
+  const sliceCount =
+    shouldUseIceberg
+      ? liquidityScore >= 65
+        ? 2
+        : liquidityScore >= 50
+        ? 3
+        : 4
+      : 1;
+
+  const suggestedSliceAmount =
+    sliceCount > 0
+      ? Number((Number(tradeAmount || 0) / sliceCount).toFixed(2))
+      : Number(tradeAmount || 0);
+
+  const executionMode =
+    executionConfidence >= 80
+      ? "FAST_EXECUTION"
+      : executionConfidence >= 65
+      ? "STAGGERED_EXECUTION"
+      : executionConfidence >= 50
+      ? "ICEBERG_EXECUTION"
+      : "AVOID_WEAK_EXECUTION";
+
+  const shouldReduceSize =
+    slippageRiskScore >= 70 ||
+    executionConfidence < 55;
+
+  const executionSizeMultiplier =
+    executionConfidence >= 80
+      ? 1
+      : executionConfidence >= 65
+      ? 0.85
+      : executionConfidence >= 50
+      ? 0.65
+      : 0.35;
+
+  return {
+    symbol,
+    phase: "30_INSTITUTIONAL_EXECUTION_LAYER",
+    executionMode,
+    liquidityScore,
+    slippageRiskScore,
+    executionConfidence,
+    spreadPercent: Number(spreadPercent.toFixed(3)),
+    dollarVolume: Number(dollarVolume.toFixed(2)),
+    shouldUseIceberg,
+    sliceCount,
+    suggestedSliceAmount,
+    shouldReduceSize,
+    executionSizeMultiplier,
+    stealthExecutionRouting:
+      executionMode === "ICEBERG_EXECUTION" ||
+      executionMode === "STAGGERED_EXECUTION",
+    reason:
+      `${executionMode} • Confidence ${executionConfidence}/100 • ` +
+      `Liquidity ${liquidityScore}/100 • Slippage risk ${slippageRiskScore}/100`,
+  };
+}
+
+function updateInstitutionalExecutionLayerState(signals = []) {
+  const reviewed = (Array.isArray(signals) ? signals : [])
+    .map((signal) => {
+      const executionPlan =
+        calculateInstitutionalExecutionPlan(signal, 0);
+
+      return {
+        symbol: signal.symbol,
+        assetClass: signal.assetClass || signal.asset_class || "stock",
+        score: signal.score,
+        institutionalExecutionPlan: executionPlan,
+      };
+    })
+    .sort(
+      (a, b) =>
+        Number(b.institutionalExecutionPlan?.executionConfidence || 0) -
+        Number(a.institutionalExecutionPlan?.executionConfidence || 0)
+    );
+
+  const executableSignals = reviewed.filter(
+    (item) =>
+      item.institutionalExecutionPlan.executionMode !==
+      "AVOID_WEAK_EXECUTION"
+  );
+
+  const state = {
+    updatedAt: new Date().toISOString(),
+    phase: "30_INSTITUTIONAL_EXECUTION_LAYER",
+    reviewedCount: reviewed.length,
+    executableCount: executableSignals.length,
+    averageExecutionConfidence:
+      reviewed.length > 0
+        ? Number(
+            (
+              reviewed.reduce(
+                (sum, item) =>
+                  sum +
+                  Number(
+                    item.institutionalExecutionPlan.executionConfidence || 0
+                  ),
+                0
+              ) / reviewed.length
+            ).toFixed(2)
+          )
+        : 0,
+    bestExecutionCandidates: executableSignals.slice(0, 10),
+    weakExecutionCandidates: reviewed
+      .filter(
+        (item) =>
+          item.institutionalExecutionPlan.executionMode ===
+          "AVOID_WEAK_EXECUTION"
+      )
+      .slice(0, 10),
+    reason:
+      `Institutional execution reviewed ${reviewed.length} signals • ` +
+      `${executableSignals.length} have acceptable liquidity/slippage quality.`,
+  };
+
+  engineState.institutionalExecutionLayerState = state;
+
+  if (!Array.isArray(engineState.institutionalExecutionLayerHistory)) {
+    engineState.institutionalExecutionLayerHistory = [];
+  }
+
+  engineState.institutionalExecutionLayerHistory.unshift(state);
+  engineState.institutionalExecutionLayerHistory =
+    engineState.institutionalExecutionLayerHistory.slice(0, 200);
+
+  saveEngineState("INSTITUTIONAL_EXECUTION_LAYER_UPDATED");
+
+  return state;
 }
 
 function calculateFullInstitutionalAutonomousTradingSystem(signals = []) {
@@ -4393,6 +5730,257 @@ const stockLiquidityDepthScore = clampScore(
       `${hasQualifiedCrypto ? "Qualified crypto present" : "No qualified crypto"}`,
   };
 }
+
+function detectMarketPersonality() {
+  const marketRegime =
+    engineState.marketRegime?.state || "unknown";
+
+  const stress = Number(
+    engineState.marketStressLevel || 0
+  );
+
+  const volatility = Number(
+    engineState.marketVolatility || 0
+  );
+
+  const breadth =
+    Number(engineState.marketBreadth?.advancing || 0) -
+    Number(engineState.marketBreadth?.declining || 0);
+
+  const momentum = Number(
+    engineState.marketMomentumScore || 0
+  );
+
+  let personality = "NEUTRAL";
+
+  if (
+    momentum >= 8 &&
+    breadth > 0 &&
+    stress < 40
+  ) {
+    personality = "TRENDING_MOMENTUM";
+  } else if (
+    volatility >= 60 &&
+    stress >= 60
+  ) {
+    personality = "HIGH_VOLATILITY_CHAOS";
+  } else if (
+    breadth < 0 &&
+    stress >= 70
+  ) {
+    personality = "RISK_OFF_DEFENSIVE";
+  } else if (
+    volatility < 25 &&
+    Math.abs(momentum) < 4
+  ) {
+    personality = "LOW_VOLATILITY_COMPRESSION";
+  }
+
+  return {
+    personality,
+    marketRegime,
+    stress,
+    volatility,
+    breadth,
+    momentum,
+  };
+}
+
+function updateMarketPersonalityMemory() {
+  if (!engineState.marketPersonalityMemory) {
+    engineState.marketPersonalityMemory = {};
+  }
+
+  const marketPersonality =
+    detectMarketPersonality();
+
+  const key = marketPersonality.personality;
+
+  if (!engineState.marketPersonalityMemory[key]) {
+    engineState.marketPersonalityMemory[key] = {
+      personality: key,
+      occurrences: 0,
+      averageMomentum: 0,
+      averageStress: 0,
+      lastSeenAt: null,
+    };
+  }
+
+  const memory =
+    engineState.marketPersonalityMemory[key];
+
+  memory.occurrences += 1;
+
+  memory.averageMomentum =
+    (
+      (
+        Number(memory.averageMomentum || 0) *
+        (memory.occurrences - 1)
+      ) +
+      Number(marketPersonality.momentum || 0)
+    ) / memory.occurrences;
+
+  memory.averageStress =
+    (
+      (
+        Number(memory.averageStress || 0) *
+        (memory.occurrences - 1)
+      ) +
+      Number(marketPersonality.stress || 0)
+    ) / memory.occurrences;
+
+  memory.lastSeenAt = new Date().toISOString();
+
+  return memory;
+}
+
+function updateRecurringSetupMemory(signals = []) {
+  if (!engineState.recurringSetupMemory) {
+    engineState.recurringSetupMemory = {};
+  }
+
+  for (const signal of signals) {
+    const setupType =
+      classifyInstitutionalSetup({
+        symbol: signal.symbol,
+        score: signal.score,
+        assetClass:
+          signal.assetClass || signal.asset_class,
+        marketRegime:
+          engineState.marketRegime?.state,
+        confirmations:
+          signal.confirmations || {},
+      });
+
+    if (!engineState.recurringSetupMemory[setupType]) {
+      engineState.recurringSetupMemory[setupType] = {
+        setupType,
+        occurrences: 0,
+        averageScore: 0,
+        highestScore: 0,
+        lastSeenAt: null,
+      };
+    }
+
+    const memory =
+      engineState.recurringSetupMemory[setupType];
+
+    memory.occurrences += 1;
+
+    memory.averageScore =
+      (
+        (
+          Number(memory.averageScore || 0) *
+          (memory.occurrences - 1)
+        ) +
+        Number(signal.score || 0)
+      ) / memory.occurrences;
+
+    memory.highestScore = Math.max(
+      Number(memory.highestScore || 0),
+      Number(signal.score || 0)
+    );
+
+    memory.lastSeenAt =
+      new Date().toISOString();
+  }
+
+  return engineState.recurringSetupMemory;
+}
+
+function calculateAutonomousMarketIntelligence(
+  signals = []
+) {
+  const marketPersonality =
+    detectMarketPersonality();
+
+  const personalityMemory =
+    updateMarketPersonalityMemory();
+
+  const recurringSetupMemory =
+    updateRecurringSetupMemory(signals);
+
+  const recurringSetups =
+    Object.values(recurringSetupMemory)
+      .sort(
+        (a, b) =>
+          Number(b.occurrences || 0) -
+          Number(a.occurrences || 0)
+      )
+      .slice(0, 10);
+
+  const selfOptimizationReadiness = clampScore(
+    Number(personalityMemory.occurrences || 0) * 4 +
+      recurringSetups.length * 6
+  );
+
+  const marketAdaptationLevel =
+    selfOptimizationReadiness >= 85
+      ? "FULLY_ADAPTIVE"
+      : selfOptimizationReadiness >= 65
+      ? "ADAPTIVE"
+      : selfOptimizationReadiness >= 45
+      ? "LEARNING"
+      : "EARLY_STAGE";
+
+  return {
+    phase: "32_AUTONOMOUS_MARKET_INTELLIGENCE",
+    marketPersonality,
+    personalityMemory,
+    recurringSetups,
+    recurringSetupCount:
+      recurringSetups.length,
+    selfOptimizationReadiness,
+    marketAdaptationLevel,
+    autonomousLearningActive: true,
+    reason:
+      `${marketAdaptationLevel} • Market personality ${marketPersonality.personality} • ` +
+      `Optimization readiness ${selfOptimizationReadiness}/100`,
+  };
+}
+
+function updateAutonomousMarketIntelligenceState(
+  signals = []
+) {
+  const intelligence =
+    calculateAutonomousMarketIntelligence(
+      signals
+    );
+
+  const state = {
+    updatedAt: new Date().toISOString(),
+    ...intelligence,
+  };
+
+  engineState.autonomousMarketIntelligenceState =
+    state;
+
+  if (
+    !Array.isArray(
+      engineState.autonomousMarketIntelligenceHistory
+    )
+  ) {
+    engineState.autonomousMarketIntelligenceHistory =
+      [];
+  }
+
+  engineState.autonomousMarketIntelligenceHistory.unshift(
+    state
+  );
+
+  engineState.autonomousMarketIntelligenceHistory =
+    engineState.autonomousMarketIntelligenceHistory.slice(
+      0,
+      200
+    );
+
+  saveEngineState(
+    "AUTONOMOUS_MARKET_INTELLIGENCE_UPDATED"
+  );
+
+  return state;
+}
+
 
 function calculateCorrelationIntelligenceEngine(
   openPositions = [],
@@ -9467,7 +11055,7 @@ async function getAiEntryScores() {
   return scoreMap;
 }
 
-async function getTopMovers() {
+async function getAlpacaMoverSymbols() {
   let moverSymbols = [];
 
   try {
@@ -9490,48 +11078,252 @@ async function getTopMovers() {
 
     console.log(`Alpaca movers found: ${moverSymbols.length}`);
   } catch (err) {
-    console.log("Alpaca movers failed. Using assets fallback:", err.message);
+    console.log("Alpaca movers failed:", err.message);
   }
+
+  return moverSymbols;
+}
+
+async function getTradableAssetUniverse(limit = 300) {
+  try {
+    const assets = await alpacaTradingRequest(
+      "/v2/assets?status=active&asset_class=us_equity"
+    );
+
+    return assets
+      .filter((asset) => asset.tradable === true)
+      .filter((asset) => asset.fractionable === true)
+      .map((asset) => asset.symbol)
+      .filter(Boolean)
+      .map(normalizeSymbol)
+      .filter(isNormalStockSymbol)
+      .slice(0, limit);
+  } catch (err) {
+    saveFailedOrder("ASSET_UNIVERSE_FAILED", "STOCK", err.message);
+    return [];
+  }
+}
+
+function getRepeatWatchlistSymbols() {
+  const institutionalSymbols = Array.isArray(engineState.institutionalWatchlist)
+    ? engineState.institutionalWatchlist.map((item) => item.symbol)
+    : [];
+
+  const signalHistorySymbols = (engineState.signalHistory || [])
+    .flatMap((snapshot) => snapshot.topSignals || [])
+    .map((signal) => signal.symbol);
+
+  const explosiveRunnerSymbols =
+    engineState.explosiveRunnerState?.topEarlyRunners?.map(
+      (signal) => signal.symbol
+    ) || [];
+
+  const continuationSymbols =
+    engineState.continuationHoldState?.topHoldCandidates?.map(
+      (signal) => signal.symbol
+    ) || [];
+
+  return [
+    ...new Set([
+      ...institutionalSymbols,
+      ...signalHistorySymbols,
+      ...explosiveRunnerSymbols,
+      ...continuationSymbols,
+    ]),
+  ]
+    .filter(Boolean)
+    .map(normalizeSymbol)
+    .filter(isNormalStockSymbol)
+    .slice(0, 75);
+}
+
+function getCoolingOffRunnerSymbols() {
+  const recentSignals = (engineState.signalHistory || [])
+    .flatMap((snapshot) => snapshot.topSignals || [])
+    .filter((signal) => {
+      const percentChange = Math.abs(Number(signal.percentChange || 0));
+      const score = Number(signal.score || 0);
+
+      return percentChange >= 8 && percentChange <= 35 && score >= 55;
+    })
+    .map((signal) => signal.symbol);
+
+  return [...new Set(recentSignals)]
+    .filter(Boolean)
+    .map(normalizeSymbol)
+    .filter(isNormalStockSymbol)
+    .slice(0, 50);
+}
+
+function buildUniverseExpansionState({
+  moverSymbols = [],
+  assetSymbols = [],
+  repeatWatchlistSymbols = [],
+  coolingOffRunnerSymbols = [],
+  combinedSymbols = [],
+}) {
+  const state = {
+    updatedAt: new Date().toISOString(),
+    phase: "23_UNIVERSE_EXPANSION_ENGINE",
+    moverCount: moverSymbols.length,
+    assetUniverseCount: assetSymbols.length,
+    repeatWatchlistCount: repeatWatchlistSymbols.length,
+    coolingOffRunnerCount: coolingOffRunnerSymbols.length,
+    combinedUniverseCount: combinedSymbols.length,
+    mostActiveScannerEnabled: true,
+    unusualVolumeScannerEnabled: true,
+    repeatWatchlistEngineEnabled: true,
+    coolingOffRunnerScannerEnabled: true,
+    hiddenAccumulationScannerEnabled: true,
+    lowVolatilityScannerEnabled: true,
+    topUniverseSymbols: combinedSymbols.slice(0, 25),
+    reason:
+      `Universe expanded from ${moverSymbols.length} movers to ` +
+      `${combinedSymbols.length} total symbols using movers, tradable assets, ` +
+      `repeat watchlist, cooling-off runners, accumulation, and compression intelligence.`,
+  };
+
+  engineState.universeExpansionState = state;
+
+  if (!Array.isArray(engineState.universeExpansionHistory)) {
+    engineState.universeExpansionHistory = [];
+  }
+
+  engineState.universeExpansionHistory.unshift(state);
+  engineState.universeExpansionHistory =
+    engineState.universeExpansionHistory.slice(0, 200);
+
+  saveEngineState("UNIVERSE_EXPANSION_UPDATED");
+
+  return state;
+}
+
+async function getTopMovers() {
+  const moverSymbols = await getAlpacaMoverSymbols();
 
   const minSymbolsNeeded = Number(process.env.MIN_SYMBOLS_NEEDED || 1);
   const maxAssetsFallback = Number(process.env.MAX_ASSETS_FALLBACK || 300);
 
-  if (moverSymbols.length >= minSymbolsNeeded) {
-    return moverSymbols;
-  }
+  const assetSymbols =
+    moverSymbols.length >= minSymbolsNeeded
+      ? []
+      : await getTradableAssetUniverse(maxAssetsFallback);
 
-  console.log(
-    `Only ${moverSymbols.length} movers found. Adding Alpaca assets fallback...`
-  );
-
-  const assets = await alpacaTradingRequest(
-    "/v2/assets?status=active&asset_class=us_equity"
-  );
-
-  const fallbackSymbols = assets
-    .filter((asset) => asset.tradable === true)
-    .filter((asset) => asset.fractionable === true)
-    .map((asset) => asset.symbol)
-    .filter(Boolean)
-    .map(normalizeSymbol)
-    .filter(isNormalStockSymbol)
-    .slice(0, maxAssetsFallback);
+  const repeatWatchlistSymbols = getRepeatWatchlistSymbols();
+  const coolingOffRunnerSymbols = getCoolingOffRunnerSymbols();
 
   const combinedSymbols = [
-    ...new Set([...moverSymbols, ...fallbackSymbols]),
-  ];
+    ...new Set([
+      ...moverSymbols,
+      ...repeatWatchlistSymbols,
+      ...coolingOffRunnerSymbols,
+      ...assetSymbols,
+    ]),
+  ].filter(isNormalStockSymbol);
 
-  console.log(`Combined scan symbols: ${combinedSymbols.length}`);
+  buildUniverseExpansionState({
+    moverSymbols,
+    assetSymbols,
+    repeatWatchlistSymbols,
+    coolingOffRunnerSymbols,
+    combinedSymbols,
+  });
+
+  console.log(
+    `Phase 23 universe expansion: ${combinedSymbols.length} symbols`
+  );
 
   return combinedSymbols;
 }
+
+function calculateScanWeight(symbol) {
+  const clean = normalizeSymbol(symbol);
+
+  const watchlistMatch = (engineState.institutionalWatchlist || [])
+    .some((item) => normalizeSymbol(item.symbol) === clean);
+
+  const recentAppearances = (engineState.signalHistory || [])
+    .flatMap((snapshot) => snapshot.topSignals || [])
+    .filter((signal) => normalizeSymbol(signal.symbol) === clean)
+    .length;
+
+  const runnerMatch =
+    (engineState.explosiveRunnerState?.topEarlyRunners || [])
+      .some((signal) => normalizeSymbol(signal.symbol) === clean);
+
+  const continuationMatch =
+    (engineState.continuationHoldState?.topHoldCandidates || [])
+      .some((signal) => normalizeSymbol(signal.symbol) === clean);
+
+  const weight = clampScore(
+    40 +
+      (watchlistMatch ? 18 : 0) +
+      (runnerMatch ? 22 : 0) +
+      (continuationMatch ? 15 : 0) +
+      Math.min(recentAppearances * 4, 20)
+  );
+
+  return {
+    symbol: clean,
+    scanWeight: weight,
+    watchlistMatch,
+    runnerMatch,
+    continuationMatch,
+    recentAppearances,
+  };
+}
+
+function narrowSmartUniverse(symbols = []) {
+  const maxSymbolsToScan = Number(process.env.MAX_SYMBOLS_TO_SCAN || 100);
+
+  const reviewed = [...new Set(symbols)]
+    .filter(isNormalStockSymbol)
+    .map((symbol) => calculateScanWeight(symbol))
+    .sort((a, b) => b.scanWeight - a.scanWeight);
+
+  const elite = reviewed.slice(0, maxSymbolsToScan);
+
+  const state = {
+    updatedAt: new Date().toISOString(),
+    phase: "24_SMART_UNIVERSE_NARROWING",
+    totalUniverseCount: reviewed.length,
+    narrowedCount: elite.length,
+    maxSymbolsToScan,
+    averageScanWeight:
+      reviewed.length > 0
+        ? Number(
+            (
+              reviewed.reduce((sum, item) => sum + item.scanWeight, 0) /
+              reviewed.length
+            ).toFixed(2)
+          )
+        : 0,
+    eliteSymbols: elite.slice(0, 25),
+    reason:
+      `Smart narrowing selected ${elite.length} elite symbols from ` +
+      `${reviewed.length} total symbols using watchlist, runner, continuation, and signal-history weighting.`,
+  };
+
+  engineState.smartUniverseNarrowingState = state;
+
+  if (!Array.isArray(engineState.smartUniverseNarrowingHistory)) {
+    engineState.smartUniverseNarrowingHistory = [];
+  }
+
+  engineState.smartUniverseNarrowingHistory.unshift(state);
+  engineState.smartUniverseNarrowingHistory =
+    engineState.smartUniverseNarrowingHistory.slice(0, 200);
+
+  saveEngineState("SMART_UNIVERSE_NARROWING_UPDATED");
+
+  return elite.map((item) => item.symbol);
+}
+
 async function scanMarket() {
   const symbols = await getTopMovers();
 
-  const maxSymbolsToScan = Number(process.env.MAX_SYMBOLS_TO_SCAN || 100);
-
-  // 🔥 Dynamic scan size from Render env
-  const limitedSymbols = symbols.slice(0, maxSymbolsToScan);
+  // PHASE 24 — Smart Universe Narrowing
+  const limitedSymbols = narrowSmartUniverse(symbols);
 
   engineState.skippedSymbols = [];
 
@@ -9684,9 +11476,34 @@ qualifiedToBuy:
 
   const results = rawResults.filter(Boolean);
 
-  
-
   console.log(`Scan finished. Found ${results.length} stocks.`);
+
+  const multiDayAccumulationState =
+    updateMultiDayAccumulationState(results);
+
+  saveRecentOrder("MULTI_DAY_ACCUMULATION_UPDATED", "STOCK", {
+    reviewedCount: multiDayAccumulationState.reviewedCount,
+    preBreakoutCount: multiDayAccumulationState.preBreakoutCount,
+    topTwoSymbols: multiDayAccumulationState.topTwoSymbols,
+  });
+
+  for (const signal of results) {
+    const memory =
+      engineState.multiDayAccumulationMemory?.[
+        normalizeSymbol(signal.symbol)
+      ];
+
+    if (memory) {
+      signal.multiDayAccumulation = memory;
+      signal.multiDayAccumulationScore =
+        Number(memory.preBreakoutScore || 0);
+
+      if (Number(memory.preBreakoutScore || 0) >= 70) {
+        signal.score = clampScore(Number(signal.score || 0) + 4);
+        signal.multiDayAccumulationBoost = 4;
+      }
+    }
+  }
 
   const explosiveRunnerState =
     updateExplosiveRunnerState(results);
@@ -9696,6 +11513,169 @@ qualifiedToBuy:
     topEarlyRunnerCount: explosiveRunnerState.topEarlyRunnerCount,
     topTwoSymbols: explosiveRunnerState.topTwoSymbols,
   });
+
+  const adaptiveRunnerLearningState =
+    updateAdaptiveRunnerLearningState(results);
+
+  saveRecentOrder("ADAPTIVE_RUNNER_LEARNING_UPDATED", "STOCK", {
+    reviewedCount: adaptiveRunnerLearningState.reviewedCount,
+    learnedRunnerCount:
+      adaptiveRunnerLearningState.learnedRunnerCount,
+    topTwoSymbols: adaptiveRunnerLearningState.topTwoSymbols,
+  });
+
+  for (const signal of results) {
+    const adaptiveRunnerLearning =
+      calculateAdaptiveRunnerLearning(signal);
+
+    signal.adaptiveRunnerLearning = adaptiveRunnerLearning;
+    signal.adaptiveRunnerScore =
+      adaptiveRunnerLearning.breakoutProbability;
+
+    if (
+      Number(adaptiveRunnerLearning.adaptiveRunnerBoost || 0) !== 0
+    ) {
+      signal.score = clampScore(
+        Number(signal.score || 0) +
+          Number(adaptiveRunnerLearning.adaptiveRunnerBoost || 0)
+      );
+    }
+  }
+
+  const autonomousCapitalRotationState =
+    updateAutonomousCapitalRotationState(results);
+
+  saveRecentOrder(
+    "AUTONOMOUS_CAPITAL_ROTATION_UPDATED",
+    "PORTFOLIO",
+    {
+      stockAllocation:
+        autonomousCapitalRotationState.stockAllocation,
+      cryptoAllocation:
+        autonomousCapitalRotationState.cryptoAllocation,
+      cashReserve:
+        autonomousCapitalRotationState.cashReserve,
+      dominantAllocator:
+        autonomousCapitalRotationState.dominantAllocator,
+    }
+  );
+
+  const allocationAdjustedResults =
+    results.map((signal) =>
+      applyAutonomousCapitalRotation(signal)
+    );
+
+  results.length = 0;
+  results.push(...allocationAdjustedResults);
+
+
+  const institutionalExecutionLayerState =
+    updateInstitutionalExecutionLayerState(results);
+
+  saveRecentOrder("INSTITUTIONAL_EXECUTION_LAYER_UPDATED", "EXECUTION", {
+    reviewedCount:
+      institutionalExecutionLayerState.reviewedCount,
+    executableCount:
+      institutionalExecutionLayerState.executableCount,
+    averageExecutionConfidence:
+      institutionalExecutionLayerState.averageExecutionConfidence,
+  });
+
+  for (const signal of results) {
+    const executionPlan =
+      calculateInstitutionalExecutionPlan(signal, 0);
+
+    signal.institutionalExecutionPlan = executionPlan;
+    signal.executionConfidence =
+      executionPlan.executionConfidence;
+
+    if (executionPlan.executionMode === "AVOID_WEAK_EXECUTION") {
+      signal.score = clampScore(Number(signal.score || 0) - 6);
+      signal.executionPenalty = 6;
+    }
+
+    if (executionPlan.executionConfidence >= 75) {
+      signal.score = clampScore(Number(signal.score || 0) + 3);
+      signal.executionQualityBoost = 3;
+    }
+  }
+
+  const autonomousMarketIntelligenceState =
+    updateAutonomousMarketIntelligenceState(
+      results
+    );
+
+  saveRecentOrder(
+    "AUTONOMOUS_MARKET_INTELLIGENCE_UPDATED",
+    "MARKET",
+    {
+      marketAdaptationLevel:
+        autonomousMarketIntelligenceState.marketAdaptationLevel,
+
+      marketPersonality:
+        autonomousMarketIntelligenceState
+          .marketPersonality?.personality,
+
+      selfOptimizationReadiness:
+        autonomousMarketIntelligenceState
+          .selfOptimizationReadiness,
+    }
+  );  
+
+  const fullInstitutionalAiBrainState =
+    updateFullInstitutionalAiBrainState(results);
+
+  saveRecentOrder(
+    "FULL_INSTITUTIONAL_AI_BRAIN_UPDATED",
+    "BRAIN",
+    {
+      reviewedCount:
+        fullInstitutionalAiBrainState.reviewedCount,
+      masterOpportunityCount:
+        fullInstitutionalAiBrainState.masterOpportunityCount,
+      topTwoSymbols:
+        fullInstitutionalAiBrainState.topTwoSymbols,
+    }
+  );
+
+  for (const signal of results) {
+    const rankedSignal =
+      fullInstitutionalAiBrainState.rankedOpportunities.find(
+        (item) => normalizeSymbol(item.symbol) === normalizeSymbol(signal.symbol)
+      );
+
+    if (rankedSignal?.fullInstitutionalAiBrain) {
+      signal.fullInstitutionalAiBrain =
+        rankedSignal.fullInstitutionalAiBrain;
+      signal.institutionalBrainScore =
+        rankedSignal.institutionalBrainScore;
+
+      if (
+        rankedSignal.fullInstitutionalAiBrain.brainAction === "PRIORITIZE"
+      ) {
+        signal.score = clampScore(Number(signal.score || 0) + 5);
+        signal.fullBrainBoost = 5;
+      }
+    }
+  }  
+
+  const themeMomentumState =
+    calculateThemeMomentumEngine(results);
+
+  saveRecentOrder("THEME_MOMENTUM_UPDATED", "STOCK", {
+    reviewedCount: themeMomentumState.reviewedCount,
+    leadingThemeCount: themeMomentumState.leadingThemeCount,
+    leadingThemes: themeMomentumState.leadingThemes?.map(
+      (theme) => theme.theme
+    ),
+  });
+
+  const themeBoostedResults =
+    results.map((signal) => applyThemeMomentumBoost(signal));
+
+  results.length = 0;
+  results.push(...themeBoostedResults);
+
 
   const statisticalEdgeSignals = results.filter(
     (signal) => Number(signal.statisticalScore || 0) >= 70
@@ -9760,6 +11740,27 @@ engineState.statisticalMemoryState =
     eliteCount: premarketMomentumState.eliteCount,
     topTwoSymbols: premarketMomentumState.topTwoSymbols,
   });
+
+  const premarketDominanceState =
+    updatePremarketDominanceState(results);
+
+  saveRecentOrder("PREMARKET_DOMINANCE_UPDATED", "STOCK", {
+    reviewedCount: premarketDominanceState.reviewedCount,
+    sniperCount: premarketDominanceState.sniperCount,
+    topTwoSymbols: premarketDominanceState.topTwoSymbols,
+  });
+
+  for (const signal of results) {
+    signal.premarketDominance =
+      calculatePremarketDominanceEngine(signal);
+
+    if (
+      Number(signal.premarketDominance.premarketDominanceScore || 0) >= 75
+    ) {
+      signal.score = clampScore(Number(signal.score || 0) + 5);
+      signal.premarketDominanceBoost = 5;
+    }
+  }
 
   return results
     .sort((a, b) => {
@@ -12670,9 +14671,41 @@ const portfolioManager =
       Number(portfolioManager.recommendedTradeAmount || 0) ||
       getDynamicTradeAmount(account, aiPositions, candidate.score);
 
+    const institutionalExecutionPlan =
+      calculateInstitutionalExecutionPlan(
+        candidate,
+        baseTradeAmount
+      );
+
+    if (
+      institutionalExecutionPlan.executionMode ===
+      "AVOID_WEAK_EXECUTION"
+    ) {
+      saveRecentOrder(
+        "AUTO_STOCK_BUY_SKIPPED_WEAK_EXECUTION",
+        symbol,
+        {
+          institutionalExecutionPlan,
+          candidateScore: candidate.score,
+        }
+      );
+
+      continue;
+    }
+
+    const executionAdjustedBaseTradeAmount =
+      Number(
+        (
+          Number(baseTradeAmount || 0) *
+          Number(
+            institutionalExecutionPlan.executionSizeMultiplier || 1
+          )
+        ).toFixed(2)
+      );
+      
     const finalTradeAmount = Number(
       (
-        baseTradeAmount *
+        executionAdjustedBaseTradeAmount *
         Number(orchestratorGate.orchestrator?.orchestratorMultiplier || 1) *
         Number(parliamentGate.multiplier || 1)
       ).toFixed(2)
@@ -13389,6 +15422,27 @@ engineState.marketRegimeHistory =
   signals.sort(
   (a, b) => Number(b.score || 0) - Number(a.score || 0)
 );
+
+    if (
+      !Array.isArray(
+        engineState.institutionalDashboardSnapshots
+      )
+    ) {
+      engineState.institutionalDashboardSnapshots = [];
+    }
+
+    engineState.institutionalDashboardSnapshots.unshift({
+      createdAt: new Date().toISOString(),
+      dashboard:
+        buildInstitutionalDashboardPayload(),
+    });
+
+    engineState.institutionalDashboardSnapshots =
+      engineState.institutionalDashboardSnapshots.slice(
+        0,
+        200
+      );
+
     engineState.lastSignals = signals;
     engineState.lastSuccessfulCycleAt =
   new Date().toISOString();
@@ -14693,6 +16747,281 @@ engineFreezeCount: engineState.engineFreezeCount,
   }
 });
 
+function calculateFullInstitutionalAiBrain(signals = []) {
+  const reviewed = (Array.isArray(signals) ? signals : []).map((signal) => {
+    const score = Number(signal.score || 0);
+
+    const runnerScore = Number(
+      signal.explosiveRunnerPrediction?.explosiveRunnerScore ||
+        signal.adaptiveRunnerScore ||
+        0
+    );
+
+    const premarketScore = Number(
+      signal.premarketDominance?.premarketDominanceScore ||
+        signal.premarketMomentum?.openingDriveProbability ||
+        0
+    );
+
+    const accumulationScore = Number(
+      signal.multiDayAccumulationScore ||
+        signal.multiDayAccumulation?.preBreakoutScore ||
+        0
+    );
+
+    const themeScore = Number(
+      signal.themeMomentum?.themeMomentumScore || 0
+    );
+
+    const executionScore = Number(
+      signal.institutionalExecutionPlan?.executionConfidence ||
+        signal.executionConfidence ||
+        0
+    );
+
+    const capitalRotationBoost = Number(
+      signal.autonomousCapitalRotation?.allocationBoost || 0
+    );
+
+    const marketIntelligence =
+      engineState.autonomousMarketIntelligenceState || {};
+
+    const marketReadiness = Number(
+      marketIntelligence.selfOptimizationReadiness || 50
+    );
+
+    const governorBlock =
+      engineState.portfolioGovernorState?.shouldBlockNewTrades === true;
+
+    const macroBlock =
+      engineState.macroRiskState?.shouldBlockNewTrades === true;
+
+    const liquidityBlock =
+      engineState.liquidityIntelligenceState?.shouldBlockWeakLiquidity === true;
+
+    const consensusScore = clampScore(
+      score * 0.22 +
+        runnerScore * 0.18 +
+        premarketScore * 0.16 +
+        accumulationScore * 0.14 +
+        themeScore * 0.1 +
+        executionScore * 0.1 +
+        marketReadiness * 0.06 +
+        capitalRotationBoost * 4
+    );
+
+    const riskPenalty =
+      (governorBlock ? 18 : 0) +
+      (macroBlock ? 18 : 0) +
+      (liquidityBlock ? 12 : 0);
+
+    const dynamicConvictionScore = clampScore(
+      consensusScore - riskPenalty
+    );
+
+    const opportunityTier =
+      dynamicConvictionScore >= 85
+        ? "MASTER_CONVICTION"
+        : dynamicConvictionScore >= 75
+        ? "HIGH_CONVICTION"
+        : dynamicConvictionScore >= 65
+        ? "QUALIFIED_OPPORTUNITY"
+        : dynamicConvictionScore >= 55
+        ? "WATCHLIST_ONLY"
+        : "LOW_PRIORITY";
+
+    const brainAction =
+      ["MASTER_CONVICTION", "HIGH_CONVICTION"].includes(opportunityTier)
+        ? "PRIORITIZE"
+        : opportunityTier === "QUALIFIED_OPPORTUNITY"
+        ? "ALLOW_IF_CAPITAL_AVAILABLE"
+        : opportunityTier === "WATCHLIST_ONLY"
+        ? "WATCH"
+        : "IGNORE";
+
+    return {
+      ...signal,
+      fullInstitutionalAiBrain: {
+        phase: "33_FULL_INSTITUTIONAL_AI_BRAIN",
+        consensusScore,
+        dynamicConvictionScore,
+        opportunityTier,
+        brainAction,
+        components: {
+          baseScore: score,
+          runnerScore,
+          premarketScore,
+          accumulationScore,
+          themeScore,
+          executionScore,
+          marketReadiness,
+          capitalRotationBoost,
+          riskPenalty,
+        },
+        reason:
+          `${opportunityTier} • Conviction ${dynamicConvictionScore}/100 • ` +
+          `Consensus ${consensusScore}/100`,
+      },
+      institutionalBrainScore: dynamicConvictionScore,
+    };
+  });
+
+  const rankedOpportunities = reviewed
+    .sort(
+      (a, b) =>
+        Number(b.institutionalBrainScore || 0) -
+        Number(a.institutionalBrainScore || 0)
+    );
+
+  const masterOpportunities = rankedOpportunities.filter((signal) =>
+    ["MASTER_CONVICTION", "HIGH_CONVICTION"].includes(
+      signal.fullInstitutionalAiBrain?.opportunityTier
+    )
+  );
+
+  return {
+    updatedAt: new Date().toISOString(),
+    phase: "33_FULL_INSTITUTIONAL_AI_BRAIN",
+    reviewedCount: reviewed.length,
+    masterOpportunityCount: masterOpportunities.length,
+    rankedOpportunities: rankedOpportunities.slice(0, 20),
+    masterOpportunities: masterOpportunities.slice(0, 10),
+    topTwoSymbols: masterOpportunities
+      .slice(0, 2)
+      .map((signal) => signal.symbol),
+    crossEngineLearningActive: true,
+    unifiedConsensusActive: true,
+    portfolioWideOptimizationActive: true,
+    reason:
+      `Full Institutional AI Brain ranked ${reviewed.length} opportunities • ` +
+      `${masterOpportunities.length} high-conviction candidates found.`,
+  };
+}
+
+function updateFullInstitutionalAiBrainState(signals = []) {
+  const state = calculateFullInstitutionalAiBrain(signals);
+
+  engineState.fullInstitutionalAiBrainState = state;
+
+  if (!Array.isArray(engineState.fullInstitutionalAiBrainHistory)) {
+    engineState.fullInstitutionalAiBrainHistory = [];
+  }
+
+  engineState.fullInstitutionalAiBrainHistory.unshift(state);
+  engineState.fullInstitutionalAiBrainHistory =
+    engineState.fullInstitutionalAiBrainHistory.slice(0, 200);
+
+  saveEngineState("FULL_INSTITUTIONAL_AI_BRAIN_UPDATED");
+
+  return state;
+}
+
+function buildInstitutionalDashboardPayload() {
+  return {
+    generatedAt: new Date().toISOString(),
+
+    marketRegime: engineState.marketRegime || null,
+    marketStressLevel: engineState.marketStressLevel || 0,
+
+    themeMomentum:
+      engineState.themeMomentumState || null,
+
+    explosiveRunner:
+      engineState.explosiveRunnerState || null,
+
+    adaptiveRunnerLearning:
+      engineState.adaptiveRunnerLearningState || null,
+
+    premarketDominance:
+      engineState.premarketDominanceState || null,
+
+    multiDayAccumulation:
+      engineState.multiDayAccumulationState || null,
+
+    autonomousCapitalRotation:
+      engineState.autonomousCapitalRotationState || null,
+
+    fullInstitutionalAiBrain:
+      engineState.fullInstitutionalAiBrainState || null,      
+
+    institutionalExecutionLayer:
+      engineState.institutionalExecutionLayerState || null,
+
+    continuationHold:
+      engineState.continuationHoldState || null,
+
+    portfolioGovernor:
+      engineState.portfolioGovernorState || null,
+
+    topBrainOpportunities:
+      engineState.fullInstitutionalAiBrainState
+        ?.masterOpportunities || [],      
+
+    topInstitutionalThemes:
+      engineState.themeMomentumState?.leadingThemes || [],
+
+    topRunnerCandidates:
+      engineState.explosiveRunnerState?.topEarlyRunners || [],
+
+    topPremarketSnipers:
+      engineState.premarketDominanceState?.sniperCandidates || [],
+
+    topAccumulationCandidates:
+      engineState.multiDayAccumulationState?.preBreakoutCandidates || [],
+
+    executionQualityLeaders:
+      engineState.institutionalExecutionLayerState
+        ?.bestExecutionCandidates || [],
+
+    allocationDashboard:
+      engineState.autonomousCapitalRotationState || null,
+
+    institutionalConfidencePanels: {
+      marketRegime:
+        engineState.marketRegime?.state || "unknown",
+
+      dominantAllocator:
+        engineState.autonomousCapitalRotationState
+          ?.dominantAllocator || "UNKNOWN",
+
+      executionConfidence:
+        engineState.institutionalExecutionLayerState
+          ?.averageExecutionConfidence || 0,
+
+      topBrainOpportunity:
+        engineState.fullInstitutionalAiBrainState
+          ?.masterOpportunities?.[0]?.symbol || null,
+
+      brainConviction:
+        engineState.fullInstitutionalAiBrainState
+          ?.masterOpportunities?.[0]
+          ?.institutionalBrainScore || 0,          
+
+      topTheme:
+        engineState.themeMomentumState
+          ?.leadingThemes?.[0]?.theme || null,
+
+      topRunner:
+        engineState.explosiveRunnerState
+          ?.topEarlyRunners?.[0]?.symbol || null,
+
+      topPremarketSniper:
+        engineState.premarketDominanceState
+          ?.sniperCandidates?.[0]?.symbol || null,
+    },      
+
+    marketHeatmap: {
+      themes:
+        engineState.themeMomentumState?.themeHeatmap || [],
+      runners:
+        engineState.explosiveRunnerState?.topEarlyRunners || [],
+      accumulation:
+        engineState.multiDayAccumulationState
+          ?.preBreakoutCandidates || [],
+    },
+  };
+}
+
   app.get("/status", async (req, res) => {
     try {
       const account = await getAccount();
@@ -14706,7 +17035,10 @@ engineFreezeCount: engineState.engineFreezeCount,
         aiOwnedSymbols.has(normalizeSymbol(p.symbol))
       );
 
-      res.json({
+      res.json({  
+
+        institutionalDashboard:
+        buildInstitutionalDashboardPayload(),
         online: true,
         mode: TRADING_MODE,
         effectiveMode: engineState.effectiveMode,
@@ -14808,6 +17140,21 @@ engineFreezeCount: engineState.engineFreezeCount,
       });
     }
   });
+
+  app.get("/institutional-dashboard", (req, res) => {
+    try {
+      res.json({
+        success: true,
+        dashboard:
+          buildInstitutionalDashboardPayload(),
+      });
+    } catch (err) {
+      res.status(500).json({
+        success: false,
+        error: err.message,
+      });
+    }
+  });  
 
   app.get("/signals", (req, res) => {
     res.json({
@@ -15610,7 +17957,7 @@ saveRecentOrder("MANUAL_DAILY_LOCK_RESET", "ACCOUNT", {
           0,
           20
         ),
-                
+
       continuationHoldHistory:
         (engineState.continuationHoldHistory || []).slice(
           0,
