@@ -4363,13 +4363,13 @@ function calculateAiPortfolioManagerDecision(
   else if (marketStress >= 60) allocationMultiplier = 0.5;
   else if (marketStress >= 40) allocationMultiplier = 0.75;
 
-  if (portfolioHeat.portfolioHeatScore < 50) {
-    allocationMultiplier *= tacticalEliteRunnerOverride
-      ? 0.85
-      : eliteHeatOverride
-      ? 0.65
-      : 0.5;
-  }
+if (portfolioHeat.portfolioHeatScore < 50) {
+  allocationMultiplier *= tacticalEliteRunnerOverride
+    ? 1
+    : eliteHeatOverride
+    ? 0.85
+    : 0.65;
+}
 
   if (tacticalEliteRunnerOverride) {
     allocationMultiplier = Math.max(allocationMultiplier, 0.45);
