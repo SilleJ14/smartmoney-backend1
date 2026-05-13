@@ -1166,6 +1166,510 @@ function ensureTradeJournalState() {
   }
 }
 
+function getReinforcementLearnedMultiplier(confidenceScore = 0) {
+  const score = Number(confidenceScore || 0);
+
+  const confidenceBand =
+    score >= 85
+      ? "ELITE_CONFIDENCE"
+      : score >= 75
+      ? "HIGH_CONFIDENCE"
+      : score >= 65
+      ? "NORMAL_CONFIDENCE"
+      : "LOW_CONFIDENCE";
+
+  const bandStats =
+    engineState.reinforcementWeightState?.confidenceBands?.[
+      confidenceBand
+    ];
+
+  const learnedMultiplier = Number(
+    bandStats?.learnedMultiplier || 1
+  );
+
+  return {
+    confidenceBand,
+    learnedMultiplier,
+    bandStats: bandStats || null,
+  };
+}
+
+function updateReinforcementWeightStateFromClosedTrade(closedTrade = {}) {
+  const confidenceScore = Number(
+    closedTrade.autonomousConfidenceScore || 0
+  );
+
+  const profitPercent = Number(closedTrade.profitPercent || 0);
+
+  const confidenceBand =
+    confidenceScore >= 85
+      ? "ELITE_CONFIDENCE"
+      : confidenceScore >= 75
+      ? "HIGH_CONFIDENCE"
+      : confidenceScore >= 65
+      ? "NORMAL_CONFIDENCE"
+      : "LOW_CONFIDENCE";
+
+  if (!engineState.reinforcementWeightState) {
+    engineState.reinforcementWeightState = {
+      updatedAt: null,
+      confidenceBands: {},
+      totalReviewedTrades: 0,
+    };
+  }
+
+  const current =
+    engineState.reinforcementWeightState.confidenceBands[
+      confidenceBand
+    ] || {
+      trades: 0,
+      wins: 0,
+      losses: 0,
+      totalProfitPercent: 0,
+      averageProfitPercent: 0,
+      winRate: 0,
+      learnedMultiplier: 1,
+    };
+
+  current.trades += 1;
+
+  if (profitPercent > 0) current.wins += 1;
+  if (profitPercent < 0) current.losses += 1;
+
+  current.totalProfitPercent =
+    Number(current.totalProfitPercent || 0) + profitPercent;
+
+  current.averageProfitPercent = Number(
+    (
+      current.totalProfitPercent /
+      Math.max(1, current.trades)
+    ).toFixed(2)
+  );
+
+  current.winRate = Number(
+    ((current.wins / Math.max(1, current.trades)) * 100).toFixed(2)
+  );
+
+  current.learnedMultiplier =
+    current.trades < 5
+      ? 1
+      : current.winRate >= 65 && current.averageProfitPercent > 0
+      ? 1.08
+      : current.winRate <= 40 || current.averageProfitPercent < 0
+      ? 0.88
+      : 1;
+
+  engineState.reinforcementWeightState.confidenceBands[
+    confidenceBand
+  ] = current;
+
+  engineState.reinforcementWeightState.updatedAt =
+    new Date().toISOString();
+
+  engineState.reinforcementWeightState.totalReviewedTrades =
+    Number(
+      engineState.reinforcementWeightState.totalReviewedTrades || 0
+    ) + 1;
+
+  if (!Array.isArray(engineState.reinforcementWeightHistory)) {
+    engineState.reinforcementWeightHistory = [];
+  }
+
+  const snapshot = {
+    updatedAt: new Date().toISOString(),
+    symbol: closedTrade.symbol,
+    confidenceBand,
+    confidenceScore,
+    profitPercent,
+    learnedMultiplier: current.learnedMultiplier,
+    bandStats: current,
+  };
+
+  engineState.reinforcementWeightHistory.unshift(snapshot);
+  engineState.reinforcementWeightHistory =
+    engineState.reinforcementWeightHistory.slice(0, 200);
+
+  return snapshot;
+}
+
+function updateExitOutcomeLearningState(closedTrade = {}) {
+  const exitReason = String(
+    closedTrade.exitReason || "UNKNOWN_EXIT"
+  );
+
+  const assetClass = String(
+    closedTrade.assetClass || "stock"
+  );
+
+  const profitPercent = Number(
+    closedTrade.profitPercent || 0
+  );
+
+  const key = `${assetClass}_${exitReason}`;
+
+  if (!engineState.smartExitIntelligenceState) {
+    engineState.smartExitIntelligenceState = {
+      updatedAt: null,
+      exitReasonPerformance: {},
+      totalReviewedExits: 0,
+    };
+  }
+
+  if (!engineState.smartExitIntelligenceState.exitReasonPerformance) {
+    engineState.smartExitIntelligenceState.exitReasonPerformance = {};
+  }
+
+  const current =
+    engineState.smartExitIntelligenceState.exitReasonPerformance[key] || {
+      key,
+      assetClass,
+      exitReason,
+      exits: 0,
+      wins: 0,
+      losses: 0,
+      totalProfitPercent: 0,
+      averageProfitPercent: 0,
+      winRate: 0,
+      exitQuality: "UNPROVEN_EXIT",
+      suggestedAdjustment: "KEEP_DEFAULT",
+    };
+
+  current.exits += 1;
+
+  if (profitPercent > 0) current.wins += 1;
+  if (profitPercent < 0) current.losses += 1;
+
+  current.totalProfitPercent =
+    Number(current.totalProfitPercent || 0) + profitPercent;
+
+  current.averageProfitPercent = Number(
+    (
+      current.totalProfitPercent /
+      Math.max(1, current.exits)
+    ).toFixed(2)
+  );
+
+  current.winRate = Number(
+    ((current.wins / Math.max(1, current.exits)) * 100).toFixed(2)
+  );
+
+  current.exitQuality =
+    current.exits < 5
+      ? "UNPROVEN_EXIT"
+      : current.winRate >= 60 && current.averageProfitPercent > 0
+      ? "STRONG_EXIT"
+      : current.winRate <= 40 || current.averageProfitPercent < 0
+      ? "WEAK_EXIT"
+      : "NEUTRAL_EXIT";
+
+  current.suggestedAdjustment =
+    current.exitQuality === "STRONG_EXIT"
+      ? "TRUST_THIS_EXIT"
+      : current.exitQuality === "WEAK_EXIT"
+      ? "REVIEW_OR_DELAY_IF_RUNNER"
+      : "KEEP_DEFAULT";
+
+  engineState.smartExitIntelligenceState.exitReasonPerformance[key] =
+    current;
+
+  engineState.smartExitIntelligenceState.updatedAt =
+    new Date().toISOString();
+
+  engineState.smartExitIntelligenceState.totalReviewedExits =
+    Number(
+      engineState.smartExitIntelligenceState.totalReviewedExits || 0
+    ) + 1;
+
+  if (!Array.isArray(engineState.smartExitIntelligenceHistory)) {
+    engineState.smartExitIntelligenceHistory = [];
+  }
+
+  const snapshot = {
+    updatedAt: new Date().toISOString(),
+    symbol: closedTrade.symbol,
+    assetClass,
+    exitReason,
+    profitPercent,
+    exitQuality: current.exitQuality,
+    suggestedAdjustment: current.suggestedAdjustment,
+    stats: current,
+  };
+
+  engineState.smartExitIntelligenceHistory.unshift(snapshot);
+  engineState.smartExitIntelligenceHistory =
+    engineState.smartExitIntelligenceHistory.slice(0, 200);
+
+  return snapshot;
+}
+
+function getExitReinforcementAdjustment(exitReason = "UNKNOWN_EXIT", assetClass = "stock") {
+  const key = `${assetClass}_${exitReason}`;
+  const stats =
+    engineState.smartExitIntelligenceState?.exitReasonPerformance?.[key];
+
+  if (!stats || Number(stats.exits || 0) < 5) {
+    return {
+      exitLearningMultiplier: 1,
+      exitLearningQuality: "UNPROVEN_EXIT",
+      reason: "Not enough exit history yet.",
+    };
+  }
+
+  if (stats.exitQuality === "STRONG_EXIT") {
+    return {
+      exitLearningMultiplier: 1.1,
+      exitLearningQuality: "STRONG_EXIT",
+      stats,
+      reason: "Historically strong exit type.",
+    };
+  }
+
+  if (stats.exitQuality === "WEAK_EXIT") {
+    return {
+      exitLearningMultiplier: 0.85,
+      exitLearningQuality: "WEAK_EXIT",
+      stats,
+      reason: "Historically weak exit type; delay if runner is still strong.",
+    };
+  }
+
+  return {
+    exitLearningMultiplier: 1,
+    exitLearningQuality: "NEUTRAL_EXIT",
+    stats,
+    reason: "Neutral exit history.",
+  };
+}
+
+function calculateRunnerExitDelayGate({
+  symbol,
+  reason,
+  isRunner,
+  unrealizedPercent,
+  dropFromHigh,
+  trendQualityHold,
+  trendHoldDecision,
+  exitLearningAdjustment,
+}) {
+  const emergencyReasons = [
+    "STOP_LOSS",
+    "EXIT_PARLIAMENT_EMERGENCY_EXIT",
+    "CLIMAX_DISTRIBUTION_EXIT",
+    "INSTITUTIONAL_FORCE_EXIT",
+  ];
+
+  if (emergencyReasons.includes(reason)) {
+    return {
+      shouldDelayExit: false,
+      reason: "Emergency exit allowed.",
+    };
+  }
+
+  const strongRunner =
+    isRunner &&
+    unrealizedPercent >= 4 &&
+    dropFromHigh <= 2.5 &&
+    (
+      trendQualityHold?.shouldExtendHold === true ||
+      trendHoldDecision?.mode === "TREND_HOLD" ||
+      exitLearningAdjustment?.exitLearningQuality === "WEAK_EXIT"
+    );
+
+  if (strongRunner) {
+    return {
+      shouldDelayExit: true,
+      symbol,
+      reason:
+        "Strong runner still has trend quality; delaying non-emergency exit.",
+    };
+  }
+
+  return {
+    shouldDelayExit: false,
+    reason: "Normal exit allowed.",
+  };
+}
+
+function calculateWeakSetupFastExitGate({
+  symbol,
+  unrealizedPercent,
+  dropFromHigh,
+  isRunner,
+}) {
+  const entry = engineState.aiEntryScores?.[symbol] || {};
+
+  const weakScore = Number(entry.score || 0) < 62;
+  const weakTechnical = Number(entry.technicalScore || 0) > 0 &&
+    Number(entry.technicalScore || 0) < 55;
+  const weakStatistical = Number(entry.statisticalScore || 0) > 0 &&
+    Number(entry.statisticalScore || 0) < 55;
+
+  const fading =
+    unrealizedPercent < -1.2 ||
+    dropFromHigh >= 4;
+
+  if (!isRunner && fading && (weakScore || weakTechnical || weakStatistical)) {
+    return {
+      shouldFastExit: true,
+      reason:
+        "Weak non-runner setup is fading; fast exit protection triggered.",
+      weakScore,
+      weakTechnical,
+      weakStatistical,
+    };
+  }
+
+  return {
+    shouldFastExit: false,
+    reason: "No weak setup fast exit.",
+  };
+}
+
+function calculateSmartTrimDecision({
+  symbol,
+  qty,
+  unrealizedPercent,
+  dropFromHigh,
+  isRunner,
+}) {
+  const shouldTrim =
+    isRunner &&
+    qty > 1 &&
+    unrealizedPercent >= 8 &&
+    dropFromHigh >= 1.2 &&
+    dropFromHigh <= 3.5;
+
+  const trimQty = shouldTrim
+    ? Math.max(1, Math.floor(qty * 0.35))
+    : 0;
+
+  return {
+    shouldTrim,
+    trimQty,
+    reason: shouldTrim
+      ? "Runner has profit and mild pullback; trim partial instead of full exit."
+      : "No smart trim needed.",
+  };
+}
+
+function updateReloadReentryMemory({
+  symbol,
+  reason,
+  unrealizedPercent,
+  isRunner,
+}) {
+  if (!engineState.institutionalReloadState) {
+    engineState.institutionalReloadState = {
+      updatedAt: null,
+      reloadWatchlist: {},
+    };
+  }
+
+  if (!engineState.institutionalReloadState.reloadWatchlist) {
+    engineState.institutionalReloadState.reloadWatchlist = {};
+  }
+
+  const eligible =
+    isRunner &&
+    unrealizedPercent > 3 &&
+    [
+      "RUNNER_TRAILING_STOP",
+      "PROFIT_PROTECTION",
+      "TRAILING_STOP",
+      "SMART_TRIM_EXIT",
+    ].includes(reason);
+
+  if (!eligible) {
+    return {
+      reloadEligible: false,
+      reason: "Not reload eligible.",
+    };
+  }
+
+  const reloadRecord = {
+    symbol,
+    lastExitAt: new Date().toISOString(),
+    lastExitReason: reason,
+    lastProfitPercent: Number(unrealizedPercent.toFixed(2)),
+    reloadStatus: "WATCH_FOR_RESET",
+    reason:
+      "Winner exited; watch for reset and re-entry strength.",
+  };
+
+  engineState.institutionalReloadState.reloadWatchlist[symbol] =
+    reloadRecord;
+  engineState.institutionalReloadState.updatedAt =
+    new Date().toISOString();
+
+  if (!Array.isArray(engineState.institutionalReloadHistory)) {
+    engineState.institutionalReloadHistory = [];
+  }
+
+  engineState.institutionalReloadHistory.unshift(reloadRecord);
+  engineState.institutionalReloadHistory =
+    engineState.institutionalReloadHistory.slice(0, 200);
+
+  return {
+    reloadEligible: true,
+    reloadRecord,
+  };
+}
+
+function calculateOvernightHoldRiskGate({
+  symbol,
+  unrealizedPercent,
+  isRunner,
+}) {
+  const minutes = getEasternMarketMinutes();
+  const nearClose = minutes >= 15 * 60 + 30;
+
+  if (!nearClose) {
+    return {
+      shouldProtectBeforeClose: false,
+      reason: "Not near market close.",
+    };
+  }
+
+  const entry = engineState.aiEntryScores?.[symbol] || {};
+
+  const strongEnoughToHold =
+    isRunner &&
+    unrealizedPercent >= 5 &&
+    (
+      Number(entry.score || 0) >= 72 ||
+      Number(entry.autonomousConfidenceScore || 0) >= 75 ||
+      Number(entry.institutionalBrainScore || 0) >= 72
+    );
+
+  return {
+    shouldProtectBeforeClose: !strongEnoughToHold,
+    strongEnoughToHold,
+    reason: strongEnoughToHold
+      ? "Strong runner can be considered for overnight hold."
+      : "Near close and not strong enough; protect before close.",
+  };
+}
+
+function updateExitDashboardState(snapshot = {}) {
+  engineState.institutionalExitOrchestratorState = {
+    ...(engineState.institutionalExitOrchestratorState || {}),
+    updatedAt: new Date().toISOString(),
+    latestExitCalibration: snapshot,
+  };
+
+  if (!Array.isArray(engineState.institutionalExitOrchestratorHistory)) {
+    engineState.institutionalExitOrchestratorHistory = [];
+  }
+
+  engineState.institutionalExitOrchestratorHistory.unshift({
+    updatedAt: new Date().toISOString(),
+    ...snapshot,
+  });
+
+  engineState.institutionalExitOrchestratorHistory =
+    engineState.institutionalExitOrchestratorHistory.slice(0, 200);
+}
+
 function journalTradeEntry(symbol, entry = {}) {
   ensureTradeJournalState();
 
@@ -1187,7 +1691,17 @@ function journalTradeEntry(symbol, entry = {}) {
       "unknown",
     confirmations: entry.confirmations || {},
     portfolioManager: entry.portfolioManager || null,
+    institutionalExecutionPlan:
+      entry.institutionalExecutionPlan || null,
+    autonomousConfidenceScore:
+      Number(entry.autonomousConfidenceScore || 0),
+    autonomousConfidenceMultiplier:
+      Number(entry.autonomousConfidenceMultiplier || 1),
+    regimeProtectionMultiplier:
+      Number(entry.regimeProtectionMultiplier || 1),
     tradeAmount: Number(entry.tradeAmount || 0),
+    reinforcementSizing:
+      entry.reinforcementSizing || null,    
     enteredAt: new Date().toISOString(),
   };
 
@@ -1226,9 +1740,24 @@ function journalTradeExit(symbol, exit = {}) {
     exitReason: exit.exitReason || "UNKNOWN_EXIT",
     confirmations: entry.confirmations || {},
     portfolioManager: entry.portfolioManager || null,
+    institutionalExecutionPlan:
+      entry.institutionalExecutionPlan || null,
+    autonomousConfidenceScore:
+      Number(entry.autonomousConfidenceScore || 0),
+    autonomousConfidenceMultiplier:
+      Number(entry.autonomousConfidenceMultiplier || 1),
+    regimeProtectionMultiplier:
+      Number(entry.regimeProtectionMultiplier || 1),
     enteredAt: entry.enteredAt || null,
+    reinforcementSizing:
+      entry.reinforcementSizing || null,    
     exitedAt: new Date().toISOString(),
   };
+
+const reinforcementSnapshot =
+  updateReinforcementWeightStateFromClosedTrade(closedTrade);  
+const exitOutcomeLearningSnapshot =
+  updateExitOutcomeLearningState(closedTrade);
 
 if (!engineState.statisticalMemoryState) {
   engineState.statisticalMemoryState = {
@@ -3762,6 +4291,48 @@ function calculateAiPortfolioManagerDecision(
       0
   );
 
+  const runnerScore = Number(
+    signal.explosiveRunnerScore ||
+      signal.explosiveRunnerPrediction?.explosiveRunnerScore ||
+      signal.adaptiveRunnerScore ||
+      0
+  );
+
+  const executionConfidence = Number(
+    signal.institutionalExecutionPlan?.executionConfidence ||
+      signal.executionConfidence ||
+      50
+  );
+
+  const institutionalBrainScore = Number(
+    signal.institutionalBrainScore ||
+      signal.fullInstitutionalAiBrain?.masterOpportunityScore ||
+      signal.fullInstitutionalAiBrain?.institutionalBrainScore ||
+      0
+  );
+
+  const premarketDominanceScore = Number(
+    signal.premarketDominance?.premarketDominanceScore ||
+      signal.premarketDominanceScore ||
+      0
+  );
+
+  const eliteHeatOverride =
+    signal.qualifiedToBuy === true &&
+    Number(signal.score || 0) >= 70 &&
+    runnerScore >= 70 &&
+    executionConfidence >= 55 &&
+    signal.confirmations?.fakeBreakout !== true;
+
+  const tacticalEliteRunnerOverride =
+    eliteHeatOverride &&
+    (
+      institutionalBrainScore >= 72 ||
+      premarketDominanceScore >= 72 ||
+      executionConfidence >= 70 ||
+      runnerScore >= 82
+    );
+
   let allocationMultiplier = 1;
 
   if (marketStress >= 75) allocationMultiplier = 0.25;
@@ -3769,7 +4340,15 @@ function calculateAiPortfolioManagerDecision(
   else if (marketStress >= 40) allocationMultiplier = 0.75;
 
   if (portfolioHeat.portfolioHeatScore < 50) {
-    allocationMultiplier *= 0.5;
+    allocationMultiplier *= tacticalEliteRunnerOverride
+      ? 0.85
+      : eliteHeatOverride
+      ? 0.65
+      : 0.5;
+  }
+
+  if (tacticalEliteRunnerOverride) {
+    allocationMultiplier = Math.max(allocationMultiplier, 0.45);
   }
 
 const maxBotBudget =
@@ -3790,21 +4369,41 @@ const remainingSlots = Math.max(
 const targetAllocationPerTrade =
   maxBotBudget / CONFIG.maxStockOpenTrades;
 
+const tacticalEliteFloor =
+  tacticalEliteRunnerOverride
+    ? Math.min(
+        availableBotCap,
+        targetAllocationPerTrade * 0.35
+      )
+    : 0;
+
 const recommendedTradeAmount = Number(
-  Math.min(
-    availableBotCap,
-    targetAllocationPerTrade
+  (
+    Math.max(
+      tacticalEliteFloor,
+      Math.min(
+        availableBotCap,
+        targetAllocationPerTrade
+      ) * allocationMultiplier
+    )
   ).toFixed(2)
 );
 
   const portfolioScore = clampScore(
     portfolioHeat.portfolioHeatScore * 0.7 +
-      (100 - marketStress) * 0.3
+      (100 - marketStress) * 0.3 +
+      (tacticalEliteRunnerOverride ? 8 : 0)
   );
+
+  const heatApprovalThreshold =
+    tacticalEliteRunnerOverride ? 35 : 45;
 
   const approved =
     recommendedTradeAmount > 0 &&
-    portfolioHeat.portfolioHeatScore >= 45;
+    (
+      portfolioHeat.portfolioHeatScore >= heatApprovalThreshold ||
+      eliteHeatOverride
+    );
 
   return {
     approved,
@@ -3822,8 +4421,16 @@ const recommendedTradeAmount = Number(
     portfolioHeat,
     marketStress,
     allocationMultiplier,
+    eliteHeatOverride,
+    tacticalEliteRunnerOverride,
+    runnerScore,
+    executionConfidence,
+    institutionalBrainScore,
+    premarketDominanceScore,
+    heatApprovalThreshold,
     portfolioManagerReason:
-      `${portfolioHeat.portfolioHeatLabel} • Market Stress ${marketStress}/100`,
+      `${portfolioHeat.portfolioHeatLabel} • Market Stress ${marketStress}/100 • ` +
+      `Elite ${eliteHeatOverride ? "YES" : "NO"} • Tactical ${tacticalEliteRunnerOverride ? "YES" : "NO"}`,
   };
 }
 
@@ -4631,18 +5238,48 @@ function calculateInstitutionalExecutionPlan(signal = {}, tradeAmount = 0) {
       ? "ICEBERG_EXECUTION"
       : "AVOID_WEAK_EXECUTION";
 
-  const shouldReduceSize =
-    slippageRiskScore >= 70 ||
-    executionConfidence < 55;
+  const executionRiskPenalty =
+    (spreadPercent > 3 ? 0.35 : 0) +
+    (spreadPercent > 1.5 ? 0.2 : 0) +
+    (spreadPercent > 0.75 ? 0.1 : 0) +
+    (dollarVolume < 250000 ? 0.25 : 0) +
+    (dollarVolume < 500000 ? 0.15 : 0) +
+    (slippageRiskScore >= 75 ? 0.2 : 0);
 
-  const executionSizeMultiplier =
-    executionConfidence >= 80
-      ? 1
+  const executionQualityBoost =
+    executionConfidence >= 85 && spreadPercent <= 0.5
+      ? 0.08
+      : executionConfidence >= 75 && spreadPercent <= 0.75
+      ? 0.04
+      : 0;
+
+  const rawExecutionMultiplier =
+    executionConfidence >= 85
+      ? 1.05
+      : executionConfidence >= 75
+      ? 0.95
       : executionConfidence >= 65
-      ? 0.85
+      ? 0.8
       : executionConfidence >= 50
-      ? 0.65
-      : 0.35;
+      ? 0.55
+      : 0.25;
+
+  const executionSizeMultiplier = Number(
+    Math.max(
+      0.2,
+      Math.min(
+        1.1,
+        rawExecutionMultiplier -
+          executionRiskPenalty +
+          executionQualityBoost
+      )
+    ).toFixed(2)
+  );
+
+  const shouldReduceSize =
+    executionSizeMultiplier < 0.85 ||
+    slippageRiskScore >= 70 ||
+    executionConfidence < 65;
 
   return {
     symbol,
@@ -4658,6 +5295,9 @@ function calculateInstitutionalExecutionPlan(signal = {}, tradeAmount = 0) {
     suggestedSliceAmount,
     shouldReduceSize,
     executionSizeMultiplier,
+    executionRiskPenalty: Number(executionRiskPenalty.toFixed(2)),
+    executionQualityBoost: Number(executionQualityBoost.toFixed(2)),
+    rawExecutionMultiplier,    
     stealthExecutionRouting:
       executionMode === "ICEBERG_EXECUTION" ||
       executionMode === "STAGGERED_EXECUTION",
@@ -13901,6 +14541,133 @@ const shouldNormalTrailingExit =
     else if (shouldProtectProfit) reason = "PROFIT_PROTECTION";
     else if (shouldNormalTrailingExit) reason = "TRAILING_STOP";
 
+    const exitLearningAdjustment =
+      getExitReinforcementAdjustment(reason, "stock");
+
+    const runnerExitDelayGate =
+      calculateRunnerExitDelayGate({
+        symbol,
+        reason,
+        isRunner,
+        unrealizedPercent,
+        dropFromHigh,
+        trendQualityHold,
+        trendHoldDecision,
+        exitLearningAdjustment,
+      });
+
+    if (runnerExitDelayGate.shouldDelayExit) {
+      saveRecentOrder("RUNNER_EXIT_DELAYED_BY_LEARNING", symbol, {
+        reason,
+        qty,
+        price: currentPrice,
+        profitPercent: unrealizedPercent,
+        dropFromHigh,
+        exitLearningAdjustment,
+        runnerExitDelayGate,
+      });
+
+      updateExitDashboardState({
+        symbol,
+        action: "RUNNER_EXIT_DELAYED",
+        reason,
+        profitPercent: unrealizedPercent,
+        runnerExitDelayGate,
+        exitLearningAdjustment,
+      });
+
+      continue;
+    }
+
+    const weakSetupFastExitGate =
+      calculateWeakSetupFastExitGate({
+        symbol,
+        unrealizedPercent,
+        dropFromHigh,
+        isRunner,
+      });
+
+    if (weakSetupFastExitGate.shouldFastExit) {
+      reason = "WEAK_SETUP_FAST_EXIT";
+    }
+
+    const overnightHoldRiskGate =
+      calculateOvernightHoldRiskGate({
+        symbol,
+        unrealizedPercent,
+        isRunner,
+      });
+
+    if (
+      overnightHoldRiskGate.shouldProtectBeforeClose &&
+      reason === "AI_EXIT"
+    ) {
+      reason = "OVERNIGHT_PROTECTION_EXIT";
+    }
+
+    const smartTrimDecision =
+      calculateSmartTrimDecision({
+        symbol,
+        qty,
+        unrealizedPercent,
+        dropFromHigh,
+        isRunner,
+      });
+
+    if (
+      smartTrimDecision.shouldTrim &&
+      !shouldStopLoss &&
+      !exitParliamentDecision.emergencyExit
+    ) {
+      try {
+        const trimOrder = await placeMarketSell(
+          symbol,
+          smartTrimDecision.trimQty,
+          "SMART_RUNNER_TRIM"
+        );
+
+        saveRecentOrder("SMART_RUNNER_TRIM_EXECUTED", symbol, {
+          trimQty: smartTrimDecision.trimQty,
+          originalQty: qty,
+          price: currentPrice,
+          profitPercent: unrealizedPercent,
+          dropFromHigh,
+          smartTrimDecision,
+          trimOrder,
+        });
+
+        updateExitDashboardState({
+          symbol,
+          action: "SMART_RUNNER_TRIM",
+          profitPercent: unrealizedPercent,
+          smartTrimDecision,
+        });
+
+        saveEngineState("SMART_RUNNER_TRIM_EXECUTED");
+
+        continue;
+      } catch (err) {
+        saveFailedOrder("SMART_RUNNER_TRIM_FAILED", symbol, err.message, {
+          smartTrimDecision,
+          qty,
+          price: currentPrice,
+          profitPercent: unrealizedPercent,
+        });
+      }
+    }
+
+    updateExitDashboardState({
+      symbol,
+      action: "FULL_EXIT_REVIEWED",
+      reason,
+      profitPercent: unrealizedPercent,
+      dropFromHigh,
+      isRunner,
+      exitLearningAdjustment,
+      weakSetupFastExitGate,
+      overnightHoldRiskGate,
+    });    
+
     const pdtFullExitProtection =
       calculatePdtExitProtection({
         symbol,
@@ -14052,6 +14819,24 @@ saveRecentOrder(reason, symbol, {
         isRunner,
         order,
       });
+
+const reloadReentryMemory =
+  updateReloadReentryMemory({
+    symbol,
+    reason,
+    unrealizedPercent,
+    isRunner,
+  });
+
+updateExitDashboardState({
+  symbol,
+  action: "FULL_EXIT_EXECUTED",
+  reason,
+  profitPercent: unrealizedPercent,
+  isRunner,
+  reloadReentryMemory,
+});      
+
 saveEngineState("PROBABILITY_REINFORCEMENT_UPDATED");
       rememberTradeResult(symbol, {
         profitPercent: unrealizedPercent,
@@ -14703,11 +15488,55 @@ const portfolioManager =
         ).toFixed(2)
       );
       
+    const autonomousConfidenceScore = clampScore(
+      Number(candidate.score || 0) * 0.22 +
+        Number(candidate.institutionalBrainScore || 0) * 0.2 +
+        Number(candidate.statisticalScore || 0) * 0.16 +
+        Number(
+          candidate.explosiveRunnerScore ||
+            candidate.explosiveRunnerPrediction?.explosiveRunnerScore ||
+            candidate.adaptiveRunnerScore ||
+            0
+        ) * 0.18 +
+        Number(
+          candidate.premarketDominance?.premarketDominanceScore ||
+            candidate.premarketDominanceScore ||
+            0
+        ) * 0.14 +
+        Number(
+          institutionalExecutionPlan.executionConfidence || 0
+        ) * 0.1
+    );
+
+    const autonomousConfidenceMultiplier =
+      autonomousConfidenceScore >= 85
+        ? 1.25
+        : autonomousConfidenceScore >= 75
+        ? 1.12
+        : autonomousConfidenceScore >= 65
+        ? 1
+        : 0.82;
+
+    const regimeProtectionMultiplier =
+      Number(engineState.marketStressLevel || 0) >= 75
+        ? 0.75
+        : Number(engineState.marketStressLevel || 0) >= 60
+        ? 0.85
+        : 1;
+
+    const reinforcementSizing =
+      getReinforcementLearnedMultiplier(
+        autonomousConfidenceScore
+      );        
+
     const finalTradeAmount = Number(
       (
         executionAdjustedBaseTradeAmount *
         Number(orchestratorGate.orchestrator?.orchestratorMultiplier || 1) *
-        Number(parliamentGate.multiplier || 1)
+        Number(parliamentGate.multiplier || 1) *
+        autonomousConfidenceMultiplier *
+        regimeProtectionMultiplier *
+        Number(reinforcementSizing.learnedMultiplier || 1)
       ).toFixed(2)
     );
 
@@ -14717,6 +15546,11 @@ const portfolioManager =
         baseTradeAmount,
         portfolioManager,
         parliamentGate,
+        institutionalExecutionPlan,
+        autonomousConfidenceScore,
+        autonomousConfidenceMultiplier,
+        regimeProtectionMultiplier,
+        reinforcementSizing,
       });
       continue;
     }
@@ -14742,6 +15576,11 @@ const portfolioManager =
         morningStrike: morningStrikeOverrideGate.allowed,
         eliteMomentumException: eliteMomentumExceptionGate.allowed, 
         technicalScore: candidate.technicalScore,
+        autonomousConfidenceScore,
+        autonomousConfidenceMultiplier,
+        regimeProtectionMultiplier,
+        institutionalExecutionPlan,
+        reinforcementSizing,             
         statisticalScore: candidate.statisticalScore,
         setupType:
           classifyInstitutionalSetup({
@@ -14764,7 +15603,12 @@ const portfolioManager =
         marketRegime: engineState.marketRegime?.state,
         confirmations: candidate.confirmations || {},
         portfolioManager,
+        institutionalExecutionPlan,
+        autonomousConfidenceScore,
+        autonomousConfidenceMultiplier,
+        regimeProtectionMultiplier,
         tradeAmount: finalTradeAmount,
+        reinforcementSizing,        
       });
 
       saveRecentOrder("AUTO_STOCK_BUY", symbol, {
@@ -14774,7 +15618,12 @@ const portfolioManager =
         portfolioManager,
         orchestratorGate,
         parliamentGate,
+        institutionalExecutionPlan,
+        autonomousConfidenceScore,
+        autonomousConfidenceMultiplier,
+        regimeProtectionMultiplier,
         adaptiveExecution,
+        reinforcementSizing,        
       });
 
       markMorningTradeUsed(symbol);
@@ -16947,6 +17796,21 @@ function buildInstitutionalDashboardPayload() {
     institutionalExecutionLayer:
       engineState.institutionalExecutionLayerState || null,
 
+    reinforcementLearning:
+      engineState.reinforcementWeightState || null,
+
+    reinforcementLearningHistory:
+      (engineState.reinforcementWeightHistory || []).slice(0, 50),
+
+    smartExitLearning:
+      engineState.smartExitIntelligenceState || null,
+
+    institutionalExitOrchestrator:
+      engineState.institutionalExitOrchestratorState || null,
+
+    institutionalReload:
+      engineState.institutionalReloadState || null,
+
     continuationHold:
       engineState.continuationHoldState || null,
 
@@ -16973,6 +17837,26 @@ function buildInstitutionalDashboardPayload() {
       engineState.institutionalExecutionLayerState
         ?.bestExecutionCandidates || [],
 
+
+    executionOptimization:
+      {
+        averageExecutionConfidence:
+          engineState.institutionalExecutionLayerState
+            ?.averageExecutionConfidence || 0,
+
+        executableCount:
+          engineState.institutionalExecutionLayerState
+            ?.executableCount || 0,
+
+        bestExecutionCandidates:
+          engineState.institutionalExecutionLayerState
+            ?.bestExecutionCandidates || [],
+
+        weakExecutionCandidates:
+          engineState.institutionalExecutionLayerState
+            ?.weakExecutionCandidates || [],
+      },        
+
     allocationDashboard:
       engineState.autonomousCapitalRotationState || null,
 
@@ -16987,6 +17871,21 @@ function buildInstitutionalDashboardPayload() {
       executionConfidence:
         engineState.institutionalExecutionLayerState
           ?.averageExecutionConfidence || 0,
+
+
+      executableCount:
+        engineState.institutionalExecutionLayerState
+          ?.executableCount || 0,
+
+      bestExecutionSymbol:
+        engineState.institutionalExecutionLayerState
+          ?.bestExecutionCandidates?.[0]?.symbol || null,
+
+      bestExecutionConfidence:
+        engineState.institutionalExecutionLayerState
+          ?.bestExecutionCandidates?.[0]
+          ?.institutionalExecutionPlan
+          ?.executionConfidence || 0,          
 
       topBrainOpportunity:
         engineState.fullInstitutionalAiBrainState
@@ -17008,6 +17907,34 @@ function buildInstitutionalDashboardPayload() {
       topPremarketSniper:
         engineState.premarketDominanceState
           ?.sniperCandidates?.[0]?.symbol || null,
+
+      reinforcementReviewedTrades:
+        engineState.reinforcementWeightState
+          ?.totalReviewedTrades || 0,
+
+      strongestConfidenceBand:
+        Object.entries(
+          engineState.reinforcementWeightState
+            ?.confidenceBands || {}
+        ).sort(
+          (a, b) =>
+            Number(b[1]?.averageProfitPercent || 0) -
+            Number(a[1]?.averageProfitPercent || 0)
+        )?.[0]?.[0] || null,
+
+      latestExitAction:
+        engineState.institutionalExitOrchestratorState
+          ?.latestExitCalibration?.action || null,
+
+      latestExitSymbol:
+        engineState.institutionalExitOrchestratorState
+          ?.latestExitCalibration?.symbol || null,
+
+      reloadWatchlistCount:
+        Object.keys(
+          engineState.institutionalReloadState
+            ?.reloadWatchlist || {}
+        ).length,          
     },      
 
     marketHeatmap: {
@@ -17018,6 +17945,26 @@ function buildInstitutionalDashboardPayload() {
       accumulation:
         engineState.multiDayAccumulationState
           ?.preBreakoutCandidates || [],
+            exitLearning:
+        engineState.smartExitIntelligenceState
+          ?.exitReasonPerformance || {},
+
+      reloadWatchlist:
+        engineState.institutionalReloadState
+          ?.reloadWatchlist || {},
+
+      reinforcementBands:
+        engineState.reinforcementWeightState
+          ?.confidenceBands || {},    
+
+
+      executionQuality:
+        engineState.institutionalExecutionLayerState
+          ?.bestExecutionCandidates || [],
+
+      weakExecution:
+        engineState.institutionalExecutionLayerState
+          ?.weakExecutionCandidates || [],          
     },
   };
 }
