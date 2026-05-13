@@ -8872,14 +8872,30 @@ function calculateCryptoInstitutionalQualification({
   const cleanSpreadPercent = Number(spreadPercent || 0);
 
   const spreadPass = cleanSpreadPercent <= 0.85;
+  const cleanExecutionPass =
+    spreadPass &&
+    cleanSpreadPercent <= 0.65 &&
+    barsFound >= 10;
 
-const liquidityPass =
-  spreadPass &&
-  dollarVolume >= 50 &&
-  (
-    volumeSpikeRatio >= 0.15 ||
-    volumeConfidenceScore >= 60
-  );
+  const trueLiquidityPass =
+    spreadPass &&
+    dollarVolume >= 50 &&
+    (
+      volumeSpikeRatio >= 0.15 ||
+      volumeConfidenceScore >= 60
+    );
+
+  const smallCryptoProbePass =
+    cleanExecutionPass &&
+    Number(score || 0) >= 75 &&
+    (
+      volumeConfidenceScore >= 35 ||
+      volumeSpikeRatio >= 0 ||
+      dollarVolume >= 0
+    );
+
+  const liquidityPass =
+    trueLiquidityPass || smallCryptoProbePass;
 
   const momentumPass =
     Number(score || 0) >=
