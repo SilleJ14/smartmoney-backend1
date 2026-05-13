@@ -451,8 +451,8 @@ continuationHoldState:
 continuationHoldHistory:
   (engineState.continuationHoldHistory || []).slice(0, 200),
 
-activeContinuationHoldSymbol:
-  engineState.activeContinuationHoldSymbol || null,  
+activeContinuationHoldSymbols:
+  engineState.activeContinuationHoldSymbols || [],
 
 smartExitIntelligenceState:
   engineState.smartExitIntelligenceState || null,
@@ -665,7 +665,7 @@ const CONFIG = {
   ),
 
   maxContinuationHoldStocks: Number(
-    process.env.MAX_CONTINUATION_HOLD_STOCKS || 1
+    process.env.MAX_CONTINUATION_HOLD_STOCKS || 5
   ),
 
   minContinuationHoldScore: Number(
@@ -863,7 +863,7 @@ fullInstitutionalAiBrainHistory: [],
 executionIntelligenceState: null,
 continuationHoldState: null,
 continuationHoldHistory: [],
-activeContinuationHoldSymbol: null,
+activeContinuationHoldSymbols: [],
 smartExitIntelligenceState: null,
 smartExitIntelligenceHistory: [],
 institutionalExitOrchestratorState: null,
@@ -3489,13 +3489,16 @@ function updateContinuationHoldState(signals = []) {
         : null,
     topHoldCandidates: rankedHolds.slice(
       0,
-      Number(CONFIG.maxContinuationHoldStocks || 1)
+      Number(CONFIG.maxContinuationHoldStocks || 5)
     ),
     reason:
       selectedHold
         ? `Continuation hold selected: ${selectedHold.symbol}`
         : "No continuation hold selected.",
   };
+
+ engineState.activeContinuationHoldSymbols =
+  topHoldCandidates.map((item) => item.symbol); 
 
   engineState.continuationHoldState = state;
 
@@ -3621,7 +3624,7 @@ function updateInstitutionalWatchlist(signals = []) {
   const now = new Date().toISOString();
 
   const strongSignals = (signals || [])
-    .filter((signal) => Number(signal.score || 0) >= CONFIG.minScoreToBuy)
+    .filter((signal) => Number(signal.score || 0) >= adaptiveMinScoreToBuy)
     .slice(0, 20);
 
   const mergedMap = new Map();
@@ -6011,7 +6014,7 @@ if (liquidityQuality < 50) {
   }
 
  adaptiveMinScoreToBuy = Math.min(
-  CONFIG.minScoreToBuy,
+  78,
   Math.max(60, Math.round(adaptiveMinScoreToBuy))
 );
 
@@ -11903,6 +11906,25 @@ async function getTopMovers() {
       ? []
       : await getTradableAssetUniverse(maxAssetsFallback);
 
+  const hiddenRunnerMemorySymbols = [
+    ...new Set([
+      ...(engineState.multiDayAccumulationState?.preBreakoutCandidates || [])
+        .map((item) => item.symbol),
+      ...(engineState.explosiveRunnerState?.topEarlyRunners || [])
+        .map((item) => item.symbol),
+      ...(engineState.adaptiveRunnerLearningState?.learnedRunnerCandidates || [])
+        .map((item) => item.symbol),
+      ...(engineState.premarketDominanceState?.dominanceRadar || [])
+        .filter(
+          (item) =>
+            Number(item.premarketDominanceScore || 0) >= 60 ||
+            Number(item.openingDriveProbability || 0) >= 60
+        )
+        .map((item) => item.symbol),
+    ]),
+  ].filter(isNormalStockSymbol);
+  
+  
   const repeatWatchlistSymbols = getRepeatWatchlistSymbols();
   const coolingOffRunnerSymbols = getCoolingOffRunnerSymbols();
 
@@ -11911,6 +11933,7 @@ async function getTopMovers() {
       ...moverSymbols,
       ...repeatWatchlistSymbols,
       ...coolingOffRunnerSymbols,
+      ...hiddenRunnerMemorySymbols,      
       ...assetSymbols,
     ]),
   ].filter(isNormalStockSymbol);
@@ -15371,12 +15394,17 @@ async function autoBuySignals(signals = []) {
 
 const frozenOpenSlots = openSlots;
 
+const adaptiveMinScoreToBuy = Number(
+  engineState.selfOptimizationState?.adaptiveMinScoreToBuy ||
+    CONFIG.minScoreToBuy
+);
+
 const frozenApprovedSignals = signals
   .filter(
     (signal) =>
       signal.qualifiedToBuy === true &&
       signal.autoTradeApproved === true &&
-      Number(signal.score || 0) >= CONFIG.minScoreToBuy
+      Number(signal.score || 0) >= adaptiveMinScoreToBuy
   )
   .slice(0, frozenOpenSlots);
 const executableSymbols = new Set(
@@ -15408,7 +15436,7 @@ const baseCandidates = frozenApprovedSignals
       )
     );
   })
-  .filter((signal) => Number(signal.score || 0) >= CONFIG.minScoreToBuy)
+ .filter((signal) => Number(signal.score || 0) >= adaptiveMinScoreToBuy)
   .filter((signal) => {
     const symbol = normalizeSymbol(signal.symbol);
     const lastSold = engineState.lastSoldAt[symbol] || 0;
