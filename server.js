@@ -3496,9 +3496,8 @@ function updateContinuationHoldState(signals = []) {
         ? `Continuation hold selected: ${selectedHold.symbol}`
         : "No continuation hold selected.",
   };
-
- engineState.activeContinuationHoldSymbols =
-  topHoldCandidates.map((item) => item.symbol); 
+  engineState.activeContinuationHoldSymbols =
+    (state.topHoldCandidates || []).map((item) => item.symbol);
 
   engineState.continuationHoldState = state;
 
@@ -3617,6 +3616,10 @@ function estimateSectorIntelligence(q) {
 }
 
 function updateInstitutionalWatchlist(signals = []) {
+  const adaptiveMinScoreToBuy = Number(
+    engineState.selfOptimizationState?.adaptiveMinScoreToBuy ||
+      CONFIG.minScoreToBuy
+  );  
   const existing = Array.isArray(engineState.institutionalWatchlist)
     ? engineState.institutionalWatchlist
     : [];
@@ -4395,14 +4398,14 @@ const remainingSlots = Math.max(
 
 const candidatePotentialScore =
   clampScore(
-    Number(candidate.score || 0) * 0.35 +
-    Number(candidate.runnerScore || 0) * 0.2 +
-    Number(candidate.institutionalBrainScore || 0) * 0.2 +
-    Number(candidate.premarketDominanceScore || 0) * 0.15 +
-    Number(candidate.executionConfidence || 0) * 0.1
+    Number(signal.score || 0) * 0.35 +
+    Number(signal.runnerScore || 0) * 0.2 +
+    Number(signal.institutionalBrainScore || 0) * 0.2 +
+    Number(signal.premarketDominanceScore || 0) * 0.15 +
+    Number(signal.executionConfidence || 0) * 0.1
   );
 
-const qualifiedCandidates = candidates.filter(
+const qualifiedCandidates = [signal].filter(
   (item) =>
     Number(item.score || 0) >=
     Number(CONFIG.minScoreToBuy || 0)
