@@ -709,7 +709,7 @@ const CONFIG = {
   ),
 
   defensiveExposureMultiplier: Number(
-    process.env.DEFENSIVE_EXPOSURE_MULTIPLIER || 0.4
+    process.env.DEFENSIVE_EXPOSURE_MULTIPLIER || 0.8
   ),
 
   panicExposureMultiplier: Number(
