@@ -434,6 +434,12 @@ institutionalExitOrchestratorHistory:
 institutionalExitOrchestratorHistory:
   (engineState.institutionalExitOrchestratorHistory || []).slice(0, 200),
 
+institutionalReloadState:
+  engineState.institutionalReloadState || null,
+
+institutionalReloadHistory:
+  (engineState.institutionalReloadHistory || []).slice(0, 200),  
+
 phase21AutonomousBrainHistory:
   (engineState.phase21AutonomousBrainHistory || []).slice(0, 200),
       pendingExits: engineState.pendingExits || [],
@@ -761,6 +767,8 @@ institutionalExitOrchestratorState: null,
 institutionalExitOrchestratorHistory: [],
 institutionalDistributionState: null,
 institutionalDistributionHistory: [],
+institutionalReloadState: null,
+institutionalReloadHistory: [],
 premarketMomentumState: null,
 premarketMomentumHistory: [],
 morningStrikeState: null,
@@ -10414,6 +10422,64 @@ function calculateInstitutionalDistributionClimax({
   };
 }
 
+function calculateInstitutionalReloadIntelligence({
+  symbol,
+  unrealizedPercent = 0,
+  dropFromHigh = 0,
+  distributionClimaxDecision = {},
+  institutionalExitDecision = {},
+}) {
+  const cleanSymbol = normalizeSymbol(symbol);
+
+  const latestSignal = (engineState.lastSignals || []).find(
+    (signal) => normalizeSymbol(signal.symbol) === cleanSymbol
+  );
+
+  const score = Number(latestSignal?.score || 0);
+  const technicalScore = Number(latestSignal?.technicalScore || 0);
+  const continuationProbability = Number(latestSignal?.continuationProbability || 0);
+  const volumeConfirmationQuality = Number(latestSignal?.volumeConfirmationQuality || 0);
+  const breakoutProbability = Number(latestSignal?.breakoutProbability || 0);
+
+  const reloadScore = clampScore(
+    35 +
+      (score >= 70 ? 12 : 0) +
+      (technicalScore >= 70 ? 12 : 0) +
+      (continuationProbability >= 75 ? 15 : 0) +
+      (volumeConfirmationQuality >= 80 ? 12 : 0) +
+      (breakoutProbability >= 75 ? 10 : 0) +
+      (dropFromHigh >= 0.75 && dropFromHigh <= 2.5 ? 15 : 0) -
+      (dropFromHigh > 4 ? 25 : 0) -
+      (distributionClimaxDecision.shouldExitClimax ? 25 : 0) -
+      (institutionalExitDecision.shouldForceExit ? 20 : 0)
+  );
+
+  const reloadMode =
+    reloadScore >= 80
+      ? "ELITE_RELOAD_ZONE"
+      : reloadScore >= 68
+      ? "WATCH_RELOAD_ZONE"
+      : "NO_RELOAD";
+
+  return {
+    symbol: cleanSymbol,
+    phase: "17.9_INSTITUTIONAL_RELOAD_INTELLIGENCE",
+    reloadMode,
+    reloadScore,
+    shouldWatchReload: reloadScore >= 68,
+    shouldAllowReload: reloadScore >= 80,
+    score,
+    technicalScore,
+    continuationProbability,
+    volumeConfirmationQuality,
+    breakoutProbability,
+    dropFromHigh,
+    reason:
+      `${reloadMode} • Reload ${reloadScore}/100 • ` +
+      `Continuation ${continuationProbability}/100 • Pullback ${dropFromHigh.toFixed(2)}%`,
+  };
+}
+
 function calculateTrendPersistenceHoldDecision({
   unrealizedPercent = 0,
   dropFromHigh = 0,
@@ -10669,6 +10735,27 @@ const shouldNormalTrailingExit =
     engineState.institutionalDistributionHistory =
       engineState.institutionalDistributionHistory.slice(0, 200);
 
+    const institutionalReloadDecision =
+      calculateInstitutionalReloadIntelligence({
+        symbol,
+        unrealizedPercent,
+        dropFromHigh,
+        distributionClimaxDecision,
+        institutionalExitDecision,
+      });
+
+    engineState.institutionalReloadState =
+      institutionalReloadDecision;
+
+    engineState.institutionalReloadHistory.unshift({
+      ...institutionalReloadDecision,
+      updatedAt: new Date().toISOString(),
+    });
+
+    engineState.institutionalReloadHistory =
+      engineState.institutionalReloadHistory.slice(0, 200);
+      
+      
     const shouldRunnerTrailingExit =
       isRunner && dropFromHigh >= dynamicRunnerTrailingStopPercent;
  if (
@@ -10722,6 +10809,7 @@ const shouldNormalTrailingExit =
           profitPercent: unrealizedPercent,
           dropFromHigh,
           distributionClimaxDecision,
+          institutionalReloadDecision,          
           trimOrder,
         });
 
@@ -10979,7 +11067,8 @@ saveRecentOrder(reason, symbol, {
         profitPercent: unrealizedPercent,
         smartExitDecision,  
         institutionalExitDecision,
-        distributionClimaxDecision,                  
+        distributionClimaxDecision,    
+        institutionalReloadDecision,                      
         isRunner,
         order,
       });
