@@ -8919,7 +8919,7 @@ function calculateCryptoInstitutionalQualification({
       engineState.macroRiskState?.shouldBlockNewTrades !== true &&
       engineState.marketCrashProtectionState?.shouldBlockNewTrades !== true
     );
-    
+
   const qualifiedToBuy =
     dataPass &&
     momentumPass &&
@@ -9037,6 +9037,16 @@ const cryptoPercentChange =
             liquidityMetrics.volumeSpikeRatio,
         },
 
+                autoTradeApproved:
+          cryptoQualification.qualifiedToBuy === true,
+
+        approved:
+          cryptoQualification.qualifiedToBuy === true,
+
+        decisionLevel:
+          cryptoQualification.qualifiedToBuy === true
+            ? "Auto-Trade Approved"
+            : "Watchlist",
         ...cryptoQualification,
       });
     } catch (err) {
@@ -9413,13 +9423,14 @@ async function placeMarketBuy(symbol, dollars, score = 0) {
       client_order_id: `${AI_ORDER_PREFIX}_BUY_${normalizedSymbol}_${Math.round(score)}_${Date.now()}`,
     };
 
-    if (marketOpen && fractionable) {
-      orderPayload = {
-        ...orderPayload,
-        notional: cleanNotional,
-        type: "market",
-      };
-    } else {
+if (marketOpen && fractionable) {
+  orderPayload = {
+    ...orderPayload,
+    notional: cleanNotional,
+    type: "market",
+  };
+} else {
+  
       const buyPrice = marketOpen
         ? referencePrice
         : Number((referencePrice * 1.01).toFixed(2));
@@ -13972,11 +13983,12 @@ engineState.analyticsSnapshots =
       )
       .sort((a, b) => b.score - a.score)[0];
 
+
     const bestCryptoSignal = cryptoSignals
       .filter(
         (s) =>
           s.qualifiedToBuy === true &&
-          s.autoTradeApproved === true
+          s.autoTradeApproved !== false
       )
       .sort((a, b) => b.score - a.score)[0];
 
