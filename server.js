@@ -458,6 +458,12 @@ exitParliamentState:
 exitParliamentHistory:
   (engineState.exitParliamentHistory || []).slice(0, 200),  
 
+explosiveRunnerState:
+  engineState.explosiveRunnerState || null,
+
+explosiveRunnerHistory:
+  (engineState.explosiveRunnerHistory || []).slice(0, 200),  
+
 phase21AutonomousBrainHistory:
   (engineState.phase21AutonomousBrainHistory || []).slice(0, 200),
       pendingExits: engineState.pendingExits || [],
@@ -791,6 +797,8 @@ smartSwingConversionState: null,
 smartSwingConversionHistory: [],
 exitParliamentState: null,
 exitParliamentHistory: [],
+explosiveRunnerState: null,
+explosiveRunnerHistory: [],
 premarketMomentumState: null,
 adaptiveOvernightHoldState: null,
 adaptiveOvernightHoldHistory: [],
@@ -1784,6 +1792,324 @@ function updatePremarketMomentumState(signals = []) {
   engineState.premarketMomentumHistory.unshift(state);
   engineState.premarketMomentumHistory =
     engineState.premarketMomentumHistory.slice(0, 200);
+
+  return state;
+}
+
+function calculateAccumulationEngine(signal = {}) {
+  const symbol = normalizeSymbol(signal.symbol);
+  const percentChange = Number(signal.percentChange || 0);
+  const volume = Number(signal.volume || signal.barVolume || 0);
+
+  const avgVolume = Number(
+    signal.averageVolume ||
+      signal.avgVolume ||
+      signal.avgBarVolume ||
+      signal.confirmations?.avgVolume ||
+      0
+  );
+
+  const relativeVolume = Number(
+    signal.relativeVolume ||
+      signal.volumeRatio ||
+      signal.volumeSpikeRatio ||
+      signal.confirmations?.volumeSpikeRatio ||
+      (avgVolume > 0 ? volume / avgVolume : 0)
+  );
+
+  const closeNearHighPercent = Number(
+    signal.confirmations?.closeNearHighPercent || 0
+  );
+
+  const aboveVwap = signal.confirmations?.aboveVwap === true;
+  const fakeBreakout = signal.confirmations?.fakeBreakout === true;
+
+  const recentSameSymbol = (engineState.signalHistory || [])
+    .filter((item) => normalizeSymbol(item.symbol) === symbol)
+    .slice(0, 20);
+
+  const repeatedAppearances = recentSameSymbol.length;
+
+  const accumulationScore = clampScore(
+    35 +
+      (relativeVolume >= 1.5 ? 12 : 0) +
+      (relativeVolume >= 3 ? 14 : 0) +
+      (percentChange > 0 && percentChange <= 15 ? 12 : 0) +
+      (closeNearHighPercent >= 70 ? 10 : 0) +
+      (aboveVwap ? 10 : 0) +
+      (repeatedAppearances >= 3 ? 10 : 0) +
+      (repeatedAppearances >= 7 ? 10 : 0) -
+      (percentChange >= 60 ? 18 : 0) -
+      (fakeBreakout ? 25 : 0)
+  );
+
+  const accumulationLabel =
+    accumulationScore >= 82
+      ? "STEALTH_ACCUMULATION"
+      : accumulationScore >= 68
+      ? "EARLY_ACCUMULATION"
+      : accumulationScore >= 55
+      ? "WATCH_ACCUMULATION"
+      : "NO_ACCUMULATION_EDGE";
+
+  return {
+    symbol,
+    phase: "22.1_ACCUMULATION_ENGINE",
+    accumulationScore,
+    accumulationLabel,
+    relativeVolume,
+    repeatedAppearances,
+    reason:
+      `${accumulationLabel} • Accumulation ${accumulationScore}/100 • ` +
+      `RVOL ${relativeVolume}x • Seen ${repeatedAppearances} times`,
+  };
+}
+
+function calculateVolatilityCompressionEngine(signal = {}) {
+  const symbol = normalizeSymbol(signal.symbol);
+  const high = Number(signal.high || 0);
+  const low = Number(signal.low || 0);
+  const current = Number(signal.current || signal.price || 0);
+  const percentChange = Math.abs(Number(signal.percentChange || 0));
+
+  const rangePercent =
+    high > 0 && low > 0 && current > 0
+      ? ((high - low) / current) * 100
+      : 0;
+
+  const pullbackFromHighPercent = Number(
+    signal.confirmations?.pullbackFromHighPercent || 0
+  );
+
+  const closeNearHighPercent = Number(
+    signal.confirmations?.closeNearHighPercent || 0
+  );
+
+  const relativeVolume = Number(
+    signal.relativeVolume ||
+      signal.volumeRatio ||
+      signal.volumeSpikeRatio ||
+      signal.confirmations?.volumeSpikeRatio ||
+      0
+  );
+
+  const compressionScore = clampScore(
+    40 +
+      (rangePercent > 0 && rangePercent <= 8 ? 18 : 0) +
+      (rangePercent > 8 && rangePercent <= 15 ? 10 : 0) +
+      (percentChange <= 8 ? 10 : 0) +
+      (relativeVolume >= 1.5 ? 10 : 0) +
+      (closeNearHighPercent >= 65 ? 10 : 0) -
+      (pullbackFromHighPercent >= 8 ? 18 : 0) -
+      (percentChange >= 40 ? 18 : 0)
+  );
+
+  const compressionLabel =
+    compressionScore >= 80
+      ? "SQUEEZE_BUILDING"
+      : compressionScore >= 65
+      ? "COMPRESSION_WATCH"
+      : "NO_COMPRESSION_EDGE";
+
+  return {
+    symbol,
+    phase: "22.2_VOLATILITY_COMPRESSION_ENGINE",
+    compressionScore,
+    compressionLabel,
+    rangePercent: Number(rangePercent.toFixed(2)),
+    reason:
+      `${compressionLabel} • Compression ${compressionScore}/100 • ` +
+      `Range ${rangePercent.toFixed(2)}%`,
+  };
+}
+
+function calculateCatalystRankingEngine(signal = {}) {
+  const symbol = normalizeSymbol(signal.symbol);
+
+  const headlineText = (
+    signal.confirmations?.riskyNewsHeadlines ||
+    signal.newsHeadlines ||
+    []
+  )
+    .join(" ")
+    .toLowerCase();
+
+  const strongWords = [
+    "earnings",
+    "revenue",
+    "guidance",
+    "contract",
+    "partnership",
+    "fda approval",
+    "acquisition",
+    "buyout",
+    "merger",
+    "patent",
+    "ai",
+    "analyst upgrade",
+    "record",
+  ];
+
+  const dangerWords = [
+    "offering",
+    "bankruptcy",
+    "delisting",
+    "investigation",
+    "lawsuit",
+    "downgrade",
+    "reverse split",
+    "weak guidance",
+  ];
+
+  const positiveHits = strongWords.filter((word) =>
+    headlineText.includes(word)
+  );
+
+  const dangerHits = dangerWords.filter((word) =>
+    headlineText.includes(word)
+  );
+
+  const catalystScore = clampScore(
+    45 +
+      positiveHits.length * 12 -
+      dangerHits.length * 20 +
+      (headlineText.includes("buyout") ? 20 : 0) +
+      (headlineText.includes("fda approval") ? 20 : 0) +
+      (headlineText.includes("offering") ? -30 : 0)
+  );
+
+  const catalystLabel =
+    catalystScore >= 82
+      ? "MAJOR_CATALYST"
+      : catalystScore >= 68
+      ? "POSITIVE_CATALYST"
+      : catalystScore <= 30
+      ? "DANGEROUS_CATALYST"
+      : "NO_CLEAR_CATALYST";
+
+  return {
+    symbol,
+    phase: "22.3_CATALYST_RANKING_ENGINE",
+    catalystScore,
+    catalystLabel,
+    positiveHits,
+    dangerHits,
+    reason: `${catalystLabel} • Catalyst ${catalystScore}/100`,
+  };
+}
+
+function calculateExplosiveRunnerPrediction(signal = {}) {
+  const accumulation =
+    signal.accumulationIntelligence ||
+    calculateAccumulationEngine(signal);
+
+  const compression =
+    signal.volatilityCompression ||
+    calculateVolatilityCompressionEngine(signal);
+
+  const catalyst =
+    signal.catalystRanking ||
+    calculateCatalystRankingEngine(signal);
+
+  const floatRotation =
+    signal.floatRotation ||
+    calculateFloatRotationIntelligence(signal);
+
+  const premarket =
+    signal.premarketMomentum ||
+    calculatePremarketMomentumEngine(signal);
+
+  const technicalScore = Number(signal.technicalScore || 0);
+
+  const statisticalScore = Number(
+    signal.statisticalScore ||
+      signal.statisticalEdgeScore ||
+      signal.statisticalEdge?.statisticalEdgeScore ||
+      0
+  );
+
+  const explosiveRunnerScore = clampScore(
+    accumulation.accumulationScore * 0.22 +
+      compression.compressionScore * 0.18 +
+      catalyst.catalystScore * 0.18 +
+      floatRotation.squeezeProbability * 0.16 +
+      premarket.openingDriveProbability * 0.14 +
+      technicalScore * 0.07 +
+      statisticalScore * 0.05
+  );
+
+  const runnerLabel =
+    explosiveRunnerScore >= 82
+      ? "EARLY_EXPLOSIVE_RUNNER"
+      : explosiveRunnerScore >= 70
+      ? "RUNNER_WATCHLIST"
+      : explosiveRunnerScore >= 58
+      ? "DEVELOPING_RUNNER"
+      : "NO_RUNNER_EDGE";
+
+  return {
+    phase: "22.4_EXPLOSIVE_RUNNER_PREDICTION",
+    explosiveRunnerScore,
+    runnerLabel,
+    accumulation,
+    compression,
+    catalyst,
+    floatRotation,
+    premarket,
+    reason:
+      `${runnerLabel} • Runner ${explosiveRunnerScore}/100 • ` +
+      `Accumulation ${accumulation.accumulationScore}/100 • ` +
+      `Compression ${compression.compressionScore}/100`,
+  };
+}
+
+function updateExplosiveRunnerState(signals = []) {
+  const stockSignals = (Array.isArray(signals) ? signals : [])
+    .filter((signal) => {
+      const assetClass = signal.assetClass || signal.asset_class || "stock";
+      return assetClass === "stock";
+    })
+    .map((signal) => ({
+      ...signal,
+      explosiveRunnerPrediction:
+        signal.explosiveRunnerPrediction ||
+        calculateExplosiveRunnerPrediction(signal),
+    }))
+    .sort(
+      (a, b) =>
+        Number(b.explosiveRunnerPrediction?.explosiveRunnerScore || 0) -
+        Number(a.explosiveRunnerPrediction?.explosiveRunnerScore || 0)
+    );
+
+  const topEarlyRunners = stockSignals
+    .filter(
+      (signal) =>
+        Number(signal.explosiveRunnerPrediction?.explosiveRunnerScore || 0) >=
+        70
+    )
+    .slice(0, 10);
+
+  const state = {
+    updatedAt: new Date().toISOString(),
+    phase: "22_EXPLOSIVE_RUNNER_INTELLIGENCE",
+    reviewedCount: stockSignals.length,
+    topEarlyRunnerCount: topEarlyRunners.length,
+    topEarlyRunners,
+    topTwoSymbols: topEarlyRunners.slice(0, 2).map((s) => s.symbol),
+    reason:
+      `Explosive runner engine reviewed ${stockSignals.length} stocks • ` +
+      `${topEarlyRunners.length} early-runner candidates`,
+  };
+
+  engineState.explosiveRunnerState = state;
+
+  if (!engineState.explosiveRunnerHistory) {
+    engineState.explosiveRunnerHistory = [];
+  }
+
+  engineState.explosiveRunnerHistory.unshift(state);
+  engineState.explosiveRunnerHistory =
+    engineState.explosiveRunnerHistory.slice(0, 200);
 
   return state;
 }
@@ -9249,6 +9575,45 @@ const institutional = calculateInstitutionalScores({
   score,
 });
 
+const accumulationIntelligence =
+  calculateAccumulationEngine({
+    ...quote,
+    score: institutional.institutionalScore,
+    statisticalScore,
+    statisticalEdge,
+    ...institutional,
+  });
+
+const volatilityCompression =
+  calculateVolatilityCompressionEngine({
+    ...quote,
+    score: institutional.institutionalScore,
+    statisticalScore,
+    statisticalEdge,
+    ...institutional,
+  });
+
+const catalystRanking =
+  calculateCatalystRankingEngine({
+    ...quote,
+    score: institutional.institutionalScore,
+    statisticalScore,
+    statisticalEdge,
+    ...institutional,
+  });
+
+const explosiveRunnerPrediction =
+  calculateExplosiveRunnerPrediction({
+    ...quote,
+    score: institutional.institutionalScore,
+    statisticalScore,
+    statisticalEdge,
+    ...institutional,
+    accumulationIntelligence,
+    volatilityCompression,
+    catalystRanking,
+  });
+
    const portfolioManager =
   typeof calculateAiPortfolioManagerDecision === "function"
     ? calculateAiPortfolioManagerDecision(
@@ -9288,6 +9653,14 @@ const institutional = calculateInstitutionalScores({
 
         statisticalScore,
         statisticalEdge,
+        accumulationIntelligence,
+        volatilityCompression,
+        catalystRanking,
+        explosiveRunnerPrediction,
+        explosiveRunnerScore:
+          explosiveRunnerPrediction.explosiveRunnerScore,
+        explosiveRunnerLabel:
+          explosiveRunnerPrediction.runnerLabel,        
 
         ...institutional,
         ...portfolioManager,
@@ -9311,7 +9684,18 @@ qualifiedToBuy:
 
   const results = rawResults.filter(Boolean);
 
+  
+
   console.log(`Scan finished. Found ${results.length} stocks.`);
+
+  const explosiveRunnerState =
+    updateExplosiveRunnerState(results);
+
+  saveRecentOrder("EXPLOSIVE_RUNNER_UPDATED", "STOCK", {
+    reviewedCount: explosiveRunnerState.reviewedCount,
+    topEarlyRunnerCount: explosiveRunnerState.topEarlyRunnerCount,
+    topTwoSymbols: explosiveRunnerState.topTwoSymbols,
+  });
 
   const statisticalEdgeSignals = results.filter(
     (signal) => Number(signal.statisticalScore || 0) >= 70
@@ -15179,6 +15563,9 @@ saveRecentOrder("MANUAL_DAILY_LOCK_RESET", "ACCOUNT", {
       continuationHoldState:
         engineState.continuationHoldState || null,
 
+      explosiveRunnerState:
+        engineState.explosiveRunnerState || null,        
+
       activeContinuationHoldSymbol:
         engineState.activeContinuationHoldSymbol || null,
 
@@ -15218,6 +15605,12 @@ saveRecentOrder("MANUAL_DAILY_LOCK_RESET", "ACCOUNT", {
           20
         ),
 
+      explosiveRunnerHistory:
+        (engineState.explosiveRunnerHistory || []).slice(
+          0,
+          20
+        ),
+                
       continuationHoldHistory:
         (engineState.continuationHoldHistory || []).slice(
           0,
