@@ -12429,6 +12429,9 @@ engineState.statisticalMemoryState =
     signal.premarketDominance =
       calculatePremarketDominanceEngine(signal);
 
+    signal.premarketDominanceScore =
+      Number(signal.premarketDominance?.premarketDominanceScore || 0);
+
     if (
       Number(signal.premarketDominance.premarketDominanceScore || 0) >= 75
     ) {
