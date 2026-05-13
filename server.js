@@ -440,6 +440,12 @@ institutionalReloadState:
 institutionalReloadHistory:
   (engineState.institutionalReloadHistory || []).slice(0, 200),  
 
+adaptiveOvernightHoldState:
+  engineState.adaptiveOvernightHoldState || null,
+
+adaptiveOvernightHoldHistory:
+  (engineState.adaptiveOvernightHoldHistory || []).slice(0, 200),  
+
 phase21AutonomousBrainHistory:
   (engineState.phase21AutonomousBrainHistory || []).slice(0, 200),
       pendingExits: engineState.pendingExits || [],
@@ -770,6 +776,8 @@ institutionalDistributionHistory: [],
 institutionalReloadState: null,
 institutionalReloadHistory: [],
 premarketMomentumState: null,
+adaptiveOvernightHoldState: null,
+adaptiveOvernightHoldHistory: [],
 premarketMomentumHistory: [],
 morningStrikeState: null,
 morningStrikeHistory: [],
@@ -10480,6 +10488,116 @@ function calculateInstitutionalReloadIntelligence({
   };
 }
 
+function calculateAdaptiveOvernightHoldIntelligence({
+  symbol,
+  unrealizedPercent = 0,
+  dropFromHigh = 0,
+  isRunner = false,
+  smartExitDecision = {},
+  institutionalExitDecision = {},
+  distributionClimaxDecision = {},
+  institutionalReloadDecision = {},
+}) {
+  const cleanSymbol = normalizeSymbol(symbol);
+
+  const latestSignal = (engineState.lastSignals || []).find(
+    (signal) => normalizeSymbol(signal.symbol) === cleanSymbol
+  );
+
+  const minutes = getEasternMarketMinutes();
+  const minutesUntilClose = (16 * 60) - minutes;
+  const nearClose = minutesUntilClose <= 45 && minutesUntilClose >= 0;
+
+  const score = Number(latestSignal?.score || 0);
+  const technicalScore = Number(latestSignal?.technicalScore || 0);
+  const continuationProbability = Number(latestSignal?.continuationProbability || 0);
+  const breakoutProbability = Number(latestSignal?.breakoutProbability || 0);
+  const volumeConfirmationQuality = Number(latestSignal?.volumeConfirmationQuality || 0);
+  const exhaustionRiskScore = Number(latestSignal?.exhaustionRiskScore || 0);
+
+  const gapRiskScore = clampScore(
+    35 +
+      (exhaustionRiskScore >= 60 ? 15 : 0) +
+      (distributionClimaxDecision.climaxScore >= 70 ? 20 : 0) +
+      (dropFromHigh >= 2 ? 15 : 0) +
+      (unrealizedPercent < 0 ? 20 : 0) -
+      (score >= 75 ? 10 : 0) -
+      (technicalScore >= 75 ? 10 : 0) -
+      (continuationProbability >= 80 ? 15 : 0)
+  );
+
+  const overnightConfidenceScore = clampScore(
+    35 +
+      (score >= 70 ? 12 : 0) +
+      (technicalScore >= 75 ? 14 : 0) +
+      (continuationProbability >= 75 ? 16 : 0) +
+      (breakoutProbability >= 75 ? 10 : 0) +
+      (volumeConfirmationQuality >= 80 ? 10 : 0) +
+      (isRunner && unrealizedPercent > 3 ? 10 : 0) -
+      (gapRiskScore >= 70 ? 20 : 0) -
+      (smartExitDecision.shouldForceExit ? 25 : 0) -
+      (institutionalExitDecision.shouldForceExit ? 25 : 0) -
+      (distributionClimaxDecision.shouldExitClimax ? 25 : 0)
+  );
+
+  const shouldHoldOvernight =
+    nearClose &&
+    overnightConfidenceScore >= 72 &&
+    gapRiskScore < 70 &&
+    !smartExitDecision.shouldForceExit &&
+    !institutionalExitDecision.shouldForceExit &&
+    !distributionClimaxDecision.shouldExitClimax;
+
+  const shouldTrimBeforeClose =
+    nearClose &&
+    unrealizedPercent >= 3 &&
+    gapRiskScore >= 60 &&
+     true;
+
+  const shouldExitBeforeClose =
+    nearClose &&
+    (
+      gapRiskScore >= 82 ||
+      smartExitDecision.shouldForceExit ||
+      institutionalExitDecision.shouldForceExit ||
+      distributionClimaxDecision.shouldExitClimax
+    );
+
+  const overnightMode =
+    shouldExitBeforeClose
+      ? "EXIT_BEFORE_CLOSE"
+      : shouldTrimBeforeClose
+      ? "TRIM_BEFORE_CLOSE"
+      : shouldHoldOvernight
+      ? "CONFIDENT_OVERNIGHT_HOLD"
+      : nearClose
+      ? "NO_OVERNIGHT_EDGE"
+      : "NOT_NEAR_CLOSE";
+
+  return {
+    symbol: cleanSymbol,
+    phase: "17.10_ADAPTIVE_OVERNIGHT_HOLD_INTELLIGENCE",
+    overnightMode,
+    nearClose,
+    minutesUntilClose,
+    overnightConfidenceScore,
+    gapRiskScore,
+    shouldHoldOvernight,
+    shouldTrimBeforeClose,
+    shouldExitBeforeClose,
+    score,
+    technicalScore,
+    continuationProbability,
+    breakoutProbability,
+    volumeConfirmationQuality,
+    exhaustionRiskScore,
+    reloadMode: institutionalReloadDecision.reloadMode || "NO_RELOAD",
+    reason:
+      `${overnightMode} • Overnight ${overnightConfidenceScore}/100 • ` +
+      `GapRisk ${gapRiskScore}/100 • MinutesToClose ${minutesUntilClose}`,
+  };
+}
+
 function calculateTrendPersistenceHoldDecision({
   unrealizedPercent = 0,
   dropFromHigh = 0,
@@ -10755,6 +10873,30 @@ const shouldNormalTrailingExit =
     engineState.institutionalReloadHistory =
       engineState.institutionalReloadHistory.slice(0, 200);
       
+    const adaptiveOvernightHoldDecision =
+      calculateAdaptiveOvernightHoldIntelligence({
+        symbol,
+        unrealizedPercent,
+        dropFromHigh,
+        isRunner,
+        smartExitDecision,
+        institutionalExitDecision,
+        distributionClimaxDecision,
+        institutionalReloadDecision,
+      });
+
+    engineState.adaptiveOvernightHoldState =
+      adaptiveOvernightHoldDecision;
+
+    engineState.adaptiveOvernightHoldHistory.unshift({
+      ...adaptiveOvernightHoldDecision,
+      updatedAt: new Date().toISOString(),
+    });
+
+    engineState.adaptiveOvernightHoldHistory =
+      engineState.adaptiveOvernightHoldHistory.slice(0, 200);
+      
+      
       
     const shouldRunnerTrailingExit =
       isRunner && dropFromHigh >= dynamicRunnerTrailingStopPercent;
@@ -10764,13 +10906,15 @@ const shouldNormalTrailingExit =
     trendQualityHold.shouldExtendHold ||
     continuationHoldExitDecision.shouldProtectHold ||
     smartExitDecision.shouldExtendHold ||
-    institutionalExitDecision.shouldHold
+    institutionalExitDecision.shouldHold ||
+    adaptiveOvernightHoldDecision.shouldHoldOvernight
   ) &&
   !shouldStopLoss &&
   !continuationHoldExitDecision.shouldExit &&
   !smartExitDecision.shouldForceExit &&
   !institutionalExitDecision.shouldForceExit &&
-  !distributionClimaxDecision.shouldExitClimax
+  !distributionClimaxDecision.shouldExitClimax &&
+  !adaptiveOvernightHoldDecision.shouldExitBeforeClose
 ) {
       saveRecentOrder("SMART_EXIT_HOLD", symbol, {
         qty,
@@ -10787,6 +10931,43 @@ const shouldNormalTrailingExit =
 
       continue;
     }
+
+    if (
+      adaptiveOvernightHoldDecision.shouldTrimBeforeClose &&
+      marketOpen &&
+      qty >= 2
+    ) {
+      try {
+        const overnightTrimQty = Math.max(1, Math.floor(qty * 0.25));
+
+        const overnightTrimOrder = await placeMarketSell(
+          symbol,
+          overnightTrimQty,
+          "OVERNIGHT_RISK_TRIM"
+        );
+
+        saveRecentOrder("OVERNIGHT_RISK_TRIM", symbol, {
+          overnightTrimQty,
+          remainingQty: qty - overnightTrimQty,
+          price: currentPrice,
+          profitPercent: unrealizedPercent,
+          dropFromHigh,
+          adaptiveOvernightHoldDecision,
+          overnightTrimOrder,
+        });
+
+        saveEngineState("OVERNIGHT_RISK_TRIM");
+
+        continue;
+      } catch (err) {
+        saveFailedOrder("OVERNIGHT_RISK_TRIM_FAILED", symbol, err.message, {
+          qty,
+          price: currentPrice,
+          profitPercent: unrealizedPercent,
+          adaptiveOvernightHoldDecision,
+        });
+      }
+    }    
 
     if (
       distributionClimaxDecision.shouldTrimClimax &&
@@ -10940,7 +11121,8 @@ const shouldNormalTrailingExit =
       !continuationHoldExitDecision.shouldExit &&
       !smartExitDecision.shouldForceExit &&
       !institutionalExitDecision.shouldForceExit &&
-      !distributionClimaxDecision.shouldExitClimax
+      !distributionClimaxDecision.shouldExitClimax &&
+      !adaptiveOvernightHoldDecision.shouldExitBeforeClose
     ) {
       continue;
     }
@@ -10953,6 +11135,7 @@ const shouldNormalTrailingExit =
     else if (smartExitDecision.shouldForceExit) reason = "SMART_FORCE_EXIT";
     else if (institutionalExitDecision.shouldForceExit) reason = "INSTITUTIONAL_FORCE_EXIT";    
     else if (distributionClimaxDecision.shouldExitClimax) reason = "CLIMAX_DISTRIBUTION_EXIT";
+    else if (adaptiveOvernightHoldDecision.shouldExitBeforeClose) reason = "OVERNIGHT_RISK_EXIT";    
     else if (continuationHoldExitDecision.shouldExit) reason = "NON_SELECTED_CONTINUATION_EXIT";
     else if (shouldRunnerTrailingExit) reason = "RUNNER_TRAILING_STOP";
     else if (shouldProtectProfit) reason = "PROFIT_PROTECTION";
@@ -11068,7 +11251,8 @@ saveRecentOrder(reason, symbol, {
         smartExitDecision,  
         institutionalExitDecision,
         distributionClimaxDecision,    
-        institutionalReloadDecision,                      
+        institutionalReloadDecision,   
+        adaptiveOvernightHoldDecision,                           
         isRunner,
         order,
       });
