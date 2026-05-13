@@ -694,7 +694,7 @@ const CONFIG = {
   ),
 
   eliteMorningStrikeLimit: Number(
-    process.env.ELITE_MORNING_STRIKE_LIMIT || 2
+    process.env.ELITE_MORNING_STRIKE_LIMIT || 5
   ),
 
   enableMarketRegimeEngine:
