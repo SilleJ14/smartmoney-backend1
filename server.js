@@ -15480,47 +15480,53 @@ let successfulStockBuysThisCycle = 0;
         provisionalTradeAmount
       );
 
+    candidate.institutionalExecutionPlan =
+      institutionalExecutionPlan;
+
+    candidate.executionConfidence =
+      institutionalExecutionPlan.executionConfidence;
+
     candidate.runnerScore =
       Number(
         candidate.explosiveRunnerScore ||
-        candidate.explosiveRunnerPrediction
-          ?.explosiveRunnerScore ||
-        candidate.adaptiveRunnerScore ||
-        0
+          candidate.explosiveRunnerPrediction
+            ?.explosiveRunnerScore ||
+          candidate.adaptiveRunnerScore ||
+          0
       );
 
     candidate.premarketDominanceScore =
       Number(
         candidate.premarketDominance
           ?.premarketDominanceScore ||
-        candidate.explosiveRunnerPrediction
-          ?.premarket
-          ?.openingDriveProbability ||
-        candidate.explosiveRunnerPrediction
-          ?.premarket
-          ?.morningMomentumScore ||
-        candidate.premarketDominanceScore ||
-        0
+          candidate.explosiveRunnerPrediction
+            ?.premarket
+            ?.openingDriveProbability ||
+          candidate.explosiveRunnerPrediction
+            ?.premarket
+            ?.morningMomentumScore ||
+          candidate.premarketDominanceScore ||
+          0
       );
 
     candidate.institutionalBrainScore =
       Number(
         candidate.fullInstitutionalAiBrain
           ?.consensusScore ||
-        candidate.fullInstitutionalAiBrain
-          ?.dynamicConvictionScore ||
-        candidate.institutionalBrainScore ||
-        50
+          candidate.fullInstitutionalAiBrain
+            ?.dynamicConvictionScore ||
+          candidate.institutionalBrainScore ||
+          50
       );
-        
-const portfolioManager =
-  typeof calculateAiPortfolioManagerDecision === "function"
-    ? calculateAiPortfolioManagerDecision(
-        candidate,
-        account,
-        aiPositions,
-        engineState.marketRegime || detectMarketRegime([])
-      )
+
+    const portfolioManager =
+      typeof calculateAiPortfolioManagerDecision === "function"
+        ? calculateAiPortfolioManagerDecision(
+            candidate,
+            account,
+            aiPositions,
+            engineState.marketRegime || detectMarketRegime([])
+          )
     : {
         approved: true,
         autoTradeApproved: true,
