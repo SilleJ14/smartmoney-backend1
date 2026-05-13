@@ -431,6 +431,9 @@ institutionalExitOrchestratorState:
 institutionalExitOrchestratorHistory:
   (engineState.institutionalExitOrchestratorHistory || []).slice(0, 200),  
 
+institutionalExitOrchestratorHistory:
+  (engineState.institutionalExitOrchestratorHistory || []).slice(0, 200),
+
 phase21AutonomousBrainHistory:
   (engineState.phase21AutonomousBrainHistory || []).slice(0, 200),
       pendingExits: engineState.pendingExits || [],
@@ -756,6 +759,8 @@ smartExitIntelligenceState: null,
 smartExitIntelligenceHistory: [],
 institutionalExitOrchestratorState: null,
 institutionalExitOrchestratorHistory: [],
+institutionalDistributionState: null,
+institutionalDistributionHistory: [],
 premarketMomentumState: null,
 premarketMomentumHistory: [],
 morningStrikeState: null,
@@ -10314,6 +10319,101 @@ function calculateInstitutionalExitOrchestrator({
   };
 }
 
+function calculateInstitutionalDistributionClimax({
+  symbol,
+  unrealizedPercent = 0,
+  dropFromHigh = 0,
+  isRunner = false,
+  smartExitDecision = {},
+  institutionalExitDecision = {},
+}) {
+  const cleanSymbol = normalizeSymbol(symbol);
+
+  const latestSignal = (engineState.lastSignals || []).find(
+    (signal) => normalizeSymbol(signal.symbol) === cleanSymbol
+  );
+
+  const percentChange = Number(latestSignal?.percentChange || 0);
+  const volumeRatio = Number(
+    latestSignal?.volumeRatio ||
+      latestSignal?.volumeSpikeRatio ||
+      latestSignal?.confirmations?.volumeSpikeRatio ||
+      0
+  );
+
+  const closeNearHighPercent = Number(
+    latestSignal?.confirmations?.closeNearHighPercent || 0
+  );
+
+  const exhaustionRiskScore = Number(
+    latestSignal?.exhaustionRiskScore ||
+      latestSignal?.technicalIntelligence?.exhaustionRiskScore ||
+      0
+  );
+
+  const continuationProbability = Number(
+    latestSignal?.continuationProbability || 0
+  );
+
+  const climaxScore = clampScore(
+    25 +
+      (percentChange >= 20 ? 15 : 0) +
+      (percentChange >= 40 ? 20 : 0) +
+      (volumeRatio >= 3 ? 12 : 0) +
+      (volumeRatio >= 6 ? 15 : 0) +
+      (exhaustionRiskScore >= 60 ? 15 : 0) +
+      (dropFromHigh >= 1 ? 10 : 0) +
+      (dropFromHigh >= 2 ? 15 : 0) -
+      (closeNearHighPercent >= 85 && dropFromHigh < 0.75 ? 15 : 0) -
+      (continuationProbability >= 80 && dropFromHigh < 1 ? 12 : 0)
+  );
+
+  const distributionRiskScore = clampScore(
+    30 +
+      (dropFromHigh >= 1.5 ? 20 : 0) +
+      (dropFromHigh >= 3 ? 25 : 0) +
+      (percentChange >= 35 && dropFromHigh >= 1 ? 15 : 0) +
+      (institutionalExitDecision.exitPressureScore >= 70 ? 15 : 0) +
+      (smartExitDecision.shouldForceExit ? 20 : 0)
+  );
+
+  const shouldTrimClimax =
+    unrealizedPercent >= 4 &&
+    climaxScore >= 70 &&
+    distributionRiskScore < 85;
+
+  const shouldExitClimax =
+    distributionRiskScore >= 85 ||
+    (climaxScore >= 88 && dropFromHigh >= 2);
+
+  const distributionMode =
+    shouldExitClimax
+      ? "CLIMAX_DISTRIBUTION_EXIT"
+      : shouldTrimClimax
+      ? "CLIMAX_TRIM_PROFIT"
+      : climaxScore >= 65
+      ? "WATCH_DISTRIBUTION"
+      : "NO_DISTRIBUTION_EXIT";
+
+  return {
+    symbol: cleanSymbol,
+    phase: "17.8_INSTITUTIONAL_DISTRIBUTION_CLIMAX",
+    distributionMode,
+    climaxScore,
+    distributionRiskScore,
+    shouldTrimClimax,
+    shouldExitClimax,
+    percentChange,
+    volumeRatio,
+    closeNearHighPercent,
+    exhaustionRiskScore,
+    continuationProbability,
+    reason:
+      `${distributionMode} • Climax ${climaxScore}/100 • ` +
+      `Distribution ${distributionRiskScore}/100 • Profit ${unrealizedPercent.toFixed(2)}%`,
+  };
+}
+
 function calculateTrendPersistenceHoldDecision({
   unrealizedPercent = 0,
   dropFromHigh = 0,
@@ -10548,6 +10648,27 @@ const shouldNormalTrailingExit =
     engineState.institutionalExitOrchestratorHistory =
       engineState.institutionalExitOrchestratorHistory.slice(0, 200);      
 
+    const distributionClimaxDecision =
+      calculateInstitutionalDistributionClimax({
+        symbol,
+        unrealizedPercent,
+        dropFromHigh,
+        isRunner,
+        smartExitDecision,
+        institutionalExitDecision,
+      });
+
+    engineState.institutionalDistributionState =
+      distributionClimaxDecision;
+
+    engineState.institutionalDistributionHistory.unshift({
+      ...distributionClimaxDecision,
+      updatedAt: new Date().toISOString(),
+    });
+
+    engineState.institutionalDistributionHistory =
+      engineState.institutionalDistributionHistory.slice(0, 200);
+
     const shouldRunnerTrailingExit =
       isRunner && dropFromHigh >= dynamicRunnerTrailingStopPercent;
  if (
@@ -10561,7 +10682,8 @@ const shouldNormalTrailingExit =
   !shouldStopLoss &&
   !continuationHoldExitDecision.shouldExit &&
   !smartExitDecision.shouldForceExit &&
-  !institutionalExitDecision.shouldForceExit
+  !institutionalExitDecision.shouldForceExit &&
+  !distributionClimaxDecision.shouldExitClimax
 ) {
       saveRecentOrder("SMART_EXIT_HOLD", symbol, {
         qty,
@@ -10578,6 +10700,44 @@ const shouldNormalTrailingExit =
 
       continue;
     }
+
+    if (
+      distributionClimaxDecision.shouldTrimClimax &&
+      marketOpen &&
+      qty >= 2
+    ) {
+      try {
+        const trimQty = Math.max(1, Math.floor(qty * 0.25));
+
+        const trimOrder = await placeMarketSell(
+          symbol,
+          trimQty,
+          "CLIMAX_TRIM_PROFIT"
+        );
+
+        saveRecentOrder("CLIMAX_TRIM_PROFIT", symbol, {
+          trimQty,
+          remainingQty: qty - trimQty,
+          price: currentPrice,
+          profitPercent: unrealizedPercent,
+          dropFromHigh,
+          distributionClimaxDecision,
+          trimOrder,
+        });
+
+        saveEngineState("CLIMAX_TRIM_PROFIT");
+
+        continue;
+      } catch (err) {
+        saveFailedOrder("CLIMAX_TRIM_FAILED", symbol, err.message, {
+          qty,
+          price: currentPrice,
+          profitPercent: unrealizedPercent,
+          distributionClimaxDecision,
+        });
+      }
+    }
+
     if (
       institutionalExitDecision.shouldScaleProfit &&
       marketOpen &&
@@ -10691,7 +10851,8 @@ const shouldNormalTrailingExit =
       !shouldRunnerTrailingExit &&
       !continuationHoldExitDecision.shouldExit &&
       !smartExitDecision.shouldForceExit &&
-      !institutionalExitDecision.shouldForceExit
+      !institutionalExitDecision.shouldForceExit &&
+      !distributionClimaxDecision.shouldExitClimax
     ) {
       continue;
     }
@@ -10703,6 +10864,7 @@ const shouldNormalTrailingExit =
     else if (smartExitDecision.runnerFailure) reason = "RUNNER_FAILURE_EXIT";
     else if (smartExitDecision.shouldForceExit) reason = "SMART_FORCE_EXIT";
     else if (institutionalExitDecision.shouldForceExit) reason = "INSTITUTIONAL_FORCE_EXIT";    
+    else if (distributionClimaxDecision.shouldExitClimax) reason = "CLIMAX_DISTRIBUTION_EXIT";
     else if (continuationHoldExitDecision.shouldExit) reason = "NON_SELECTED_CONTINUATION_EXIT";
     else if (shouldRunnerTrailingExit) reason = "RUNNER_TRAILING_STOP";
     else if (shouldProtectProfit) reason = "PROFIT_PROTECTION";
@@ -10816,7 +10978,8 @@ saveRecentOrder(reason, symbol, {
         dropFromHigh,
         profitPercent: unrealizedPercent,
         smartExitDecision,  
-        institutionalExitDecision,            
+        institutionalExitDecision,
+        distributionClimaxDecision,                  
         isRunner,
         order,
       });
