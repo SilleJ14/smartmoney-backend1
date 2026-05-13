@@ -8908,11 +8908,18 @@ function calculateCryptoInstitutionalQualification({
   const dataPass =
     barsFound >= 10 &&
     Number(quote.current || 0) > 0;
+  const cryptoMacroOverride =
+    engineState.marketCycleIntelligenceState?.marketCyclePhase === "ACCUMULATION" &&
+    engineState.autonomousTradingSystemState?.shouldBlockNewTrades !== true &&
+    engineState.phase21AutonomousBrainState?.shouldBlockNewTrades !== true;
 
   const macroPass =
-    engineState.macroRiskState?.shouldBlockNewTrades !== true &&
-    engineState.marketCrashProtectionState?.shouldBlockNewTrades !== true;
-
+    cryptoMacroOverride ||
+    (
+      engineState.macroRiskState?.shouldBlockNewTrades !== true &&
+      engineState.marketCrashProtectionState?.shouldBlockNewTrades !== true
+    );
+    
   const qualifiedToBuy =
     dataPass &&
     momentumPass &&
