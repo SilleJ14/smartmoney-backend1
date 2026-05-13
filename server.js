@@ -4295,6 +4295,8 @@ function calculateAiPortfolioManagerDecision(
     signal.explosiveRunnerScore ||
       signal.explosiveRunnerPrediction?.explosiveRunnerScore ||
       signal.adaptiveRunnerScore ||
+      signal.adaptiveRunnerLearning?.adaptiveRunnerScore ||
+      signal.adaptiveRunnerLearning?.breakoutProbability ||
       0
   );
 
@@ -4308,12 +4310,16 @@ function calculateAiPortfolioManagerDecision(
     signal.institutionalBrainScore ||
       signal.fullInstitutionalAiBrain?.masterOpportunityScore ||
       signal.fullInstitutionalAiBrain?.institutionalBrainScore ||
+      signal.fullInstitutionalAiBrain?.dynamicConvictionScore ||
+      signal.fullInstitutionalAiBrain?.consensusScore ||
       0
   );
 
   const premarketDominanceScore = Number(
     signal.premarketDominance?.premarketDominanceScore ||
       signal.premarketDominanceScore ||
+      signal.premarketMomentum?.openingDriveProbability ||
+      signal.explosiveRunnerPrediction?.premarket?.openingDriveProbability ||
       0
   );
 
@@ -4326,11 +4332,22 @@ function calculateAiPortfolioManagerDecision(
 
   const tacticalEliteRunnerOverride =
     eliteHeatOverride &&
+    portfolioHeat.duplicateSymbolRisk !== true &&
     (
-      institutionalBrainScore >= 72 ||
-      premarketDominanceScore >= 72 ||
-      executionConfidence >= 70 ||
-      runnerScore >= 82
+      (
+        premarketDominanceScore >= 72 &&
+        executionConfidence >= 60 &&
+        runnerScore >= 70
+      ) ||
+      (
+        institutionalBrainScore >= 60 &&
+        executionConfidence >= 62 &&
+        runnerScore >= 72
+      ) ||
+      (
+        runnerScore >= 78 &&
+        executionConfidence >= 60
+      )
     );
 
   let allocationMultiplier = 1;
@@ -4402,7 +4419,8 @@ const recommendedTradeAmount = Number(
     recommendedTradeAmount > 0 &&
     (
       portfolioHeat.portfolioHeatScore >= heatApprovalThreshold ||
-      eliteHeatOverride
+      eliteHeatOverride ||
+      tacticalEliteRunnerOverride
     );
 
   return {
@@ -4423,6 +4441,10 @@ const recommendedTradeAmount = Number(
     allocationMultiplier,
     eliteHeatOverride,
     tacticalEliteRunnerOverride,
+    tacticalEliteRunnerReason:
+      tacticalEliteRunnerOverride
+        ? "Tactical elite runner allowed through defensive portfolio heat."
+        : "No tactical elite override.",
     runnerScore,
     executionConfidence,
     institutionalBrainScore,
@@ -4430,8 +4452,12 @@ const recommendedTradeAmount = Number(
     heatApprovalThreshold,
     portfolioManagerReason:
       `${portfolioHeat.portfolioHeatLabel} • Market Stress ${marketStress}/100 • ` +
-      `Elite ${eliteHeatOverride ? "YES" : "NO"} • Tactical ${tacticalEliteRunnerOverride ? "YES" : "NO"}`,
-  };
+      `Elite ${eliteHeatOverride ? "YES" : "NO"} • Tactical ${
+        tacticalEliteRunnerOverride ? "YES" : "NO"
+      } • Heat ${portfolioHeat.portfolioHeatScore}/100 • Same Sector ${
+        portfolioHeat.sameSectorOpenPositions || 0
+      }`,
+    };
 }
 
 function calculateInstitutionalRebalanceIntelligence(
