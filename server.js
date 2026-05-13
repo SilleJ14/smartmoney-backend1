@@ -15479,6 +15479,7 @@ let successfulStockBuysThisCycle = 0;
         candidate,
         provisionalTradeAmount
       );
+
     candidate.runnerScore =
       Number(
         candidate.explosiveRunnerScore ||
@@ -15492,6 +15493,12 @@ let successfulStockBuysThisCycle = 0;
       Number(
         candidate.premarketDominance
           ?.premarketDominanceScore ||
+        candidate.explosiveRunnerPrediction
+          ?.premarket
+          ?.openingDriveProbability ||
+        candidate.explosiveRunnerPrediction
+          ?.premarket
+          ?.morningMomentumScore ||
         candidate.premarketDominanceScore ||
         0
       );
@@ -15505,11 +15512,6 @@ let successfulStockBuysThisCycle = 0;
         candidate.institutionalBrainScore ||
         50
       );
-
-        explosiveRunnerScore
-        premarketDominance.premarketDominanceScore
-        fullInstitutionalAiBrain.consensusScore 
-        
         
 const portfolioManager =
   typeof calculateAiPortfolioManagerDecision === "function"
