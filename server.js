@@ -12358,7 +12358,7 @@ qualifiedToBuy:
   results.length = 0;
   results.push(...themeBoostedResults);
 
-  
+
   const refreshedFullInstitutionalAiBrainState =
     updateFullInstitutionalAiBrainState(results);
 
@@ -12463,6 +12463,42 @@ engineState.statisticalMemoryState =
       signal.score = clampScore(Number(signal.score || 0) + 5);
       signal.premarketDominanceBoost = 5;
     }
+  }
+
+    const finalFullInstitutionalAiBrainState =
+    updateFullInstitutionalAiBrainState(results);
+
+  for (const signal of results) {
+    const rankedSignal =
+      finalFullInstitutionalAiBrainState.rankedOpportunities.find(
+        (item) =>
+          normalizeSymbol(item.symbol) === normalizeSymbol(signal.symbol)
+      );
+
+    if (rankedSignal?.fullInstitutionalAiBrain) {
+      signal.fullInstitutionalAiBrain =
+        rankedSignal.fullInstitutionalAiBrain;
+
+      signal.institutionalBrainScore =
+        Number(rankedSignal.institutionalBrainScore || 0);
+    }
+
+    signal.runnerScore =
+      Number(
+        signal.explosiveRunnerScore ||
+          signal.explosiveRunnerPrediction?.explosiveRunnerScore ||
+          signal.adaptiveRunnerScore ||
+          0
+      );
+
+    signal.premarketDominanceScore =
+      Number(
+        signal.premarketDominance?.premarketDominanceScore ||
+          signal.premarketDominanceScore ||
+          signal.explosiveRunnerPrediction?.premarket?.openingDriveProbability ||
+          signal.explosiveRunnerPrediction?.premarket?.morningMomentumScore ||
+          0
+      );
   }
 
   return results
@@ -17762,10 +17798,12 @@ function calculateFullInstitutionalAiBrain(signals = []) {
 
     const premarketScore = Number(
       signal.premarketDominance?.premarketDominanceScore ||
+        signal.premarketDominanceScore ||
         signal.premarketMomentum?.openingDriveProbability ||
+        signal.explosiveRunnerPrediction?.premarket?.openingDriveProbability ||
+        signal.explosiveRunnerPrediction?.premarket?.morningMomentumScore ||
         0
     );
-
     const accumulationScore = Number(
       signal.multiDayAccumulationScore ||
         signal.multiDayAccumulation?.preBreakoutScore ||
