@@ -15467,12 +15467,38 @@ let successfulStockBuysThisCycle = 0;
         candidate,
         provisionalTradeAmount
       );
+    candidate.runnerScore =
+      Number(
+        candidate.explosiveRunnerScore ||
+        candidate.explosiveRunnerPrediction
+          ?.explosiveRunnerScore ||
+        candidate.adaptiveRunnerScore ||
+        0
+      );
 
-    candidate.institutionalExecutionPlan =
-      institutionalExecutionPlan;
-    candidate.executionConfidence =
-      institutionalExecutionPlan.executionConfidence;
+    candidate.premarketDominanceScore =
+      Number(
+        candidate.premarketDominance
+          ?.premarketDominanceScore ||
+        candidate.premarketDominanceScore ||
+        0
+      );
 
+    candidate.institutionalBrainScore =
+      Number(
+        candidate.fullInstitutionalAiBrain
+          ?.consensusScore ||
+        candidate.fullInstitutionalAiBrain
+          ?.dynamicConvictionScore ||
+        candidate.institutionalBrainScore ||
+        50
+      );
+
+        explosiveRunnerScore
+        premarketDominance.premarketDominanceScore
+        fullInstitutionalAiBrain.consensusScore 
+        
+        
 const portfolioManager =
   typeof calculateAiPortfolioManagerDecision === "function"
     ? calculateAiPortfolioManagerDecision(
