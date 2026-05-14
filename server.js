@@ -9225,13 +9225,38 @@ async function polygonQuote(symbol) {
 
     if (!bar) return null;
 
+    const current = Number(bar.c || 0);
+    const open = Number(bar.o || 0);
+    const previousClose = Number(bar.o || 0);
+
     return {
-      c: Number(bar.c || 0),
+      symbol: cleanSymbol,
+
+      current,
+      price: current,
+      change:
+        previousClose > 0
+          ? Number((current - previousClose).toFixed(4))
+          : 0,
+      percentChange:
+        previousClose > 0
+          ? Number((((current - previousClose) / previousClose) * 100).toFixed(2))
+          : 0,
+
+      high: Number(bar.h || 0),
+      low: Number(bar.l || 0),
+      open,
+      previousClose,
+
+      volume: Number(bar.v || 0),
+
+      c: current,
       h: Number(bar.h || 0),
       l: Number(bar.l || 0),
-      o: Number(bar.o || 0),
-      pc: Number(bar.o || 0),
+      o: open,
+      pc: previousClose,
       v: Number(bar.v || 0),
+
       source: "polygon",
     };
   } catch (err) {
@@ -9249,7 +9274,6 @@ async function polygonQuote(symbol) {
     return null;
   }
 }
-
 async function getCombinedStockQuote(symbol) {
   let polygon = null;
   let finnhub = null;
@@ -9263,10 +9287,12 @@ async function getCombinedStockQuote(symbol) {
     dataError = err.message;
   }
 
-  try {
-    finnhub = await finnhubQuote(symbol);
-  } catch (err) {
-    dataError = err.message;
+  if (!polygon?.current) {
+    try {
+      finnhub = await finnhubQuote(symbol);
+    } catch (err) {
+      dataError = err.message;
+    }
   }
 
   const bars = await getRecentBars(symbol, "5Min", 30);
@@ -9286,10 +9312,6 @@ async function getCombinedStockQuote(symbol) {
     0
   );
 
-  const dollarVolume =
-    Number(barStats.lastVolume || barStats.avgVolume || 0) *
-    alpacaCurrent;
-
   const alpacaLow = Math.min(
     ...bars.map((b) => Number(b.l || Infinity))
   );
@@ -9298,7 +9320,7 @@ async function getCombinedStockQuote(symbol) {
     ? alpacaLow
     : 0;
 
-  const primary = polygon || finnhub;
+  const primary = polygon?.current ? polygon : finnhub;
 
   const current = Number(
     primary?.current ||
@@ -9335,6 +9357,9 @@ async function getCombinedStockQuote(symbol) {
     Number(barStats.avgVolume || 0)
   );
 
+  const dollarVolume =
+    volume * current;
+
   if (!current || current <= 0) {
     throw new Error(
       dataError ||
@@ -9344,56 +9369,26 @@ async function getCombinedStockQuote(symbol) {
 
   return {
     symbol,
-
     current,
     price: current,
-
     change: Number(primary?.change || 0),
-
     percentChange,
-
-    high: Number(
-      primary?.high ||
-        primary?.h ||
-        alpacaHigh ||
-        current
-    ),
-
-    low: Number(
-      primary?.low ||
-        primary?.l ||
-        safeAlpacaLow ||
-        current
-    ),
-
+    high: Number(primary?.high || primary?.h || alpacaHigh || current),
+    low: Number(primary?.low || primary?.l || safeAlpacaLow || current),
     open,
-
     previousClose,
-
     volume,
-
     dollarVolume,
-
-    barVolume: Number(
-      barStats.lastVolume || 0
-    ),
-
-    avgBarVolume: Math.round(
-      Number(barStats.avgVolume || 0)
-    ),
-
-    volumeRatio: Number(
-      barStats.volumeSpikeRatio || 0
-    ),
-
-    dataSource: polygon
+    barVolume: Number(barStats.lastVolume || 0),
+    avgBarVolume: Math.round(Number(barStats.avgVolume || 0)),
+    volumeRatio: Number(barStats.volumeSpikeRatio || 0),
+    dataSource: polygon?.current
       ? "Polygon + Alpaca"
-      : finnhub
+      : finnhub?.current
       ? "Finnhub + Alpaca"
       : "Alpaca fallback",
   };
 }
-
 async function getRecentBars(symbol, timeframe = "5Min", limit = 30) {
   const data = await alpacaDataRequest(
     `/v2/stocks/${encodeURIComponent(
@@ -18466,7 +18461,7 @@ function buildInstitutionalDashboardPayload() {
   app.get("/stock-quote/:symbol", async (req, res) => {
     try {
       const symbol = normalizeSymbol(req.params.symbol);
-      const q = await finnhubQuote(symbol);
+      const q = await getCombinedStockQuote(symbol);
       const asset = await getAsset(symbol).catch(() => null);
 
       if (!q || !q.current) {
