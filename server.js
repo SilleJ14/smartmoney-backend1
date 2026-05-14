@@ -167,6 +167,12 @@ adaptiveRiskState:
   engineState.adaptiveRiskState || null,
 capitalRedistributionHistory:
   (engineState.capitalRedistributionHistory || []).slice(0, 200),
+
+institutionalRebalanceState:
+  engineState.institutionalRebalanceState || null,
+
+institutionalRebalanceHistory:
+  (engineState.institutionalRebalanceHistory || []).slice(0, 200),  
   capitalCompoundingState:
   engineState.capitalCompoundingState || null,
 
@@ -461,10 +467,7 @@ smartExitIntelligenceHistory:
   (engineState.smartExitIntelligenceHistory || []).slice(0, 200),  
 
 institutionalExitOrchestratorState:
-  engineState.institutionalExitOrchestratorState || null,
-
-institutionalExitOrchestratorHistory:
-  (engineState.institutionalExitOrchestratorHistory || []).slice(0, 200),  
+  engineState.institutionalExitOrchestratorState || null,  
 
 institutionalExitOrchestratorHistory:
   (engineState.institutionalExitOrchestratorHistory || []).slice(0, 200),
@@ -820,6 +823,8 @@ sectorRotationState: null,
 sectorRotationHistory: [],
 capitalRedistributionState: null,
 capitalRedistributionHistory: [],
+institutionalRebalanceState: null,
+institutionalRebalanceHistory: [],
 capitalCompoundingState: null,
 capitalCompoundingHistory: [],
 equityCurveState: null,
@@ -15544,6 +15549,15 @@ let successfulStockBuysThisCycle = 0;
         ])
       );
 
+    const eliteMomentumExceptionGate =
+      calculateEliteMomentumExceptionGate(
+        candidate,
+        new Set([
+          ...Array.from(aiOwnedSymbols || []),
+          ...positions.map((p) => normalizeSymbol(p.symbol)),
+        ])
+      );      
+
     if (!parliamentGate.allowed && morningStrikeOverrideGate.allowed) {
       parliamentGate = {
         allowed: true,
@@ -16607,6 +16621,27 @@ engineState.capitalRedistributionHistory.unshift(capitalRedistribution);
 engineState.capitalRedistributionHistory =
   engineState.capitalRedistributionHistory.slice(0, 200);
 
+const institutionalRebalance =
+  calculateInstitutionalRebalanceIntelligence(
+    account,
+    analyticsAiPositions,
+    allSignalsForAnalytics
+  );
+
+engineState.institutionalRebalanceState =
+  institutionalRebalance;
+
+if (!Array.isArray(engineState.institutionalRebalanceHistory)) {
+  engineState.institutionalRebalanceHistory = [];
+}
+
+engineState.institutionalRebalanceHistory.unshift(
+  institutionalRebalance
+);
+
+engineState.institutionalRebalanceHistory =
+  engineState.institutionalRebalanceHistory.slice(0, 200);
+
 const capitalCompounding =
   calculateSmartCapitalCompoundingEngine(
     account,
@@ -17096,6 +17131,56 @@ engineState.portfolioOptimizationHistory =
     0,
     200
   );
+
+const dividendCompounders = allSignalsForAnalytics
+  .map((signal) => ({
+    symbol: signal.symbol,
+    score: Number(signal.score || 0),
+    harvardDividendScore: Number(
+      signal.harvardDividendScore ||
+        signal.harvardDividendCompounding
+          ?.harvardDividendCompoundingScore ||
+        0
+    ),
+    harvardDividendProfile:
+      signal.harvardDividendProfile ||
+      signal.harvardDividendCompounding
+        ?.harvardDividendProfile ||
+      "Unknown",
+    dividendScore: Number(signal.dividendScore || 0),
+    wealthProfile: signal.wealthProfile || "Unknown",
+  }))
+  .filter((item) => item.harvardDividendScore > 0)
+  .sort(
+    (a, b) =>
+      Number(b.harvardDividendScore || 0) -
+      Number(a.harvardDividendScore || 0)
+  )
+  .slice(0, 10);
+
+engineState.dividendCompoundingState = {
+  updatedAt: new Date().toISOString(),
+  phase: "15.7_HARVARD_DIVIDEND_COMPOUNDING_ENGINE",
+  reviewedCount: allSignalsForAnalytics.length,
+  topDividendCompounders: dividendCompounders,
+  eliteCompounderCount: dividendCompounders.filter(
+    (item) => item.harvardDividendScore >= 85
+  ).length,
+  reason:
+    `Dividend engine reviewed ${allSignalsForAnalytics.length} signals ` +
+    `and found ${dividendCompounders.length} dividend/compounder candidates.`,
+};
+
+if (!Array.isArray(engineState.dividendCompoundingHistory)) {
+  engineState.dividendCompoundingHistory = [];
+}
+
+engineState.dividendCompoundingHistory.unshift(
+  engineState.dividendCompoundingState
+);
+
+engineState.dividendCompoundingHistory =
+  engineState.dividendCompoundingHistory.slice(0, 200);  
 
 const macroRisk =
   calculateBridgewaterMacroRiskEngine(
