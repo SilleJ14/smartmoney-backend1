@@ -9408,6 +9408,7 @@ async function finnhubQuote(symbol) {
   }
 }
 
+
 async function getCombinedStockQuote(symbol) {
   let polygon = null;
   let finnhub = null;
