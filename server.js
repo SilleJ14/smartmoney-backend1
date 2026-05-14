@@ -9199,13 +9199,29 @@ async function isAssetSellEligible(symbol) {
 }
 
 async function polygonQuote(symbol) {
+  const cleanSymbol =
+    normalizeSymbol(symbol);
+
   try {
     if (!ENABLE_POLYGON || !POLYGON_API_KEY) {
+      engineState.apiHealth.polygon = {
+        ok: false,
+        error: "Polygon disabled or missing key",
+        checkedAt: new Date().toISOString(),
+      };
+
       return null;
     }
 
-    const cleanSymbol =
-      normalizeSymbol(symbol);
+    const cooldownUntil =
+      engineState.apiCooldowns?.polygon || 0;
+
+    if (
+      cooldownUntil &&
+      Date.now() < Number(cooldownUntil)
+    ) {
+      return null;
+    }
 
     const url =
       `https://api.polygon.io/v2/aggs/ticker/${cleanSymbol}/prev` +
@@ -9213,63 +9229,110 @@ async function polygonQuote(symbol) {
 
     const response = await fetch(url);
 
-    if (!response.ok) {
-      throw new Error(
-        `Polygon HTTP ${response.status}`
-      );
-    }
+    const data = await response.json().catch(() => ({}));
 
-    const data = await response.json();
+    if (!response.ok) {
+      const status = response.status;
+      const message =
+        data?.error ||
+        data?.message ||
+        `Polygon HTTP ${status}`;
+
+      engineState.apiFailureCounts.polygon =
+        Number(engineState.apiFailureCounts?.polygon || 0) + 1;
+
+      engineState.apiHealth.polygon = {
+        ok: false,
+        symbol: cleanSymbol,
+        status,
+        error: message,
+        checkedAt: new Date().toISOString(),
+      };
+
+      if ([403, 429, 500, 502, 503, 504].includes(status)) {
+        engineState.apiCooldowns.polygon =
+          Date.now() + 60 * 1000;
+      }
+
+      return null;
+    }
 
     const bar = data?.results?.[0];
 
-    if (!bar) return null;
+    if (!bar) {
+      engineState.apiHealth.polygon = {
+        ok: false,
+        symbol: cleanSymbol,
+        status: response.status,
+        error: "Polygon returned no results",
+        checkedAt: new Date().toISOString(),
+      };
+
+      return null;
+    }
 
     const current = Number(bar.c || 0);
     const open = Number(bar.o || 0);
     const previousClose = Number(bar.o || 0);
+    const volume = Number(bar.v || 0);
+
+    engineState.apiHealth.polygon = {
+      ok: true,
+      symbol: cleanSymbol,
+      status: response.status,
+      error: "",
+      checkedAt: new Date().toISOString(),
+    };
 
     return {
       symbol: cleanSymbol,
 
       current,
       price: current,
+
       change:
         previousClose > 0
           ? Number((current - previousClose).toFixed(4))
           : 0,
+
       percentChange:
         previousClose > 0
-          ? Number((((current - previousClose) / previousClose) * 100).toFixed(2))
+          ? Number(
+              (((current - previousClose) / previousClose) * 100).toFixed(2)
+            )
           : 0,
 
       high: Number(bar.h || 0),
       low: Number(bar.l || 0),
       open,
       previousClose,
-
-      volume: Number(bar.v || 0),
+      volume,
 
       c: current,
       h: Number(bar.h || 0),
       l: Number(bar.l || 0),
       o: open,
       pc: previousClose,
-      v: Number(bar.v || 0),
+      v: volume,
 
       source: "polygon",
     };
   } catch (err) {
+    engineState.apiFailureCounts.polygon =
+      Number(engineState.apiFailureCounts?.polygon || 0) + 1;
+
+    engineState.apiHealth.polygon = {
+      ok: false,
+      symbol: cleanSymbol,
+      error: err.message,
+      checkedAt: new Date().toISOString(),
+    };
+
     console.error(
       "Polygon quote failed:",
-      symbol,
+      cleanSymbol,
       err.message
     );
-
-    engineState.apiFailureCounts.polygon =
-      Number(
-        engineState.apiFailureCounts?.polygon || 0
-      ) + 1;
 
     return null;
   }
