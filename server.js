@@ -13,6 +13,9 @@ console.log("ENV CHECK:", {
   ALPACA_LIVE_SECRET: process.env.ALPACA_LIVE_SECRET ? "FOUND" : "MISSING",
   ALPACA_LIVE_KEY: process.env.ALPACA_LIVE_KEY ? "FOUND" : "MISSING",
   FINNHUB_API_KEY: process.env.FINNHUB_API_KEY ? "FOUND" : "MISSING",
+  POLYGON_API_KEY: process.env.POLYGON_API_KEY ? "FOUND" : "MISSING",
+  ENABLE_POLYGON: process.env.ENABLE_POLYGON !== "false",
+  POLYGON_PRIMARY: process.env.POLYGON_PRIMARY === "true",
 });
 
 const app = express();
@@ -9230,7 +9233,7 @@ async function polygonQuote(symbol) {
       h: Number(bar.h || 0),
       l: Number(bar.l || 0),
       o: Number(bar.o || 0),
-      pc: Number(bar.o || 0),
+      pc: Number(bar.c || 0),
       v: Number(bar.v || 0),
       source: "polygon",
     };
@@ -19325,6 +19328,28 @@ saveRecentOrder("MANUAL_DAILY_LOCK_RESET", "ACCOUNT", {
           0,
           20
         ),
+    });
+  } catch (err) {
+    res.status(500).json({
+      ok: false,
+      error: err.message,
+    });
+  }
+});
+
+app.get("/polygon-test/:symbol", async (req, res) => {
+  try {
+    const symbol = normalizeSymbol(req.params.symbol);
+    const quote = await polygonQuote(symbol);
+
+    res.json({
+      ok: !!quote,
+      symbol,
+      polygonEnabled: ENABLE_POLYGON,
+      polygonPrimary: POLYGON_PRIMARY,
+      polygonKeyFound: !!POLYGON_API_KEY,
+      quote,
+      polygonFailures: engineState.apiFailureCounts?.polygon || 0,
     });
   } catch (err) {
     res.status(500).json({
