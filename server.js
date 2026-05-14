@@ -9276,12 +9276,18 @@ async function polygonQuote(symbol) {
 
     if (!bar) return null;
 
+    const currentPrice = Number(bar.c || 0);
+    const openPrice = Number(bar.o || currentPrice);
+
+    const estimatedPreviousClose =
+      openPrice > 0 ? openPrice : currentPrice;
+
     return {
-      c: Number(bar.c || 0),
-      h: Number(bar.h || 0),
-      l: Number(bar.l || 0),
-      o: Number(bar.o || 0),
-      pc: Number(bar.c || 0),
+      c: currentPrice,
+      h: Number(bar.h || currentPrice),
+      l: Number(bar.l || currentPrice),
+      o: openPrice,
+      pc: estimatedPreviousClose,
       v: Number(bar.v || 0),
       source: "polygon",
     };
