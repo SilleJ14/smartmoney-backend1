@@ -47,6 +47,15 @@ const PORT = Number(process.env.PORT || 10000);
 
 const FINNHUB_API_KEY = process.env.FINNHUB_API_KEY;
 
+const POLYGON_API_KEY =
+  process.env.POLYGON_API_KEY;
+
+const ENABLE_POLYGON =
+  process.env.ENABLE_POLYGON !== "false";
+
+const POLYGON_PRIMARY =
+  process.env.POLYGON_PRIMARY === "true";
+
 function loadRuntimeConfig() {
   try {
     if (!fs.existsSync(CONFIG_FILE)) return {};
@@ -9189,127 +9198,202 @@ async function isAssetSellEligible(symbol) {
   }
 }
 
-async function finnhubQuote(symbol) {
-if (
-  engineState.apiCooldowns.finnhubQuote &&
-  Date.now() <
-    engineState.apiCooldowns.finnhubQuote
-) {
-  throw new Error(
-    "Finnhub quote API cooling down"
-  );
-}
-  const url = `https://finnhub.io/api/v1/quote?symbol=${encodeURIComponent(
-    symbol
-  )}&token=${FINNHUB_API_KEY}`;
+async function polygonQuote(symbol) {
+  try {
+    if (!ENABLE_POLYGON || !POLYGON_API_KEY) {
+      return null;
+    }
 
-  const res = await fetch(url);
+    const cleanSymbol =
+      normalizeSymbol(symbol);
 
-  markApiHealth("finnhubQuote", true);
+    const url =
+      `https://api.polygon.io/v2/aggs/ticker/${cleanSymbol}/prev` +
+      `?adjusted=true&apiKey=${POLYGON_API_KEY}`;
 
-  const data = await res.json();
+    const response = await fetch(url);
 
-  if (!res.ok || !data || typeof data.c !== "number") {
-    engineState.apiFailureCounts.finnhubQuote =
-      (engineState.apiFailureCounts.finnhubQuote || 0) + 1;
-engineState.apiCooldowns.finnhubQuote =
-  Date.now() + 1000 * 60;
-    markApiHealth(
-      "finnhubQuote",
-      false,
-      `Quote failed for ${symbol}`
+    if (!response.ok) {
+      throw new Error(
+        `Polygon HTTP ${response.status}`
+      );
+    }
+
+    const data = await response.json();
+
+    const bar = data?.results?.[0];
+
+    if (!bar) return null;
+
+    return {
+      c: Number(bar.c || 0),
+      h: Number(bar.h || 0),
+      l: Number(bar.l || 0),
+      o: Number(bar.o || 0),
+      pc: Number(bar.o || 0),
+      v: Number(bar.v || 0),
+      source: "polygon",
+    };
+  } catch (err) {
+    console.error(
+      "Polygon quote failed:",
+      symbol,
+      err.message
     );
 
-markApiHealth("finnhubQuote", false, `Quote failed for ${symbol}`);
-    throw new Error(`Finnhub quote failed for ${symbol}`);
-  }
+    engineState.apiFailureCounts.polygon =
+      Number(
+        engineState.apiFailureCounts?.polygon || 0
+      ) + 1;
 
-  return {
-    symbol,
-    current: Number(data.c || 0),
-    change: Number(data.d || 0),
-    percentChange: Number(data.dp || 0),
-    high: Number(data.h || 0),
-    low: Number(data.l || 0),
-    open: Number(data.o || 0),
-    previousClose: Number(data.pc || 0),
-    volume: Number(data.v || data.volume || 0),
-  };
+    return null;
+  }
 }
+
 async function getCombinedStockQuote(symbol) {
+  let polygon = null;
   let finnhub = null;
-  let finnhubError = "";
+  let dataError = "";
+
+  try {
+    if (POLYGON_PRIMARY) {
+      polygon = await polygonQuote(symbol);
+    }
+  } catch (err) {
+    dataError = err.message;
+  }
 
   try {
     finnhub = await finnhubQuote(symbol);
   } catch (err) {
-    finnhubError = err.message;
+    dataError = err.message;
   }
 
   const bars = await getRecentBars(symbol, "5Min", 30);
   const barStats = calculateBarStats(bars);
 
-const latestBar = bars[bars.length - 1] || {};
-const firstBar = bars[0] || {};
+  const latestBar = bars[bars.length - 1] || {};
+  const firstBar = bars[0] || {};
 
-const alpacaCurrent = Number(latestBar.c || 0);
+  const alpacaCurrent = Number(latestBar.c || 0);
 
-const alpacaOpen = Number(
-  firstBar.o || latestBar.o || 0
-);
+  const alpacaOpen = Number(
+    firstBar.o || latestBar.o || 0
+  );
 
-const alpacaHigh = Math.max(
-  ...bars.map((b) => Number(b.h || 0)),
-  0
-);
+  const alpacaHigh = Math.max(
+    ...bars.map((b) => Number(b.h || 0)),
+    0
+  );
 
-const dollarVolume =
-  Number(barStats.lastVolume || barStats.avgVolume || 0) *
-  alpacaCurrent;
+  const dollarVolume =
+    Number(barStats.lastVolume || barStats.avgVolume || 0) *
+    alpacaCurrent;
 
-const alpacaLow = Math.min(
-  ...bars.map((b) => Number(b.l || Infinity))
-);
+  const alpacaLow = Math.min(
+    ...bars.map((b) => Number(b.l || Infinity))
+  );
 
-const safeAlpacaLow = Number.isFinite(alpacaLow)
-  ? alpacaLow
-  : 0;
+  const safeAlpacaLow = Number.isFinite(alpacaLow)
+    ? alpacaLow
+    : 0;
 
-  const current = Number(finnhub?.current || alpacaCurrent || 0);
-  const open = Number(finnhub?.open || alpacaOpen || 0);
-  const previousClose = Number(finnhub?.previousClose || alpacaOpen || 0);
+  const primary = polygon || finnhub;
+
+  const current = Number(
+    primary?.current ||
+      primary?.c ||
+      alpacaCurrent ||
+      0
+  );
+
+  const open = Number(
+    primary?.open ||
+      primary?.o ||
+      alpacaOpen ||
+      0
+  );
+
+  const previousClose = Number(
+    primary?.previousClose ||
+      primary?.pc ||
+      alpacaOpen ||
+      0
+  );
 
   const percentChange =
-    Number(finnhub?.percentChange || 0) ||
-    (previousClose > 0 ? ((current - previousClose) / previousClose) * 100 : 0);
+    Number(primary?.percentChange || 0) ||
+    (
+      previousClose > 0
+        ? ((current - previousClose) / previousClose) * 100
+        : 0
+    );
 
   const volume = Math.max(
-    Number(finnhub?.volume || 0),
+    Number(primary?.volume || primary?.v || 0),
     Number(barStats.lastVolume || 0),
     Number(barStats.avgVolume || 0)
   );
 
   if (!current || current <= 0) {
-    throw new Error(finnhubError || `No valid price from Finnhub or Alpaca for ${symbol}`);
+    throw new Error(
+      dataError ||
+        `No valid price from Polygon, Finnhub, or Alpaca for ${symbol}`
+    );
   }
 
   return {
     symbol,
+
     current,
     price: current,
-    change: Number(finnhub?.change || 0),
+
+    change: Number(primary?.change || 0),
+
     percentChange,
-    high: Number(finnhub?.high || alpacaHigh || current),
-    low: Number(finnhub?.low || safeAlpacaLow || current),
+
+    high: Number(
+      primary?.high ||
+        primary?.h ||
+        alpacaHigh ||
+        current
+    ),
+
+    low: Number(
+      primary?.low ||
+        primary?.l ||
+        safeAlpacaLow ||
+        current
+    ),
+
     open,
+
     previousClose,
+
     volume,
-    barVolume: Number(barStats.lastVolume || 0),
-    avgBarVolume: Math.round(Number(barStats.avgVolume || 0)),
-    volumeRatio: Number(barStats.volumeSpikeRatio || 0),
-    dataSource: finnhub ? "Finnhub + Alpaca" : "Alpaca fallback",
+
+    dollarVolume,
+
+    barVolume: Number(
+      barStats.lastVolume || 0
+    ),
+
+    avgBarVolume: Math.round(
+      Number(barStats.avgVolume || 0)
+    ),
+
+    volumeRatio: Number(
+      barStats.volumeSpikeRatio || 0
+    ),
+
+    dataSource: polygon
+      ? "Polygon + Alpaca"
+      : finnhub
+      ? "Finnhub + Alpaca"
+      : "Alpaca fallback",
   };
 }
+
 async function getRecentBars(symbol, timeframe = "5Min", limit = 30) {
   const data = await alpacaDataRequest(
     `/v2/stocks/${encodeURIComponent(
@@ -9488,6 +9572,8 @@ engineState.apiCooldowns.finnhubNews =
     };
   }
 }
+
+
 async function getAdvancedConfirmations(q) {
   const bars = await getRecentBars(q.symbol, "5Min", 30);
   const stats = calculateBarStats(bars);
