@@ -9201,6 +9201,51 @@ async function isAssetSellEligible(symbol) {
   }
 }
 
+const polygonQuoteCache = new Map();
+
+function getPolygonCacheKey(symbol) {
+  return normalizeSymbol(symbol);
+}
+
+function getPolygonCachedQuote(symbol) {
+  const key = getPolygonCacheKey(symbol);
+  const cached = polygonQuoteCache.get(key);
+
+  if (!cached) return null;
+
+  const ageMs = Date.now() - Number(cached.savedAt || 0);
+
+  if (ageMs > 60 * 1000) {
+    polygonQuoteCache.delete(key);
+    return null;
+  }
+
+  return cached.quote || null;
+}
+
+function savePolygonCachedQuote(symbol, quote) {
+  const key = getPolygonCacheKey(symbol);
+
+  polygonQuoteCache.set(key, {
+    savedAt: Date.now(),
+    quote,
+  });
+}
+
+function isPolygonInCooldown() {
+  const until = Number(engineState.apiCooldowns?.polygon || 0);
+  return until > Date.now();
+}
+
+function putPolygonInCooldown(minutes = 2) {
+  if (!engineState.apiCooldowns) {
+    engineState.apiCooldowns = {};
+  }
+
+  engineState.apiCooldowns.polygon =
+    Date.now() + minutes * 60 * 1000;
+}
+
 async function finnhubQuote(symbol) {
   if (!FINNHUB_API_KEY) {
     return null;
@@ -9247,6 +9292,168 @@ async function finnhubQuote(symbol) {
         : 0,
     source: "finnhub",
   };
+}
+
+async function polygonQuote(symbol) {
+  try {
+    if (!ENABLE_POLYGON || !POLYGON_API_KEY) {
+      return null;
+    }
+
+    const cleanSymbol = normalizeSymbol(symbol);
+
+    if (!cleanSymbol) {
+      return null;
+    }
+
+    const cacheKey = cleanSymbol;
+
+    if (!global.polygonQuoteCache) {
+      global.polygonQuoteCache = new Map();
+    }
+
+    const cached =
+      global.polygonQuoteCache.get(cacheKey);
+
+    if (cached) {
+      const ageMs = Date.now() - cached.savedAt;
+
+      if (ageMs < 60000) {
+        return cached.quote;
+      }
+    }
+
+    if (
+      engineState.apiCooldowns?.polygon &&
+      engineState.apiCooldowns.polygon > Date.now()
+    ) {
+      return null;
+    }
+
+    // LIVE SNAPSHOT
+    const snapshotUrl =
+      `https://api.polygon.io/v2/snapshot/locale/us/markets/stocks/tickers/${encodeURIComponent(
+        cleanSymbol
+      )}?apiKey=${POLYGON_API_KEY}`;
+
+    const snapshotResponse = await fetch(snapshotUrl);
+
+    if (snapshotResponse.status === 429) {
+      engineState.apiCooldowns.polygon =
+        Date.now() + 2 * 60 * 1000;
+
+      throw new Error("Polygon rate limit");
+    }
+
+    if (!snapshotResponse.ok) {
+      throw new Error(
+        `Polygon snapshot HTTP ${snapshotResponse.status}`
+      );
+    }
+
+    const snapshotData =
+      await snapshotResponse.json();
+
+    const ticker =
+      snapshotData?.ticker || {};
+
+    // PREVIOUS CLOSE
+    const prevUrl =
+      `https://api.polygon.io/v2/aggs/ticker/${encodeURIComponent(
+        cleanSymbol
+      )}/prev?adjusted=true&apiKey=${POLYGON_API_KEY}`;
+
+    const prevResponse = await fetch(prevUrl);
+
+    if (!prevResponse.ok) {
+      throw new Error(
+        `Polygon prev HTTP ${prevResponse.status}`
+      );
+    }
+
+    const prevData =
+      await prevResponse.json();
+
+    const prevBar =
+      prevData?.results?.[0];
+
+    const currentPrice = Number(
+      ticker?.lastTrade?.p ||
+      ticker?.day?.c ||
+      0
+    );
+
+    const previousClose = Number(
+      prevBar?.c || 0
+    );
+
+    if (!currentPrice || currentPrice <= 0) {
+      return null;
+    }
+
+    const quote = {
+      current: currentPrice,
+      price: currentPrice,
+
+      c: currentPrice,
+
+      h: Number(
+        ticker?.day?.h || currentPrice
+      ),
+
+      l: Number(
+        ticker?.day?.l || currentPrice
+      ),
+
+      o: Number(
+        ticker?.day?.o || currentPrice
+      ),
+
+      pc: previousClose,
+
+      v: Number(
+        ticker?.day?.v || 0
+      ),
+
+      change:
+        currentPrice - previousClose,
+
+      percentChange:
+        previousClose > 0
+          ? (
+              (currentPrice - previousClose) /
+              previousClose
+            ) * 100
+          : 0,
+
+      source: "polygon",
+    };
+
+    global.polygonQuoteCache.set(cacheKey, {
+      savedAt: Date.now(),
+      quote,
+    });
+
+    return quote;
+  } catch (err) {
+    console.error(
+      "Polygon quote failed:",
+      symbol,
+      err.message
+    );
+
+    if (!engineState.apiFailureCounts) {
+      engineState.apiFailureCounts = {};
+    }
+
+    engineState.apiFailureCounts.polygon =
+      Number(
+        engineState.apiFailureCounts
+          ?.polygon || 0
+      ) + 1;
+
+    return null;
+  }
 }
 
 async function getCombinedStockQuote(symbol) {
