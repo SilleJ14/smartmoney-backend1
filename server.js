@@ -9337,6 +9337,77 @@ async function polygonQuote(symbol) {
     return null;
   }
 }
+async function finnhubQuote(symbol) {
+  const cleanSymbol = normalizeSymbol(symbol);
+
+  try {
+    if (!FINNHUB_API_KEY) {
+      markApiHealth("finnhubQuote", false, "Missing Finnhub API key");
+      return null;
+    }
+
+    const url =
+      `https://finnhub.io/api/v1/quote?symbol=${encodeURIComponent(cleanSymbol)}` +
+      `&token=${FINNHUB_API_KEY}`;
+
+    const response = await fetch(url);
+    const data = await response.json().catch(() => ({}));
+
+    if (!response.ok) {
+      const message =
+        data?.error ||
+        data?.message ||
+        `Finnhub quote HTTP ${response.status}`;
+
+      engineState.apiFailureCounts.finnhubQuote =
+        Number(engineState.apiFailureCounts?.finnhubQuote || 0) + 1;
+
+      markApiHealth("finnhubQuote", false, message);
+      return null;
+    }
+
+    const current = Number(data.c || 0);
+    const previousClose = Number(data.pc || 0);
+    const open = Number(data.o || 0);
+    const high = Number(data.h || 0);
+    const low = Number(data.l || 0);
+
+    if (!current || current <= 0) {
+      markApiHealth("finnhubQuote", false, `No Finnhub price for ${cleanSymbol}`);
+      return null;
+    }
+
+    markApiHealth("finnhubQuote", true);
+
+    return {
+      symbol: cleanSymbol,
+      current,
+      price: current,
+      change: previousClose > 0 ? Number((current - previousClose).toFixed(4)) : 0,
+      percentChange:
+        previousClose > 0
+          ? Number((((current - previousClose) / previousClose) * 100).toFixed(2))
+          : 0,
+      high,
+      low,
+      open,
+      previousClose,
+      c: current,
+      h: high,
+      l: low,
+      o: open,
+      pc: previousClose,
+      source: "finnhub",
+    };
+  } catch (err) {
+    engineState.apiFailureCounts.finnhubQuote =
+      Number(engineState.apiFailureCounts?.finnhubQuote || 0) + 1;
+
+    markApiHealth("finnhubQuote", false, err.message);
+    return null;
+  }
+}
+
 async function getCombinedStockQuote(symbol) {
   let polygon = null;
   let finnhub = null;
