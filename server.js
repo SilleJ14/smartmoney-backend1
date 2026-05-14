@@ -9276,19 +9276,37 @@ async function polygonQuote(symbol) {
 
     if (!bar) return null;
 
-    const currentPrice = Number(bar.c || 0);
-    const openPrice = Number(bar.o || currentPrice);
+    const prevUrl =
+      `https://api.polygon.io/v2/aggs/ticker/${encodeURIComponent(
+        symbol
+      )}/prev?adjusted=true&apiKey=${POLYGON_API_KEY}`;
 
-    const estimatedPreviousClose =
-      openPrice > 0 ? openPrice : currentPrice;
+    const prevResponse = await fetch(prevUrl);
+
+    if (!prevResponse.ok) {
+      throw new Error(`Polygon prev HTTP ${prevResponse.status}`);
+    }
+
+    const prevData = await prevResponse.json();
+    const prevBar = prevData?.results?.[0];
+
+    const currentPrice = Number(bar.c || 0);
+    const previousClose = Number(prevBar?.c || 0);
+
+    if (!currentPrice || !previousClose) return null;
 
     return {
       c: currentPrice,
       h: Number(bar.h || currentPrice),
       l: Number(bar.l || currentPrice),
-      o: openPrice,
-      pc: estimatedPreviousClose,
+      o: Number(bar.o || currentPrice),
+      pc: previousClose,
       v: Number(bar.v || 0),
+      change: currentPrice - previousClose,
+      percentChange:
+        previousClose > 0
+          ? ((currentPrice - previousClose) / previousClose) * 100
+          : 0,
       source: "polygon",
     };
   } catch (err) {
