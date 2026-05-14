@@ -9199,29 +9199,13 @@ async function isAssetSellEligible(symbol) {
 }
 
 async function polygonQuote(symbol) {
-  const cleanSymbol =
-    normalizeSymbol(symbol);
-
   try {
     if (!ENABLE_POLYGON || !POLYGON_API_KEY) {
-      engineState.apiHealth.polygon = {
-        ok: false,
-        error: "Polygon disabled or missing key",
-        checkedAt: new Date().toISOString(),
-      };
-
       return null;
     }
 
-    const cooldownUntil =
-      engineState.apiCooldowns?.polygon || 0;
-
-    if (
-      cooldownUntil &&
-      Date.now() < Number(cooldownUntil)
-    ) {
-      return null;
-    }
+    const cleanSymbol =
+      normalizeSymbol(symbol);
 
     const url =
       `https://api.polygon.io/v2/aggs/ticker/${cleanSymbol}/prev` +
@@ -9229,186 +9213,67 @@ async function polygonQuote(symbol) {
 
     const response = await fetch(url);
 
-    const data = await response.json().catch(() => ({}));
-
     if (!response.ok) {
-      const status = response.status;
-      const message =
-        data?.error ||
-        data?.message ||
-        `Polygon HTTP ${status}`;
-
-      engineState.apiFailureCounts.polygon =
-        Number(engineState.apiFailureCounts?.polygon || 0) + 1;
-
-      engineState.apiHealth.polygon = {
-        ok: false,
-        symbol: cleanSymbol,
-        status,
-        error: message,
-        checkedAt: new Date().toISOString(),
-      };
-
-      if ([403, 429, 500, 502, 503, 504].includes(status)) {
-        engineState.apiCooldowns.polygon =
-          Date.now() + 60 * 1000;
-      }
-
-      return null;
+      throw new Error(
+        `Polygon HTTP ${response.status}`
+      );
     }
+
+    const data = await response.json();
 
     const bar = data?.results?.[0];
 
-    if (!bar) {
-      engineState.apiHealth.polygon = {
-        ok: false,
-        symbol: cleanSymbol,
-        status: response.status,
-        error: "Polygon returned no results",
-        checkedAt: new Date().toISOString(),
-      };
-
-      return null;
-    }
+    if (!bar) return null;
 
     const current = Number(bar.c || 0);
     const open = Number(bar.o || 0);
     const previousClose = Number(bar.o || 0);
-    const volume = Number(bar.v || 0);
-
-    engineState.apiHealth.polygon = {
-      ok: true,
-      symbol: cleanSymbol,
-      status: response.status,
-      error: "",
-      checkedAt: new Date().toISOString(),
-    };
 
     return {
       symbol: cleanSymbol,
 
       current,
       price: current,
-
       change:
         previousClose > 0
           ? Number((current - previousClose).toFixed(4))
           : 0,
-
       percentChange:
         previousClose > 0
-          ? Number(
-              (((current - previousClose) / previousClose) * 100).toFixed(2)
-            )
+          ? Number((((current - previousClose) / previousClose) * 100).toFixed(2))
           : 0,
 
       high: Number(bar.h || 0),
       low: Number(bar.l || 0),
       open,
       previousClose,
-      volume,
+
+      volume: Number(bar.v || 0),
 
       c: current,
       h: Number(bar.h || 0),
       l: Number(bar.l || 0),
       o: open,
       pc: previousClose,
-      v: volume,
+      v: Number(bar.v || 0),
 
       source: "polygon",
     };
   } catch (err) {
-    engineState.apiFailureCounts.polygon =
-      Number(engineState.apiFailureCounts?.polygon || 0) + 1;
-
-    engineState.apiHealth.polygon = {
-      ok: false,
-      symbol: cleanSymbol,
-      error: err.message,
-      checkedAt: new Date().toISOString(),
-    };
-
     console.error(
       "Polygon quote failed:",
-      cleanSymbol,
+      symbol,
       err.message
     );
 
+    engineState.apiFailureCounts.polygon =
+      Number(
+        engineState.apiFailureCounts?.polygon || 0
+      ) + 1;
+
     return null;
   }
 }
-async function finnhubQuote(symbol) {
-  const cleanSymbol = normalizeSymbol(symbol);
-
-  try {
-    if (!FINNHUB_API_KEY) {
-      markApiHealth("finnhubQuote", false, "Missing Finnhub API key");
-      return null;
-    }
-
-    const url =
-      `https://finnhub.io/api/v1/quote?symbol=${encodeURIComponent(cleanSymbol)}` +
-      `&token=${FINNHUB_API_KEY}`;
-
-    const response = await fetch(url);
-    const data = await response.json().catch(() => ({}));
-
-    if (!response.ok) {
-      const message =
-        data?.error ||
-        data?.message ||
-        `Finnhub quote HTTP ${response.status}`;
-
-      engineState.apiFailureCounts.finnhubQuote =
-        Number(engineState.apiFailureCounts?.finnhubQuote || 0) + 1;
-
-      markApiHealth("finnhubQuote", false, message);
-      return null;
-    }
-
-    const current = Number(data.c || 0);
-    const previousClose = Number(data.pc || 0);
-    const open = Number(data.o || 0);
-    const high = Number(data.h || 0);
-    const low = Number(data.l || 0);
-
-    if (!current || current <= 0) {
-      markApiHealth("finnhubQuote", false, `No Finnhub price for ${cleanSymbol}`);
-      return null;
-    }
-
-    markApiHealth("finnhubQuote", true);
-
-    return {
-      symbol: cleanSymbol,
-      current,
-      price: current,
-      change: previousClose > 0 ? Number((current - previousClose).toFixed(4)) : 0,
-      percentChange:
-        previousClose > 0
-          ? Number((((current - previousClose) / previousClose) * 100).toFixed(2))
-          : 0,
-      high,
-      low,
-      open,
-      previousClose,
-      c: current,
-      h: high,
-      l: low,
-      o: open,
-      pc: previousClose,
-      source: "finnhub",
-    };
-  } catch (err) {
-    engineState.apiFailureCounts.finnhubQuote =
-      Number(engineState.apiFailureCounts?.finnhubQuote || 0) + 1;
-
-    markApiHealth("finnhubQuote", false, err.message);
-    return null;
-  }
-}
-
-
 async function getCombinedStockQuote(symbol) {
   let polygon = null;
   let finnhub = null;
@@ -18648,87 +18513,6 @@ function buildInstitutionalDashboardPayload() {
     }
   });  
 
-app.get(
-  "/stock-movement/:symbol",
-  async (req, res) => {
-    try {
-      const symbol =
-        normalizeSymbol(
-          req.params.symbol || ""
-        );
-
-      if (!symbol) {
-        return res.status(400).json({
-          error: "Missing symbol",
-        });
-      }
-
-      const quote =
-        await getCombinedStockQuote(symbol);
-
-      const bars =
-        await getRecentBars(
-          symbol,
-          "1Min",
-          60
-        );
-
-      const barStats =
-        calculateBarStats(bars);
-
-      const movement = bars.map((bar) => ({
-        time: bar.t,
-        open: Number(bar.o || 0),
-        high: Number(bar.h || 0),
-        low: Number(bar.l || 0),
-        close: Number(bar.c || 0),
-        volume: Number(bar.v || 0),
-      }));
-
-      return res.json({
-        success: true,
-
-        symbol,
-
-        quote,
-
-        stats: {
-          avgVolume:
-            Number(
-              barStats.avgVolume || 0
-            ),
-
-          latestVolume:
-            Number(
-              barStats.lastVolume || 0
-            ),
-
-          volumeRatio:
-            Number(
-              barStats.volumeSpikeRatio || 0
-            ),
-
-          vwap:
-            Number(
-              barStats.vwap || 0
-            ),
-        },
-
-        movement,
-      });
-    } catch (err) {
-      console.error(
-        "Stock movement route failed:",
-        err.message
-      );
-
-      return res.status(500).json({
-        error: err.message,
-      });
-    }
-  }
-);
-
   app.get("/signals", (req, res) => {
     res.json({
       lastScanAt: engineState.lastScanAt,
@@ -18757,9 +18541,7 @@ app.get(
     } catch (err) {
       res.status(500).json({ error: err.message });
     }
-  }); 
-  
-  app.get("/all-positions-test", async (req, res) => {
+  }); app.get("/all-positions-test", async (req, res) => {
     try {
       const positions = await getPositions();
 
