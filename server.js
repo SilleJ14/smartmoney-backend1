@@ -9274,6 +9274,7 @@ async function polygonQuote(symbol) {
     return null;
   }
 }
+
 async function getCombinedStockQuote(symbol) {
   let polygon = null;
   let finnhub = null;
@@ -9389,6 +9390,7 @@ async function getCombinedStockQuote(symbol) {
       : "Alpaca fallback",
   };
 }
+
 async function getRecentBars(symbol, timeframe = "5Min", limit = 30) {
   const data = await alpacaDataRequest(
     `/v2/stocks/${encodeURIComponent(
@@ -18461,7 +18463,7 @@ function buildInstitutionalDashboardPayload() {
   app.get("/stock-quote/:symbol", async (req, res) => {
     try {
       const symbol = normalizeSymbol(req.params.symbol);
-      const q = await getCombinedStockQuote(symbol);
+      const q = await getCombinedStockQuote(symbol);    
       const asset = await getAsset(symbol).catch(() => null);
 
       if (!q || !q.current) {
@@ -18513,87 +18515,6 @@ function buildInstitutionalDashboardPayload() {
     }
   });  
 
-app.get(
-  "/stock-movement/:symbol",
-  async (req, res) => {
-    try {
-      const symbol =
-        normalizeSymbol(
-          req.params.symbol || ""
-        );
-
-      if (!symbol) {
-        return res.status(400).json({
-          error: "Missing symbol",
-        });
-      }
-
-      const quote =
-        await getCombinedStockQuote(symbol);
-
-      const bars =
-        await getRecentBars(
-          symbol,
-          "1Min",
-          60
-        );
-
-      const barStats =
-        calculateBarStats(bars);
-
-      const movement = bars.map((bar) => ({
-        time: bar.t,
-        open: Number(bar.o || 0),
-        high: Number(bar.h || 0),
-        low: Number(bar.l || 0),
-        close: Number(bar.c || 0),
-        volume: Number(bar.v || 0),
-      }));
-
-      return res.json({
-        success: true,
-
-        symbol,
-
-        quote,
-
-        stats: {
-          avgVolume:
-            Number(
-              barStats.avgVolume || 0
-            ),
-
-          latestVolume:
-            Number(
-              barStats.lastVolume || 0
-            ),
-
-          volumeRatio:
-            Number(
-              barStats.volumeSpikeRatio || 0
-            ),
-
-          vwap:
-            Number(
-              barStats.vwap || 0
-            ),
-        },
-
-        movement,
-      });
-    } catch (err) {
-      console.error(
-        "Stock movement route failed:",
-        err.message
-      );
-
-      return res.status(500).json({
-        error: err.message,
-      });
-    }
-  }
-);
-
   app.get("/signals", (req, res) => {
     res.json({
       lastScanAt: engineState.lastScanAt,
@@ -18622,9 +18543,7 @@ app.get(
     } catch (err) {
       res.status(500).json({ error: err.message });
     }
-  }); 
-  
-  app.get("/all-positions-test", async (req, res) => {
+  }); app.get("/all-positions-test", async (req, res) => {
     try {
       const positions = await getPositions();
 
