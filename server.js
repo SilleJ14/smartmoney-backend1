@@ -9249,99 +9249,18 @@ async function finnhubQuote(symbol) {
   };
 }
 
-async function polygonQuote(symbol) {
-  try {
-    if (!ENABLE_POLYGON || !POLYGON_API_KEY) {
-      return null;
-    }
-
-    const cleanSymbol =
-      normalizeSymbol(symbol);
-
-    const url =
-      `https://api.polygon.io/v2/aggs/ticker/${cleanSymbol}/prev` +
-      `?adjusted=true&apiKey=${POLYGON_API_KEY}`;
-
-    const response = await fetch(url);
-
-    if (!response.ok) {
-      throw new Error(
-        `Polygon HTTP ${response.status}`
-      );
-    }
-
-    const data = await response.json();
-
-    const bar = data?.results?.[0];
-
-    if (!bar) return null;
-
-    const prevUrl =
-      `https://api.polygon.io/v2/aggs/ticker/${encodeURIComponent(
-        symbol
-      )}/prev?adjusted=true&apiKey=${POLYGON_API_KEY}`;
-
-    const prevResponse = await fetch(prevUrl);
-
-    if (!prevResponse.ok) {
-      throw new Error(`Polygon prev HTTP ${prevResponse.status}`);
-    }
-
-    const prevData = await prevResponse.json();
-    const prevBar = prevData?.results?.[0];
-
-    const currentPrice = Number(bar.c || 0);
-    const previousClose = Number(prevBar?.c || 0);
-
-    if (!currentPrice || !previousClose) return null;
-
-    return {
-      c: currentPrice,
-      h: Number(bar.h || currentPrice),
-      l: Number(bar.l || currentPrice),
-      o: Number(bar.o || currentPrice),
-      pc: previousClose,
-      v: Number(bar.v || 0),
-      change: currentPrice - previousClose,
-      percentChange:
-        previousClose > 0
-          ? ((currentPrice - previousClose) / previousClose) * 100
-          : 0,
-      source: "polygon",
-    };
-  } catch (err) {
-    console.error(
-      "Polygon quote failed:",
-      symbol,
-      err.message
-    );
-
-    engineState.apiFailureCounts.polygon =
-      Number(
-        engineState.apiFailureCounts?.polygon || 0
-      ) + 1;
-
-    return null;
-  }
-}
-
 async function getCombinedStockQuote(symbol) {
   let polygon = null;
   let finnhub = null;
   let dataError = "";
 
   try {
-    if (POLYGON_PRIMARY) {
+    if (ENABLE_POLYGON && POLYGON_PRIMARY) {
       polygon = await polygonQuote(symbol);
     }
   } catch (err) {
     dataError = err.message;
-  }
-
-  try {
-    finnhub = await finnhubQuote(symbol);
-  } catch (err) {
-    dataError = err.message;
+    console.error("Polygon primary failed:", symbol, err.message);
   }
 
   const bars = await getRecentBars(symbol, "5Min", 30);
@@ -9372,6 +9291,15 @@ async function getCombinedStockQuote(symbol) {
   const safeAlpacaLow = Number.isFinite(alpacaLow)
     ? alpacaLow
     : 0;
+
+  if (!polygon) {
+    try {
+      finnhub = await finnhubQuote(symbol);
+    } catch (err) {
+      dataError = err.message;
+      console.error("Finnhub fallback failed:", symbol, err.message);
+    }
+  }
 
   const primary = polygon || finnhub;
 
@@ -9404,6 +9332,14 @@ async function getCombinedStockQuote(symbol) {
         : 0
     );
 
+  const change =
+    Number(primary?.change || 0) ||
+    (
+      previousClose > 0
+        ? current - previousClose
+        : 0
+    );
+
   const volume = Math.max(
     Number(primary?.volume || primary?.v || 0),
     Number(barStats.lastVolume || 0),
@@ -9423,7 +9359,7 @@ async function getCombinedStockQuote(symbol) {
     current,
     price: current,
 
-    change: Number(primary?.change || 0),
+    change,
 
     percentChange,
 
