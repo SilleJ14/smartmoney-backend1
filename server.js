@@ -556,6 +556,12 @@ fullInstitutionalAiBrainState:
 fullInstitutionalAiBrainHistory:
   (engineState.fullInstitutionalAiBrainHistory || []).slice(0, 200),  
 
+autonomousMetaStrategyState:
+  engineState.autonomousMetaStrategyState || null,
+
+autonomousMetaStrategyHistory:
+  (engineState.autonomousMetaStrategyHistory || []).slice(0, 200),
+
 phase21AutonomousBrainHistory:
   (engineState.phase21AutonomousBrainHistory || []).slice(0, 200),
       pendingExits: engineState.pendingExits || [],
@@ -877,6 +883,8 @@ phase21AutonomousBrainState: null,
 phase21AutonomousBrainHistory: [],
 fullInstitutionalAiBrainState: null,
 fullInstitutionalAiBrainHistory: [],
+autonomousMetaStrategyState: null,
+autonomousMetaStrategyHistory: [],
 executionIntelligenceState: null,
 continuationHoldState: null,
 continuationHoldHistory: [],
@@ -1211,6 +1219,175 @@ function getReinforcementLearnedMultiplier(confidenceScore = 0) {
   };
 }
 
+function updateInstitutionalMarketMemoryFromClosedTrade(
+  closedTrade = {},
+  setupType = "GENERAL_SETUP"
+) {
+  if (!engineState.statisticalMemoryState) {
+    engineState.statisticalMemoryState = {
+      updatedAt: null,
+      setupHistory: [],
+      setupPerformance: {},
+      expectancyHistory: [],
+      probabilityHistory: [],
+    };
+  }
+
+  const profitPercent = Number(closedTrade.profitPercent || 0);
+  const isWin = profitPercent > 0;
+
+  const regimeKey =
+    closedTrade.marketRegime || "unknown_regime";
+
+  const sectorKey =
+    closedTrade.sector || "General Market";
+
+  const strategyKey =
+    closedTrade.strategy || setupType || "institutional_momentum";
+
+  const confirmations = closedTrade.confirmations || {};
+
+  const confirmationKeys = [
+    confirmations.aboveVwap === true ? "ABOVE_VWAP" : "BELOW_VWAP",
+    confirmations.closeNearHigh === true ? "CLOSE_NEAR_HIGH" : "WEAK_CLOSE",
+    confirmations.volumeSpike === true ? "VOLUME_SPIKE" : "NO_VOLUME_SPIKE",
+    confirmations.fakeBreakout === true ? "FAKE_BREAKOUT" : "NO_FAKE_BREAKOUT",
+  ];
+
+  function updateMemoryBucket(store, key) {
+    if (!store[key]) {
+      store[key] = {
+        key,
+        trades: 0,
+        wins: 0,
+        losses: 0,
+        totalProfitPercent: 0,
+        averageProfitPercent: 0,
+        winRate: 0,
+        expectancyScore: 50,
+        trustMultiplier: 1,
+        lastUpdated: null,
+      };
+    }
+
+    const bucket = store[key];
+
+    bucket.trades += 1;
+    if (isWin) bucket.wins += 1;
+    if (profitPercent < 0) bucket.losses += 1;
+
+    bucket.totalProfitPercent =
+      Number(bucket.totalProfitPercent || 0) + profitPercent;
+
+    bucket.averageProfitPercent = Number(
+      (
+        bucket.totalProfitPercent /
+        Math.max(1, bucket.trades)
+      ).toFixed(2)
+    );
+
+    bucket.winRate = Number(
+      ((bucket.wins / Math.max(1, bucket.trades)) * 100).toFixed(2)
+    );
+
+    bucket.expectancyScore = clampScore(
+      50 +
+        bucket.averageProfitPercent * 4 +
+        (bucket.winRate - 50) * 0.6
+    );
+
+    bucket.trustMultiplier =
+      bucket.trades < 5
+        ? 1
+        : bucket.expectancyScore >= 70
+        ? 1.08
+        : bucket.expectancyScore <= 40
+        ? 0.88
+        : 1;
+
+    bucket.lastUpdated = new Date().toISOString();
+
+    return bucket;
+  }
+
+  const setupMemory =
+    updateMemoryBucket(
+      engineState.statisticalMemoryState.setupPerformance,
+      setupType
+    );
+
+  const strategyMemory =
+    updateMemoryBucket(
+      engineState.strategyPerformanceState,
+      strategyKey
+    );
+
+  const regimeMemory =
+    updateMemoryBucket(
+      engineState.regimePerformanceState,
+      regimeKey
+    );
+
+  const sectorMemory =
+    updateMemoryBucket(
+      engineState.sectorPerformanceState,
+      sectorKey
+    );
+
+  const confirmationMemory = confirmationKeys.map((key) =>
+    updateMemoryBucket(
+      engineState.confirmationPerformanceState,
+      key
+    )
+  );
+
+  const snapshot = {
+    updatedAt: new Date().toISOString(),
+    symbol: closedTrade.symbol,
+    setupType,
+    strategyKey,
+    regimeKey,
+    sectorKey,
+    profitPercent,
+    setupExpectancyScore: setupMemory.expectancyScore,
+    strategyExpectancyScore: strategyMemory.expectancyScore,
+    regimeExpectancyScore: regimeMemory.expectancyScore,
+    sectorExpectancyScore: sectorMemory.expectancyScore,
+    confirmationKeys,
+    reason:
+      `Market memory updated • Setup ${setupMemory.expectancyScore}/100 • ` +
+      `Regime ${regimeMemory.expectancyScore}/100 • Sector ${sectorMemory.expectancyScore}/100`,
+  };
+
+  engineState.statisticalMemoryState.expectancyHistory.unshift(snapshot);
+  engineState.statisticalMemoryState.expectancyHistory =
+    engineState.statisticalMemoryState.expectancyHistory.slice(0, 300);
+
+  engineState.statisticalMemoryState.probabilityHistory.unshift({
+    updatedAt: new Date().toISOString(),
+    symbol: closedTrade.symbol,
+    setupType,
+    winRate: setupMemory.winRate,
+    averageProfitPercent: setupMemory.averageProfitPercent,
+    trustMultiplier: setupMemory.trustMultiplier,
+  });
+
+  engineState.statisticalMemoryState.probabilityHistory =
+    engineState.statisticalMemoryState.probabilityHistory.slice(0, 300);
+
+  engineState.statisticalMemoryState.updatedAt =
+    new Date().toISOString();
+
+  return {
+    snapshot,
+    setupMemory,
+    strategyMemory,
+    regimeMemory,
+    sectorMemory,
+    confirmationMemory,
+  };
+}
+
 function updateReinforcementWeightStateFromClosedTrade(closedTrade = {}) {
   const confidenceScore = Number(
     closedTrade.autonomousConfidenceScore || 0
@@ -1542,6 +1719,83 @@ function calculateWeakSetupFastExitGate({
   };
 }
 
+function calculateInstitutionalProfitExtraction({
+  symbol,
+  unrealizedPercent,
+  dropFromHigh,
+  isRunner,
+  highWater,
+  currentPrice,
+}) {
+  const entry = engineState.aiEntryScores?.[symbol] || {};
+
+  const entryScore = Number(entry.score || 0);
+  const institutionalBrainScore = Number(
+    entry.institutionalBrainScore ||
+      entry.autonomousConfidenceScore ||
+      0
+  );
+
+  const technicalScore = Number(entry.technicalScore || 0);
+  const statisticalScore = Number(entry.statisticalScore || 0);
+
+  const trendPersistenceScore = Number(
+    engineState.trendPersistenceState?.heldSymbols?.[symbol]
+      ?.trendPersistenceScore || 0
+  );
+
+  const winnerStrengthScore = clampScore(
+    unrealizedPercent * 3 +
+      entryScore * 0.18 +
+      institutionalBrainScore * 0.18 +
+      technicalScore * 0.16 +
+      statisticalScore * 0.14 +
+      trendPersistenceScore * 0.14 -
+      dropFromHigh * 4
+  );
+
+  const pressWinner =
+    isRunner &&
+    unrealizedPercent >= 8 &&
+    dropFromHigh <= 1.5 &&
+    winnerStrengthScore >= 72;
+
+  const protectWinner =
+    unrealizedPercent >= 5 &&
+    dropFromHigh >= 3 &&
+    winnerStrengthScore < 65;
+
+  const trimWinner =
+    unrealizedPercent >= 10 &&
+    dropFromHigh >= 1.5 &&
+    dropFromHigh <= 4 &&
+    winnerStrengthScore >= 65;
+
+  const dynamicRunnerTrailingStopPercent =
+    pressWinner
+      ? unrealizedPercent >= 20
+        ? 3.5
+        : unrealizedPercent >= 12
+        ? 2.5
+        : 2
+      : protectWinner
+      ? 1
+      : CONFIG.runnerTrailingStopPercent;
+
+  return {
+    phase: "36_INSTITUTIONAL_PROFIT_EXTRACTION",
+    updatedAt: new Date().toISOString(),
+    winnerStrengthScore,
+    pressWinner,
+    protectWinner,
+    trimWinner,
+    dynamicRunnerTrailingStopPercent,
+    reason:
+      `${pressWinner ? "PRESS_WINNER" : protectWinner ? "PROTECT_WINNER" : trimWinner ? "TRIM_WINNER" : "NORMAL_WINNER_MANAGEMENT"} • ` +
+      `WinnerStrength ${winnerStrengthScore}/100 • Profit ${unrealizedPercent.toFixed(2)}% • Drop ${dropFromHigh.toFixed(2)}%`,
+  };
+}
+
 function calculateSmartTrimDecision({
   symbol,
   qty,
@@ -1808,6 +2062,12 @@ engineState.statisticalMemoryState.setupHistory.unshift({
 
 engineState.statisticalMemoryState.setupHistory =
   engineState.statisticalMemoryState.setupHistory.slice(0, 500);
+
+const institutionalMarketMemorySnapshot =
+  updateInstitutionalMarketMemoryFromClosedTrade(
+    closedTrade,
+    setupType
+  );  
 
 engineState.statisticalMemoryState.updatedAt =
   new Date().toISOString();
@@ -13328,9 +13588,14 @@ engineState.statisticalMemoryState =
           0
       );
   }
+  const autonomousMetaStrategyResult =
+    calculateAutonomousMetaStrategyOrchestrator(results);
+
+  results = autonomousMetaStrategyResult.signals;
 
   return results
     .sort((a, b) => {
+      
       if (b.score !== a.score) return b.score - a.score;
       return b.percentChange - a.percentChange;
     })
@@ -14957,7 +15222,25 @@ const adaptiveSwingRisk = calculateAdaptiveSwingRisk(
       });
     }
 
+    
     const isRunner = Boolean(engineState.runnerPositions[symbol]);
+
+    const profitExtraction =
+      calculateInstitutionalProfitExtraction({
+        symbol,
+        unrealizedPercent,
+        dropFromHigh,
+        isRunner,
+        highWater,
+        currentPrice,
+      });
+
+    engineState.institutionalExitOrchestratorState = {
+      ...(engineState.institutionalExitOrchestratorState || {}),
+      latestProfitExtraction: profitExtraction,
+      updatedAt: new Date().toISOString(),
+    };
+
     const shouldStopLoss = unrealizedPercent <= adaptiveSwingRisk.stopLossPercent;
        const continuationHoldExitDecision =
       calculateContinuationHoldExitDecision({
@@ -14965,6 +15248,7 @@ const adaptiveSwingRisk = calculateAdaptiveSwingRisk(
         unrealizedPercent,
         dropFromHigh,
       }); 
+
     const isMorningStrikePosition =
       engineState.aiEntryScores?.[symbol]?.entryType === "MORNING_STRIKE" ||
       engineState.aiEntryScores?.[symbol]?.morningStrike === true ||
@@ -15014,8 +15298,16 @@ const shouldNormalTrailingExit =
         currentPrice,
       });
 
-    const dynamicRunnerTrailingStopPercent =
-      trendHoldDecision.runnerTrailingStopPercent;
+    const dynamicRunnerTrailingStopPercent = Math.max(
+      Number(
+        trendHoldDecision.runnerTrailingStopPercent ||
+          CONFIG.runnerTrailingStopPercent
+      ),
+      Number(
+        profitExtraction.dynamicRunnerTrailingStopPercent ||
+          CONFIG.runnerTrailingStopPercent
+      )
+    );
 
     const smartExitDecision =
       calculateSmartExitIntelligence({
@@ -15206,7 +15498,8 @@ const shouldNormalTrailingExit =
   ) &&
   !exitParliamentDecision.shouldConsensusExit
 ) {
-      saveRecentOrder("SMART_EXIT_HOLD", symbol, {
+
+    saveRecentOrder("SMART_EXIT_HOLD", symbol, {
         qty,
         price: currentPrice,
         highWater,
@@ -15214,6 +15507,7 @@ const shouldNormalTrailingExit =
         profitPercent: unrealizedPercent,
         isRunner,
         smartExitDecision,
+        profitExtraction,
         trendHoldMode: trendHoldDecision.mode,
         trendHoldReason: trendHoldDecision.reason,
         dynamicRunnerTrailingStopPercent,
@@ -15221,7 +15515,6 @@ const shouldNormalTrailingExit =
 
       continue;
     }
-
     const pdtTrimProtection =
       calculatePdtExitProtection({
         symbol,
@@ -16109,6 +16402,86 @@ const portfolioManager =
   }
 }
 
+function calculateEliteRunnerHeatOverride(signal = {}) {
+  const continuationProbability = Number(
+    signal.continuationProbability || 0
+  );
+
+  const trendQualityScore = Number(
+    signal.trendQualityScore || 0
+  );
+
+  const breakoutQualityScore = Number(
+    signal.breakoutQualityScore || 0
+  );
+
+  const executionConfidence = Number(
+    signal.executionConfidence ||
+      signal.institutionalExecutionPlan?.executionConfidence ||
+      0
+  );
+
+  const institutionalBrainScore = Number(
+    signal.institutionalBrainScore ||
+      signal.fullInstitutionalAiBrain?.dynamicConvictionScore ||
+      0
+  );
+
+  const trapRiskScore = Number(
+    signal.liquiditySweepTrap?.trapRiskScore || 0
+  );
+
+  const fakeBreakout =
+    signal.confirmations?.fakeBreakout === true;
+
+  const portfolioHeatScore = Number(
+    signal.portfolioHeat?.portfolioHeatScore || 0
+  );
+
+  const sameSectorOpenPositions = Number(
+    signal.portfolioHeat?.sameSectorOpenPositions || 0
+  );
+
+  const eliteRunnerScore = clampScore(
+    continuationProbability * 0.22 +
+      trendQualityScore * 0.18 +
+      breakoutQualityScore * 0.18 +
+      executionConfidence * 0.14 +
+      institutionalBrainScore * 0.18 -
+      trapRiskScore * 0.12 -
+      (fakeBreakout ? 30 : 0)
+  );
+
+  const eliteHeatOverride =
+    eliteRunnerScore >= 78 &&
+    continuationProbability >= 80 &&
+    trendQualityScore >= 85 &&
+    breakoutQualityScore >= 85 &&
+    fakeBreakout !== true;
+
+  const heatOverrideMultiplier =
+    eliteHeatOverride
+      ? portfolioHeatScore <= 25
+        ? 1.35
+        : portfolioHeatScore <= 45
+        ? 1.18
+        : 1.08
+      : 1;
+
+  return {
+    phase: "35_ELITE_RUNNER_HEAT_OVERRIDE",
+    updatedAt: new Date().toISOString(),
+    eliteRunnerScore,
+    eliteHeatOverride,
+    heatOverrideMultiplier,
+    sameSectorOpenPositions,
+    portfolioHeatScore,
+    reason:
+      `${eliteHeatOverride ? "ELITE_HEAT_OVERRIDE_ACTIVE" : "NORMAL_HEAT_CONTROL"} • ` +
+      `Elite ${eliteRunnerScore}/100 • Heat ${portfolioHeatScore}/100`,
+  };
+}
+
 function calculateAdaptiveAggressionRebalancer(signal = {}) {
   const score = Number(signal.score || 0);
 
@@ -16837,6 +17210,13 @@ const eliteCapitalBoost =
 
       continue;
     }
+
+        const eliteRunnerHeatOverride =
+      calculateEliteRunnerHeatOverride(candidate);
+
+    candidate.eliteRunnerHeatOverride =
+      eliteRunnerHeatOverride;
+
     const adaptiveAggression =
       calculateAdaptiveAggressionRebalancer(candidate);
 
@@ -16918,6 +17298,11 @@ const eliteCapitalBoost =
   const sectorDominanceMultiplier =
   Number(candidate.sectorDominance?.dominanceMultiplier || 1);
 
+  const eliteHeatMultiplier =
+      Number(
+        candidate.eliteRunnerHeatOverride?.heatOverrideMultiplier || 1
+      );
+
     const adaptiveAggressionMultiplier =
       Number(
         candidate.adaptiveAggression?.aggressionMultiplier || 1
@@ -16938,7 +17323,8 @@ const eliteCapitalBoost =
         regimeProtectionMultiplier *
         Number(reinforcementSizing.learnedMultiplier || 1) *
         weakSetupPenalty *
-        adaptiveAggressionMultiplier *        
+        eliteHeatMultiplier *
+        adaptiveAggressionMultiplier *      
         marketPhaseSizingMultiplier *
         sectorDominanceMultiplier *
         liquidityTrapMultiplier *
@@ -19374,6 +19760,313 @@ function updateFullInstitutionalAiBrainState(signals = []) {
   return state;
 }
 
+
+function detectAutonomousStrategyType(signal = {}) {
+  const score = Number(signal.score || 0);
+  const institutionalBrainScore = Number(
+    signal.institutionalBrainScore || score
+  );
+
+  const percentChange = Number(
+    signal.percentChange ||
+      signal.changePercent ||
+      0
+  );
+
+  const volumeSpikeRatio = Number(
+    signal.confirmations?.volumeSpikeRatio ||
+      signal.volumeSpikeRatio ||
+      signal.relativeVolume ||
+      signal.volumeRatio ||
+      0
+  );
+
+  const runnerScore = Number(
+    signal.runnerScore ||
+      signal.explosiveRunnerScore ||
+      signal.explosiveRunnerPrediction?.explosiveRunnerScore ||
+      0
+  );
+
+  const accumulationScore = Number(
+    signal.multiDayAccumulation?.accumulationScore ||
+      signal.accumulationScore ||
+      0
+  );
+
+  const premarketScore = Number(
+    signal.premarketDominanceScore ||
+      signal.premarketDominance?.premarketDominanceScore ||
+      0
+  );
+
+  const opportunityTier =
+    signal.fullInstitutionalAiBrain?.opportunityTier || "";
+
+  if (
+    opportunityTier === "MASTER_CONVICTION" ||
+    institutionalBrainScore >= 88
+  ) {
+    return "MOMENTUM";
+  }
+
+  if (
+    runnerScore >= 75 ||
+    premarketScore >= 75 ||
+    percentChange >= 12
+  ) {
+    return "BREAKOUT";
+  }
+
+  if (
+    institutionalBrainScore >= 78 &&
+    percentChange >= 3 &&
+    percentChange <= 15
+  ) {
+    return "CONTINUATION";
+  }
+
+  if (
+    volumeSpikeRatio >= 2.5 &&
+    percentChange >= 2 &&
+    percentChange <= 10
+  ) {
+    return "SQUEEZE";
+  }
+
+  if (
+    accumulationScore >= 65 ||
+    (
+      volumeSpikeRatio >= 1.5 &&
+      percentChange >= 0 &&
+      percentChange <= 5
+    )
+  ) {
+    return "ACCUMULATION";
+  }
+
+  return "DEFENSIVE_PROBE";
+}
+
+function calculateAutonomousMetaStrategyOrchestrator(signals = []) {
+  const reviewed = Array.isArray(signals) ? signals : [];
+
+  const marketRegime = String(
+    engineState.marketRegime?.state ||
+      engineState.marketRegime?.label ||
+      "neutral"
+  ).toLowerCase();
+
+  const macroStress = Number(
+    engineState.macroRiskState?.macroStressScore ||
+      engineState.marketStressLevel ||
+      0
+  );
+
+  const portfolioGovernorMode =
+    engineState.portfolioGovernorState?.governorMode ||
+    "NORMAL";
+
+  const liquidityBlocked =
+    engineState.liquidityIntelligenceState
+      ?.shouldBlockWeakLiquidity === true;
+
+  const baseWeights = {
+    BREAKOUT: 1,
+    CONTINUATION: 1,
+    SQUEEZE: 1,
+    ACCUMULATION: 1,
+    MOMENTUM: 1,
+    DEFENSIVE_PROBE: 0.75,
+  };
+
+  if (
+    marketRegime.includes("aggressive") ||
+    marketRegime.includes("bullish")
+  ) {
+    baseWeights.BREAKOUT += 0.25;
+    baseWeights.MOMENTUM += 0.25;
+    baseWeights.CONTINUATION += 0.15;
+  }
+
+  if (
+    marketRegime.includes("defensive") ||
+    marketRegime.includes("panic") ||
+    macroStress >= 60
+  ) {
+    baseWeights.DEFENSIVE_PROBE += 0.35;
+    baseWeights.ACCUMULATION += 0.2;
+    baseWeights.BREAKOUT -= 0.25;
+    baseWeights.MOMENTUM -= 0.15;
+  }
+
+  if (
+    marketRegime.includes("neutral") ||
+    marketRegime.includes("chop")
+  ) {
+    baseWeights.SQUEEZE += 0.2;
+    baseWeights.ACCUMULATION += 0.15;
+  }
+
+  if (portfolioGovernorMode === "PROBE_DEPLOYMENT") {
+    baseWeights.DEFENSIVE_PROBE += 0.25;
+    baseWeights.BREAKOUT -= 0.15;
+  }
+
+  if (portfolioGovernorMode === "CONTROLLED_EXPANSION") {
+    baseWeights.CONTINUATION += 0.15;
+    baseWeights.MOMENTUM += 0.1;
+  }
+
+  if (liquidityBlocked) {
+    baseWeights.DEFENSIVE_PROBE += 0.25;
+    baseWeights.BREAKOUT -= 0.2;
+    baseWeights.SQUEEZE -= 0.1;
+  }
+
+  const strategyBuckets = {
+    BREAKOUT: [],
+    CONTINUATION: [],
+    SQUEEZE: [],
+    ACCUMULATION: [],
+    MOMENTUM: [],
+    DEFENSIVE_PROBE: [],
+  };
+
+  const routedSignals = reviewed.map((signal) => {
+    const strategyType = detectAutonomousStrategyType(signal);
+
+    const baseScore = Number(
+      signal.institutionalBrainScore ||
+        signal.score ||
+        0
+    );
+
+    const strategyWeight = Math.max(
+      0.25,
+      Number(baseWeights[strategyType] || 1)
+    );
+
+    const metaStrategyScore = clampScore(
+      baseScore * strategyWeight
+    );
+
+    const routedSignal = {
+      ...signal,
+      score: Math.max(Number(signal.score || 0), metaStrategyScore),
+      metaStrategyScore,
+      autonomousMetaStrategy: {
+        phase: "34_AUTONOMOUS_META_STRATEGY_ORCHESTRATOR",
+        strategyType,
+        strategyWeight: Number(strategyWeight.toFixed(2)),
+        metaStrategyScore,
+        marketRegime,
+        macroStress,
+        portfolioGovernorMode,
+        liquidityBlocked,
+        reason:
+          `${strategyType} route • Weight ${strategyWeight.toFixed(2)}x • ` +
+          `Meta score ${metaStrategyScore}/100`,
+      },
+    };
+
+    strategyBuckets[strategyType].push(routedSignal);
+
+    return routedSignal;
+  });
+
+  Object.keys(strategyBuckets).forEach((key) => {
+    strategyBuckets[key] = strategyBuckets[key]
+      .sort(
+        (a, b) =>
+          Number(b.metaStrategyScore || 0) -
+          Number(a.metaStrategyScore || 0)
+      )
+      .slice(0, 10);
+  });
+
+  const strategyRanking = Object.entries(strategyBuckets)
+    .map(([strategy, bucket]) => {
+      const bestScore = Number(bucket[0]?.metaStrategyScore || 0);
+      const count = bucket.length;
+      const weight = Number(baseWeights[strategy] || 1);
+
+      return {
+        strategy,
+        count,
+        bestScore,
+        weight: Number(weight.toFixed(2)),
+        dominanceScore: Number(
+          (bestScore * weight + count * 3).toFixed(2)
+        ),
+      };
+    })
+    .sort((a, b) => b.dominanceScore - a.dominanceScore);
+
+  const dominantStrategy =
+    strategyRanking[0]?.strategy || "DEFENSIVE_PROBE";
+
+  const capitalRoutingMode =
+    macroStress >= 75
+      ? "CAPITAL_DEFENSE"
+      : dominantStrategy === "BREAKOUT"
+      ? "ATTACK_BREAKOUTS"
+      : dominantStrategy === "CONTINUATION"
+      ? "PRESS_CONTINUATION"
+      : dominantStrategy === "SQUEEZE"
+      ? "WAIT_FOR_EXPANSION"
+      : dominantStrategy === "ACCUMULATION"
+      ? "BUILD_EARLY_POSITION"
+      : dominantStrategy === "MOMENTUM"
+      ? "FOLLOW_LEADERSHIP"
+      : "PROBE_ONLY";
+
+  const rankedSignals = routedSignals.sort(
+    (a, b) =>
+      Number(b.metaStrategyScore || 0) -
+      Number(a.metaStrategyScore || 0)
+  );
+
+  const state = {
+    updatedAt: new Date().toISOString(),
+    phase: "34_AUTONOMOUS_META_STRATEGY_ORCHESTRATOR",
+    reviewedCount: reviewed.length,
+    dominantStrategy,
+    capitalRoutingMode,
+    marketRegime,
+    macroStress,
+    portfolioGovernorMode,
+    liquidityBlocked,
+    strategyWeights: baseWeights,
+    strategyRanking,
+    strategyBuckets,
+    rankedSignals: rankedSignals.slice(0, 25),
+    topTwoSymbols: rankedSignals.slice(0, 2).map((s) => s.symbol),
+    adaptiveStrategyRotationActive: true,
+    selfEvolvingCapitalRoutingActive: true,
+    reason:
+      `${capitalRoutingMode} • Dominant strategy ${dominantStrategy} • ` +
+      `${rankedSignals.length} routed signals`,
+  };
+
+  engineState.autonomousMetaStrategyState = state;
+
+  if (!Array.isArray(engineState.autonomousMetaStrategyHistory)) {
+    engineState.autonomousMetaStrategyHistory = [];
+  }
+
+  engineState.autonomousMetaStrategyHistory.unshift(state);
+  engineState.autonomousMetaStrategyHistory =
+    engineState.autonomousMetaStrategyHistory.slice(0, 200);
+
+  saveEngineState("AUTONOMOUS_META_STRATEGY_UPDATED");
+
+  return {
+    state,
+    signals: rankedSignals,
+  };
+}
+
 function buildInstitutionalDashboardPayload() {
   return {
     generatedAt: new Date().toISOString(),
@@ -19401,6 +20094,9 @@ function buildInstitutionalDashboardPayload() {
 
     fullInstitutionalAiBrain:
       engineState.fullInstitutionalAiBrainState || null,      
+
+    autonomousMetaStrategy:
+      engineState.autonomousMetaStrategyState || null,      
 
     institutionalExecutionLayer:
       engineState.institutionalExecutionLayerState || null,
