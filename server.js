@@ -562,6 +562,12 @@ autonomousMetaStrategyState:
 autonomousMetaStrategyHistory:
   (engineState.autonomousMetaStrategyHistory || []).slice(0, 200),
 
+adaptiveSuppressionBalancerState:
+  engineState.adaptiveSuppressionBalancerState || null,
+
+adaptiveSuppressionBalancerHistory:
+  (engineState.adaptiveSuppressionBalancerHistory || []).slice(0, 200),  
+
 autonomousCapitalPressureState:
   engineState.autonomousCapitalPressureState || null,
 
@@ -891,6 +897,8 @@ fullInstitutionalAiBrainState: null,
 fullInstitutionalAiBrainHistory: [],
 autonomousMetaStrategyState: null,
 autonomousMetaStrategyHistory: [],
+adaptiveSuppressionBalancerState: null,
+adaptiveSuppressionBalancerHistory: [],
 autonomousCapitalPressureState: null,
 autonomousCapitalPressureHistory: [],
 executionIntelligenceState: null,
@@ -16630,6 +16638,158 @@ function calculateAutonomousCapitalPressure({
 
   return snapshot;
 }
+function calculateAdaptiveSuppressionBalancer({
+  candidate = {},
+  capitalPressure = {},
+  orchestratorGate = {},
+  parliamentGate = {},
+  autonomousConfidenceMultiplier = 1,
+  regimeProtectionMultiplier = 1,
+  reinforcementSizing = {},
+  weakSetupPenalty = 1,
+  eliteHeatMultiplier = 1,
+  adaptiveAggressionMultiplier = 1,
+  marketPhaseSizingMultiplier = 1,
+  sectorDominanceMultiplier = 1,
+  liquidityTrapMultiplier = 1,
+  entryTimingMultiplier = 1,
+}) {
+  const symbol = normalizeSymbol(candidate.symbol);
+
+  const score = Number(candidate.score || 0);
+  const institutionalBrainScore = Number(
+    candidate.institutionalBrainScore ||
+      candidate.fullInstitutionalAiBrain?.dynamicConvictionScore ||
+      0
+  );
+
+  const runnerScore = Number(
+    candidate.runnerScore ||
+      candidate.explosiveRunnerScore ||
+      candidate.explosiveRunnerPrediction?.explosiveRunnerScore ||
+      0
+  );
+
+  const executionConfidence = Number(
+    candidate.institutionalExecutionPlan?.executionConfidence ||
+      candidate.executionConfidence ||
+      50
+  );
+
+  const metaStrategyScore = Number(
+    candidate.metaStrategyScore || score
+  );
+
+  const closeNearHighPercent = Number(
+    candidate.confirmations?.closeNearHighPercent || 0
+  );
+
+  const pullbackFromHighPercent = Number(
+    candidate.confirmations?.pullbackFromHighPercent || 0
+  );
+
+  const aboveVwap =
+    candidate.confirmations?.aboveVwap === true;
+
+  const fakeBreakout =
+    candidate.confirmations?.fakeBreakout === true;
+
+  const liquidityRejected =
+    candidate.liquiditySweepTrap?.shouldRejectEntry === true;
+
+  const rawSuppressionProduct =
+    Number(orchestratorGate.orchestrator?.orchestratorMultiplier || 1) *
+    Number(parliamentGate.multiplier || 1) *
+    Number(autonomousConfidenceMultiplier || 1) *
+    Number(regimeProtectionMultiplier || 1) *
+    Number(reinforcementSizing.learnedMultiplier || 1) *
+    Number(weakSetupPenalty || 1) *
+    Number(eliteHeatMultiplier || 1) *
+    Number(adaptiveAggressionMultiplier || 1) *
+    Number(marketPhaseSizingMultiplier || 1) *
+    Number(sectorDominanceMultiplier || 1) *
+    Number(liquidityTrapMultiplier || 1) *
+    Number(entryTimingMultiplier || 1);
+
+  const suppressionHealthScore = clampScore(
+    score * 0.18 +
+      institutionalBrainScore * 0.22 +
+      metaStrategyScore * 0.16 +
+      runnerScore * 0.14 +
+      executionConfidence * 0.16 +
+      (aboveVwap ? 8 : 0) +
+      (closeNearHighPercent >= 65 ? 7 : 0) -
+      (pullbackFromHighPercent >= 8 ? 12 : 0) -
+      (fakeBreakout ? 35 : 0)
+  );
+
+  const qualityTier =
+    suppressionHealthScore >= 82
+      ? "ELITE_SURVIVOR"
+      : suppressionHealthScore >= 72
+      ? "STRONG_SURVIVOR"
+      : suppressionHealthScore >= 64
+      ? "SELECTIVE_SURVIVOR"
+      : "DO_NOT_RELIEVE";
+
+  const canRelieveSuppression =
+    !fakeBreakout &&
+    !liquidityRejected &&
+    parliamentGate.allowed !== false &&
+    orchestratorGate.allowed !== false &&
+    qualityTier !== "DO_NOT_RELIEVE";
+
+  const targetSuppressionFloor =
+    qualityTier === "ELITE_SURVIVOR"
+      ? 0.55
+      : qualityTier === "STRONG_SURVIVOR"
+      ? 0.42
+      : qualityTier === "SELECTIVE_SURVIVOR"
+      ? 0.32
+      : rawSuppressionProduct;
+
+  let balancedMultiplier = 1;
+
+  if (
+    canRelieveSuppression &&
+    rawSuppressionProduct > 0 &&
+    rawSuppressionProduct < targetSuppressionFloor
+  ) {
+    balancedMultiplier = Math.min(
+      qualityTier === "ELITE_SURVIVOR" ? 1.65 : 1.35,
+      targetSuppressionFloor / rawSuppressionProduct
+    );
+  }
+
+  const state = {
+    updatedAt: new Date().toISOString(),
+    phase: "37_5_ADAPTIVE_SUPPRESSION_BALANCER",
+    symbol,
+    suppressionHealthScore,
+    qualityTier,
+    rawSuppressionProduct: Number(rawSuppressionProduct.toFixed(4)),
+    targetSuppressionFloor,
+    balancedMultiplier: Number(balancedMultiplier.toFixed(2)),
+    canRelieveSuppression,
+    capitalPressureTier: capitalPressure.pressureTier || null,
+    reason:
+      canRelieveSuppression
+        ? `${qualityTier} • Suppression ${rawSuppressionProduct.toFixed(3)} • Balance x${balancedMultiplier.toFixed(2)}`
+        : `No relief • ${qualityTier} • Suppression ${rawSuppressionProduct.toFixed(3)}`,
+  };
+
+  engineState.adaptiveSuppressionBalancerState = state;
+
+  if (!Array.isArray(engineState.adaptiveSuppressionBalancerHistory)) {
+    engineState.adaptiveSuppressionBalancerHistory = [];
+  }
+
+  engineState.adaptiveSuppressionBalancerHistory.unshift(state);
+  engineState.adaptiveSuppressionBalancerHistory =
+    engineState.adaptiveSuppressionBalancerHistory.slice(0, 200);
+
+  return state;
+}
 
 function calculateEliteRunnerHeatOverride(signal = {}) {
   const continuationProbability = Number(
@@ -17556,6 +17716,25 @@ const eliteCapitalBoost =
         capitalPressure,
       });
 
+    const suppressionBalancer =
+      calculateAdaptiveSuppressionBalancer({
+        candidate,
+        capitalPressure,
+        orchestratorGate,
+        parliamentGate,
+        autonomousConfidenceMultiplier,
+        regimeProtectionMultiplier,
+        reinforcementSizing,
+        weakSetupPenalty,
+        eliteHeatMultiplier,
+        adaptiveAggressionMultiplier,
+        marketPhaseSizingMultiplier,
+        sectorDominanceMultiplier,
+        liquidityTrapMultiplier,
+        entryTimingMultiplier,
+      });
+
+
     const finalTradeAmount = Number(
       (
         capitalPressure.capitalPressureAmount *
@@ -17570,7 +17749,8 @@ const eliteCapitalBoost =
         marketPhaseSizingMultiplier *
         sectorDominanceMultiplier *
         liquidityTrapMultiplier *
-        entryTimingMultiplier
+        entryTimingMultiplier *
+        suppressionBalancer.balancedMultiplier
       ).toFixed(2)
     );
 
@@ -17585,6 +17765,8 @@ const eliteCapitalBoost =
         autonomousConfidenceMultiplier,
         regimeProtectionMultiplier,
         reinforcementSizing,
+        capitalPressure,
+        suppressionBalancer,
       });
       continue;
     }
