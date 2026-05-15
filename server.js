@@ -3326,6 +3326,75 @@ function calculateExplosiveRunnerPrediction(signal = {}) {
       `Compression ${compression.compressionScore}/100`,
   };
 }
+function calculateEarlyStrengthProjection(signal = {}) {
+  const confirmations = signal.confirmations || {};
+
+  const momentumScore = Number(signal.momentumScore || 0);
+  const closeNearHighPercent = Number(confirmations.closeNearHighPercent || 0);
+  const pullbackFromHighPercent = Number(confirmations.pullbackFromHighPercent || 0);
+  const volumeSpikeRatio = Number(
+    confirmations.volumeSpikeRatio ||
+      signal.volumeSpikeRatio ||
+      signal.relativeVolume ||
+      signal.volumeRatio ||
+      0
+  );
+
+  const premarket =
+    signal.premarketMomentum ||
+    signal.explosiveRunnerPrediction?.premarket ||
+    calculatePremarketMomentumEngine(signal);
+
+  const gapContinuationProbability = Number(
+    premarket?.gapContinuation?.openingRangeBreakoutProbability || 0
+  );
+
+  const openingDriveProbability = Number(
+    signal.premarketDominance?.openingDriveProbability ||
+      premarket?.openingDriveProbability ||
+      0
+  );
+
+  const fadeRisk = Number(
+    premarket?.fadeRisk || 50
+  );
+
+  const earlyProjectionScore = clampScore(
+    momentumScore * 0.22 +
+      closeNearHighPercent * 0.22 +
+      Math.max(0, 100 - pullbackFromHighPercent * 8) * 0.18 +
+      openingDriveProbability * 0.16 +
+      gapContinuationProbability * 0.14 +
+      Math.min(volumeSpikeRatio * 15, 100) * 0.08 -
+      fadeRisk * 0.12 +
+      (confirmations.aboveVwap === true ? 8 : -15) +
+      (confirmations.fakeBreakout === true ? -30 : 0)
+  );
+
+  return {
+    phase: "34_EARLY_STRENGTH_PROJECTION",
+    earlyProjectionScore,
+    earlyProjectionTier:
+      earlyProjectionScore >= 78
+        ? "EARLY_LEADER"
+        : earlyProjectionScore >= 68
+        ? "EARLY_WATCH"
+        : "IGNORE",
+    closeNearHighPercent,
+    pullbackFromHighPercent,
+    volumeSpikeRatio,
+    openingDriveProbability,
+    gapContinuationProbability,
+    fadeRisk,
+    aboveVwap: confirmations.aboveVwap === true,
+    fakeBreakout: confirmations.fakeBreakout === true,
+    reason:
+      `Projection ${earlyProjectionScore}/100 • ` +
+      `CloseNearHigh ${closeNearHighPercent}% • ` +
+      `Pullback ${pullbackFromHighPercent}% • ` +
+      `OpenDrive ${openingDriveProbability}/100`,
+  };
+}
 
 function updateExplosiveRunnerState(signals = []) {
   const stockSignals = (Array.isArray(signals) ? signals : [])
@@ -12435,6 +12504,20 @@ const explosiveRunnerPrediction =
     catalystRanking,
   });
 
+const earlyStrengthProjection =
+  calculateEarlyStrengthProjection({
+    ...quote,
+    score: institutional.institutionalScore,
+    momentumScore: institutional.momentumScore || score,
+    statisticalScore,
+    statisticalEdge,
+    ...institutional,
+    accumulationIntelligence,
+    volatilityCompression,
+    catalystRanking,
+    explosiveRunnerPrediction,
+  });
+
    const portfolioManager =
   typeof calculateAiPortfolioManagerDecision === "function"
     ? calculateAiPortfolioManagerDecision(
@@ -12482,6 +12565,11 @@ const explosiveRunnerPrediction =
           explosiveRunnerPrediction.explosiveRunnerScore,
         explosiveRunnerLabel:
           explosiveRunnerPrediction.runnerLabel,        
+        earlyStrengthProjection,
+        earlyProjectionScore:
+          earlyStrengthProjection.earlyProjectionScore,
+        earlyProjectionTier:
+          earlyStrengthProjection.earlyProjectionTier,          
 
         ...institutional,
         ...portfolioManager,
