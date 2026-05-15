@@ -562,6 +562,12 @@ autonomousMetaStrategyState:
 autonomousMetaStrategyHistory:
   (engineState.autonomousMetaStrategyHistory || []).slice(0, 200),
 
+autonomousCapitalPressureState:
+  engineState.autonomousCapitalPressureState || null,
+
+autonomousCapitalPressureHistory:
+  (engineState.autonomousCapitalPressureHistory || []).slice(0, 200),  
+
 phase21AutonomousBrainHistory:
   (engineState.phase21AutonomousBrainHistory || []).slice(0, 200),
       pendingExits: engineState.pendingExits || [],
@@ -885,6 +891,8 @@ fullInstitutionalAiBrainState: null,
 fullInstitutionalAiBrainHistory: [],
 autonomousMetaStrategyState: null,
 autonomousMetaStrategyHistory: [],
+autonomousCapitalPressureState: null,
+autonomousCapitalPressureHistory: [],
 executionIntelligenceState: null,
 continuationHoldState: null,
 continuationHoldHistory: [],
@@ -13595,7 +13603,7 @@ engineState.statisticalMemoryState =
 
   return results
     .sort((a, b) => {
-      
+
       if (b.score !== a.score) return b.score - a.score;
       return b.percentChange - a.percentChange;
     })
@@ -16402,6 +16410,227 @@ const portfolioManager =
   }
 }
 
+function calculateAutonomousCapitalPressure({
+  signal = {},
+  account = {},
+  openBotPositions = [],
+  baseTradeAmount = 0,
+  portfolioManager = {},
+  parliamentGate = {},
+  institutionalExecutionPlan = {},
+  reinforcementSizing = {},
+}) {
+  const symbol = normalizeSymbol(signal.symbol);
+
+  const score = Number(signal.score || 0);
+  const metaStrategyScore = Number(signal.metaStrategyScore || score);
+  const institutionalBrainScore = Number(
+    signal.institutionalBrainScore ||
+      signal.fullInstitutionalAiBrain?.dynamicConvictionScore ||
+      score
+  );
+
+  const runnerScore = Number(
+    signal.runnerScore ||
+      signal.explosiveRunnerScore ||
+      signal.explosiveRunnerPrediction?.explosiveRunnerScore ||
+      0
+  );
+
+  const continuationProbability = Number(
+    signal.continuationProbability || 0
+  );
+
+  const breakoutProbability = Number(
+    signal.breakoutProbability || 0
+  );
+
+  const accumulationScore = Number(
+    signal.multiDayAccumulationScore ||
+      signal.multiDayAccumulation?.preBreakoutScore ||
+      signal.accumulationIntelligence?.accumulationScore ||
+      0
+  );
+
+  const executionConfidence = Number(
+    institutionalExecutionPlan.executionConfidence ||
+      signal.executionConfidence ||
+      signal.institutionalExecutionPlan?.executionConfidence ||
+      50
+  );
+
+  const liquidityScore = Number(
+    institutionalExecutionPlan.liquidityScore ||
+      signal.institutionalExecutionPlan?.liquidityScore ||
+      signal.liquidityFitScore ||
+      50
+  );
+
+  const trapRiskScore = Number(
+    signal.liquiditySweepTrap?.trapRiskScore || 0
+  );
+
+  const fakeBreakout =
+    signal.confirmations?.fakeBreakout === true;
+
+  const aboveVwap =
+    signal.confirmations?.aboveVwap === true;
+
+  const closeNearHighPercent = Number(
+    signal.confirmations?.closeNearHighPercent || 0
+  );
+
+  const pullbackFromHighPercent = Number(
+    signal.confirmations?.pullbackFromHighPercent || 0
+  );
+
+  const marketRegime = String(
+    engineState.marketRegime?.state ||
+      engineState.marketRegime?.label ||
+      "neutral"
+  ).toLowerCase();
+
+  const capitalRoutingMode =
+    engineState.autonomousMetaStrategyState?.capitalRoutingMode ||
+    "NORMAL_ROUTING";
+
+  const strategyType =
+    signal.autonomousMetaStrategy?.strategyType ||
+    "UNCLASSIFIED";
+
+  const cash = Number(account?.cash || 0);
+  const buyingPower = Number(account?.buying_power || cash);
+  const equity = Number(account?.equity || 0);
+
+  const maxBotBudget =
+    equity * (Number(CONFIG.maxBotExposurePercent || 15) / 100);
+
+  const currentBotExposure = getBotExposure(openBotPositions);
+  const remainingBotBudget = Math.max(0, maxBotBudget - currentBotExposure);
+
+  const asymmetricOpportunityScore = clampScore(
+    institutionalBrainScore * 0.2 +
+      metaStrategyScore * 0.18 +
+      runnerScore * 0.14 +
+      continuationProbability * 0.12 +
+      breakoutProbability * 0.1 +
+      accumulationScore * 0.1 +
+      executionConfidence * 0.08 +
+      liquidityScore * 0.08 +
+      (aboveVwap ? 6 : 0) +
+      (closeNearHighPercent >= 70 ? 5 : 0) -
+      (pullbackFromHighPercent >= 8 ? 12 : 0) -
+      (trapRiskScore * 0.12) -
+      (fakeBreakout ? 35 : 0)
+  );
+
+  const pressureTier =
+    fakeBreakout || asymmetricOpportunityScore < 55
+      ? "STARVE"
+      : asymmetricOpportunityScore >= 88
+      ? "MAX_PRESSURE"
+      : asymmetricOpportunityScore >= 78
+      ? "AGGRESSIVE_PRESSURE"
+      : asymmetricOpportunityScore >= 68
+      ? "NORMAL_PRESSURE"
+      : "PROBE_PRESSURE";
+
+  let pressureMultiplier =
+    pressureTier === "MAX_PRESSURE"
+      ? 1.55
+      : pressureTier === "AGGRESSIVE_PRESSURE"
+      ? 1.25
+      : pressureTier === "NORMAL_PRESSURE"
+      ? 1
+      : pressureTier === "PROBE_PRESSURE"
+      ? 0.45
+      : 0;
+
+  if (
+    marketRegime.includes("defensive") ||
+    capitalRoutingMode === "PROBE_ONLY"
+  ) {
+    pressureMultiplier *=
+      pressureTier === "MAX_PRESSURE"
+        ? 0.85
+        : pressureTier === "AGGRESSIVE_PRESSURE"
+        ? 0.75
+        : 0.55;
+  }
+
+  if (
+    strategyType === "BREAKOUT" ||
+    strategyType === "MOMENTUM" ||
+    strategyType === "CONTINUATION"
+  ) {
+    pressureMultiplier *= 1.08;
+  }
+
+  if (
+    strategyType === "DEFENSIVE_PROBE" &&
+    pressureTier !== "MAX_PRESSURE"
+  ) {
+    pressureMultiplier *= 0.65;
+  }
+
+  if (portfolioManager?.portfolioAction === "REDUCE_RISK") {
+    pressureMultiplier *=
+      pressureTier === "MAX_PRESSURE" ? 0.85 : 0.6;
+  }
+
+  if (institutionalExecutionPlan?.shouldReduceSize === true) {
+    pressureMultiplier *= 0.55;
+  }
+
+  if (parliamentGate?.allowed === false) {
+    pressureMultiplier = 0;
+  }
+
+  const capitalPressureAmount = Number(
+    Math.min(
+      Number(baseTradeAmount || 0) * pressureMultiplier,
+      remainingBotBudget,
+      cash,
+      buyingPower || cash
+    ).toFixed(2)
+  );
+
+  const finalPressureAmount =
+    pressureTier === "STARVE"
+      ? 0
+      : capitalPressureAmount;
+
+  const snapshot = {
+    updatedAt: new Date().toISOString(),
+    phase: "37_AUTONOMOUS_CAPITAL_PRESSURE_ENGINE",
+    symbol,
+    pressureTier,
+    pressureMultiplier: Number(pressureMultiplier.toFixed(2)),
+    asymmetricOpportunityScore,
+    baseTradeAmount: Number(Number(baseTradeAmount || 0).toFixed(2)),
+    capitalPressureAmount: finalPressureAmount,
+    strategyType,
+    capitalRoutingMode,
+    marketRegime,
+    remainingBotBudget: Number(remainingBotBudget.toFixed(2)),
+    reason:
+      `${pressureTier} • Asymmetry ${asymmetricOpportunityScore}/100 • ` +
+      `Pressure x${pressureMultiplier.toFixed(2)} • ${strategyType}`,
+  };
+
+  engineState.autonomousCapitalPressureState = snapshot;
+
+  if (!Array.isArray(engineState.autonomousCapitalPressureHistory)) {
+    engineState.autonomousCapitalPressureHistory = [];
+  }
+
+  engineState.autonomousCapitalPressureHistory.unshift(snapshot);
+  engineState.autonomousCapitalPressureHistory =
+    engineState.autonomousCapitalPressureHistory.slice(0, 200);
+
+  return snapshot;
+}
+
 function calculateEliteRunnerHeatOverride(signal = {}) {
   const continuationProbability = Number(
     signal.continuationProbability || 0
@@ -17314,9 +17543,22 @@ const eliteCapitalBoost =
   const entryTimingMultiplier =
       Number(candidate.entryTiming?.timingMultiplier || 1);  
 
+    const capitalPressure =
+      calculateAutonomousCapitalPressure({
+        signal: candidate,
+        account,
+        openBotPositions,
+        baseTradeAmount: executionAdjustedBaseTradeAmount,
+        portfolioManager,
+        parliamentGate,
+        institutionalExecutionPlan,
+        reinforcementSizing,
+        capitalPressure,
+      });
+
     const finalTradeAmount = Number(
       (
-        executionAdjustedBaseTradeAmount *
+        capitalPressure.capitalPressureAmount *
         Number(orchestratorGate.orchestrator?.orchestratorMultiplier || 1) *
         Number(parliamentGate.multiplier || 1) *
         autonomousConfidenceMultiplier *
@@ -17324,7 +17566,7 @@ const eliteCapitalBoost =
         Number(reinforcementSizing.learnedMultiplier || 1) *
         weakSetupPenalty *
         eliteHeatMultiplier *
-        adaptiveAggressionMultiplier *      
+        adaptiveAggressionMultiplier *
         marketPhaseSizingMultiplier *
         sectorDominanceMultiplier *
         liquidityTrapMultiplier *
