@@ -4533,14 +4533,26 @@ const recommendedTradeAmount = Number(
   );
 
   const heatApprovalThreshold =
-    tacticalEliteRunnerOverride ? 35 : 45;
+    tacticalEliteRunnerOverride ? 25 : 45;
+
+  const strongSetupOverride =
+    recommendedTradeAmount > 0 &&
+    Number(signal.score || 0) >= 65 &&
+    signal.qualifiedToBuy === true &&
+    Number(signal.technicalScore || 0) >= 60 &&
+    Number(signal.runnerScore || 0) >= 60 &&
+    Number(signal.executionConfidence || 0) >= 55 &&
+    signal.confirmations?.aboveVwap === true &&
+    signal.confirmations?.fakeBreakout !== true &&
+    Number(signal.confirmations?.pullbackFromHighPercent || 0) <= 3;
 
   const approved =
     recommendedTradeAmount > 0 &&
     (
       portfolioHeat.portfolioHeatScore >= heatApprovalThreshold ||
       eliteHeatOverride ||
-      tacticalEliteRunnerOverride
+      tacticalEliteRunnerOverride ||
+      strongSetupOverride
     );
 
   return {
