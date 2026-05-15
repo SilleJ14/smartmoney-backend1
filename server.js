@@ -16109,6 +16109,84 @@ const portfolioManager =
   }
 }
 
+function calculateAdaptiveAggressionRebalancer(signal = {}) {
+  const score = Number(signal.score || 0);
+
+  const marketPhase =
+    engineState.marketCycleIntelligenceState?.marketPhase ||
+    "PROBE_ONLY";
+
+  const relativeVolume = Number(
+    signal.volumeRatio ||
+      signal.relativeVolume ||
+      signal.confirmations?.volumeSpikeRatio ||
+      0
+  );
+
+  const accumulationScore = Number(
+    signal.accumulationIntelligence?.accumulationScore ||
+      signal.multiDayAccumulationScore ||
+      0
+  );
+
+  const executionConfidence = Number(
+    signal.executionConfidence ||
+      signal.institutionalExecutionPlan?.executionConfidence ||
+      0
+  );
+
+  const breakoutProbability = Number(
+    signal.breakoutProbability || 0
+  );
+
+  const fakeBreakout =
+    signal.confirmations?.fakeBreakout === true;
+
+  const aboveVwap =
+    signal.confirmations?.aboveVwap === true;
+
+  const suppressionReliefScore = clampScore(
+    (score - 65) * 1.4 +
+      Math.min(30, relativeVolume * 5) +
+      accumulationScore * 0.18 +
+      executionConfidence * 0.16 +
+      breakoutProbability * 0.12 +
+      (aboveVwap ? 10 : 0) -
+      (fakeBreakout ? 35 : 0)
+  );
+
+  const allowProbeOverride =
+    suppressionReliefScore >= 68 &&
+    relativeVolume >= 2 &&
+    fakeBreakout !== true;
+
+  const aggressionMultiplier =
+    marketPhase === "DEFENSIVE_TRAP_MARKET"
+      ? allowProbeOverride
+        ? 0.72
+        : 0.45
+      : marketPhase === "PROBE_ONLY"
+      ? allowProbeOverride
+        ? 0.92
+        : 0.7
+      : allowProbeOverride
+      ? 1.08
+      : 1;
+
+  return {
+    phase: "34_ADAPTIVE_AGGRESSION_REBALANCER",
+    updatedAt: new Date().toISOString(),
+    suppressionReliefScore,
+    allowProbeOverride,
+    aggressionMultiplier,
+    marketPhase,
+    relativeVolume,
+    reason:
+      `${allowProbeOverride ? "PROBE_OVERRIDE_ENABLED" : "NORMAL_SUPPRESSION"} • ` +
+      `Relief ${suppressionReliefScore}/100 • RVOL ${relativeVolume}x`,
+  };
+}
+
 function calculateLiquiditySweepTrapDetection(signal = {}) {
   const confirmations = signal.confirmations || {};
 
@@ -16759,6 +16837,11 @@ const eliteCapitalBoost =
 
       continue;
     }
+    const adaptiveAggression =
+      calculateAdaptiveAggressionRebalancer(candidate);
+
+    candidate.adaptiveAggression =
+      adaptiveAggression;
 
     const liquiditySweepTrap =
       calculateLiquiditySweepTrapDetection({
@@ -16835,6 +16918,11 @@ const eliteCapitalBoost =
   const sectorDominanceMultiplier =
   Number(candidate.sectorDominance?.dominanceMultiplier || 1);
 
+    const adaptiveAggressionMultiplier =
+      Number(
+        candidate.adaptiveAggression?.aggressionMultiplier || 1
+      );  
+
   const liquidityTrapMultiplier =
       Number(candidate.liquiditySweepTrap?.liquidityTimingMultiplier || 1);  
 
@@ -16850,6 +16938,7 @@ const eliteCapitalBoost =
         regimeProtectionMultiplier *
         Number(reinforcementSizing.learnedMultiplier || 1) *
         weakSetupPenalty *
+        adaptiveAggressionMultiplier *        
         marketPhaseSizingMultiplier *
         sectorDominanceMultiplier *
         liquidityTrapMultiplier *
@@ -18555,10 +18644,33 @@ engineState.liveAiPerformanceHistory =
 engineState.selfHealingScanState =
   selfHealingScanRecovery;
 
+const macroProbeOverrideAllowed =
+  engineState.macroRiskState?.shouldBlockNewTrades === true &&
+  marketCrashProtection.shouldBlockNewTrades !== true &&
+  engineState.portfolioGovernorState?.shouldBlockNewTrades !== true &&
+  Number(engineState.macroRiskState?.macroStressScore || 0) < 88 &&
+  Number(engineState.averageSignalScore || 0) >= 35;
+
+engineState.macroProbeOverrideState = {
+  updatedAt: new Date().toISOString(),
+  allowed: macroProbeOverrideAllowed,
+  macroStressScore: engineState.macroRiskState?.macroStressScore,
+  averageSignalScore: engineState.averageSignalScore,
+  marketCrashBlock: marketCrashProtection.shouldBlockNewTrades === true,
+  portfolioGovernorBlock:
+    engineState.portfolioGovernorState?.shouldBlockNewTrades === true,
+  reason: macroProbeOverrideAllowed
+    ? "Macro risk high, but controlled probe mode allowed."
+    : "Macro risk block remains active.",
+};
+
 if (
   marketCrashProtection.shouldBlockNewTrades ||
-  engineState.macroRiskState?.shouldBlockNewTrades ||
-  engineState.portfolioGovernorState?.shouldBlockNewTrades
+  engineState.portfolioGovernorState?.shouldBlockNewTrades ||
+  (
+    engineState.macroRiskState?.shouldBlockNewTrades &&
+    !macroProbeOverrideAllowed
+  )
 ) {
 
   autoTradingEnabled = false;
@@ -18566,6 +18678,14 @@ if (
   saveRecentOrder("AUTO_TRADING_BLOCKED_MACRO_RISK", "SYSTEM", {
     marketCrashProtection,
     macroRisk: engineState.macroRiskState,
+    macroProbeOverrideState: engineState.macroProbeOverrideState,
+  });
+}
+
+if (macroProbeOverrideAllowed) {
+  saveRecentOrder("MACRO_PROBE_OVERRIDE_ALLOWED", "SYSTEM", {
+    macroRisk: engineState.macroRiskState,
+    macroProbeOverrideState: engineState.macroProbeOverrideState,
   });
 }
 engineState.sectorStrengthHistory =
