@@ -9101,18 +9101,21 @@ const effectiveRemainingBotBudget =
 
 if (effectiveRemainingBotBudget <= 0) return 0;
 
-  const perTradeMax = maxBotBudget / CONFIG.maxOpenTrades;
+  const perTradeMax =
+    maxBotBudget / Math.max(1, CONFIG.maxStockOpenTrades || CONFIG.maxOpenTrades);
+
   const scoreMultiplier =
-    signalScore >= 95
+    signalScore >= 85
       ? 1
-      : signalScore >= 90
-        ? 0.8
-        : signalScore >= 85
-          ? 0.6
-          : 0.4;
+      : signalScore >= 78
+      ? 0.85
+      : signalScore >= 72
+      ? 0.75
+      : signalScore >= 65
+      ? 0.60
+      : 0.35;
 
   const scoreAdjustedTradeMax = perTradeMax * scoreMultiplier;
-
   return Math.max(
     1,
    Math.min(
@@ -16077,6 +16080,31 @@ let successfulStockBuysThisCycle = 0;
 
       continue;
     }
+      
+    
+
+     const institutionalGrade = String(
+      candidate.institutionalEntryGrade ||
+        candidate.technicalIntelligence?.institutionalEntryGrade ||
+        ""
+    );
+
+    const hasStrongEnoughGrade =
+      institutionalGrade.includes("A") ||
+      institutionalGrade.includes("B") ||
+      Number(candidate.technicalScore || 0) >= 65;
+
+    const eliteCapitalBoost =
+      Number(candidate.score || 0) >= 72 &&
+      hasStrongEnoughGrade &&
+      Number(candidate.breakoutProbability || 0) >= 75 &&
+      Number(candidate.continuationProbability || 0) >= 70 &&
+      candidate.confirmations?.aboveVwap === true &&
+      Number(candidate.confirmations?.pullbackFromHighPercent || 0) <= 2 &&
+      Number(institutionalExecutionPlan.executionConfidence || 0) >= 60 &&
+      candidate.confirmations?.fakeBreakout !== true
+        ? 1.75
+        : 1;
 
     const executionAdjustedBaseTradeAmount =
       Number(
@@ -16084,10 +16112,12 @@ let successfulStockBuysThisCycle = 0;
           Number(baseTradeAmount || 0) *
           Number(
             institutionalExecutionPlan.executionSizeMultiplier || 1
-          )
+          ) *
+          eliteCapitalBoost
         ).toFixed(2)
       );
-      
+
+
     const autonomousConfidenceScore = clampScore(
       Number(candidate.score || 0) * 0.22 +
         Number(candidate.institutionalBrainScore || 0) * 0.2 +
