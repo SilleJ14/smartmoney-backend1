@@ -3753,6 +3753,8 @@ function updateInstitutionalWatchlist(signals = []) {
   return engineState.institutionalWatchlist;
 }
 
+
+
 function calculateAiSectorRotationEngine(stockSignals = []) {
   const sectorMap = {};
 
@@ -3833,6 +3835,178 @@ function calculateAiSectorRotationEngine(stockSignals = []) {
     leadingSectors: sectors.filter((s) => ["OVERWEIGHT", "ACCUMULATE"].includes(s.rotationBias)).slice(0, 5),
     weakSectors: sectors.filter((s) => s.rotationBias === "AVOID").slice(0, 5),
     allSectors: sectors.slice(0, 12),
+  };
+}
+
+function calculateInstitutionalSectorDominanceEngine(stockSignals = []) {
+  const signals = Array.isArray(stockSignals) ? stockSignals : [];
+  const sectorMap = {};
+
+  for (const signal of signals) {
+    const sectorInfo =
+      signal.estimatedSector
+        ? signal
+        : estimateSectorIntelligence(signal);
+
+    const sector = sectorInfo.estimatedSector || "General Market";
+
+    if (!sectorMap[sector]) {
+      sectorMap[sector] = {
+        sector,
+        symbols: [],
+        totalScore: 0,
+        totalMomentum: 0,
+        totalLiquidity: 0,
+        fakeBreakouts: 0,
+        qualifiedCount: 0,
+        eliteCount: 0,
+        count: 0,
+      };
+    }
+
+    sectorMap[sector].symbols.push(normalizeSymbol(signal.symbol));
+    sectorMap[sector].totalScore += Number(signal.score || 0);
+    sectorMap[sector].totalMomentum += Number(signal.percentChange || 0);
+    sectorMap[sector].totalLiquidity += Number(signal.volume || signal.barVolume || 0);
+
+    if (signal.confirmations?.fakeBreakout === true) {
+      sectorMap[sector].fakeBreakouts += 1;
+    }
+
+    if (signal.qualifiedToBuy === true && signal.autoTradeApproved === true) {
+      sectorMap[sector].qualifiedCount += 1;
+    }
+
+    if (Number(signal.score || 0) >= 82) {
+      sectorMap[sector].eliteCount += 1;
+    }
+
+    sectorMap[sector].count += 1;
+  }
+
+  const sectors = Object.values(sectorMap)
+    .map((item) => {
+      const count = Math.max(1, item.count);
+
+      const avgScore = item.totalScore / count;
+      const avgMomentum = item.totalMomentum / count;
+      const avgVolume = item.totalLiquidity / count;
+      const fakeBreakoutRatio = item.fakeBreakouts / count;
+      const qualifiedRatio = item.qualifiedCount / count;
+      const eliteRatio = item.eliteCount / count;
+
+      const dominanceScore = clampScore(
+        avgScore * 0.35 +
+          qualifiedRatio * 100 * 0.22 +
+          eliteRatio * 100 * 0.2 +
+          Math.min(20, Math.max(0, avgMomentum)) * 1.1 +
+          (avgVolume >= 250000 ? 8 : 0) +
+          (avgVolume >= 1000000 ? 10 : 0) -
+          fakeBreakoutRatio * 100 * 0.25
+      );
+
+      const dominanceGrade =
+        dominanceScore >= 85 && fakeBreakoutRatio <= 0.12
+          ? "A_DOMINANT_SECTOR"
+          : dominanceScore >= 72 && fakeBreakoutRatio <= 0.2
+          ? "B_LEADING_SECTOR"
+          : dominanceScore >= 60
+          ? "C_WATCH_SECTOR"
+          : "D_WEAK_SECTOR";
+
+      return {
+        sector: item.sector,
+        dominanceScore,
+        dominanceGrade,
+        symbols: item.symbols.slice(0, 10),
+        signalCount: item.count,
+        qualifiedCount: item.qualifiedCount,
+        eliteCount: item.eliteCount,
+        avgScore: Number(avgScore.toFixed(2)),
+        avgMomentum: Number(avgMomentum.toFixed(2)),
+        avgVolume: Number(avgVolume.toFixed(0)),
+        fakeBreakoutRatio: Number(fakeBreakoutRatio.toFixed(2)),
+        qualifiedRatio: Number(qualifiedRatio.toFixed(2)),
+        eliteRatio: Number(eliteRatio.toFixed(2)),
+      };
+    })
+    .sort((a, b) => b.dominanceScore - a.dominanceScore);
+
+  const leadingSector = sectors[0] || null;
+
+  return {
+    phase: "31_INSTITUTIONAL_SECTOR_DOMINANCE_ENGINE",
+    updatedAt: new Date().toISOString(),
+    leadingSector,
+    sectors: sectors.slice(0, 8),
+    dominantSectorCount: sectors.filter(
+      (s) => s.dominanceGrade === "A_DOMINANT_SECTOR"
+    ).length,
+    riskMessage: leadingSector
+      ? `${leadingSector.sector} leading • ${leadingSector.dominanceGrade} • Score ${leadingSector.dominanceScore}/100`
+      : "No sector dominance detected.",
+  };
+}
+
+function applyInstitutionalSectorDominance(signal = {}) {
+  const sectorState = engineState.sectorDominanceState;
+
+  if (!sectorState?.sectors?.length) return signal;
+
+  const sectorInfo =
+    signal.estimatedSector
+      ? signal
+      : estimateSectorIntelligence(signal);
+
+  const sector = sectorInfo.estimatedSector || "General Market";
+
+  const sectorRank = sectorState.sectors.find(
+    (item) => item.sector === sector
+  );
+
+  if (!sectorRank) {
+    return {
+      ...signal,
+      sectorDominance: {
+        sector,
+        dominanceBoost: 0,
+        dominanceMultiplier: 1,
+        reason: "No sector dominance match.",
+      },
+    };
+  }
+
+  const dominanceBoost =
+    sectorRank.dominanceGrade === "A_DOMINANT_SECTOR"
+      ? 5
+      : sectorRank.dominanceGrade === "B_LEADING_SECTOR"
+      ? 3
+      : sectorRank.dominanceGrade === "C_WATCH_SECTOR"
+      ? 0
+      : -4;
+
+  const dominanceMultiplier =
+    sectorRank.dominanceGrade === "A_DOMINANT_SECTOR"
+      ? 1.16
+      : sectorRank.dominanceGrade === "B_LEADING_SECTOR"
+      ? 1.08
+      : sectorRank.dominanceGrade === "C_WATCH_SECTOR"
+      ? 1
+      : 0.82;
+
+  return {
+    ...signal,
+    score: clampScore(Number(signal.score || 0) + dominanceBoost),
+    sectorDominance: {
+      sector,
+      dominanceBoost,
+      dominanceMultiplier,
+      dominanceGrade: sectorRank.dominanceGrade,
+      dominanceScore: sectorRank.dominanceScore,
+      reason:
+        `Sector ${sector} • ${sectorRank.dominanceGrade} • ` +
+        `Boost ${dominanceBoost} • Multiplier ${dominanceMultiplier}`,
+    },
   };
 }
 
@@ -6864,6 +7038,47 @@ for (const position of filteredPositions) {
     }
   }
 
+    const marketLeaders = analyzedSignals
+    .map((signal) => {
+      const score = Number(signal.score || 0);
+      const percentChange = Number(signal.percentChange || 0);
+      const volumeRatio = Number(
+        signal.volumeRatio ||
+          signal.relativeVolume ||
+          signal.volumeSpikeRatio ||
+          signal.confirmations?.volumeSpikeRatio ||
+          0
+      );
+
+      const leaderScore = clampScore(
+        score * 0.45 +
+          Math.max(0, percentChange) * 1.2 +
+          Math.min(30, volumeRatio * 10) +
+          (signal.qualifiedToBuy === true ? 10 : 0) -
+          (signal.confirmations?.fakeBreakout === true ? 30 : 0)
+      );
+
+      return {
+        symbol: normalizeSymbol(signal.symbol),
+        assetClass:
+          String(signal.asset_class || signal.assetClass || "").includes("crypto") ||
+          normalizeSymbol(signal.symbol).includes("/")
+            ? "crypto"
+            : "stock",
+        leaderScore,
+        score,
+        percentChange,
+        volumeRatio,
+        qualifiedToBuy: signal.qualifiedToBuy === true,
+        fakeBreakout: signal.confirmations?.fakeBreakout === true,
+      };
+    })
+    .filter((item) => item.leaderScore >= 70)
+    .sort((a, b) => b.leaderScore - a.leaderScore)
+    .slice(0, 12);
+
+  const topMarketLeader = marketLeaders[0] || null;
+
   const sectorClusters = Object.entries(
     sectorBuckets
   ).map(([sector, positions]) => {
@@ -7024,6 +7239,11 @@ for (const position of filteredPositions) {
     totalClusters: sectorClusters.length,
     concentratedClusters:
       concentratedClusters.length,
+
+    marketLeaders,
+    topMarketLeader,
+    leaderCount: marketLeaders.length,
+
     cryptoPositions,
     overlapWarnings,
     sectorClusters:
@@ -10774,6 +10994,104 @@ function detectMarketRegime(stockSignals = []) {
     riskMessage: "Weak or choppy conditions. Exposure reduced.",
   };
 }
+
+function calculateInstitutionalMarketPhase(stockSignals = [], cryptoSignals = []) {
+  const allSignals = [...stockSignals, ...cryptoSignals];
+
+  const avgScore =
+    allSignals.reduce((sum, s) => sum + Number(s.score || 0), 0) /
+    Math.max(1, allSignals.length);
+
+  const eliteCount = allSignals.filter((s) => Number(s.score || 0) >= 82).length;
+  const weakCount = allSignals.filter((s) => Number(s.score || 0) < 65).length;
+
+  const fakeBreakoutCount = allSignals.filter(
+    (s) => s.confirmations?.fakeBreakout === true
+  ).length;
+
+  const advancingCount = stockSignals.filter(
+    (s) => Number(s.percentChange || 0) > 0
+  ).length;
+
+  const breadthRatio =
+    advancingCount / Math.max(1, stockSignals.length);
+
+  const eliteRatio =
+    eliteCount / Math.max(1, allSignals.length);
+
+  const weakRatio =
+    weakCount / Math.max(1, allSignals.length);
+
+  const fakeBreakoutRatio =
+    fakeBreakoutCount / Math.max(1, allSignals.length);
+
+  const marketStress = Number(engineState.marketStressLevel || 0);
+  const marketVolatility = Number(engineState.marketVolatility || 0);
+  const marketMomentum = Number(engineState.marketMomentumScore || 0);
+
+  const phaseScore = clampScore(
+    avgScore * 0.28 +
+      eliteRatio * 100 * 0.22 +
+      breadthRatio * 100 * 0.18 +
+      Math.max(0, marketMomentum) * 1.2 -
+      weakRatio * 100 * 0.14 -
+      fakeBreakoutRatio * 100 * 0.16 -
+      marketStress * 0.45 -
+      marketVolatility * 0.35
+  );
+
+  const phase =
+    phaseScore >= 82 && eliteRatio >= 0.18 && fakeBreakoutRatio <= 0.12
+      ? "ELITE_RISK_ON"
+      : phaseScore >= 70 && breadthRatio >= 0.5
+      ? "SELECTIVE_RISK_ON"
+      : phaseScore >= 55
+      ? "PROBE_ONLY"
+      : marketStress >= 60 || fakeBreakoutRatio >= 0.25
+      ? "DEFENSIVE_TRAP_MARKET"
+      : "CASH_DEFENSIVE";
+
+  const capitalMode =
+    phase === "ELITE_RISK_ON"
+      ? "ATTACK_ELITE_SETUPS"
+      : phase === "SELECTIVE_RISK_ON"
+      ? "NORMAL_SELECTIVE_BUYING"
+      : phase === "PROBE_ONLY"
+      ? "SMALL_PROBES_ONLY"
+      : "PROTECT_CAPITAL";
+
+  const buyAggressionMultiplier =
+    phase === "ELITE_RISK_ON"
+      ? 1.18
+      : phase === "SELECTIVE_RISK_ON"
+      ? 1
+      : phase === "PROBE_ONLY"
+      ? 0.72
+      : 0.45;
+
+  return {
+    phase: "30_INSTITUTIONAL_MARKET_PHASE_ENGINE",
+    updatedAt: new Date().toISOString(),
+    marketPhase: phase,
+    phaseScore,
+    capitalMode,
+    buyAggressionMultiplier,
+    avgScore: Number(avgScore.toFixed(2)),
+    eliteRatio: Number(eliteRatio.toFixed(2)),
+    weakRatio: Number(weakRatio.toFixed(2)),
+    breadthRatio: Number(breadthRatio.toFixed(2)),
+    fakeBreakoutRatio: Number(fakeBreakoutRatio.toFixed(2)),
+    marketStress,
+    marketVolatility,
+    marketMomentum,
+    reason:
+      `${phase} • PhaseScore ${phaseScore}/100 • ` +
+      `Elite ${(eliteRatio * 100).toFixed(1)}% • ` +
+      `Breadth ${(breadthRatio * 100).toFixed(1)}% • ` +
+      `FakeBreakouts ${(fakeBreakoutRatio * 100).toFixed(1)}%`,
+  };
+}
+
 function calculateAdvancedRiskEngine(q) {
   const price = Number(q.current || q.price || 0);
   const volume = Number(q.volume || 0);
@@ -11904,12 +12222,53 @@ function calculateCryptoInstitutionalQualification({
   const liquidityPass =
     trueLiquidityPass || smallCryptoProbePass;
 
+  const trendStructureScore = clampScore(
+    45 +
+      (Number(score || 0) >= 65 ? 10 : 0) +
+      (Number(score || 0) >= 75 ? 12 : 0) +
+      (volumeSpikeRatio >= 0.5 ? 10 : 0) +
+      (volumeSpikeRatio >= 1.2 ? 12 : 0) +
+      (volumeConfidenceScore >= 60 ? 12 : 0) +
+      (cleanSpreadPercent <= 0.45 ? 10 : 0) -
+      (cleanSpreadPercent > 0.85 ? 25 : 0) -
+      (barsFound < 10 ? 30 : 0)
+  );
+
+  const cryptoTrapRiskScore = clampScore(
+    25 +
+      (cleanSpreadPercent > 0.85 ? 25 : 0) +
+      (volumeConfidenceScore < 35 ? 18 : 0) +
+      (volumeSpikeRatio < 0.15 ? 12 : 0) +
+      (barsFound < 10 ? 30 : 0) -
+      (Number(score || 0) >= 75 ? 10 : 0) -
+      (volumeConfidenceScore >= 65 ? 12 : 0)
+  );
+
+  const institutionalCryptoScore = clampScore(
+    Number(score || 0) * 0.45 +
+      trendStructureScore * 0.25 +
+      volumeConfidenceScore * 0.2 +
+      (100 - cryptoTrapRiskScore) * 0.1
+  );
+
+  const institutionalCryptoGrade =
+    institutionalCryptoScore >= 85 && cryptoTrapRiskScore <= 35
+      ? "A_CRYPTO_INSTITUTIONAL"
+      : institutionalCryptoScore >= 75 && cryptoTrapRiskScore <= 45
+      ? "B_CRYPTO_STRONG"
+      : institutionalCryptoScore >= 65 && cryptoTrapRiskScore <= 55
+      ? "C_CRYPTO_PROBE"
+      : "D_CRYPTO_AVOID";    
+
   const momentumPass =
     Number(score || 0) >=
-    Number(
-      engineState.selfOptimizationState?.adaptiveMinScoreToBuy ||
-        CONFIG.minScoreToBuy ||
-        70
+    Math.max(
+      65,
+      Number(
+        engineState.selfOptimizationState?.adaptiveMinScoreToBuy ||
+          CONFIG.minScoreToBuy ||
+          65
+      )
     );
 
   const dataPass =
@@ -11927,12 +12286,17 @@ function calculateCryptoInstitutionalQualification({
       engineState.marketCrashProtectionState?.shouldBlockNewTrades !== true
     );
 
+  const institutionalStructurePass =
+    institutionalCryptoScore >= 65 &&
+    cryptoTrapRiskScore <= 60 &&
+    institutionalCryptoGrade !== "D_CRYPTO_AVOID";
+
   const qualifiedToBuy =
     dataPass &&
     momentumPass &&
     liquidityPass &&
-    macroPass;
-
+    macroPass &&
+    institutionalStructurePass;
   return {
     qualifiedToBuy,
     cryptoInstitutionalQualification: {
@@ -11947,6 +12311,11 @@ function calculateCryptoInstitutionalQualification({
       dollarVolume,
       volumeSpikeRatio,
       volumeConfidenceScore,
+      institutionalCryptoScore,
+      institutionalCryptoGrade,
+      cryptoTrapRiskScore,
+      trendStructureScore,
+      institutionalStructurePass,     
       reason: qualifiedToBuy
         ? "Crypto institutional qualification passed"
         : "Crypto institutional qualification failed",
@@ -15740,6 +16109,216 @@ const portfolioManager =
   }
 }
 
+function calculateLiquiditySweepTrapDetection(signal = {}) {
+  const confirmations = signal.confirmations || {};
+
+  const score = Number(signal.score || 0);
+  const percentChange = Number(signal.percentChange || signal.changePercent || 0);
+  const volumeSpikeRatio = Number(
+    signal.volumeSpikeRatio ||
+      signal.relativeVolume ||
+      confirmations.volumeSpikeRatio ||
+      0
+  );
+
+  const closeNearHighPercent = Number(confirmations.closeNearHighPercent || 0);
+  const pullbackFromHighPercent = Number(confirmations.pullbackFromHighPercent || 0);
+  const aboveVwap = confirmations.aboveVwap === true;
+  const fakeBreakout = confirmations.fakeBreakout === true;
+
+  const exhaustionSpike =
+    percentChange >= 45 &&
+    pullbackFromHighPercent >= 3 &&
+    closeNearHighPercent < 60;
+
+  const liquiditySweepReclaim =
+    pullbackFromHighPercent >= 2 &&
+    pullbackFromHighPercent <= 6 &&
+    closeNearHighPercent >= 65 &&
+    aboveVwap &&
+    volumeSpikeRatio >= 0.5 &&
+    fakeBreakout !== true;
+
+  const trapRiskScore = clampScore(
+    25 +
+      (fakeBreakout ? 35 : 0) +
+      (percentChange >= 35 ? 12 : 0) +
+      (percentChange >= 60 ? 18 : 0) +
+      (pullbackFromHighPercent >= 4 ? 15 : 0) +
+      (pullbackFromHighPercent >= 7 ? 22 : 0) +
+      (closeNearHighPercent < 45 ? 18 : 0) +
+      (!aboveVwap ? 16 : 0) -
+      (liquiditySweepReclaim ? 22 : 0) -
+      (score >= 82 ? 10 : 0)
+  );
+
+  const absorptionScore = clampScore(
+    40 +
+      (volumeSpikeRatio >= 0.5 ? 12 : 0) +
+      (volumeSpikeRatio >= 1.2 ? 14 : 0) +
+      (aboveVwap ? 12 : 0) +
+      (closeNearHighPercent >= 70 ? 12 : 0) +
+      (liquiditySweepReclaim ? 18 : 0) -
+      (fakeBreakout ? 25 : 0)
+  );
+
+  const shouldRejectEntry =
+    exhaustionSpike ||
+    (fakeBreakout && trapRiskScore >= 65) ||
+    (trapRiskScore >= 82 && absorptionScore < 55);
+
+  const liquidityTimingMultiplier =
+    shouldRejectEntry
+      ? 0
+      : liquiditySweepReclaim && absorptionScore >= 70
+      ? 1.12
+      : trapRiskScore >= 60
+      ? 0.65
+      : trapRiskScore >= 50
+      ? 0.82
+      : 1;
+
+  return {
+    phase: "33_LIQUIDITY_SWEEP_TRAP_DETECTION_ENGINE",
+    updatedAt: new Date().toISOString(),
+    trapRiskScore,
+    absorptionScore,
+    exhaustionSpike,
+    liquiditySweepReclaim,
+    shouldRejectEntry,
+    liquidityTimingMultiplier,
+    reason:
+      `${shouldRejectEntry ? "REJECT_TRAP" : liquiditySweepReclaim ? "SWEEP_RECLAIM" : "NORMAL"} • ` +
+      `TrapRisk ${trapRiskScore}/100 • Absorption ${absorptionScore}/100`,
+  };
+}
+
+function calculateInstitutionalEntryTiming(signal = {}) {
+  const confirmations = signal.confirmations || {};
+
+  const score = Number(signal.score || 0);
+  const percentChange = Number(signal.percentChange || signal.changePercent || 0);
+
+  const pullbackFromHighPercent = Number(
+    confirmations.pullbackFromHighPercent || 0
+  );
+
+  const closeNearHighPercent = Number(
+    confirmations.closeNearHighPercent || 0
+  );
+
+  const aboveVwap = confirmations.aboveVwap === true;
+  const fakeBreakout = confirmations.fakeBreakout === true;
+
+  const executionConfidence = Number(
+    signal.institutionalExecutionPlan?.executionConfidence ||
+      signal.executionConfidence ||
+      0
+  );
+
+  const breakoutProbability = Number(
+    signal.breakoutProbability ||
+      signal.explosiveRunnerPrediction?.breakoutProbability ||
+      0
+  );
+
+  const continuationProbability = Number(
+    signal.continuationProbability ||
+      signal.explosiveRunnerPrediction?.continuationProbability ||
+      0
+  );
+
+  const chaseRiskScore = clampScore(
+    20 +
+      (percentChange >= 25 ? 18 : 0) +
+      (percentChange >= 45 ? 18 : 0) +
+      (pullbackFromHighPercent >= 4 ? 15 : 0) +
+      (pullbackFromHighPercent >= 7 ? 20 : 0) +
+      (fakeBreakout ? 35 : 0) -
+      (aboveVwap ? 10 : 0) -
+      (closeNearHighPercent >= 75 ? 8 : 0) -
+      (breakoutProbability >= 80 ? 10 : 0)
+  );
+
+  const timingScore = clampScore(
+    score * 0.28 +
+      executionConfidence * 0.24 +
+      breakoutProbability * 0.18 +
+      continuationProbability * 0.16 +
+      (aboveVwap ? 8 : 0) +
+      (closeNearHighPercent >= 70 ? 8 : 0) -
+      chaseRiskScore * 0.22
+  );
+
+  const entryMode =
+    timingScore >= 82 && chaseRiskScore <= 35
+      ? "ATTACK_NOW"
+      : timingScore >= 70 && chaseRiskScore <= 50
+      ? "ENTER_NORMAL"
+      : timingScore >= 62 && chaseRiskScore <= 65
+      ? "PROBE_ONLY"
+      : "WAIT_FOR_BETTER_ENTRY";
+
+  const timingMultiplier =
+    entryMode === "ATTACK_NOW"
+      ? 1.15
+      : entryMode === "ENTER_NORMAL"
+      ? 1
+      : entryMode === "PROBE_ONLY"
+      ? 0.55
+      : 0;
+
+  return {
+    phase: "32_INSTITUTIONAL_ENTRY_TIMING_ENGINE",
+    updatedAt: new Date().toISOString(),
+    timingScore,
+    chaseRiskScore,
+    entryMode,
+    timingMultiplier,
+    percentChange,
+    pullbackFromHighPercent,
+    closeNearHighPercent,
+    aboveVwap,
+    fakeBreakout,
+    reason:
+      `${entryMode} • Timing ${timingScore}/100 • ` +
+      `ChaseRisk ${chaseRiskScore}/100`,
+  };
+}
+
+function getEffectiveBuyThreshold(signals = []) {
+  const hardFloor = Math.max(65, Number(CONFIG.minScoreToBuy || 65));
+
+  const validSignals = Array.isArray(signals) ? signals : [];
+  const avgScore =
+    validSignals.length > 0
+      ? validSignals.reduce((sum, s) => sum + Number(s.score || 0), 0) /
+        validSignals.length
+      : 0;
+
+  const marketStress = Number(engineState.marketStressLevel || 0);
+  const defensiveRegime =
+    engineState.marketRegimeState?.state === "defensive" ||
+    engineState.marketRegime?.state === "defensive";
+
+  const crashBlock =
+    engineState.marketCrashProtectionState?.shouldBlockNewTrades === true;
+
+  const macroBlock =
+    engineState.macroRiskState?.shouldBlockNewTrades === true;
+
+  let dynamicThreshold = hardFloor;
+
+  if (avgScore < 60) dynamicThreshold += 5;
+  if (defensiveRegime && avgScore < 72) dynamicThreshold += 3;
+  if (marketStress >= 60) dynamicThreshold += 5;
+  if (marketStress >= 80) dynamicThreshold += 5;
+  if (macroBlock) dynamicThreshold += 5;
+  if (crashBlock) dynamicThreshold += 10;
+
+  return Math.max(hardFloor, Math.min(dynamicThreshold, 85));
+}
+
 async function autoBuySignals(signals = []) {
   if (!["live_stock", "smart"].includes(TRADING_MODE)) return;
 
@@ -15809,10 +16388,28 @@ async function autoBuySignals(signals = []) {
 
 const frozenOpenSlots = openSlots;
 
-const adaptiveMinScoreToBuy = Number(
-  engineState.selfOptimizationState?.adaptiveMinScoreToBuy ||
-    CONFIG.minScoreToBuy
+const effectiveBuyThreshold = getEffectiveBuyThreshold(signals);
+
+const adaptiveMinScoreToBuy = Math.max(
+  65,
+  effectiveBuyThreshold,
+  Number(
+    engineState.selfOptimizationState?.adaptiveMinScoreToBuy ||
+      CONFIG.minScoreToBuy ||
+      65
+  )
 );
+
+engineState.effectiveBuyThreshold = {
+  updatedAt: new Date().toISOString(),
+  hardFloor: 65,
+  configMinScoreToBuy: CONFIG.minScoreToBuy,
+  effectiveBuyScore: adaptiveMinScoreToBuy,
+  reason:
+    adaptiveMinScoreToBuy > 65
+      ? "Buy threshold raised above 65 by risk/adaptive conditions."
+      : "Hard floor active. Buy threshold cannot go below 65.",
+};
 
 const frozenApprovedSignals = signals
   .filter(
@@ -16106,17 +16703,33 @@ let successfulStockBuysThisCycle = 0;
       institutionalGrade.includes("B") ||
       Number(candidate.technicalScore || 0) >= 65;
 
-    const eliteCapitalBoost =
-      Number(candidate.score || 0) >= 72 &&
+const eliteCapitalBoost =
+  Number(candidate.score || 0) >= 90 &&
+  hasStrongEnoughGrade &&
+  Number(candidate.breakoutProbability || 0) >= 88 &&
+  Number(candidate.continuationProbability || 0) >= 85 &&
+  candidate.confirmations?.aboveVwap === true &&
+  Number(candidate.confirmations?.pullbackFromHighPercent || 0) <= 1.5 &&
+  Number(institutionalExecutionPlan.executionConfidence || 0) >= 82 &&
+  candidate.confirmations?.fakeBreakout !== true
+    ? 3.2
+    : Number(candidate.score || 0) >= 82 &&
       hasStrongEnoughGrade &&
-      Number(candidate.breakoutProbability || 0) >= 75 &&
-      Number(candidate.continuationProbability || 0) >= 70 &&
+      Number(candidate.breakoutProbability || 0) >= 80 &&
+      Number(candidate.continuationProbability || 0) >= 75 &&
       candidate.confirmations?.aboveVwap === true &&
       Number(candidate.confirmations?.pullbackFromHighPercent || 0) <= 2 &&
-      Number(institutionalExecutionPlan.executionConfidence || 0) >= 60 &&
+      Number(institutionalExecutionPlan.executionConfidence || 0) >= 70 &&
       candidate.confirmations?.fakeBreakout !== true
-        ? 1.75
-        : 1;
+    ? 2.2
+    : Number(candidate.score || 0) >= 72 &&
+      hasStrongEnoughGrade &&
+      Number(candidate.breakoutProbability || 0) >= 72 &&
+      Number(candidate.continuationProbability || 0) >= 68 &&
+      candidate.confirmations?.aboveVwap === true &&
+      candidate.confirmations?.fakeBreakout !== true
+    ? 1.45
+    : 0.85;
 
     const executionAdjustedBaseTradeAmount =
       Number(
@@ -16129,7 +16742,43 @@ let successfulStockBuysThisCycle = 0;
         ).toFixed(2)
       );
 
+    const entryTiming =
+      calculateInstitutionalEntryTiming({
+        ...candidate,
+        institutionalExecutionPlan,
+      });
 
+    candidate.entryTiming = entryTiming;
+
+    if (entryTiming.entryMode === "WAIT_FOR_BETTER_ENTRY") {
+      saveRecentOrder("AUTO_STOCK_BUY_SKIPPED_ENTRY_TIMING", symbol, {
+        score: candidate.score,
+        entryTiming,
+        reason: "Entry timing engine says wait for better entry.",
+      });
+
+      continue;
+    }
+
+    const liquiditySweepTrap =
+      calculateLiquiditySweepTrapDetection({
+        ...candidate,
+        institutionalExecutionPlan,
+      });
+
+    candidate.liquiditySweepTrap = liquiditySweepTrap;
+
+    if (liquiditySweepTrap.shouldRejectEntry) {
+      saveRecentOrder("AUTO_STOCK_BUY_SKIPPED_LIQUIDITY_TRAP", symbol, {
+        score: candidate.score,
+        liquiditySweepTrap,
+        reason: "Liquidity sweep/trap engine rejected entry.",
+      });
+
+      continue;
+    }
+    
+    
     const autonomousConfidenceScore = clampScore(
       Number(candidate.score || 0) * 0.22 +
         Number(candidate.institutionalBrainScore || 0) * 0.2 +
@@ -16171,6 +16820,27 @@ let successfulStockBuysThisCycle = 0;
         autonomousConfidenceScore
       );        
 
+    const weakSetupPenalty =
+    Number(candidate.score || 0) < 70
+    ? 0.55
+    : Number(candidate.score || 0) < 75
+    ? 0.72
+    : 1;
+
+    const marketPhaseSizingMultiplier =
+     Number(
+    engineState.marketCycleIntelligenceState?.buyAggressionMultiplier || 1
+  );
+
+  const sectorDominanceMultiplier =
+  Number(candidate.sectorDominance?.dominanceMultiplier || 1);
+
+  const liquidityTrapMultiplier =
+      Number(candidate.liquiditySweepTrap?.liquidityTimingMultiplier || 1);  
+
+  const entryTimingMultiplier =
+      Number(candidate.entryTiming?.timingMultiplier || 1);  
+
     const finalTradeAmount = Number(
       (
         executionAdjustedBaseTradeAmount *
@@ -16178,7 +16848,12 @@ let successfulStockBuysThisCycle = 0;
         Number(parliamentGate.multiplier || 1) *
         autonomousConfidenceMultiplier *
         regimeProtectionMultiplier *
-        Number(reinforcementSizing.learnedMultiplier || 1)
+        Number(reinforcementSizing.learnedMultiplier || 1) *
+        weakSetupPenalty *
+        marketPhaseSizingMultiplier *
+        sectorDominanceMultiplier *
+        liquidityTrapMultiplier *
+        entryTimingMultiplier
       ).toFixed(2)
     );
 
@@ -16588,6 +17263,11 @@ async function autoBuyCryptoSignals(signals) {
   else if (bestCandidateScore >= 75) scoreMultiplier = 0.55;
 
   const tradeAmount = baseTradeAmount * scoreMultiplier;
+  const effectiveCryptoBuyThreshold = Math.max(
+    65,
+    getEffectiveBuyThreshold(signals),
+    Number(CONFIG.minScoreToBuy || 65)
+  );
 
   if (tradeAmount < 1) {
     saveFailedOrder("AUTO_CRYPTO_BUY_SKIPPED", "CRYPTO", "Not enough budget");
@@ -16603,7 +17283,7 @@ async function autoBuyCryptoSignals(signals) {
 
       return (
         institutionalPassed &&
-        score >= CONFIG.minScoreToBuy &&
+        score >= effectiveCryptoBuyThreshold &&
         spread <= 0.85
       );
     })
@@ -16640,7 +17320,7 @@ const cryptoBarsFound = Number(crypto.barsFound || 0);
 
 const cryptoQualified =
   crypto.qualifiedToBuy === true &&
-  Number(crypto.score || 0) >= CONFIG.minScoreToBuy &&
+  Number(crypto.score || 0) >= effectiveCryptoBuyThreshold &&
   Number(crypto.spreadPercent || 0) <= 0.85 &&
   cryptoBarsFound >= 10;
 
@@ -16702,8 +17382,25 @@ const adaptiveCryptoSizing =
     account
   );
 
+const cryptoConvictionMultiplier =
+  cryptoInstitutionalScore >= 88 &&
+  cryptoTechnicalScore >= 82 &&
+  cryptoStatisticalScore >= 75
+    ? 2.6
+    : cryptoInstitutionalScore >= 80 &&
+      cryptoTechnicalScore >= 72
+    ? 1.9
+    : cryptoInstitutionalScore >= 72
+    ? 1.35
+    : 0.65;
+
 const finalTradeAmount =
-  adaptiveCryptoSizing.recommendedAmount;
+  Number(
+    (
+      adaptiveCryptoSizing.recommendedAmount *
+      cryptoConvictionMultiplier
+    ).toFixed(2)
+  );
 
 if (!finalTradeAmount || finalTradeAmount <= 0) {
   saveRecentOrder(
@@ -16910,6 +17607,17 @@ const signals = [...stockSignals, ...cryptoSignals];
 
 engineState.marketRegimeHistory =
   engineState.marketRegimeHistory.slice(0, 200);
+
+engineState.marketCycleIntelligenceState =
+  calculateInstitutionalMarketPhase(stockSignals, cryptoSignals);
+
+engineState.marketCycleIntelligenceHistory.unshift(
+  engineState.marketCycleIntelligenceState
+);
+
+engineState.marketCycleIntelligenceHistory =
+  engineState.marketCycleIntelligenceHistory.slice(0, 200);
+
   signals.sort(
   (a, b) => Number(b.score || 0) - Number(a.score || 0)
 );
@@ -16984,6 +17692,24 @@ engineState.sectorRotationState = sectorRotation;
 engineState.sectorRotationHistory.unshift(sectorRotation);
 engineState.sectorRotationHistory =
   engineState.sectorRotationHistory.slice(0, 200);
+
+const sectorDominance =
+  calculateInstitutionalSectorDominanceEngine(stockSignals);
+
+engineState.sectorDominanceState = sectorDominance;
+
+if (!Array.isArray(engineState.sectorDominanceHistory)) {
+  engineState.sectorDominanceHistory = [];
+}
+
+engineState.sectorDominanceHistory.unshift(sectorDominance);
+engineState.sectorDominanceHistory =
+  engineState.sectorDominanceHistory.slice(0, 200);
+
+stockSignals = stockSignals.map((signal) =>
+  applyInstitutionalSectorDominance(signal)
+);
+  
  const analyticsPositions = Array.isArray(engineState.cachedPositions)
   ? engineState.cachedPositions
   : [];
