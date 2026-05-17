@@ -13607,11 +13607,13 @@ engineState.statisticalMemoryState =
   const autonomousMetaStrategyResult =
     calculateAutonomousMetaStrategyOrchestrator(results);
 
-  results = autonomousMetaStrategyResult.signals;
+  const finalResults =
+    Array.isArray(autonomousMetaStrategyResult?.signals)
+      ? autonomousMetaStrategyResult.signals
+      : results;
 
-  return results
+  return finalResults
     .sort((a, b) => {
-
       if (b.score !== a.score) return b.score - a.score;
       return b.percentChange - a.percentChange;
     })
@@ -20959,7 +20961,6 @@ app.get("/frontend/dashboard", async (req, res) => {
       },
     });
   } catch (err) {
-    console.error("frontend dashboard error", err);
 
     res.status(500).json({
       success: false,
