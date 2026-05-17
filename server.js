@@ -20698,6 +20698,276 @@ function buildInstitutionalDashboardPayload() {
   };
 }
 
+// ================================
+// FRONTEND CLEAN API ENDPOINTS
+// ================================
+
+app.get("/frontend/portfolio", async (req, res) => {
+  try {
+    const account = latestStatus?.account || {};
+    const risk = latestStatus?.risk || {};
+    const dashboard = latestStatus?.institutionalDashboard || {};
+    const governor = dashboard?.portfolioGovernor || {};
+
+    const equity = Number(account.equity || risk.currentEquity || 0);
+    const cash = Number(account.cash || risk.currentCash || 0);
+
+    const openValue = Number(
+      account.position_market_value ||
+      risk.currentBotExposure ||
+      governor.currentExposure ||
+      0
+    );
+
+    const maxBotBudget = Number(
+      governor.maxBudget ||
+      risk.maxBotBudget ||
+      0
+    );
+
+    const autoCapLeft = Math.max(
+      0,
+      maxBotBudget - openValue
+    );
+
+    const peakEquity = Number(
+      account.peakEquity ||
+      risk.peakEquity ||
+      equity
+    );
+
+    const drawdownPercent =
+      peakEquity > 0
+        ? ((peakEquity - equity) / peakEquity) * 100
+        : 0;
+
+    const portfolioReturnPercent =
+      Number(account.last_equity || 0) > 0
+        ? (
+            ((equity - Number(account.last_equity)) /
+              Number(account.last_equity)) *
+            100
+          )
+        : 0;
+
+    res.json({
+      success: true,
+
+      portfolio: {
+        equity,
+        cash,
+        openValue,
+        maxBotBudget,
+        autoCapLeft,
+
+        unrealizedPL: equity - cash,
+        realizedPL: 0,
+
+        portfolioReturnPercent,
+        drawdownPercent,
+
+        dailyLossLeftPercent:
+          Number(CONFIG.dailyLossLimitPercent || 2) -
+          drawdownPercent,
+
+        openPositions:
+          Number(latestStatus?.positions?.length || 0),
+
+        peakEquity,
+      },
+    });
+  } catch (err) {
+    console.error("frontend portfolio error", err);
+
+    res.status(500).json({
+      success: false,
+      error: err.message,
+    });
+  }
+});
+
+app.get("/frontend/signals", async (req, res) => {
+  try {
+    const orchestration =
+      latestStatus?.phase20AutonomousOrchestration || {};
+
+    const signals = Array.isArray(orchestration.topSignals)
+      ? orchestration.topSignals
+      : [];
+
+    const approvedSignals = signals
+      .filter(
+        (s) =>
+          s &&
+          s.qualifiedToBuy &&
+          (s.autoTradeApproved || s.approved)
+      )
+      .sort((a, b) => (b.score || 0) - (a.score || 0));
+
+    res.json({
+      success: true,
+      count: approvedSignals.length,
+      signals: approvedSignals,
+    });
+  } catch (err) {
+    console.error("frontend signals error", err);
+
+    res.status(500).json({
+      success: false,
+      error: err.message,
+    });
+  }
+});
+
+app.get("/frontend/ai", async (req, res) => {
+  try {
+    const brain =
+      latestStatus?.phase21AutonomousBrain || {};
+
+    const orchestration =
+      latestStatus?.phase20AutonomousOrchestration || {};
+
+    const autonomous =
+      latestStatus?.autonomousTradingSystem || {};
+
+    const dashboard =
+      latestStatus?.institutionalDashboard || {};
+
+    const governor =
+      dashboard?.portfolioGovernor || {};
+
+    res.json({
+      success: true,
+
+      ai: {
+        brainMode: brain.brainMode,
+        autonomousIntelligenceScore:
+          brain.autonomousIntelligenceScore,
+
+        parliamentDecision:
+          autonomous.capitalParliamentDecision,
+
+        probabilityScore:
+          autonomous.probabilityScore,
+
+        consensusScore:
+          orchestration.consensusScore,
+
+        governorMode:
+          governor.governorMode,
+
+        governorScore:
+          governor.governorScore,
+
+        capitalThrottleMultiplier:
+          governor.capitalThrottleMultiplier,
+
+        shouldBlockNewTrades:
+          brain.shouldBlockNewTrades,
+
+        finalSystemReason:
+          autonomous.finalSystemReason,
+
+        governorReason:
+          governor.governorReason,
+
+        topCandidates:
+          brain.topAutonomousCandidates || [],
+      },
+    });
+  } catch (err) {
+    console.error("frontend ai error", err);
+
+    res.status(500).json({
+      success: false,
+      error: err.message,
+    });
+  }
+});
+
+app.get("/frontend/alerts", async (req, res) => {
+  try {
+    const orchestration =
+      latestStatus?.phase20AutonomousOrchestration || {};
+
+    const topSignals =
+      orchestration.topSignals || [];
+
+    const alerts = topSignals
+      .filter((s) => s.score >= 65)
+      .slice(0, 25)
+      .map((s) => ({
+        symbol: s.symbol,
+        score: s.score,
+        message:
+          s.portfolioManagerReason ||
+          s.technicalReason ||
+          s.executionReason ||
+          "Institutional signal detected",
+
+        approved:
+          s.autoTradeApproved || s.approved,
+
+        executionConfidence:
+          s.executionConfidence || 0,
+
+        institutionalGrade:
+          s.institutionalGrade || "NORMAL",
+      }));
+
+    res.json({
+      success: true,
+      count: alerts.length,
+      alerts,
+    });
+  } catch (err) {
+    console.error("frontend alerts error", err);
+
+    res.status(500).json({
+      success: false,
+      error: err.message,
+    });
+  }
+});
+
+app.get("/frontend/dashboard", async (req, res) => {
+  try {
+    res.json({
+      success: true,
+
+      dashboard: {
+        marketRegime:
+          latestStatus?.institutionalDashboard
+            ?.marketRegime || {},
+
+        autonomousTradingSystem:
+          latestStatus?.autonomousTradingSystem || {},
+
+        portfolioGovernor:
+          latestStatus?.institutionalDashboard
+            ?.portfolioGovernor || {},
+
+        topSignals:
+          latestStatus
+            ?.phase20AutonomousOrchestration
+            ?.topSignals || [],
+
+        topOpportunities:
+          latestStatus
+            ?.phase21AutonomousBrain
+            ?.topAutonomousCandidates || [],
+      },
+    });
+  } catch (err) {
+    console.error("frontend dashboard error", err);
+
+    res.status(500).json({
+      success: false,
+      error: err.message,
+    });
+  }
+});
+
   app.get("/status", async (req, res) => {
     try {
       const account = await getAccount();
