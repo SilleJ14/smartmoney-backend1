@@ -7318,18 +7318,69 @@ function calculateAiPortfolioManagerDecision(
       )
     );
 
+  const phase57Signal = {
+    ...signal,
+
+    symbol: normalizeSymbol(signal.symbol),
+
+    score: Number(signal.score || 0),
+
+    runnerScore: Number(
+      signal.runnerScore ||
+        signal.explosiveRunnerScore ||
+        signal.explosiveRunnerPrediction?.explosiveRunnerScore ||
+        signal.adaptiveRunnerScore ||
+        0
+    ),
+
+    institutionalBrainScore: Number(
+      signal.institutionalBrainScore ||
+        signal.fullInstitutionalAiBrain?.dynamicConvictionScore ||
+        signal.fullInstitutionalAiBrain?.consensusScore ||
+        signal.aiConfidence ||
+        signal.institutionalScore ||
+        0
+    ),
+
+    executionConfidence: Number(
+      signal.executionConfidence ||
+        signal.institutionalExecutionPlan?.executionConfidence ||
+        0
+    ),
+
+    premarketDominanceScore: Number(
+      signal.premarketDominanceScore ||
+        signal.premarketDominance?.premarketDominanceScore ||
+        signal.premarket?.openingDriveProbability ||
+        0
+    ),
+
+    volumeConfirmationQuality: Number(
+      signal.volumeConfirmationQuality ||
+        Number(signal.confirmations?.volumeSpikeRatio || 0) * 20 ||
+        0
+    ),
+
+    statisticalEdgeScore: Number(
+      signal.statisticalEdgeScore ||
+        signal.statisticalScore ||
+        signal.statisticalEdge?.statisticalEdgeScore ||
+        0
+    ),
+  };
+
   const phase572EliteDiscovery =
-    calculatePhase572EliteDiscovery(signal);    
+    calculatePhase572EliteDiscovery(phase57Signal);
 
   const phase57EliteOverride =
     calculatePhase57EliteOverrideDecision({
-      signal,
+      signal: phase57Signal,
       account,
       openBotPositions,
       portfolioHeat,
       marketRegime,
       eliteCapital,
-    });    
+    });
 
   const portfolioScore = clampScore(
     portfolioHeat.portfolioHeatScore * 0.55 +
