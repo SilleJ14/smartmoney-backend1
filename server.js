@@ -20370,13 +20370,79 @@ saveRecentOrder("PHASE_14_GOVERNOR_UPDATED", "GOVERNOR", {
     phase14GovernorState.blockedCount,
 });
 
+  const phase59OrderFlow =
+    calculatePhase59InstitutionalOrderFlowIntelligence(results, []);
+
+  engineState.phase59InstitutionalOrderFlowState = phase59OrderFlow.state;
+  engineState.phase59InstitutionalOrderFlowHistory.unshift(phase59OrderFlow.state);
+  engineState.phase59InstitutionalOrderFlowHistory =
+    engineState.phase59InstitutionalOrderFlowHistory.slice(0, 200);
+
+  let phasePipelineSignals = phase59OrderFlow.analyzedSignals.map((signal) => {
+    const phase60AdaptiveExecution =
+      calculatePhase60AdaptiveExecutionAlgorithms(
+        signal,
+        signal.recommendedTradeAmount || 0
+      );
+
+    return {
+      ...signal,
+      phase60AdaptiveExecution,
+      adaptiveExecutionScore:
+        phase60AdaptiveExecution.adaptiveExecutionScore,
+    };
+  });
+
+  const phase61ProfitAggression =
+    calculatePhase61ProfitAggressionAI(phasePipelineSignals);
+
+  engineState.phase61ProfitAggressionState = phase61ProfitAggression.state;
+  engineState.phase61ProfitAggressionHistory.unshift(phase61ProfitAggression.state);
+  engineState.phase61ProfitAggressionHistory =
+    engineState.phase61ProfitAggressionHistory.slice(0, 200);
+
+  phasePipelineSignals = phase61ProfitAggression.analyzedSignals;
+
+  const phase62MarketPersonality =
+    calculatePhase62MarketPersonalityMemory(phasePipelineSignals);
+
+  engineState.phase62MarketPersonalityState = phase62MarketPersonality.state;
+  engineState.phase62MarketPersonalityHistory.unshift(phase62MarketPersonality.state);
+  engineState.phase62MarketPersonalityHistory =
+    engineState.phase62MarketPersonalityHistory.slice(0, 200);
+
+  phasePipelineSignals = phase62MarketPersonality.analyzedSignals;
+
+  const phase63StrategyEvolution =
+    calculatePhase63StrategyEvolutionEngine(phasePipelineSignals);
+
+  engineState.phase63StrategyEvolutionState = phase63StrategyEvolution.state;
+  engineState.phase63StrategyEvolutionHistory.unshift(phase63StrategyEvolution.state);
+  engineState.phase63StrategyEvolutionHistory =
+    engineState.phase63StrategyEvolutionHistory.slice(0, 200);
+
+  phasePipelineSignals = phase63StrategyEvolution.analyzedSignals;
+
+  const centralAutonomousDecisionCore =
+    calculateCentralAutonomousDecisionCore(phasePipelineSignals, []);
+
+  engineState.centralAutonomousDecisionCoreState =
+    centralAutonomousDecisionCore.state;
+
+  engineState.centralAutonomousDecisionCoreHistory.unshift(
+    centralAutonomousDecisionCore.state
+  );
+
+  engineState.centralAutonomousDecisionCoreHistory =
+    engineState.centralAutonomousDecisionCoreHistory.slice(0, 200);
+
   const autonomousMetaStrategyResult =
-    calculateAutonomousMetaStrategyOrchestrator(results);
+    calculateAutonomousMetaStrategyOrchestrator(phasePipelineSignals);
 
   const finalResults =
     Array.isArray(autonomousMetaStrategyResult?.signals)
       ? autonomousMetaStrategyResult.signals
-      : results;
+      : phasePipelineSignals;
 
   return finalResults
     .sort((a, b) => {
@@ -31928,6 +31994,12 @@ const runnerScore = Number(
         signal.phase62MarketPersonality?.personalityFitScore ||
         0
     );
+
+    const strategyEvolutionScore = Number(
+  signal.strategyEvolutionScore ||
+    signal.phase63StrategyEvolution?.strategyEvolutionScore ||
+    0
+);
 
     const riskPenalty =
       (signal.confirmations?.fakeBreakout ? 18 : 0) +
