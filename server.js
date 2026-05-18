@@ -7391,6 +7391,9 @@ function calculateAiPortfolioManagerDecision(
       eliteCapital,
     });
 
+  const heatApprovalThreshold =
+    tacticalEliteRunnerOverride ? 25 : 45;    
+
   const dynamicHeatRelaxation =
     (() => {
       const score = Number(signal.score || signal.institutionalScore || 0);
@@ -7469,10 +7472,9 @@ function calculateAiPortfolioManagerDecision(
           squeezeContinuationEdge ||
           phase57EliteOverride.overrideApproved === true
         );
-
       const relaxedHeatScore =
         heatRelaxationApproved
-          ? Math.max(heatScore, 58)
+          ? Math.min(heatScore, 25)
           : heatScore;
 
       const relaxedHeatApprovalThreshold =
@@ -7501,15 +7503,12 @@ function calculateAiPortfolioManagerDecision(
     
 
   const portfolioScore = clampScore(
-    dynamicHeatRelaxation.relaxedHeatScore * 0.55 +
+    (100 - dynamicHeatRelaxation.relaxedHeatScore) * 0.55 +
       (100 - marketStress) * 0.2 +
       Number(eliteCapital.eliteScore || 0) * 0.25 +
       (tacticalEliteRunnerOverride ? 8 : 0) +
       (dynamicHeatRelaxation.heatRelaxationApproved ? 8 : 0)
   );
-
-  const heatApprovalThreshold =
-    tacticalEliteRunnerOverride ? 25 : 45;
 
   const effectiveHeatApprovalThreshold =
     dynamicHeatRelaxation.relaxedHeatApprovalThreshold;
