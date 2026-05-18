@@ -6882,8 +6882,18 @@ function calculateAiPortfolioManagerDecision(
           portfolioHeat,
         });
 
-  const recommendedTradeAmount = Number(
+  const rawRecommendedTradeAmount = Number(
     eliteCapital.recommendedTradeAmount || 0
+  );
+
+  const recommendedTradeAmount = Number(
+    Math.min(
+      rawRecommendedTradeAmount,
+      maxBotBudget,
+      Math.max(0, maxBotBudget - getBotExposure(openBotPositions)),
+      Number(account.cash || 0),
+      Number(account.buying_power || account.cash || 0)
+    ).toFixed(2)
   );
 
   const eliteHeatOverride =
@@ -6942,7 +6952,7 @@ function calculateAiPortfolioManagerDecision(
     );
 
   const equity = Number(account.equity || account.cash || 0);
-  const maxBotBudget =
+  const reconciledMaxBotBudget =
     equity * (CONFIG.maxBotExposurePercent / 100);
 
   return {
@@ -6952,12 +6962,11 @@ function calculateAiPortfolioManagerDecision(
     aiPortfolioAction: approved ? "ALLOW" : "REDUCE_RISK",
     portfolioScore,
     recommendedTradeAmount,
-    aiAllocationPercentOfBotBudget: Number(
-      (
-        (recommendedTradeAmount / Math.max(maxBotBudget, 1)) *
-        100
-      ).toFixed(2)
-    ),
+    rawRecommendedTradeAmount,
+    aiAllocationPercentOfBotBudget:
+      reconciledMaxBotBudget > 0
+        ? Number(((recommendedTradeAmount / reconciledMaxBotBudget) * 100).toFixed(2))
+        : 0,
     portfolioHeat,
     marketStress,
     allocationMultiplier: Number(eliteCapital.concentrationMultiplier || 1),
@@ -9735,7 +9744,14 @@ function calculateAutonomousPortfolioGovernor(
       (sectorSaturationRisk ? 35 : 75) * 0.1
   );
 
-const bestCandidate = candidates
+const fallbackCandidates =
+  candidates.length > 0
+    ? candidates
+    : Array.isArray(engineState.lastSignals)
+    ? engineState.lastSignals
+    : [];
+
+const bestCandidate = fallbackCandidates
   .slice()
   .sort((a, b) => Number(b.score || 0) - Number(a.score || 0))[0] || {};
 
@@ -9876,6 +9892,123 @@ capitalThrottleMultiplier = Math.max(
       `Throttle x${capitalThrottleMultiplier}` +
       `${eliteDeploymentCandidate ? " • Elite deployment release active" : ""}` +
       `${lowStressCapitalRelease ? " • Low-stress capital release" : ""}`,
+  };
+}
+
+function calculateFinalPositionSizingReconciliation({
+  signal = {},
+  account = {},
+  openBotPositions = [],
+  portfolioGovernor = {},
+  portfolioManager = {},
+  institutionalExecutionPlan = {},
+  capitalPressure = {},
+  baseTradeAmount = 0,
+}) {
+  const symbol = normalizeSymbol(signal.symbol);
+
+  const equity = Number(account?.equity || account?.cash || 0);
+  const cash = Number(account?.cash || 0);
+  const buyingPower = Number(account?.buying_power || cash || 0);
+
+  const currentBotExposure = getBotExposure(openBotPositions);
+  const maxBotBudget = equity * (Number(CONFIG.maxBotExposurePercent || 15) / 100);
+  const remainingBotBudget = Math.max(0, maxBotBudget - currentBotExposure);
+
+  const perTradeMax = Math.max(
+    Number(CONFIG.eliteConcentrationMinTradeAmount || 5),
+    maxBotBudget / Math.max(1, Number(CONFIG.maxOpenTrades || 8))
+  );
+
+  const governorMultiplier = Number(
+    portfolioGovernor.capitalThrottleMultiplier || 1
+  );
+
+  const executionMultiplier = Number(
+    institutionalExecutionPlan.executionSizeMultiplier ||
+      signal.institutionalExecutionPlan?.executionSizeMultiplier ||
+      1
+  );
+
+  const allocationMultiplier = Number(
+    portfolioManager.allocationMultiplier ||
+      signal.allocationMultiplier ||
+      1
+  );
+
+  const pressureAmount = Number(
+    capitalPressure.capitalPressureAmount || 0
+  );
+
+  const rawRequestedAmount = Math.max(
+    Number(baseTradeAmount || 0),
+    Number(signal.recommendedTradeAmount || 0),
+    pressureAmount
+  );
+
+  const eliteOverride =
+    signal.tacticalEliteRunnerOverride === true ||
+    portfolioManager.tacticalEliteRunnerOverride === true ||
+    signal.eliteHeatOverride === true ||
+    portfolioManager.eliteHeatOverride === true;
+
+  const confidenceBoost =
+    eliteOverride ? 1.35 : 1;
+
+  const unifiedMultiplier =
+    governorMultiplier *
+    executionMultiplier *
+    allocationMultiplier *
+    confidenceBoost;
+
+  const unclampedAmount =
+    rawRequestedAmount > 0
+      ? rawRequestedAmount * unifiedMultiplier
+      : perTradeMax * unifiedMultiplier;
+
+  const finalTradeAmount = Number(
+    Math.max(
+      0,
+      Math.min(
+        unclampedAmount,
+        perTradeMax * (eliteOverride ? 1.75 : 1),
+        remainingBotBudget,
+        cash,
+        buyingPower || cash
+      )
+    ).toFixed(2)
+  );
+
+  const finalBlocked =
+    finalTradeAmount < Number(CONFIG.eliteConcentrationMinTradeAmount || 5) ||
+    remainingBotBudget <= 0 ||
+    cash <= 0 ||
+    portfolioGovernor.shouldBlockNewTrades === true;
+
+  return {
+    phase: "56.2_FINAL_POSITION_SIZING_RECONCILIATION",
+    updatedAt: new Date().toISOString(),
+    symbol,
+    finalTradeAmount: finalBlocked ? 0 : finalTradeAmount,
+    rawRequestedAmount: Number(rawRequestedAmount.toFixed(2)),
+    perTradeMax: Number(perTradeMax.toFixed(2)),
+    maxBotBudget: Number(maxBotBudget.toFixed(2)),
+    remainingBotBudget: Number(remainingBotBudget.toFixed(2)),
+    currentBotExposure: Number(currentBotExposure.toFixed(2)),
+    cash: Number(cash.toFixed(2)),
+    buyingPower: Number(buyingPower.toFixed(2)),
+    governorMultiplier: Number(governorMultiplier.toFixed(2)),
+    executionMultiplier: Number(executionMultiplier.toFixed(2)),
+    allocationMultiplier: Number(allocationMultiplier.toFixed(2)),
+    confidenceBoost: Number(confidenceBoost.toFixed(2)),
+    unifiedMultiplier: Number(unifiedMultiplier.toFixed(2)),
+    eliteOverride,
+    finalBlocked,
+    reason:
+      `${finalBlocked ? "BLOCKED_OR_TOO_SMALL" : "FINAL_SIZE_APPROVED"} • ` +
+      `Final $${finalBlocked ? 0 : finalTradeAmount} • ` +
+      `PerTradeMax $${perTradeMax.toFixed(2)} • RemainingBudget $${remainingBotBudget.toFixed(2)} • ` +
+      `Unified x${unifiedMultiplier.toFixed(2)}`,
   };
 }
 
@@ -28694,6 +28827,44 @@ engineState.analyticsSnapshots =
         };
       }
     }
+      const finalSizingReconciliation =
+        calculateFinalPositionSizingReconciliation({
+          signal,
+          account,
+          openBotPositions,
+          portfolioGovernor: engineState.portfolioGovernorState || {},
+          portfolioManager: refreshedPortfolioManager,
+          institutionalExecutionPlan:
+            signal.institutionalExecutionPlan || {},
+          capitalPressure:
+            signal.autonomousCapitalPressure || {},
+          baseTradeAmount:
+            signal.recommendedTradeAmount || 0,
+        });
+
+      signal.finalSizingReconciliation = finalSizingReconciliation;
+      signal.recommendedTradeAmount =
+        finalSizingReconciliation.finalTradeAmount;
+
+      signal.aiAllocationPercentOfBotBudget =
+        finalSizingReconciliation.maxBotBudget > 0
+          ? Number(
+              (
+                finalSizingReconciliation.finalTradeAmount /
+                finalSizingReconciliation.maxBotBudget *
+                100
+              ).toFixed(2)
+            )
+          : 0;
+
+      if (finalSizingReconciliation.finalBlocked) {
+        signal.autoTradeApproved = false;
+        signal.approved = false;
+        signal.decisionLevel = "Blocked By Final Sizing Reconciliation";
+        signal.portfolioAction = "FINAL_SIZE_BLOCK";
+        signal.aiPortfolioAction = "FINAL_SIZE_BLOCK";
+      }
+
 
     engineState.lastSignals = signals;
     engineState.lastStockSignals = stockSignals;
