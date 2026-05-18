@@ -7261,11 +7261,11 @@ function calculateAiPortfolioManagerDecision(
   );
 
 
-  const rawRecommendedTradeAmount = Number(
+  let rawRecommendedTradeAmount = Number(
     eliteCapital.recommendedTradeAmount || 0
   );
 
-  const recommendedTradeAmount = Number(
+  let recommendedTradeAmount = Number(
     Math.min(
       rawRecommendedTradeAmount,
       maxBotBudget,
@@ -7512,7 +7512,7 @@ function calculateAiPortfolioManagerDecision(
     executionConfidence >= 55 &&
     signal.confirmations?.fakeBreakout !== true;
 
-  const approved =
+ let approved =
     recommendedTradeAmount > 0 &&
     (
       dynamicHeatRelaxation.relaxedHeatScore <= effectiveHeatApprovalThreshold ||
@@ -7522,9 +7522,6 @@ function calculateAiPortfolioManagerDecision(
       phase572EliteDiscovery.eliteDiscoveryScore >= 85 ||
       eliteCapital.concentrationTier === "ELITE_CONCENTRATION"
     );
-
- const institutionalMinimumScore =
-  Number(CONFIG.minScoreToBuy || 65);
 
 const reconciledMaxBotBudget = maxBotBudget;
 
