@@ -6790,16 +6790,12 @@ function calculatePortfolioHeatEngine(signal, openBotPositions = []) {
 
   const concentrationRiskScore = clampScore(
     100 -
-      openPositionCount * 12 -
-      sameSectorCount * 18 -
-      (duplicateSymbolRisk ? 40 : 0)
+      (duplicateSymbolRisk ? 100 : 0)
   );
 
   const correlationRiskScore = clampScore(
     100 -
-      sameSectorCount * 22 -
-      (estimatedSector === "Speculative Small Cap" ? 20 : 0) -
-      (duplicateSymbolRisk ? 35 : 0)
+      (duplicateSymbolRisk ? 100 : 0)
   );
 
   const portfolioHeatScore = clampScore(
@@ -6822,11 +6818,7 @@ function calculatePortfolioHeatEngine(signal, openBotPositions = []) {
   const correlationAction =
     duplicateSymbolRisk
       ? "Block Duplicate Symbol"
-      : portfolioHeatScore <= 25
-      ? "Allow Allocation"
-      : portfolioHeatScore <= 55
-      ? "Reduce Allocation"
-      : "Avoid Additional Exposure";
+      : "Allow Allocation Until Max Exposure";
   return {
     portfolioHeatScore,
     portfolioHeatLabel,
@@ -13016,8 +13008,10 @@ function calculateEliteCapitalConcentration({
 
   const remainingSlots = Math.max(
     1,
-    Number(CONFIG.maxStockOpenTrades || CONFIG.maxOpenTrades || 1) -
-      openBotPositions.length
+    Math.min(
+      Number(CONFIG.topAutoTradeCandidates || 5),
+      Math.max(1, Math.ceil(availableBotCap / Math.max(5, Number(CONFIG.eliteConcentrationMinTradeAmount || 5))))
+    )
   );
 
   const baseSlotAmount = availableBotCap / remainingSlots;
@@ -26203,30 +26197,30 @@ async function autoBuySignals(signals = []) {
     return !symbol.includes("/") && position.asset_class !== "crypto";
   });
 
-  if (
-    aiPositions.length >= CONFIG.maxOpenTrades ||
-    aiStockPositions.length >= CONFIG.maxStockOpenTrades
-  ) {
-    const rotated = await replaceWeakestIfBetter(
-      signals,
-      positions,
-      aiOwnedSymbols
-    );
+  const maxBotBudget =
+    Number(account.equity || 0) *
+    (Number(CONFIG.maxBotExposurePercent || 0) / 100);
 
-    if (!rotated) {
-      saveRecentOrder("AUTO_STOCK_BUY_SKIPPED", "STOCK", {
-        reason: "Max stock positions reached, no stronger rotation found",
-      });
-    }
+  const currentBotExposure = getBotExposure(aiPositions);
+  const remainingBotBudget = Math.max(
+    0,
+    maxBotBudget - currentBotExposure
+  );
 
+  if (remainingBotBudget <= 0) {
+    saveRecentOrder("AUTO_STOCK_BUY_SKIPPED_EXPOSURE_FULL", "STOCK", {
+      reason: "Max bot exposure reached",
+      maxBotExposurePercent: CONFIG.maxBotExposurePercent,
+      maxBotBudget: Number(maxBotBudget.toFixed(2)),
+      currentBotExposure: Number(currentBotExposure.toFixed(2)),
+      remainingBotBudget: Number(remainingBotBudget.toFixed(2)),
+      openStockPositions: aiStockPositions.length,
+      totalAiPositions: aiPositions.length,
+    });
     return;
   }
 
-
-  const openSlots = Math.min(
-    CONFIG.maxOpenTrades - aiPositions.length,
-    CONFIG.maxStockOpenTrades - aiStockPositions.length
-  );
+  const openSlots = Number.MAX_SAFE_INTEGER;
 
 const frozenOpenSlots = openSlots;
 
