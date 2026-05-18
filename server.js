@@ -31420,7 +31420,7 @@ statisticalEdgeHistory:
 
 
   app.post("/config", (req, res) => {
-    const allowedConfigKeys = [
+    const numericConfigKeys = [
       "minStockPrice",
       "maxStockPrice",
       "minScoreToBuy",
@@ -31431,9 +31431,6 @@ statisticalEdgeHistory:
       "maxOpenTrades",
       "maxStockOpenTrades",
       "maxCryptoOpenTrades",
-      "autoTradingEnabled",
-      "tradingMode",
-      "tradingModeLocked",
       "runnerTriggerPercent",
       "runnerTrailingStopPercent",
       "dailyLossLimitPercent",
@@ -31450,91 +31447,100 @@ statisticalEdgeHistory:
       "minPremarketGapPercent",
       "minPremarketRelativeVolume",
       "eliteMorningStrikeLimit",
-      "enableMarketRegimeEngine",
       "aggressiveBullishExposureMultiplier",
       "cautiousBullishExposureMultiplier",
       "defensiveExposureMultiplier",
       "panicExposureMultiplier",
-      "enableAdvancedFilters",
       "minVolumeSpikeRatio",
       "minCloseNearHighPercent",
       "fakeBreakoutMaxHighPullbackPercent",
       "maxGapUpPercent",
-      "requireAboveVwap",
-      "enableNewsRiskFilter",
-      "newsLookbackDays"
+      "newsLookbackDays",
     ];
 
-    for (const key of allowedConfigKeys) {
+    const booleanConfigKeys = [
+      "autoTradingEnabled",
+      "tradingModeLocked",
+      "enableMarketRegimeEngine",
+      "enableAdvancedFilters",
+      "requireAboveVwap",
+      "enableNewsRiskFilter",
+      "allowClosedMarketAutoTrade",
+    ];
+
+    const stringConfigKeys = ["tradingMode"];
+
+    const updates = {};
+
+    for (const key of numericConfigKeys) {
       if (req.body[key] === undefined) continue;
 
-      if (typeof CONFIG[key] === "boolean") {
-        CONFIG[key] = Boolean(req.body[key]);
-      } else {
-        const value = Number(req.body[key]);
+      const value = Number(req.body[key]);
 
-        if (!Number.isFinite(value)) {
-          return res.status(400).json({
-            error: `Invalid number for ${key}`,
-            received: req.body[key],
-          });
-        }
+      if (!Number.isFinite(value)) {
+        return res.status(400).json({
+          ok: false,
+          error: `Invalid number for ${key}`,
+          received: req.body[key],
+        });
+      }
 
-        CONFIG[key] = value;
+      updates[key] = value;
+      CONFIG[key] = value;
+    }
+
+    for (const key of booleanConfigKeys) {
+      if (req.body[key] === undefined) continue;
+
+      const value =
+        req.body[key] === true ||
+        req.body[key] === "true" ||
+        req.body[key] === 1 ||
+        req.body[key] === "1";
+
+      updates[key] = value;
+      CONFIG[key] = value;
+
+      if (key === "autoTradingEnabled") {
+        autoTradingEnabled = value;
+      }
+
+      if (key === "tradingModeLocked") {
+        tradingModeLocked = value;
       }
     }
-  runtimeConfig = saveRuntimeConfig({
-    ...CONFIG,
-    tradingMode: TRADING_MODE,
-    tradingModeLocked,
-    autoTradingEnabled,
-  });
+
+    for (const key of stringConfigKeys) {
+      if (req.body[key] === undefined) continue;
+
+      updates[key] = String(req.body[key]);
+      CONFIG[key] = String(req.body[key]);
+
+      if (key === "tradingMode") {
+        TRADING_MODE = String(req.body[key]);
+      }
+    }
+
+    runtimeConfig = saveRuntimeConfig({
+      ...runtimeConfig,
+      ...updates,
+      tradingMode: TRADING_MODE,
+      tradingModeLocked,
+      autoTradingEnabled,
+    });
+
+    Object.assign(CONFIG, runtimeConfig);
+
+    saveEngineState("MANUAL_CONFIG_UPDATED");
+
     res.json({
-      
-      message: "Remote config updated",
+      ok: true,
+      permanent: true,
+      message: "Remote config permanently updated",
       config: CONFIG,
+      runtimeConfig,
     });
   });
-  app.post("/mode", (req, res) => {
-    const { mode } = req.body;
-
-const validModes = ["smart", "live_stock", "live_crypto"];
-
-if (tradingModeLocked) {
-  return res.status(403).json({
-    error: "Trading mode is locked",
-    mode: TRADING_MODE,
-    message: "Unlock trading mode before changing it.",
-  });
-}
-
-if (!validModes.includes(mode)) {
-  return res.status(400).json({
-    error: "Invalid mode",
-    validModes,
-  });
-}
-
-TRADING_MODE = mode;
-
-runtimeConfig = saveRuntimeConfig({
-  ...runtimeConfig,
-  tradingMode: TRADING_MODE,
-  tradingModeLocked,
-  autoTradingEnabled,
-});
-
-saveEngineState("TRADING_MODE_CHANGED");
-
-console.log("MODE SWITCHED:", TRADING_MODE);
-
-res.json({
-  message: "Trading mode updated",
-  mode: TRADING_MODE,
-  tradingModeLocked,
-  autoTradingEnabled,
-});
-});
 
 app.post("/mode-lock/on", (req, res) => {
   tradingModeLocked = true;
