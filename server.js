@@ -6898,6 +6898,25 @@ function calculateAiPortfolioManagerDecision(
           portfolioHeat,
         });
 
+  const equity = Number(account?.equity || 0);
+
+  const compoundingState =
+    engineState.capitalCompoundingState || {};
+
+  const maxBotBudget = Number(
+    compoundingState.compoundedBotBudget ||
+      equity * (CONFIG.maxBotExposurePercent / 100)
+  );
+
+  const currentBotExposure =
+    getBotExposure(openBotPositions);
+
+  const remainingBotBudget = Math.max(
+    0,
+    maxBotBudget - currentBotExposure
+  );
+
+
   const rawRecommendedTradeAmount = Number(
     eliteCapital.recommendedTradeAmount || 0
   );
@@ -6906,7 +6925,7 @@ function calculateAiPortfolioManagerDecision(
     Math.min(
       rawRecommendedTradeAmount,
       maxBotBudget,
-      Math.max(0, maxBotBudget - getBotExposure(openBotPositions)),
+      remainingBotBudget,
       Number(account.cash || 0),
       Number(account.buying_power || account.cash || 0)
     ).toFixed(2)
@@ -29793,14 +29812,31 @@ function syncFinalInstitutionalDashboardSignals(finalStockSignals = [], finalCry
     ...cryptoSignalsForDashboard,
   ].filter(Boolean);
 
-  if (!mergedDashboardSignals.length) {
-    return {
-      phase: "56.5_FINAL_INSTITUTIONAL_DASHBOARD_SIGNAL_SYNC",
-      synced: false,
-      reviewedCount: 0,
-      reason: "No finalized signals available for dashboard sync.",
-    };
+if (!mergedDashboardSignals.length) {
+  engineState.finalDashboardSignalSyncState = {
+    phase: "56.5_FINAL_INSTITUTIONAL_DASHBOARD_SIGNAL_SYNC",
+    updatedAt: new Date().toISOString(),
+    synced: false,
+    stockSignalCount: stockSignalsForDashboard.length,
+    cryptoSignalCount: cryptoSignalsForDashboard.length,
+    reviewedCount: 0,
+    topSymbols: [],
+    reason: "No finalized signals available for dashboard sync.",
+  };
+
+  if (!Array.isArray(engineState.finalDashboardSignalSyncHistory)) {
+    engineState.finalDashboardSignalSyncHistory = [];
   }
+
+  engineState.finalDashboardSignalSyncHistory.unshift(
+    engineState.finalDashboardSignalSyncState
+  );
+
+  engineState.finalDashboardSignalSyncHistory =
+    engineState.finalDashboardSignalSyncHistory.slice(0, 200);
+
+  return engineState.finalDashboardSignalSyncState;
+}
 
   if (typeof updateThemeMomentumState === "function") {
     engineState.themeMomentumState =
@@ -30370,10 +30406,13 @@ app.get("/frontend/dashboard", async (req, res) => {
           latestStatus?.institutionalDashboard
             ?.portfolioGovernor || {},
 
-        topSignals:
-          latestStatus
-            ?.phase20AutonomousOrchestration
-            ?.topSignals || [],
+      topSignals:
+        Array.isArray(engineState.lastStockSignals) &&
+          engineState.lastStockSignals.length > 0
+              ? engineState.lastStockSignals
+                 : latestStatus
+                 ?.phase20AutonomousOrchestration
+                 ?.topSignals || [],
 
         topOpportunities:
           latestStatus
