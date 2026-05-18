@@ -10511,6 +10511,26 @@ function calculateCryptoSignalRealismEngine(signal = {}) {
 
   const spreadPercent =
     bid > 0 && ask > 0 ? ((ask - bid) / ask) * 100 : 1;
+
+  const volume = Number(
+    signal.volume ||
+      signal.barVolume ||
+      signal.confirmations?.lastVolume ||
+      0
+  );
+
+  const dollarVolume = Number(
+    signal.dollarVolume ||
+      signal.cryptoDollarVolume ||
+      volume * price ||
+      0
+  );
+
+  const weakCryptoLiquidity =
+    dollarVolume > 0 && dollarVolume < 25000;
+
+  const missingCryptoLiquidity =
+    dollarVolume <= 0;    
  
 const stableBehaviorDetected =
   Math.abs(
@@ -10541,12 +10561,16 @@ const memePenalty =
       ? 10
       : 0;
 
+const liquidityPenalty =
+  missingCryptoLiquidity ? 35 : weakCryptoLiquidity ? 20 : 0;
+
 const cryptoRiskPenalty =
   weakHistoryPenalty +
   spreadPenalty +
   stableBehaviorPenalty +
   memePenalty +
-  noStatPenalty;
+  noStatPenalty +
+  liquidityPenalty;
 
   const realismScore = clampScore(rawScore - cryptoRiskPenalty);
 
@@ -10554,6 +10578,9 @@ const cryptoRiskPenalty =
     realismScore,
     cryptoRiskPenalty,
     spreadPercent: Number(spreadPercent.toFixed(3)),
+    dollarVolume: Number(dollarVolume.toFixed(2)),
+    weakCryptoLiquidity,
+    missingCryptoLiquidity,    
     memeOrUltraSpeculative,
     cryptoRealismReason:
       `Crypto realism ${realismScore}/100 • ` +
@@ -15764,10 +15791,18 @@ function calculateProfitVelocityGovernor(stockSignals = [], cryptoSignals = []) 
         globalRiskOffScore * 0.1
     );
 
+    const eliteVelocityCandidate =
+      baseScore >= CONFIG.minScoreToBuy &&
+      (
+        Number(signal.runnerScore || signal.explosiveRunnerScore || 0) >= 75 ||
+        Number(signal.institutionalBrainScore || signal.fullInstitutionalAiBrain?.dynamicConvictionScore || 0) >= 75 ||
+        Number(signal.executionConfidence || signal.institutionalExecutionPlan?.executionConfidence || 0) >= 70
+      );
+
     const action =
-      velocityMode === "SLOW_PROFIT_VELOCITY"
+      velocityMode === "SLOW_PROFIT_VELOCITY" && !eliteVelocityCandidate
         ? "REDUCE_TRADE_SPEED"
-        : finalVelocityScore >= 88
+        : finalVelocityScore >= 88 || eliteVelocityCandidate
         ? "PRIORITIZE_FAST_COMPOUNDING"
         : finalVelocityScore >= 74
         ? "ALLOW_CONTROLLED_ACCELERATION"
@@ -27566,14 +27601,25 @@ for (const signal of allSignalsForAnalytics) {
     signal.cryptoRiskPenalty = cryptoRealism.cryptoRiskPenalty;
     signal.cryptoRealismReason = cryptoRealism.cryptoRealismReason;
 
+    const cryptoLiquidityPass =
+      cryptoRealism.missingCryptoLiquidity !== true &&
+      Number(cryptoRealism.dollarVolume || 0) >= 25000;
+
     signal.qualifiedToBuy =
       signal.qualifiedToBuy === true &&
+      cryptoLiquidityPass &&
       Number(signal.score || 0) >=
         Number(
           engineState.selfOptimizationState?.adaptiveMinScoreToBuy ||
             CONFIG.minScoreToBuy ||
             70
         );
+
+    if (!cryptoLiquidityPass) {
+      signal.autoTradeApproved = false;
+      signal.approved = false;
+      signal.decisionLevel = "Blocked By Crypto Liquidity Realism";
+    }
   }
 }
 
@@ -28563,7 +28609,33 @@ engineState.analyticsSnapshots =
           engineState.marketRegime || detectMarketRegime(stockSignals)
         );
 
+        const penaltyCompressionApproval =
+        signal.penaltyCompression?.shouldRestoreApproval === true;
+
+      const protectedPenaltyCompressionDecision =
+        penaltyCompressionApproval
+          ? {
+              autoTradeApproved: signal.autoTradeApproved,
+              approved: signal.approved,
+              decisionLevel: signal.decisionLevel,
+              portfolioAction: signal.portfolioAction,
+              aiPortfolioAction: signal.aiPortfolioAction,
+              allocationMultiplier: signal.allocationMultiplier,
+            }
+          : null;
+
       Object.assign(signal, refreshedPortfolioManager);
+
+      if (protectedPenaltyCompressionDecision) {
+        Object.assign(signal, protectedPenaltyCompressionDecision);
+
+        signal.finalApprovalProtection = {
+          phase: "58_FINAL_APPROVAL_RECONCILIATION",
+          protected: true,
+          reason:
+            "Penalty compression restored approval; later portfolio refresh was not allowed to overwrite it.",
+        };
+      }
     }
 
     engineState.lastSignals = signals;
