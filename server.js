@@ -9735,18 +9735,52 @@ function calculateAutonomousPortfolioGovernor(
       (sectorSaturationRisk ? 35 : 75) * 0.1
   );
 
+const bestCandidate = candidates
+  .slice()
+  .sort((a, b) => Number(b.score || 0) - Number(a.score || 0))[0] || {};
+
+const bestCandidateScore = Number(bestCandidate.score || 0);
+const bestInstitutionalScore = Number(
+  bestCandidate.institutionalScore ||
+    bestCandidate.aiConfidence ||
+    0
+);
+const bestRunnerScore = Number(
+  bestCandidate.runnerScore ||
+    bestCandidate.explosiveRunnerScore ||
+    0
+);
+const bestExecutionConfidence = Number(
+  bestCandidate.executionConfidence ||
+    bestCandidate.institutionalExecutionPlan?.executionConfidence ||
+    0
+);
+
+const eliteDeploymentCandidate =
+  bestCandidateScore >= CONFIG.minScoreToBuy &&
+  bestInstitutionalScore >= 70 &&
+  (
+    bestRunnerScore >= 70 ||
+    bestExecutionConfidence >= 65 ||
+    bestCandidate.qualifiedToBuy === true
+  );
+
 let capitalThrottleMultiplier =
   macroRisk?.shouldBlockNewTrades || crashProtection?.shouldBlockNewTrades
     ? 0.25
     : governorScore >= 85
     ? 1
     : governorScore >= 70
-    ? 0.75
+    ? 0.85
     : governorScore >= 55
-    ? 0.5
+    ? eliteDeploymentCandidate
+      ? 0.75
+      : 0.6
     : governorScore >= 40
-    ? 0.25
-    : 0.15;
+    ? eliteDeploymentCandidate
+      ? 0.55
+      : 0.35
+    : 0.2;
 
 
 const governorMode =
@@ -9794,11 +9828,28 @@ capitalThrottleMultiplier *=
       parliamentPenalty
   );
 
+const lowStressCapitalRelease =
+  Number(engineState.marketStressLevel || 0) <= 20 &&
+  shouldBlockNewTrades === false &&
+  eliteDeploymentCandidate === true;
+
+if (lowStressCapitalRelease) {
+  capitalThrottleMultiplier = Math.max(
+    capitalThrottleMultiplier,
+    0.8
+  );
+}
+
 capitalThrottleMultiplier = Math.max(
-  0.35,
+  macroRisk?.shouldBlockNewTrades || crashProtection?.shouldBlockNewTrades
+    ? 0.25
+    : eliteDeploymentCandidate
+    ? 0.55
+    : 0.35,
   Math.min(capitalThrottleMultiplier, 1)
 );
-  
+
+
   return {
     updatedAt: new Date().toISOString(),
     governorMode,
@@ -9814,11 +9865,17 @@ capitalThrottleMultiplier = Math.max(
     volatilityBudgetScore: Number(volatilityBudgetScore.toFixed(2)),
     averageCandidateScore: Number(averageCandidateScore.toFixed(2)),
     sectorSaturationRisk,
+    bestCandidateSymbol: bestCandidate.symbol || null,
+    bestCandidateScore,
+    eliteDeploymentCandidate,
+    lowStressCapitalRelease,    
     topSector,
     sectorExposure,
     governorReason:
       `${governorMode} • Governor ${governorScore.toFixed(0)}/100 • ` +
-      `Throttle x${capitalThrottleMultiplier}`,
+      `Throttle x${capitalThrottleMultiplier}` +
+      `${eliteDeploymentCandidate ? " • Elite deployment release active" : ""}` +
+      `${lowStressCapitalRelease ? " • Low-stress capital release" : ""}`,
   };
 }
 
