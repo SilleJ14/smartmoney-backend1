@@ -30161,8 +30161,34 @@ function buildInstitutionalDashboardPayload() {
 // FRONTEND CLEAN API ENDPOINTS
 // ================================
 
+function getLatestFrontendStatusSnapshot() {
+  return {
+    account: engineState.cachedAccount || {},
+    positions: engineState.cachedPositions || [],
+    risk: {
+      maxBotExposurePercent: CONFIG.maxBotExposurePercent,
+      maxBotBudget:
+        Number(engineState.cachedAccount?.equity || 0) *
+        (CONFIG.maxBotExposurePercent / 100),
+      currentBotExposure: getBotExposure(
+        engineState.cachedPositions || []
+      ),
+      currentEquity: Number(engineState.cachedAccount?.equity || 0),
+      currentCash: Number(engineState.cachedAccount?.cash || 0),
+    },
+    institutionalDashboard: buildInstitutionalDashboardPayload(),
+    autonomousTradingSystem:
+      engineState.autonomousTradingSystemState || {},
+    phase20AutonomousOrchestration:
+      engineState.phase20AutonomousOrchestrationState || {},
+    phase21AutonomousBrain:
+      engineState.phase21AutonomousBrainState || {},
+  };
+}
+
 app.get("/frontend/portfolio", async (req, res) => {
   try {
+    const latestStatus = getLatestFrontendStatusSnapshot();
     const account = latestStatus?.account || {};
     const risk = latestStatus?.risk || {};
     const dashboard = latestStatus?.institutionalDashboard || {};
