@@ -787,6 +787,9 @@ finalDashboardSignalSyncState:
 finalDashboardSignalSyncHistory:
   (engineState.finalDashboardSignalSyncHistory || []).slice(0, 200),
 
+finalDashboardSignalSyncHistory:
+  (engineState.finalDashboardSignalSyncHistory || []).slice(0, 200),
+
 
 pyramidScalingState:
   engineState.pyramidScalingState || null,
@@ -1144,7 +1147,8 @@ engineFreezeCount: 0,
   pyramidAddsBySymbol: {},
   finalDashboardSignalSyncState: null,
   finalDashboardSignalSyncHistory: [],
-
+  phase57EliteOverrideState: null,
+  phase57EliteOverrideHistory: [],
   dailyStartEquity: null,
   dailyPeakEquity: null,
   profitLockFloorEquity: null,
@@ -6820,6 +6824,165 @@ function calculatePortfolioHeatEngine(signal, openBotPositions = []) {
   };
 }
 
+function calculatePhase57EliteOverrideDecision({
+  signal = {},
+  account = {},
+  openBotPositions = [],
+  portfolioHeat = {},
+  marketRegime = {},
+  eliteCapital = {},
+}) {
+  const symbol = normalizeSymbol(signal.symbol);
+
+  const score = Number(signal.score || 0);
+
+  const runnerScore = Number(
+    signal.runnerScore ||
+      signal.explosiveRunnerScore ||
+      signal.explosiveRunnerPrediction?.explosiveRunnerScore ||
+      signal.adaptiveRunnerScore ||
+      0
+  );
+
+  const institutionalBrainScore = Number(
+    signal.institutionalBrainScore ||
+      signal.fullInstitutionalAiBrain?.dynamicConvictionScore ||
+      signal.fullInstitutionalAiBrain?.consensusScore ||
+      signal.aiConfidence ||
+      signal.institutionalScore ||
+      0
+  );
+
+  const executionConfidence = Number(
+    signal.executionConfidence ||
+      signal.institutionalExecutionPlan?.executionConfidence ||
+      0
+  );
+
+  const premarketDominanceScore = Number(
+    signal.premarketDominanceScore ||
+      signal.premarketDominance?.premarketDominanceScore ||
+      signal.premarket?.openingDriveProbability ||
+      0
+  );
+
+  const volumeConfirmationQuality = Number(
+    signal.volumeConfirmationQuality ||
+      signal.confirmations?.volumeSpikeRatio * 20 ||
+      0
+  );
+
+  const statisticalEdgeScore = Number(
+    signal.statisticalEdgeScore ||
+      signal.statisticalScore ||
+      signal.statisticalEdge?.statisticalEdgeScore ||
+      0
+  );
+
+  const liquidityStressScore = Number(
+    signal.liquidityStressScore ||
+      signal.institutionalExecutionPlan?.slippageRiskScore ||
+      0
+  );
+
+  const crashRisk =
+    engineState.marketCrashProtectionState?.shouldBlockNewTrades === true ||
+    engineState.globalRiskOffDefenseState?.shouldBlockNewTrades === true ||
+    Number(engineState.marketStressLevel || 0) >= 85;
+
+  const duplicateSymbolRisk =
+    portfolioHeat.duplicateSymbolRisk === true;
+
+  const highPortfolioHeat =
+    Number(portfolioHeat.portfolioHeatScore || 0) < 25 &&
+    Number(portfolioHeat.totalOpenBotPositions || 0) >=
+      Number(CONFIG.maxStockOpenTrades || 5);
+
+  const eliteSignalQuality =
+    score >= CONFIG.minScoreToBuy &&
+    institutionalBrainScore >= 70 &&
+    runnerScore >= 72 &&
+    executionConfidence >= 65 &&
+    volumeConfirmationQuality >= 75 &&
+    statisticalEdgeScore >= 70 &&
+    signal.confirmations?.fakeBreakout !== true;
+
+  const asymmetricRunnerQuality =
+    score >= 70 &&
+    runnerScore >= 80 &&
+    institutionalBrainScore >= 68 &&
+    premarketDominanceScore >= 60 &&
+    Number(signal.breakoutProbability || 0) >= 75 &&
+    Number(signal.continuationProbability || 0) >= 70;
+
+  const liquidityAcceptable =
+    executionConfidence >= 65 &&
+    liquidityStressScore <= 55;
+
+  const overrideApproved =
+    !crashRisk &&
+    !duplicateSymbolRisk &&
+    liquidityAcceptable &&
+    (eliteSignalQuality || asymmetricRunnerQuality);
+
+  const selectiveAggressionMultiplier =
+    overrideApproved && eliteSignalQuality && asymmetricRunnerQuality
+      ? 1.35
+      : overrideApproved
+      ? 1.18
+      : 1;
+
+  const decisionLevel =
+    overrideApproved && selectiveAggressionMultiplier >= 1.3
+      ? "ELITE_ASYMMETRIC_OVERRIDE"
+      : overrideApproved
+      ? "SELECTIVE_AGGRESSION_OVERRIDE"
+      : highPortfolioHeat
+      ? "BLOCK_PORTFOLIO_HEAT"
+      : crashRisk
+      ? "BLOCK_RISK_OFF"
+      : "NO_ELITE_OVERRIDE";
+
+  const state = {
+    phase: "57.1_INSTITUTIONAL_ELITE_OVERRIDE_SELECTIVE_AGGRESSION",
+    updatedAt: new Date().toISOString(),
+    symbol,
+    score,
+    runnerScore,
+    institutionalBrainScore,
+    executionConfidence,
+    premarketDominanceScore,
+    volumeConfirmationQuality,
+    statisticalEdgeScore,
+    liquidityStressScore,
+    crashRisk,
+    duplicateSymbolRisk,
+    highPortfolioHeat,
+    eliteSignalQuality,
+    asymmetricRunnerQuality,
+    liquidityAcceptable,
+    overrideApproved,
+    selectiveAggressionMultiplier,
+    decisionLevel,
+    reason:
+      `${decisionLevel} • Score ${score}/100 • Runner ${runnerScore}/100 • ` +
+      `Brain ${institutionalBrainScore}/100 • Execution ${executionConfidence}/100 • ` +
+      `Premarket ${premarketDominanceScore}/100 • Volume ${volumeConfirmationQuality}/100`,
+  };
+
+  engineState.phase57EliteOverrideState = state;
+
+  if (!Array.isArray(engineState.phase57EliteOverrideHistory)) {
+    engineState.phase57EliteOverrideHistory = [];
+  }
+
+  engineState.phase57EliteOverrideHistory.unshift(state);
+  engineState.phase57EliteOverrideHistory =
+    engineState.phase57EliteOverrideHistory.slice(0, 200);
+
+  return state;
+}
+
 function calculateAiPortfolioManagerDecision(
   signal,
   account = {},
@@ -6974,6 +7137,16 @@ function calculateAiPortfolioManagerDecision(
       )
     );
 
+  const phase57EliteOverride =
+    calculatePhase57EliteOverrideDecision({
+      signal,
+      account,
+      openBotPositions,
+      portfolioHeat,
+      marketRegime,
+      eliteCapital,
+    });    
+
   const portfolioScore = clampScore(
     portfolioHeat.portfolioHeatScore * 0.55 +
       (100 - marketStress) * 0.2 +
@@ -6999,6 +7172,7 @@ function calculateAiPortfolioManagerDecision(
       eliteHeatOverride ||
       tacticalEliteRunnerOverride ||
       strongSetupOverride ||
+      phase57EliteOverride.overrideApproved ||
       eliteCapital.concentrationTier === "ELITE_CONCENTRATION"
     );
 
@@ -7017,7 +7191,14 @@ function calculateAiPortfolioManagerDecision(
         : 0,
     portfolioHeat,
     marketStress,
-    allocationMultiplier: Number(eliteCapital.concentrationMultiplier || 1),
+     allocationMultiplier: Number(
+      (
+        Number(eliteCapital.concentrationMultiplier || 1) *
+        Number(phase57EliteOverride.selectiveAggressionMultiplier || 1)
+      ).toFixed(2)
+    ),
+    phase57EliteOverride,
+
     eliteCapitalConcentration: eliteCapital,
     concentrationTier: eliteCapital.concentrationTier,
     eliteHeatOverride,
