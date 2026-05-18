@@ -790,6 +790,12 @@ finalDashboardSignalSyncHistory:
 finalDashboardSignalSyncHistory:
   (engineState.finalDashboardSignalSyncHistory || []).slice(0, 200),
 
+phase57EliteOverrideState:
+  engineState.phase57EliteOverrideState || null,
+
+phase57EliteOverrideHistory:
+  (engineState.phase57EliteOverrideHistory || []).slice(0, 200),  
+
 phase572EliteDiscoveryState:
   engineState.phase572EliteDiscoveryState || null,
 
@@ -19162,10 +19168,46 @@ const earlyStrengthProjection =
     explosiveRunnerPrediction,
   });
 
+const portfolioManagerInput = {
+  ...quote,
+
+  score: institutional.institutionalScore,
+  legacyMomentumScore: score,
+
+  momentumScore:
+    institutional.momentumScore || score,
+
+  fundamentalBlendScore:
+    institutional.fundamentalBlendScore || 0,
+
+  reinforcementWeights:
+    institutional.reinforcementWeights ||
+    engineState.reinforcementWeightState?.weights ||
+    {},
+
+  statisticalScore,
+  statisticalEdge,
+  accumulationIntelligence,
+  volatilityCompression,
+  catalystRanking,
+  explosiveRunnerPrediction,
+  explosiveRunnerScore:
+    explosiveRunnerPrediction.explosiveRunnerScore,
+  explosiveRunnerLabel:
+    explosiveRunnerPrediction.runnerLabel,
+  earlyStrengthProjection,
+  earlyProjectionScore:
+    earlyStrengthProjection.earlyProjectionScore,
+  earlyProjectionTier:
+    earlyStrengthProjection.earlyProjectionTier,
+
+  ...institutional,
+};  
+
    const portfolioManager =
   typeof calculateAiPortfolioManagerDecision === "function"
     ? calculateAiPortfolioManagerDecision(
-        institutional,
+        portfolioManagerInput,
         engineState.cachedAccount || {},
         engineState.cachedPositions || [],
         engineState.marketRegime || detectMarketRegime([])
