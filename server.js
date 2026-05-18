@@ -5965,7 +5965,7 @@ function calculatePenaltyCompressionAndEliteOverride(signals = []) {
       isEliteMomentum || isInstitutionalElite || isPremarketElite;
 
     const heatPenaltyActive =
-      portfolioHeatScore <= 25 || sameSectorOpenPositions >= 4;
+      portfolioHeatScore >= 75 || sameSectorOpenPositions >= 4;
 
     const executionPenaltyActive = executionSizeMultiplier <= 0.4;
     const riskPenaltyActive = globalRiskMultiplier <= 0.5;
@@ -7083,7 +7083,7 @@ function calculatePhase57EliteOverrideDecision({
     portfolioHeat.duplicateSymbolRisk === true;
 
   const highPortfolioHeat =
-    Number(portfolioHeat.portfolioHeatScore || 0) < 25 &&
+    Number(portfolioHeat.portfolioHeatScore || 0) >= 75 &&
     Number(portfolioHeat.totalOpenBotPositions || 0) >=
       Number(CONFIG.maxStockOpenTrades || 5);
 
@@ -12829,10 +12829,9 @@ function calculateEliteCapitalConcentration({
   else if (marketStress >= 60) concentrationMultiplier *= 0.65;
   else if (marketStress >= 40) concentrationMultiplier *= 0.85;
 
-  if (portfolioHeatScore < 45 && concentrationTier !== "ELITE_CONCENTRATION") {
+  if (portfolioHeatScore >= 75 && concentrationTier !== "ELITE_CONCENTRATION") {
     concentrationMultiplier *= 0.7;
   }
-
   const maxBotBudget = equity * (CONFIG.maxBotExposurePercent / 100);
   const currentBotExposure = getBotExposure(openBotPositions);
   const availableBotCap = Math.max(0, maxBotBudget - currentBotExposure);
