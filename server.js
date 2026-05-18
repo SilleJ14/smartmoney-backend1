@@ -7525,15 +7525,20 @@ function calculateAiPortfolioManagerDecision(
   const institutionalMinimumScore =
   Number(CONFIG.minScoreToBuy || 65);
 
-    if (Number(score || 0) < institutionalMinimumScore) {
+
+const reconciledMaxBotBudget = maxBotBudget;
+
+const institutionalMinimumScore =
+  Number(CONFIG.minScoreToBuy || 65);
+
+if (Number(score || 0) < institutionalMinimumScore) {
   approved = false;
   recommendedTradeAmount = 0;
   rawRecommendedTradeAmount = 0;
-    }
+}
 
-  const reconciledMaxBotBudget = maxBotBudget;
-  return {
-    approved,
+return {
+  approved,
     autoTradeApproved: approved,
     portfolioAction: approved ? "ALLOW" : "REDUCE_RISK",
     aiPortfolioAction: approved ? "ALLOW" : "REDUCE_RISK",
