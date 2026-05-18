@@ -8459,6 +8459,180 @@ function calculateInstitutionalExecutionPlan(signal = {}, tradeAmount = 0) {
   };
 }
 
+function applySmallCapRunnerExecutionRelaxation(signal = {}, executionPlan = {}) {
+  const assetClass = String(
+    signal.assetClass || signal.asset_class || "stock"
+  ).toLowerCase();
+
+  if (assetClass !== "stock") return executionPlan;
+
+  const score = Number(signal.score || 0);
+
+  const runnerScore = Number(
+    signal.runnerScore ||
+      signal.explosiveRunnerScore ||
+      signal.explosiveRunnerPrediction?.explosiveRunnerScore ||
+      signal.adaptiveRunnerScore ||
+      0
+  );
+
+  const technicalScore = Number(
+    signal.technicalScore ||
+      signal.technicalIntelligence?.technicalScore ||
+      0
+  );
+
+  const statisticalScore = Number(
+    signal.statisticalScore ||
+      signal.statisticalEdgeScore ||
+      signal.statisticalEdge?.statisticalEdgeScore ||
+      0
+  );
+
+  const volumeSpikeRatio = Number(
+    signal.volumeRatio ||
+      signal.relativeVolume ||
+      signal.confirmations?.volumeSpikeRatio ||
+      0
+  );
+
+  const closeNearHighPercent = Number(
+    signal.confirmations?.closeNearHighPercent || 0
+  );
+
+  const pullbackFromHighPercent = Number(
+    signal.confirmations?.pullbackFromHighPercent || 99
+  );
+
+  const breakoutProbability = Number(
+    signal.breakoutProbability || 0
+  );
+
+  const continuationProbability = Number(
+    signal.continuationProbability || 0
+  );
+
+  const dollarVolume = Number(
+    signal.dollarVolume ||
+      executionPlan.dollarVolume ||
+      0
+  );
+
+  const spreadPercent = Number(
+    signal.spreadPercent ||
+      executionPlan.spreadPercent ||
+      0
+  );
+
+  const liquidityStressScore = Number(
+    signal.liquidityStressScore || 0
+  );
+
+  const fakeBreakout =
+    signal.confirmations?.fakeBreakout === true;
+
+  const aboveVwap =
+    signal.confirmations?.aboveVwap === true;
+
+  const marketStress = Number(engineState.marketStressLevel || 0);
+
+  const highQualitySmallCapRunner =
+    score >= 72 &&
+    runnerScore >= 74 &&
+    technicalScore >= 85 &&
+    statisticalScore >= 80 &&
+    volumeSpikeRatio >= 3 &&
+    closeNearHighPercent >= 90 &&
+    pullbackFromHighPercent <= 1.5 &&
+    breakoutProbability >= 85 &&
+    continuationProbability >= 80 &&
+    aboveVwap &&
+    !fakeBreakout;
+
+  const executionRiskAcceptable =
+    dollarVolume >= 10000 &&
+    spreadPercent <= 0.75 &&
+    liquidityStressScore <= 40 &&
+    marketStress < 50;
+
+  const approved =
+    highQualitySmallCapRunner && executionRiskAcceptable;
+
+  if (!approved) {
+    return {
+      ...executionPlan,
+      smallCapRunnerExecutionRelaxation: {
+        phase: "30.1_SMALL_CAP_RUNNER_EXECUTION_RELAXATION",
+        approved: false,
+        reason:
+          "No small-cap execution relaxation; setup or execution risk did not qualify.",
+      },
+    };
+  }
+
+  const relaxedExecutionConfidence = Math.max(
+    Number(executionPlan.executionConfidence || 0),
+    68
+  );
+
+  const relaxedLiquidityScore = Math.max(
+    Number(executionPlan.liquidityScore || 0),
+    55
+  );
+
+  const relaxedSlippageRiskScore = Math.min(
+    Number(executionPlan.slippageRiskScore || 100),
+    25
+  );
+
+  const relaxedExecutionSizeMultiplier = Math.max(
+    Number(executionPlan.executionSizeMultiplier || 0),
+    0.55
+  );
+
+  return {
+    ...executionPlan,
+    executionMode: "SMALL_CAP_RUNNER_PROBE_EXECUTION",
+    liquidityScore: relaxedLiquidityScore,
+    slippageRiskScore: relaxedSlippageRiskScore,
+    executionConfidence: relaxedExecutionConfidence,
+    shouldReduceSize: true,
+    executionSizeMultiplier: relaxedExecutionSizeMultiplier,
+    executionRiskPenalty: 0,
+    executionQualityBoost: 3,
+    rawExecutionMultiplier: Math.max(
+      Number(executionPlan.rawExecutionMultiplier || 0),
+      0.55
+    ),
+    stealthExecutionRouting: true,
+    sliceCount: Math.max(Number(executionPlan.sliceCount || 1), 2),
+    smallCapRunnerExecutionRelaxation: {
+      phase: "30.1_SMALL_CAP_RUNNER_EXECUTION_RELAXATION",
+      approved: true,
+      score,
+      runnerScore,
+      technicalScore,
+      statisticalScore,
+      volumeSpikeRatio,
+      closeNearHighPercent,
+      pullbackFromHighPercent,
+      breakoutProbability,
+      continuationProbability,
+      dollarVolume,
+      spreadPercent,
+      relaxedExecutionConfidence,
+      relaxedLiquidityScore,
+      relaxedSlippageRiskScore,
+      relaxedExecutionSizeMultiplier,
+      reason:
+        "SMALL_CAP_RUNNER_PROBE_APPROVED • Elite runner metrics justify controlled probe execution.",
+    },
+    reason:
+      `SMALL_CAP_RUNNER_PROBE_EXECUTION • Confidence ${relaxedExecutionConfidence}/100 • ` +
+      `Liquidity ${relaxedLiquidityScore}/100 • RVOL ${volumeSpikeRatio}x • Controlled probe only`,
+  };
+}
+
 function calculatePhase15AutonomousExecutionDominance(signal = {}, tradeAmount = 0) {
   const symbol = normalizeSymbol(signal.symbol);
 
@@ -8540,9 +8714,13 @@ function calculatePhase15AutonomousExecutionDominance(signal = {}, tradeAmount =
       ? 20000
       : 0;
 
+  const smallCapRunnerProbeApproved =
+    executionPlan.smallCapRunnerExecutionRelaxation?.approved === true;
+
   const blockExecution =
     executionMode === "AVOID_BAD_EXECUTION" &&
-    Number(signal.score || 0) < 88;
+    Number(signal.score || 0) < 88 &&
+    !smallCapRunnerProbeApproved;
 
   return {
     phase: "15_AUTONOMOUS_EXECUTION_DOMINANCE",
@@ -19541,16 +19719,22 @@ qualifiedToBuy:
     const executionPlan =
       calculateInstitutionalExecutionPlan(signal, 0);
 
-    signal.institutionalExecutionPlan = executionPlan;
-    signal.executionConfidence =
-      executionPlan.executionConfidence;
+    const relaxedExecutionPlan =
+      applySmallCapRunnerExecutionRelaxation(
+        signal,
+        executionPlan
+      );
 
-    if (executionPlan.executionMode === "AVOID_WEAK_EXECUTION") {
+    signal.institutionalExecutionPlan = relaxedExecutionPlan;
+    signal.executionConfidence =
+      relaxedExecutionPlan.executionConfidence;
+
+    if (relaxedExecutionPlan.executionMode === "AVOID_WEAK_EXECUTION") {
       signal.score = clampScore(Number(signal.score || 0) - 6);
       signal.executionPenalty = 6;
     }
 
-    if (executionPlan.executionConfidence >= 75) {
+    if (relaxedExecutionPlan.executionConfidence >= 68) {
       signal.score = clampScore(Number(signal.score || 0) + 3);
       signal.executionQualityBoost = 3;
     }
