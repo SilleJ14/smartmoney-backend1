@@ -12964,19 +12964,33 @@ function calculateEliteCapitalConcentration({
   let concentrationTier = "NORMAL";
   let concentrationMultiplier = 1;
 
-  if (eliteScore >= 92) {
+  if (eliteScore >= 90) {
     concentrationTier = "ELITE_CONCENTRATION";
-    concentrationMultiplier = Number(CONFIG.eliteConcentrationMaxMultiplier || 1.75);
+    concentrationMultiplier = 2.4;
   } else if (eliteScore >= 85) {
     concentrationTier = "HIGH_CONVICTION";
-    concentrationMultiplier = 1.35;
-  } else if (eliteScore >= 75) {
+    concentrationMultiplier = 2.1;
+  } else if (eliteScore >= 80) {
     concentrationTier = "QUALITY_SETUP";
-    concentrationMultiplier = 1.1;
-  } else if (eliteScore < 65) {
+    concentrationMultiplier = 1.8;
+  } else if (eliteScore >= 75) {
+    concentrationTier = "STRONG_SETUP";
+    concentrationMultiplier = 1.5;
+  } else if (eliteScore >= 70) {
+    concentrationTier = "GOOD_SETUP";
+    concentrationMultiplier = 1.25;
+  } else if (eliteScore >= 60) {
+    concentrationTier = "NORMAL";
+    concentrationMultiplier = 1;
+  } else if (eliteScore >= 50) {
     concentrationTier = "LOW_CONVICTION";
-    concentrationMultiplier = 0.55;
+    concentrationMultiplier = 0.85;
+  } else {
+    concentrationTier = "LOW_CONVICTION";
+    concentrationMultiplier = 0.7;
   }
+
+
   const sectorDomination =
     calculateSectorDominationAllocation(signal);
 
@@ -12995,13 +13009,14 @@ function calculateEliteCapitalConcentration({
     concentrationMultiplier = 0;
   }  
 
-  if (marketStress >= 75) concentrationMultiplier *= 0.45;
-  else if (marketStress >= 60) concentrationMultiplier *= 0.65;
-  else if (marketStress >= 40) concentrationMultiplier *= 0.85;
+  if (marketStress >= 85) concentrationMultiplier *= 0.7;
+  else if (marketStress >= 70) concentrationMultiplier *= 0.82;
+  else if (marketStress >= 55) concentrationMultiplier *= 0.9;
 
-  if (portfolioHeatScore >= 75 && concentrationTier !== "ELITE_CONCENTRATION") {
-    concentrationMultiplier *= 0.7;
+  if (portfolioHeatScore >= 90 && concentrationTier !== "ELITE_CONCENTRATION") {
+    concentrationMultiplier *= 0.9;
   }
+  
   const maxBotBudget = equity * (CONFIG.maxBotExposurePercent / 100);
   const currentBotExposure = getBotExposure(openBotPositions);
   const availableBotCap = Math.max(0, maxBotBudget - currentBotExposure);
