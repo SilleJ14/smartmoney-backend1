@@ -790,6 +790,11 @@ finalDashboardSignalSyncHistory:
 finalDashboardSignalSyncHistory:
   (engineState.finalDashboardSignalSyncHistory || []).slice(0, 200),
 
+phase572EliteDiscoveryState:
+  engineState.phase572EliteDiscoveryState || null,
+
+phase572EliteDiscoveryHistory:
+  (engineState.phase572EliteDiscoveryHistory || []).slice(0, 200),  
 
 pyramidScalingState:
   engineState.pyramidScalingState || null,
@@ -1149,6 +1154,8 @@ engineFreezeCount: 0,
   finalDashboardSignalSyncHistory: [],
   phase57EliteOverrideState: null,
   phase57EliteOverrideHistory: [],
+  phase572EliteDiscoveryState: null,
+  phase572EliteDiscoveryHistory: [],
   dailyStartEquity: null,
   dailyPeakEquity: null,
   profitLockFloorEquity: null,
@@ -6824,6 +6831,180 @@ function calculatePortfolioHeatEngine(signal, openBotPositions = []) {
   };
 }
 
+function calculatePhase572EliteDiscovery(signal = {}) {
+  const symbol = normalizeSymbol(signal.symbol);
+
+  const relativeVolume = Number(
+    signal.confirmations?.volumeSpikeRatio || 0
+  );
+
+  const closeNearHighPercent = Number(
+    signal.confirmations?.closeNearHighPercent || 0
+  );
+
+  const pullbackFromHighPercent = Number(
+    signal.confirmations?.pullbackFromHighPercent || 100
+  );
+
+  const breakoutProbability = Number(
+    signal.breakoutProbability || 0
+  );
+
+  const continuationProbability = Number(
+    signal.continuationProbability || 0
+  );
+
+  const openingDriveProbability = Number(
+    signal.premarket?.openingDriveProbability ||
+      signal.premarketDominance?.openingDriveProbability ||
+      0
+  );
+
+  const floatRotationScore = Number(
+    signal.floatRotation?.floatRotationScore ||
+      signal.premarket?.floatRotation?.floatRotationScore ||
+      0
+  );
+
+  const squeezeProbability = Number(
+    signal.floatRotation?.squeezeProbability ||
+      signal.premarket?.floatRotation?.squeezeProbability ||
+      0
+  );
+
+  const accumulationScore = Number(
+    signal.accumulationIntelligence?.accumulationScore ||
+      0
+  );
+
+  const multiDayAccumulationScore = Number(
+    signal.multiDayAccumulationScore || 0
+  );
+
+  const volumeConfirmationQuality = Number(
+    signal.volumeConfirmationQuality || 0
+  );
+
+  const trendPersistence = Number(
+    signal.statisticalEdge?.trendPersistenceScore || 0
+  );
+
+  const statisticalEdgeScore = Number(
+    signal.statisticalEdge?.statisticalEdgeScore ||
+      signal.statisticalEdgeScore ||
+      0
+  );
+
+  const stealthAccumulationScore =
+    accumulationScore >= 65 &&
+    multiDayAccumulationScore >= 40
+      ? 85
+      : accumulationScore >= 55
+      ? 65
+      : 35;
+
+  const squeezeSetupScore =
+    squeezeProbability >= 75 &&
+    floatRotationScore >= 70
+      ? 90
+      : squeezeProbability >= 60
+      ? 70
+      : 35;
+
+  const continuationStrength =
+    continuationProbability >= 75 &&
+    breakoutProbability >= 70
+      ? 90
+      : continuationProbability >= 60
+      ? 70
+      : 30;
+
+  const openingDriveStrength =
+    openingDriveProbability >= 75
+      ? 90
+      : openingDriveProbability >= 60
+      ? 70
+      : 35;
+
+  const volumeExpansionStrength =
+    relativeVolume >= 5 &&
+    volumeConfirmationQuality >= 85
+      ? 95
+      : relativeVolume >= 3
+      ? 75
+      : 40;
+
+  const trendQuality =
+    trendPersistence >= 65 &&
+    closeNearHighPercent >= 70 &&
+    pullbackFromHighPercent <= 15
+      ? 90
+      : closeNearHighPercent >= 50
+      ? 70
+      : 35;
+
+  const eliteDiscoveryScore = Math.round(
+    stealthAccumulationScore * 0.18 +
+      squeezeSetupScore * 0.22 +
+      continuationStrength * 0.2 +
+      openingDriveStrength * 0.14 +
+      volumeExpansionStrength * 0.14 +
+      trendQuality * 0.12
+  );
+
+  const eliteDiscoveryTier =
+    eliteDiscoveryScore >= 85
+      ? "ASYMMETRIC_ELITE"
+      : eliteDiscoveryScore >= 72
+      ? "HIGH_POTENTIAL"
+      : eliteDiscoveryScore >= 60
+      ? "EARLY_WATCHLIST"
+      : "NO_DISCOVERY_EDGE";
+
+  const state = {
+    phase: "57.2_ELITE_OPPORTUNITY_DISCOVERY_EXPANSION",
+    updatedAt: new Date().toISOString(),
+    symbol,
+    relativeVolume,
+    breakoutProbability,
+    continuationProbability,
+    openingDriveProbability,
+    floatRotationScore,
+    squeezeProbability,
+    accumulationScore,
+    multiDayAccumulationScore,
+    volumeConfirmationQuality,
+    trendPersistence,
+    statisticalEdgeScore,
+    stealthAccumulationScore,
+    squeezeSetupScore,
+    continuationStrength,
+    openingDriveStrength,
+    volumeExpansionStrength,
+    trendQuality,
+    eliteDiscoveryScore,
+    eliteDiscoveryTier,
+    reason:
+      `${eliteDiscoveryTier} • Discovery ${eliteDiscoveryScore}/100 • ` +
+      `RVOL ${relativeVolume}x • Squeeze ${squeezeProbability}/100 • ` +
+      `Continuation ${continuationProbability}/100`,
+  };
+
+  engineState.phase572EliteDiscoveryState = state;
+
+  if (!Array.isArray(engineState.phase572EliteDiscoveryHistory)) {
+    engineState.phase572EliteDiscoveryHistory = [];
+  }
+
+  engineState.phase572EliteDiscoveryHistory.unshift(state);
+
+  engineState.phase572EliteDiscoveryHistory =
+    engineState.phase572EliteDiscoveryHistory.slice(0, 200);
+
+  return state;
+}
+
+
 function calculatePhase57EliteOverrideDecision({
   signal = {},
   account = {},
@@ -7137,6 +7318,9 @@ function calculateAiPortfolioManagerDecision(
       )
     );
 
+  const phase572EliteDiscovery =
+    calculatePhase572EliteDiscovery(signal);    
+
   const phase57EliteOverride =
     calculatePhase57EliteOverrideDecision({
       signal,
@@ -7173,6 +7357,7 @@ function calculateAiPortfolioManagerDecision(
       tacticalEliteRunnerOverride ||
       strongSetupOverride ||
       phase57EliteOverride.overrideApproved ||
+      phase572EliteDiscovery.eliteDiscoveryScore >= 85 ||
       eliteCapital.concentrationTier === "ELITE_CONCENTRATION"
     );
 
@@ -7198,7 +7383,7 @@ function calculateAiPortfolioManagerDecision(
       ).toFixed(2)
     ),
     phase57EliteOverride,
-
+    phase572EliteDiscovery,
     eliteCapitalConcentration: eliteCapital,
     concentrationTier: eliteCapital.concentrationTier,
     eliteHeatOverride,
