@@ -7002,10 +7002,7 @@ function calculateAiPortfolioManagerDecision(
       eliteCapital.concentrationTier === "ELITE_CONCENTRATION"
     );
 
-  const equity = Number(account.equity || account.cash || 0);
-  const reconciledMaxBotBudget =
-    equity * (CONFIG.maxBotExposurePercent / 100);
-
+  const reconciledMaxBotBudget = maxBotBudget;
   return {
     approved,
     autoTradeApproved: approved,
