@@ -7522,6 +7522,14 @@ function calculateAiPortfolioManagerDecision(
       phase572EliteDiscovery.eliteDiscoveryScore >= 85 ||
       eliteCapital.concentrationTier === "ELITE_CONCENTRATION"
     );
+  const institutionalMinimumScore =
+  Number(CONFIG.minScoreToBuy || 65);
+
+    if (Number(score || 0) < institutionalMinimumScore) {
+  approved = false;
+  recommendedTradeAmount = 0;
+  rawRecommendedTradeAmount = 0;
+    }
 
   const reconciledMaxBotBudget = maxBotBudget;
   return {
@@ -12966,28 +12974,28 @@ function calculateEliteCapitalConcentration({
 
   if (eliteScore >= 90) {
     concentrationTier = "ELITE_CONCENTRATION";
-    concentrationMultiplier = 2.4;
+    concentrationMultiplier = 2.6;
   } else if (eliteScore >= 85) {
     concentrationTier = "HIGH_CONVICTION";
-    concentrationMultiplier = 2.1;
+    concentrationMultiplier = 2.2;
   } else if (eliteScore >= 80) {
     concentrationTier = "QUALITY_SETUP";
-    concentrationMultiplier = 1.8;
+    concentrationMultiplier = 1.9;
   } else if (eliteScore >= 75) {
     concentrationTier = "STRONG_SETUP";
-    concentrationMultiplier = 1.5;
+    concentrationMultiplier = 1.7;
   } else if (eliteScore >= 70) {
     concentrationTier = "GOOD_SETUP";
-    concentrationMultiplier = 1.25;
+    concentrationMultiplier = 1.5;
   } else if (eliteScore >= 60) {
     concentrationTier = "NORMAL";
     concentrationMultiplier = 1;
   } else if (eliteScore >= 50) {
     concentrationTier = "LOW_CONVICTION";
-    concentrationMultiplier = 0.85;
+    concentrationMultiplier = 0.5;
   } else {
     concentrationTier = "LOW_CONVICTION";
-    concentrationMultiplier = 0.7;
+    concentrationMultiplier = 0.3;
   }
 
 
