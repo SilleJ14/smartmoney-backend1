@@ -594,6 +594,55 @@ adaptiveSuppressionBalancerState:
 adaptiveSuppressionBalancerHistory:
   (engineState.adaptiveSuppressionBalancerHistory || []).slice(0, 200),  
 
+phase34AdaptiveAggressionBalancerState:
+  engineState.phase34AdaptiveAggressionBalancerState || null,
+
+phase34AdaptiveAggressionBalancerHistory:
+  (engineState.phase34AdaptiveAggressionBalancerHistory || []).slice(0, 200),
+
+phase38AutonomousCapitalParliamentState:
+  engineState.phase38AutonomousCapitalParliamentState || null,
+
+phase41InstitutionalCompressionState:
+  engineState.phase41InstitutionalCompressionState || null,
+
+phase41InstitutionalCompressionHistory:
+  (engineState.phase41InstitutionalCompressionHistory || []).slice(0, 200),
+  
+  
+phase40RecursiveRealTimeLearningState:
+  engineState.phase40RecursiveRealTimeLearningState || null,
+
+phase40RecursiveRealTimeLearningHistory:
+  (engineState.phase40RecursiveRealTimeLearningHistory || []).slice(0, 200),
+
+phase39MetaStrategyAiState:
+  engineState.phase39MetaStrategyAiState || null,
+
+phase39MetaStrategyAiHistory:
+  (engineState.phase39MetaStrategyAiHistory || []).slice(0, 200),  
+
+phase38AutonomousCapitalParliamentHistory:
+  (engineState.phase38AutonomousCapitalParliamentHistory || []).slice(0, 200),  
+
+phase37SelfBalancingAiEcosystemState:
+  engineState.phase37SelfBalancingAiEcosystemState || null,
+
+phase37SelfBalancingAiEcosystemHistory:
+  (engineState.phase37SelfBalancingAiEcosystemHistory || []).slice(0, 200),  
+
+phase36PredictiveExecutionTimingState:
+  engineState.phase36PredictiveExecutionTimingState || null,
+
+phase36PredictiveExecutionTimingHistory:
+  (engineState.phase36PredictiveExecutionTimingHistory || []).slice(0, 200),
+
+phase35AiGovernanceLayerState:
+  engineState.phase35AiGovernanceLayerState || null,
+
+phase35AiGovernanceLayerHistory:
+  (engineState.phase35AiGovernanceLayerHistory || []).slice(0, 200),
+
 autonomousCapitalPressureState:
   engineState.autonomousCapitalPressureState || null,
 
@@ -606,8 +655,131 @@ eliteCapitalConcentrationState:
 eliteCapitalConcentrationHistory:
   (engineState.eliteCapitalConcentrationHistory || []).slice(0, 200),
 
+phase42CryptoInstitutionalState:
+  engineState.phase42CryptoInstitutionalState || null,
+
+phase42CryptoInstitutionalHistory:
+  (engineState.phase42CryptoInstitutionalHistory || []).slice(0, 200),
+
+cryptoInstitutionalMemory:
+  engineState.cryptoInstitutionalMemory || {},
+
+phase43CryptoCapitalRotationState:
+  engineState.phase43CryptoCapitalRotationState || null,
+
+phase43CryptoCapitalRotationHistory:
+  (engineState.phase43CryptoCapitalRotationHistory || []).slice(0, 200),
+
+cryptoCapitalRotationMemory:
+  engineState.cryptoCapitalRotationMemory || {},
+ 
+  
+phase44CryptoExecutionTimingState:
+  engineState.phase44CryptoExecutionTimingState || null,
+
+phase44CryptoExecutionTimingHistory:
+  (engineState.phase44CryptoExecutionTimingHistory || []).slice(0, 200),
+
+cryptoExecutionTimingMemory:
+  engineState.cryptoExecutionTimingMemory || {},
+ 
+phase45CryptoPositionSizingState:
+  engineState.phase45CryptoPositionSizingState || null,
+
+phase45CryptoPositionSizingHistory:
+  (engineState.phase45CryptoPositionSizingHistory || []).slice(0, 200),
+
+cryptoPositionSizingMemory:
+  engineState.cryptoPositionSizingMemory || {},  
+ 
+phase46CryptoExitParliamentState:
+  engineState.phase46CryptoExitParliamentState || null,
+
+phase46CryptoExitParliamentHistory:
+  (engineState.phase46CryptoExitParliamentHistory || []).slice(0, 200),
+
+cryptoExitParliamentMemory:
+  engineState.cryptoExitParliamentMemory || {},  
+
+phase47CryptoLiquiditySweepState:
+  engineState.phase47CryptoLiquiditySweepState || null,
+
+phase47CryptoLiquiditySweepHistory:
+  (engineState.phase47CryptoLiquiditySweepHistory || []).slice(0, 200),
+
+cryptoLiquiditySweepMemory:
+  engineState.cryptoLiquiditySweepMemory || {},
+
+phase48CrossMarketCorrelationState:
+  engineState.phase48CrossMarketCorrelationState || null,
+
+phase48CrossMarketCorrelationHistory:
+  (engineState.phase48CrossMarketCorrelationHistory || []).slice(0, 200),
+
+crossMarketCorrelationMemory:
+  engineState.crossMarketCorrelationMemory || {},
+
+phase49StablecoinFlowState:
+  engineState.phase49StablecoinFlowState || null,
+
+phase49StablecoinFlowHistory:
+  (engineState.phase49StablecoinFlowHistory || []).slice(0, 200),
+
+stablecoinFlowMemory:
+  engineState.stablecoinFlowMemory || {},
+phase50WhaleSmartMoneyState:
+  engineState.phase50WhaleSmartMoneyState || null,
+
+phase50WhaleSmartMoneyHistory:
+  (engineState.phase50WhaleSmartMoneyHistory || []).slice(0, 200),
+
+whaleSmartMoneyMemory:
+  engineState.whaleSmartMoneyMemory || {},
+
+phase51MultiTimeframeCryptoState:
+  engineState.phase51MultiTimeframeCryptoState || null,
+
+phase51MultiTimeframeCryptoHistory:
+  (engineState.phase51MultiTimeframeCryptoHistory || []).slice(0, 200),
+
+multiTimeframeCryptoMemory:
+  engineState.multiTimeframeCryptoMemory || {},
+
+phase52CryptoStrategySelectorState:
+  engineState.phase52CryptoStrategySelectorState || null,
+
+phase52CryptoStrategySelectorHistory:
+  (engineState.phase52CryptoStrategySelectorHistory || []).slice(0, 200),
+
+cryptoStrategySelectorMemory:
+  engineState.cryptoStrategySelectorMemory || {},  
+
 phase21AutonomousBrainHistory:
   (engineState.phase21AutonomousBrainHistory || []).slice(0, 200),
+
+cryptoReinforcementLearningState:
+  engineState.cryptoReinforcementLearningState || null,
+
+cryptoReinforcementLearningHistory:
+  (engineState.cryptoReinforcementLearningHistory || []).slice(0, 200),
+
+globalRiskOffDefenseState:
+  engineState.globalRiskOffDefenseState || null,
+
+globalRiskOffDefenseHistory:
+  (engineState.globalRiskOffDefenseHistory || []).slice(0, 200),
+ 
+unifiedInstitutionalOrchestratorState:
+  engineState.unifiedInstitutionalOrchestratorState || null,
+
+unifiedInstitutionalOrchestratorHistory:
+  (engineState.unifiedInstitutionalOrchestratorHistory || []).slice(0, 200),  
+
+profitVelocityGovernorState:
+  engineState.profitVelocityGovernorState || null,
+
+profitVelocityGovernorHistory:
+  (engineState.profitVelocityGovernorHistory || []).slice(0, 200),  
 
 pyramidScalingState:
   engineState.pyramidScalingState || null,
@@ -1049,14 +1221,71 @@ crossEngineMemoryState: null,
 crossEngineMemoryHistory: [],
 adaptiveExecutionTimingState: null,
 adaptiveExecutionTimingHistory: [],
+phase42CryptoInstitutionalState: null,
+phase42CryptoInstitutionalHistory: [],
+cryptoInstitutionalMemory: {},
+phase43CryptoCapitalRotationState: null,
+phase43CryptoCapitalRotationHistory: [],
+cryptoCapitalRotationMemory: {},
+phase44CryptoExecutionTimingState: null,
+phase44CryptoExecutionTimingHistory: [],
+cryptoExecutionTimingMemory: {},
+phase45CryptoPositionSizingState: null,
+phase45CryptoPositionSizingHistory: [],
+cryptoPositionSizingMemory: {},
+phase46CryptoExitParliamentState: null,
+phase46CryptoExitParliamentHistory: [],
+cryptoExitParliamentMemory: {},
+phase47CryptoLiquiditySweepState: null,
+phase47CryptoLiquiditySweepHistory: [],
+cryptoLiquiditySweepMemory: {},
+phase48CrossMarketCorrelationState: null,
+phase48CrossMarketCorrelationHistory: [],
+crossMarketCorrelationMemory: {},
+phase49StablecoinFlowState: null,
+phase49StablecoinFlowHistory: [],
+stablecoinFlowMemory: {},
+phase50WhaleSmartMoneyState: null,
+phase50WhaleSmartMoneyHistory: [],
+whaleSmartMoneyMemory: {},
+phase51MultiTimeframeCryptoState: null,
+phase51MultiTimeframeCryptoHistory: [],
+multiTimeframeCryptoMemory: {},
+phase52CryptoStrategySelectorState: null,
+phase52CryptoStrategySelectorHistory: [],
+cryptoStrategySelectorMemory: {},
 phase21AutonomousBrainState: null,
 phase21AutonomousBrainHistory: [],
+cryptoReinforcementLearningState: null,
+cryptoReinforcementLearningHistory: [],
+globalRiskOffDefenseState: null,
+globalRiskOffDefenseHistory: [],
+unifiedInstitutionalOrchestratorState: null,
+unifiedInstitutionalOrchestratorHistory: [],
+profitVelocityGovernorState: null,
+profitVelocityGovernorHistory: [],
 fullInstitutionalAiBrainState: null,
 fullInstitutionalAiBrainHistory: [],
 autonomousMetaStrategyState: null,
 autonomousMetaStrategyHistory: [],
 adaptiveSuppressionBalancerState: null,
 adaptiveSuppressionBalancerHistory: [],
+phase34AdaptiveAggressionBalancerState: null,
+phase34AdaptiveAggressionBalancerHistory: [],
+phase41InstitutionalCompressionState: null,
+phase41InstitutionalCompressionHistory: [],
+phase40RecursiveRealTimeLearningState: null,
+phase40RecursiveRealTimeLearningHistory: [],
+phase39MetaStrategyAiState: null,
+phase39MetaStrategyAiHistory: [],
+phase38AutonomousCapitalParliamentState: null,
+phase38AutonomousCapitalParliamentHistory: [],
+phase37SelfBalancingAiEcosystemState: null,
+phase37SelfBalancingAiEcosystemHistory: [],
+phase36PredictiveExecutionTimingState: null,
+phase36PredictiveExecutionTimingHistory: [],
+phase35AiGovernanceLayerState: null,
+phase35AiGovernanceLayerHistory: [],
 autonomousCapitalPressureState: null,
 autonomousCapitalPressureHistory: [],
 eliteCapitalConcentrationState: null,
@@ -13367,6 +13596,2714 @@ function calculateMarketRegimeDominance(regime = {}, stockSignals = []) {
   return state;
 }
 
+function calculatePhase42CryptoInstitutionalSignal(signal = {}) {
+  const symbol = normalizeSymbol(signal.symbol);
+  const score = Number(signal.score || 0);
+  const current = Number(signal.current || signal.price || 0);
+  const bid = Number(signal.bid || 0);
+  const ask = Number(signal.ask || 0);
+  const percentChange = Number(signal.percentChange || signal.changePercent || 0);
+  const volume = Number(signal.volume || 0);
+  const volumeRatio = Number(
+    signal.volumeRatio ||
+      signal.relativeVolume ||
+      signal.volumeSpikeRatio ||
+      signal.confirmations?.volumeSpikeRatio ||
+      0
+  );
+
+  const spreadPercent =
+    bid > 0 && ask > 0 && current > 0
+      ? ((ask - bid) / current) * 100
+      : 0;
+
+  const isMajorCrypto =
+    symbol.includes("BTC") ||
+    symbol.includes("ETH") ||
+    symbol.includes("SOL");
+
+  const liquidityScore = clampScore(
+    45 +
+      (isMajorCrypto ? 15 : 0) +
+      (volumeRatio >= 1.5 ? 12 : 0) +
+      (volumeRatio >= 3 ? 12 : 0) -
+      (spreadPercent >= 0.35 ? 15 : 0) -
+      (spreadPercent >= 0.75 ? 25 : 0)
+  );
+
+  const momentumScore = clampScore(
+    50 +
+      (percentChange > 0 ? 12 : -8) +
+      (percentChange >= 3 ? 10 : 0) +
+      (percentChange >= 7 ? 8 : 0) -
+      (percentChange <= -4 ? 18 : 0) -
+      (Math.abs(percentChange) >= 18 ? 12 : 0)
+  );
+
+  const cryptoInstitutionalScore = clampScore(
+    score * 0.35 +
+      liquidityScore * 0.35 +
+      momentumScore * 0.3
+  );
+
+  const cryptoRegime =
+    cryptoInstitutionalScore >= 85
+      ? "CRYPTO_INSTITUTIONAL_ACCUMULATION"
+      : cryptoInstitutionalScore >= 72
+      ? "CRYPTO_MOMENTUM_EXPANSION"
+      : cryptoInstitutionalScore >= 60
+      ? "CRYPTO_SELECTIVE"
+      : "CRYPTO_RISK_OFF";
+
+  const cryptoSizingMultiplier =
+    cryptoRegime === "CRYPTO_INSTITUTIONAL_ACCUMULATION"
+      ? 1.18
+      : cryptoRegime === "CRYPTO_MOMENTUM_EXPANSION"
+      ? 1.1
+      : cryptoRegime === "CRYPTO_SELECTIVE"
+      ? 0.95
+      : 0.65;
+
+  const suppressCrypto =
+    cryptoRegime === "CRYPTO_RISK_OFF" ||
+    spreadPercent >= 0.9 ||
+    liquidityScore < 45;
+
+  const scoreBoost =
+    cryptoInstitutionalScore >= 85
+      ? 7
+      : cryptoInstitutionalScore >= 72
+      ? 4
+      : cryptoInstitutionalScore < 45
+      ? -8
+      : 0;
+
+  return {
+    phase: "42_FULL_CRYPTO_INSTITUTIONAL_ARCHITECTURE",
+    updatedAt: new Date().toISOString(),
+    symbol,
+    cryptoRegime,
+    cryptoInstitutionalScore,
+    cryptoLiquidityScore: liquidityScore,
+    cryptoMomentumScore: momentumScore,
+    cryptoSizingMultiplier,
+    suppressCrypto,
+    scoreBoost,
+    spreadPercent: Number(spreadPercent.toFixed(4)),
+    reason:
+      `${cryptoRegime} • Institutional ${cryptoInstitutionalScore}/100 • ` +
+      `Liquidity ${liquidityScore}/100 • Momentum ${momentumScore}/100`,
+  };
+}
+
+function updatePhase42CryptoInstitutionalState(cryptoSignals = []) {
+  const reviewed = cryptoSignals.map((signal) => {
+    const phase42 =
+      signal.phase42CryptoInstitutional ||
+      calculatePhase42CryptoInstitutionalSignal(signal);
+
+    return {
+      symbol: signal.symbol,
+      cryptoRegime: phase42.cryptoRegime,
+      cryptoInstitutionalScore: phase42.cryptoInstitutionalScore,
+      cryptoLiquidityScore: phase42.cryptoLiquidityScore,
+      cryptoMomentumScore: phase42.cryptoMomentumScore,
+      suppressCrypto: phase42.suppressCrypto,
+    };
+  });
+
+  const approved = reviewed.filter((item) => !item.suppressCrypto);
+  const blocked = reviewed.filter((item) => item.suppressCrypto);
+
+  const state = {
+    updatedAt: new Date().toISOString(),
+    phase: "42_FULL_CRYPTO_INSTITUTIONAL_ARCHITECTURE",
+    reviewedCount: reviewed.length,
+    approvedCount: approved.length,
+    blockedCount: blocked.length,
+    topCryptoInstitutionalSetups: approved
+      .sort(
+        (a, b) =>
+          Number(b.cryptoInstitutionalScore || 0) -
+          Number(a.cryptoInstitutionalScore || 0)
+      )
+      .slice(0, 10),
+    blockedCryptoSetups: blocked.slice(0, 10),
+    reason:
+      `Phase 42 reviewed ${reviewed.length} crypto signals • ` +
+      `${approved.length} approved • ${blocked.length} blocked`,
+  };
+
+  engineState.phase42CryptoInstitutionalState = state;
+
+  if (!Array.isArray(engineState.phase42CryptoInstitutionalHistory)) {
+    engineState.phase42CryptoInstitutionalHistory = [];
+  }
+
+  engineState.phase42CryptoInstitutionalHistory.unshift(state);
+  engineState.phase42CryptoInstitutionalHistory =
+    engineState.phase42CryptoInstitutionalHistory.slice(0, 200);
+
+  engineState.cryptoInstitutionalMemory =
+    engineState.cryptoInstitutionalMemory || {};
+
+  for (const item of approved) {
+    engineState.cryptoInstitutionalMemory[normalizeSymbol(item.symbol)] = {
+      ...item,
+      updatedAt: new Date().toISOString(),
+    };
+  }
+
+  saveEngineState("PHASE_42_CRYPTO_INSTITUTIONAL_UPDATED");
+
+  return state;
+}
+
+function calculatePhase43CryptoCapitalRotation(cryptoSignals = []) {
+  const analyzed = Array.isArray(cryptoSignals) ? cryptoSignals : [];
+
+  const approved = analyzed.filter(
+    (signal) =>
+      signal.qualifiedToBuy !== false &&
+      signal.phase42Suppressed !== true
+  );
+
+  const topSignals = approved
+    .map((signal) => {
+      const phase42 = signal.phase42CryptoInstitutional || {};
+      const score = Number(signal.score || 0);
+      const cryptoScore = Number(
+        phase42.cryptoInstitutionalScore ||
+          signal.cryptoInstitutionalScore ||
+          score
+      );
+      const liquidity = Number(
+        phase42.cryptoLiquidityScore ||
+          signal.cryptoLiquidityScore ||
+          50
+      );
+      const momentum = Number(
+        phase42.cryptoMomentumScore ||
+          signal.cryptoMomentumScore ||
+          50
+      );
+
+      const rotationScore = clampScore(
+        score * 0.3 +
+          cryptoScore * 0.35 +
+          liquidity * 0.2 +
+          momentum * 0.15
+      );
+
+      return {
+        symbol: signal.symbol,
+        score,
+        cryptoInstitutionalScore: cryptoScore,
+        cryptoLiquidityScore: liquidity,
+        cryptoMomentumScore: momentum,
+        rotationScore,
+      };
+    })
+    .sort((a, b) => Number(b.rotationScore || 0) - Number(a.rotationScore || 0));
+
+  const averageRotationScore =
+    topSignals.length > 0
+      ? topSignals.reduce(
+          (sum, item) => sum + Number(item.rotationScore || 0),
+          0
+        ) / topSignals.length
+      : 0;
+
+  const eliteCount = topSignals.filter(
+    (item) => Number(item.rotationScore || 0) >= 82
+  ).length;
+
+  const weakCount = analyzed.filter(
+    (signal) =>
+      signal.qualifiedToBuy === false ||
+      signal.phase42Suppressed === true
+  ).length;
+
+  const cryptoCapitalMode =
+    eliteCount >= 2 && averageRotationScore >= 78
+      ? "CRYPTO_AGGRESSIVE_ROTATION"
+      : averageRotationScore >= 68
+      ? "CRYPTO_SELECTIVE_ROTATION"
+      : averageRotationScore >= 55
+      ? "CRYPTO_DEFENSIVE_ROTATION"
+      : "STABLECOIN_DEFENSE_MODE";
+
+  const cryptoCapitalMultiplier =
+    cryptoCapitalMode === "CRYPTO_AGGRESSIVE_ROTATION"
+      ? 1.2
+      : cryptoCapitalMode === "CRYPTO_SELECTIVE_ROTATION"
+      ? 1
+      : cryptoCapitalMode === "CRYPTO_DEFENSIVE_ROTATION"
+      ? 0.65
+      : 0.25;
+
+  const shouldBlockWeakCrypto =
+    cryptoCapitalMode === "STABLECOIN_DEFENSE_MODE";
+
+  const state = {
+    updatedAt: new Date().toISOString(),
+    phase: "43_CRYPTO_CAPITAL_ROTATION_STABLECOIN_DEFENSE",
+    reviewedCount: analyzed.length,
+    approvedCount: approved.length,
+    weakCount,
+    eliteCount,
+    averageRotationScore: Number(averageRotationScore.toFixed(2)),
+    cryptoCapitalMode,
+    cryptoCapitalMultiplier,
+    shouldBlockWeakCrypto,
+    topCryptoRotationCandidates: topSignals.slice(0, 10),
+    reason:
+      `${cryptoCapitalMode} • Avg rotation ${averageRotationScore.toFixed(
+        0
+      )}/100 • Elite ${eliteCount} • Weak ${weakCount}`,
+  };
+
+  engineState.phase43CryptoCapitalRotationState = state;
+
+  if (!Array.isArray(engineState.phase43CryptoCapitalRotationHistory)) {
+    engineState.phase43CryptoCapitalRotationHistory = [];
+  }
+
+  engineState.phase43CryptoCapitalRotationHistory.unshift(state);
+  engineState.phase43CryptoCapitalRotationHistory =
+    engineState.phase43CryptoCapitalRotationHistory.slice(0, 200);
+
+  engineState.cryptoCapitalRotationMemory =
+    engineState.cryptoCapitalRotationMemory || {};
+
+  for (const item of topSignals.slice(0, 10)) {
+    engineState.cryptoCapitalRotationMemory[normalizeSymbol(item.symbol)] = {
+      ...item,
+      updatedAt: state.updatedAt,
+      cryptoCapitalMode,
+    };
+  }
+
+  saveEngineState("PHASE_43_CRYPTO_CAPITAL_ROTATION_UPDATED");
+
+  return state;
+}
+
+function applyPhase43CryptoCapitalRotationToSignals(
+  cryptoSignals = [],
+  phase43State = {}
+) {
+  return cryptoSignals.map((signal) => {
+    const symbol = normalizeSymbol(signal.symbol);
+    const memory =
+      engineState.cryptoCapitalRotationMemory?.[symbol] || {};
+
+    const rotationScore = Number(memory.rotationScore || 0);
+    const multiplier = Number(
+      phase43State.cryptoCapitalMultiplier || 1
+    );
+
+    signal.phase43CryptoCapitalRotation = {
+      phase: "43_CRYPTO_CAPITAL_ROTATION_STABLECOIN_DEFENSE",
+      cryptoCapitalMode:
+        phase43State.cryptoCapitalMode || "UNKNOWN",
+      rotationScore,
+      cryptoCapitalMultiplier: multiplier,
+      shouldBlockWeakCrypto:
+        phase43State.shouldBlockWeakCrypto === true,
+      reason: phase43State.reason || "",
+    };
+
+    signal.cryptoCapitalRotationScore = rotationScore;
+    signal.cryptoCapitalMultiplier = multiplier;
+
+    if (
+      phase43State.shouldBlockWeakCrypto === true &&
+      rotationScore < 65
+    ) {
+      signal.qualifiedToBuy = false;
+      signal.phase43Suppressed = true;
+      signal.phase43SuppressionReason =
+        "Phase 43 stablecoin defense blocked weak crypto setup.";
+    }
+
+    if (rotationScore >= 82 && multiplier > 1) {
+      signal.score = clampScore(Number(signal.score || 0) + 4);
+    }
+
+    if (rotationScore < 50) {
+      signal.score = clampScore(Number(signal.score || 0) - 5);
+    }
+
+    return signal;
+  });
+}
+
+function calculatePhase44CryptoExecutionTiming(signal = {}) {
+  const symbol = normalizeSymbol(signal.symbol);
+  const current = Number(signal.current || signal.price || 0);
+  const bid = Number(signal.bid || 0);
+  const ask = Number(signal.ask || 0);
+  const spreadPercent = Number(
+    signal.spreadPercent ||
+      (bid > 0 && ask > 0 && current > 0
+        ? ((ask - bid) / current) * 100
+        : 0)
+  );
+
+  const volumeSpikeRatio = Number(
+    signal.volumeSpikeRatio ||
+      signal.confirmations?.volumeSpikeRatio ||
+      signal.relativeVolume ||
+      0
+  );
+
+  const dollarVolume = Number(signal.dollarVolume || 0);
+  const percentChange = Number(
+    signal.percentChange || signal.changePercent || 0
+  );
+
+  const spreadScore = clampScore(
+    100 -
+      spreadPercent * 120 -
+      (spreadPercent >= 0.4 ? 18 : 0) -
+      (spreadPercent >= 0.75 ? 30 : 0)
+  );
+
+  const liquidityExecutionScore = clampScore(
+    50 +
+      (volumeSpikeRatio >= 1 ? 10 : 0) +
+      (volumeSpikeRatio >= 2 ? 12 : 0) +
+      (dollarVolume >= 100 ? 8 : 0) +
+      (dollarVolume >= 1000 ? 10 : 0) -
+      (dollarVolume <= 20 ? 18 : 0)
+  );
+
+  const timingScore = clampScore(
+    55 +
+      (percentChange > 0 ? 10 : -4) +
+      (percentChange >= 2 ? 8 : 0) +
+      (percentChange <= -4 ? -14 : 0) -
+      (Math.abs(percentChange) >= 15 ? 16 : 0)
+  );
+
+  const cryptoExecutionScore = clampScore(
+    spreadScore * 0.4 +
+      liquidityExecutionScore * 0.35 +
+      timingScore * 0.25
+  );
+
+  const executionDecision =
+    cryptoExecutionScore >= 82
+      ? "EXECUTE_NOW"
+      : cryptoExecutionScore >= 68
+      ? "EXECUTE_CAREFULLY"
+      : cryptoExecutionScore >= 55
+      ? "WAIT_FOR_BETTER_FILL"
+      : "BLOCK_BAD_CRYPTO_EXECUTION";
+
+  const executionMultiplier =
+    executionDecision === "EXECUTE_NOW"
+      ? 1.08
+      : executionDecision === "EXECUTE_CAREFULLY"
+      ? 0.92
+      : executionDecision === "WAIT_FOR_BETTER_FILL"
+      ? 0.55
+      : 0;
+
+  const blockExecution =
+    executionDecision === "BLOCK_BAD_CRYPTO_EXECUTION" ||
+    spreadPercent >= 1 ||
+    spreadScore < 35;
+
+  return {
+    phase: "44_CRYPTO_EXECUTION_TIMING_SLIPPAGE_DEFENSE",
+    updatedAt: new Date().toISOString(),
+    symbol,
+    cryptoExecutionScore,
+    spreadScore,
+    liquidityExecutionScore,
+    timingScore,
+    spreadPercent: Number(spreadPercent.toFixed(4)),
+    executionDecision,
+    executionMultiplier,
+    blockExecution,
+    reason:
+      `${executionDecision} • Execution ${cryptoExecutionScore}/100 • ` +
+      `Spread ${spreadPercent.toFixed(3)}% • Timing ${timingScore}/100`,
+  };
+}
+
+function updatePhase44CryptoExecutionTimingState(cryptoSignals = []) {
+  const reviewed = cryptoSignals.map((signal) =>
+    calculatePhase44CryptoExecutionTiming(signal)
+  );
+
+  const executable = reviewed.filter((item) => !item.blockExecution);
+  const blocked = reviewed.filter((item) => item.blockExecution);
+
+  const avgExecutionScore =
+    reviewed.length > 0
+      ? reviewed.reduce(
+          (sum, item) => sum + Number(item.cryptoExecutionScore || 0),
+          0
+        ) / reviewed.length
+      : 0;
+
+  const state = {
+    updatedAt: new Date().toISOString(),
+    phase: "44_CRYPTO_EXECUTION_TIMING_SLIPPAGE_DEFENSE",
+    reviewedCount: reviewed.length,
+    executableCount: executable.length,
+    blockedCount: blocked.length,
+    avgExecutionScore: Number(avgExecutionScore.toFixed(2)),
+    topExecutableCrypto: executable
+      .sort(
+        (a, b) =>
+          Number(b.cryptoExecutionScore || 0) -
+          Number(a.cryptoExecutionScore || 0)
+      )
+      .slice(0, 10),
+    blockedCryptoExecution: blocked.slice(0, 10),
+    reason:
+      `Phase 44 reviewed ${reviewed.length} crypto signals • ` +
+      `${executable.length} executable • ${blocked.length} blocked`,
+  };
+
+  engineState.phase44CryptoExecutionTimingState = state;
+
+  if (!Array.isArray(engineState.phase44CryptoExecutionTimingHistory)) {
+    engineState.phase44CryptoExecutionTimingHistory = [];
+  }
+
+  engineState.phase44CryptoExecutionTimingHistory.unshift(state);
+  engineState.phase44CryptoExecutionTimingHistory =
+    engineState.phase44CryptoExecutionTimingHistory.slice(0, 200);
+
+  engineState.cryptoExecutionTimingMemory =
+    engineState.cryptoExecutionTimingMemory || {};
+
+  for (const item of reviewed) {
+    engineState.cryptoExecutionTimingMemory[normalizeSymbol(item.symbol)] = item;
+  }
+
+  saveEngineState("PHASE_44_CRYPTO_EXECUTION_TIMING_UPDATED");
+
+  return state;
+}
+
+function applyPhase44CryptoExecutionTimingToSignals(cryptoSignals = []) {
+  return cryptoSignals.map((signal) => {
+    const phase44 = calculatePhase44CryptoExecutionTiming(signal);
+
+    signal.phase44CryptoExecutionTiming = phase44;
+    signal.cryptoExecutionScore = phase44.cryptoExecutionScore;
+    signal.cryptoExecutionDecision = phase44.executionDecision;
+    signal.cryptoExecutionMultiplier = phase44.executionMultiplier;
+
+    if (phase44.blockExecution) {
+      signal.qualifiedToBuy = false;
+      signal.phase44Suppressed = true;
+      signal.phase44SuppressionReason = phase44.reason;
+    }
+
+    if (phase44.executionDecision === "EXECUTE_NOW") {
+      signal.score = clampScore(Number(signal.score || 0) + 3);
+    }
+
+    if (phase44.executionDecision === "WAIT_FOR_BETTER_FILL") {
+      signal.score = clampScore(Number(signal.score || 0) - 4);
+    }
+
+    return signal;
+  });
+}
+
+function calculatePhase45CryptoPositionSizing(signal = {}) {
+  const symbol = normalizeSymbol(signal.symbol);
+  const score = Number(signal.score || 0);
+  const percentChange = Number(signal.percentChange || signal.changePercent || 0);
+
+  const phase42Score = Number(
+    signal.cryptoInstitutionalScore ||
+      signal.phase42CryptoInstitutional?.cryptoInstitutionalScore ||
+      score
+  );
+
+  const phase43Score = Number(
+    signal.cryptoCapitalRotationScore ||
+      signal.phase43CryptoCapitalRotation?.rotationScore ||
+      phase42Score
+  );
+
+  const phase44Score = Number(
+    signal.cryptoExecutionScore ||
+      signal.phase44CryptoExecutionTiming?.cryptoExecutionScore ||
+      phase43Score
+  );
+
+  const volatilityPenalty =
+    Math.abs(percentChange) >= 20
+      ? 32
+      : Math.abs(percentChange) >= 12
+      ? 20
+      : Math.abs(percentChange) >= 7
+      ? 10
+      : 0;
+
+  const cryptoRiskScore = clampScore(
+    100 -
+      volatilityPenalty -
+      (signal.phase42Suppressed ? 25 : 0) -
+      (signal.phase43Suppressed ? 25 : 0) -
+      (signal.phase44Suppressed ? 30 : 0) -
+      (phase44Score < 55 ? 18 : 0)
+  );
+
+  const sizingScore = clampScore(
+    phase42Score * 0.3 +
+      phase43Score * 0.25 +
+      phase44Score * 0.25 +
+      cryptoRiskScore * 0.2
+  );
+
+  const positionSizeMode =
+    sizingScore >= 86 && cryptoRiskScore >= 75
+      ? "MAX_ELITE_CRYPTO_SIZE"
+      : sizingScore >= 74
+      ? "NORMAL_CRYPTO_SIZE"
+      : sizingScore >= 60
+      ? "REDUCED_CRYPTO_SIZE"
+      : sizingScore >= 45
+      ? "MICRO_CRYPTO_PROBE"
+      : "BLOCK_CRYPTO_POSITION";
+
+  const positionSizeMultiplier =
+    positionSizeMode === "MAX_ELITE_CRYPTO_SIZE"
+      ? 1.15
+      : positionSizeMode === "NORMAL_CRYPTO_SIZE"
+      ? 1
+      : positionSizeMode === "REDUCED_CRYPTO_SIZE"
+      ? 0.65
+      : positionSizeMode === "MICRO_CRYPTO_PROBE"
+      ? 0.3
+      : 0;
+
+  const blockPosition =
+    positionSizeMode === "BLOCK_CRYPTO_POSITION" ||
+    signal.qualifiedToBuy === false ||
+    cryptoRiskScore < 35;
+
+  return {
+    phase: "45_CRYPTO_POSITION_SIZING_VOLATILITY_RISK",
+    updatedAt: new Date().toISOString(),
+    symbol,
+    sizingScore,
+    cryptoRiskScore,
+    positionSizeMode,
+    positionSizeMultiplier,
+    volatilityPenalty,
+    blockPosition,
+    phase42Score,
+    phase43Score,
+    phase44Score,
+    reason:
+      `${positionSizeMode} • Sizing ${sizingScore}/100 • ` +
+      `Risk ${cryptoRiskScore}/100 • Volatility penalty ${volatilityPenalty}`,
+  };
+}
+
+function updatePhase45CryptoPositionSizingState(cryptoSignals = []) {
+  const reviewed = cryptoSignals.map((signal) =>
+    calculatePhase45CryptoPositionSizing(signal)
+  );
+
+  const blocked = reviewed.filter((item) => item.blockPosition);
+  const tradable = reviewed.filter((item) => !item.blockPosition);
+
+  const avgSizingScore =
+    reviewed.length > 0
+      ? reviewed.reduce(
+          (sum, item) => sum + Number(item.sizingScore || 0),
+          0
+        ) / reviewed.length
+      : 0;
+
+  const state = {
+    updatedAt: new Date().toISOString(),
+    phase: "45_CRYPTO_POSITION_SIZING_VOLATILITY_RISK",
+    reviewedCount: reviewed.length,
+    tradableCount: tradable.length,
+    blockedCount: blocked.length,
+    avgSizingScore: Number(avgSizingScore.toFixed(2)),
+    topSizedCryptoSetups: tradable
+      .sort(
+        (a, b) =>
+          Number(b.sizingScore || 0) - Number(a.sizingScore || 0)
+      )
+      .slice(0, 10),
+    blockedCryptoSizing: blocked.slice(0, 10),
+    reason:
+      `Phase 45 reviewed ${reviewed.length} crypto signals • ` +
+      `${tradable.length} sized • ${blocked.length} blocked`,
+  };
+
+  engineState.phase45CryptoPositionSizingState = state;
+
+  if (!Array.isArray(engineState.phase45CryptoPositionSizingHistory)) {
+    engineState.phase45CryptoPositionSizingHistory = [];
+  }
+
+  engineState.phase45CryptoPositionSizingHistory.unshift(state);
+  engineState.phase45CryptoPositionSizingHistory =
+    engineState.phase45CryptoPositionSizingHistory.slice(0, 200);
+
+  engineState.cryptoPositionSizingMemory =
+    engineState.cryptoPositionSizingMemory || {};
+
+  for (const item of reviewed) {
+    engineState.cryptoPositionSizingMemory[normalizeSymbol(item.symbol)] = item;
+  }
+
+  saveEngineState("PHASE_45_CRYPTO_POSITION_SIZING_UPDATED");
+
+  return state;
+}
+
+function applyPhase45CryptoPositionSizingToSignals(cryptoSignals = []) {
+  return cryptoSignals.map((signal) => {
+    const phase45 = calculatePhase45CryptoPositionSizing(signal);
+
+    signal.phase45CryptoPositionSizing = phase45;
+    signal.cryptoPositionSizingScore = phase45.sizingScore;
+    signal.cryptoRiskScore = phase45.cryptoRiskScore;
+    signal.cryptoPositionSizeMode = phase45.positionSizeMode;
+    signal.cryptoPositionSizeMultiplier = phase45.positionSizeMultiplier;
+
+    if (phase45.blockPosition) {
+      signal.qualifiedToBuy = false;
+      signal.phase45Suppressed = true;
+      signal.phase45SuppressionReason = phase45.reason;
+    }
+
+    if (phase45.positionSizeMode === "MAX_ELITE_CRYPTO_SIZE") {
+      signal.score = clampScore(Number(signal.score || 0) + 3);
+    }
+
+    if (
+      phase45.positionSizeMode === "MICRO_CRYPTO_PROBE" ||
+      phase45.positionSizeMode === "REDUCED_CRYPTO_SIZE"
+    ) {
+      signal.score = clampScore(Number(signal.score || 0) - 2);
+    }
+
+    return signal;
+  });
+}
+
+function calculatePhase46CryptoExitParliament(signal = {}) {
+  const symbol = normalizeSymbol(signal.symbol);
+  const score = Number(signal.score || 0);
+  const percentChange = Number(signal.percentChange || signal.changePercent || 0);
+
+  const phase42Score = Number(
+    signal.cryptoInstitutionalScore ||
+      signal.phase42CryptoInstitutional?.cryptoInstitutionalScore ||
+      score
+  );
+
+  const phase43Score = Number(
+    signal.cryptoCapitalRotationScore ||
+      signal.phase43CryptoCapitalRotation?.rotationScore ||
+      phase42Score
+  );
+
+  const phase44Score = Number(
+    signal.cryptoExecutionScore ||
+      signal.phase44CryptoExecutionTiming?.cryptoExecutionScore ||
+      phase43Score
+  );
+
+  const phase45RiskScore = Number(
+    signal.cryptoRiskScore ||
+      signal.phase45CryptoPositionSizing?.cryptoRiskScore ||
+      50
+  );
+
+  const runnerStrength = clampScore(
+    score * 0.25 +
+      phase42Score * 0.25 +
+      phase43Score * 0.2 +
+      phase44Score * 0.15 +
+      phase45RiskScore * 0.15
+  );
+
+  const profitProtectionPressure = clampScore(
+    (percentChange >= 10 ? 28 : 0) +
+      (percentChange >= 18 ? 22 : 0) +
+      (percentChange <= -4 ? 25 : 0) +
+      (percentChange <= -8 ? 25 : 0) +
+      (phase45RiskScore < 50 ? 20 : 0) +
+      (phase44Score < 55 ? 15 : 0)
+  );
+
+  const exitDecision =
+    percentChange <= -10 || phase45RiskScore < 35
+      ? "EMERGENCY_CRYPTO_EXIT"
+      : profitProtectionPressure >= 70
+      ? "PROTECT_CRYPTO_PROFIT"
+      : runnerStrength >= 82 && profitProtectionPressure < 45
+      ? "HOLD_CRYPTO_RUNNER"
+      : runnerStrength >= 68
+      ? "TRAIL_CRYPTO_RUNNER"
+      : "REDUCE_WEAK_CRYPTO";
+
+  const exitUrgency =
+    exitDecision === "EMERGENCY_CRYPTO_EXIT"
+      ? 100
+      : exitDecision === "PROTECT_CRYPTO_PROFIT"
+      ? 80
+      : exitDecision === "REDUCE_WEAK_CRYPTO"
+      ? 65
+      : exitDecision === "TRAIL_CRYPTO_RUNNER"
+      ? 35
+      : 15;
+
+  const shouldExit =
+    exitDecision === "EMERGENCY_CRYPTO_EXIT" ||
+    exitDecision === "PROTECT_CRYPTO_PROFIT" ||
+    exitDecision === "REDUCE_WEAK_CRYPTO";
+
+  return {
+    phase: "46_CRYPTO_EXIT_PARLIAMENT_RUNNER_PROTECTION",
+    updatedAt: new Date().toISOString(),
+    symbol,
+    runnerStrength,
+    profitProtectionPressure,
+    exitDecision,
+    exitUrgency,
+    shouldExit,
+    phase42Score,
+    phase43Score,
+    phase44Score,
+    phase45RiskScore,
+    reason:
+      `${exitDecision} • Runner ${runnerStrength}/100 • ` +
+      `Protection pressure ${profitProtectionPressure}/100 • ` +
+      `Urgency ${exitUrgency}/100`,
+  };
+}
+
+function updatePhase46CryptoExitParliamentState(cryptoSignals = []) {
+  const reviewed = cryptoSignals.map((signal) =>
+    calculatePhase46CryptoExitParliament(signal)
+  );
+
+  const exitCandidates = reviewed.filter((item) => item.shouldExit);
+  const runners = reviewed.filter(
+    (item) =>
+      item.exitDecision === "HOLD_CRYPTO_RUNNER" ||
+      item.exitDecision === "TRAIL_CRYPTO_RUNNER"
+  );
+
+  const avgRunnerStrength =
+    reviewed.length > 0
+      ? reviewed.reduce(
+          (sum, item) => sum + Number(item.runnerStrength || 0),
+          0
+        ) / reviewed.length
+      : 0;
+
+  const state = {
+    updatedAt: new Date().toISOString(),
+    phase: "46_CRYPTO_EXIT_PARLIAMENT_RUNNER_PROTECTION",
+    reviewedCount: reviewed.length,
+    exitCandidateCount: exitCandidates.length,
+    runnerCount: runners.length,
+    avgRunnerStrength: Number(avgRunnerStrength.toFixed(2)),
+    protectedCryptoRunners: runners
+      .sort(
+        (a, b) =>
+          Number(b.runnerStrength || 0) - Number(a.runnerStrength || 0)
+      )
+      .slice(0, 10),
+    cryptoExitCandidates: exitCandidates
+      .sort(
+        (a, b) => Number(b.exitUrgency || 0) - Number(a.exitUrgency || 0)
+      )
+      .slice(0, 10),
+    reason:
+      `Phase 46 reviewed ${reviewed.length} crypto signals • ` +
+      `${runners.length} runners protected • ` +
+      `${exitCandidates.length} exit candidates`,
+  };
+
+  engineState.phase46CryptoExitParliamentState = state;
+
+  if (!Array.isArray(engineState.phase46CryptoExitParliamentHistory)) {
+    engineState.phase46CryptoExitParliamentHistory = [];
+  }
+
+  engineState.phase46CryptoExitParliamentHistory.unshift(state);
+  engineState.phase46CryptoExitParliamentHistory =
+    engineState.phase46CryptoExitParliamentHistory.slice(0, 200);
+
+  engineState.cryptoExitParliamentMemory =
+    engineState.cryptoExitParliamentMemory || {};
+
+  for (const item of reviewed) {
+    engineState.cryptoExitParliamentMemory[normalizeSymbol(item.symbol)] = item;
+  }
+
+  saveEngineState("PHASE_46_CRYPTO_EXIT_PARLIAMENT_UPDATED");
+
+  return state;
+}
+
+function applyPhase46CryptoExitParliamentToSignals(cryptoSignals = []) {
+  return cryptoSignals.map((signal) => {
+    const phase46 = calculatePhase46CryptoExitParliament(signal);
+
+    signal.phase46CryptoExitParliament = phase46;
+    signal.cryptoRunnerStrength = phase46.runnerStrength;
+    signal.cryptoProfitProtectionPressure =
+      phase46.profitProtectionPressure;
+    signal.cryptoExitDecision = phase46.exitDecision;
+    signal.cryptoExitUrgency = phase46.exitUrgency;
+
+    if (phase46.exitDecision === "HOLD_CRYPTO_RUNNER") {
+      signal.score = clampScore(Number(signal.score || 0) + 3);
+      signal.cryptoRunnerProtected = true;
+    }
+
+    if (phase46.exitDecision === "TRAIL_CRYPTO_RUNNER") {
+      signal.cryptoRunnerTrailing = true;
+    }
+
+    if (
+      phase46.exitDecision === "PROTECT_CRYPTO_PROFIT" ||
+      phase46.exitDecision === "REDUCE_WEAK_CRYPTO"
+    ) {
+      signal.score = clampScore(Number(signal.score || 0) - 3);
+      signal.cryptoExitWatch = true;
+    }
+
+    if (phase46.exitDecision === "EMERGENCY_CRYPTO_EXIT") {
+      signal.qualifiedToBuy = false;
+      signal.phase46Suppressed = true;
+      signal.phase46SuppressionReason = phase46.reason;
+    }
+
+    return signal;
+  });
+}
+
+function calculatePhase47CryptoLiquiditySweep(signal = {}) {
+  const symbol = normalizeSymbol(signal.symbol);
+  const score = Number(signal.score || 0);
+  const current = Number(signal.current || signal.price || 0);
+  const high = Number(signal.high || signal.h || current);
+  const low = Number(signal.low || signal.l || current);
+  const open = Number(signal.open || signal.o || current);
+  const percentChange = Number(signal.percentChange || signal.changePercent || 0);
+
+  const volumeSpikeRatio = Number(
+    signal.volumeSpikeRatio ||
+      signal.relativeVolume ||
+      signal.confirmations?.volumeSpikeRatio ||
+      0
+  );
+
+  const rangePercent =
+    current > 0 && high > low ? ((high - low) / current) * 100 : 0;
+
+  const closeNearHighPercent =
+    high > low ? ((current - low) / (high - low)) * 100 : 50;
+
+  const closeNearLowPercent =
+    high > low ? ((high - current) / (high - low)) * 100 : 50;
+
+  const upperWickPercent =
+    high > low ? ((high - Math.max(current, open)) / (high - low)) * 100 : 0;
+
+  const lowerWickPercent =
+    high > low ? ((Math.min(current, open) - low) / (high - low)) * 100 : 0;
+
+  const phase42Score = Number(
+    signal.cryptoInstitutionalScore ||
+      signal.phase42CryptoInstitutional?.cryptoInstitutionalScore ||
+      score
+  );
+
+  const phase44Score = Number(
+    signal.cryptoExecutionScore ||
+      signal.phase44CryptoExecutionTiming?.cryptoExecutionScore ||
+      phase42Score
+  );
+
+  const stopHuntRisk = clampScore(
+    (rangePercent >= 4 ? 18 : 0) +
+      (rangePercent >= 8 ? 22 : 0) +
+      (volumeSpikeRatio >= 2 ? 18 : 0) +
+      (upperWickPercent >= 45 ? 22 : 0) +
+      (lowerWickPercent >= 45 ? 18 : 0) +
+      (Math.abs(percentChange) >= 10 ? 15 : 0) -
+      (phase42Score >= 80 ? 10 : 0)
+  );
+
+  const accumulationSweepScore = clampScore(
+    (lowerWickPercent >= 35 ? 24 : 0) +
+      (closeNearHighPercent >= 65 ? 22 : 0) +
+      (volumeSpikeRatio >= 1.5 ? 18 : 0) +
+      (percentChange >= 0 ? 12 : 0) +
+      (phase42Score >= 75 ? 18 : 0) +
+      (phase44Score >= 68 ? 10 : 0)
+  );
+
+  const distributionSweepScore = clampScore(
+    (upperWickPercent >= 35 ? 24 : 0) +
+      (closeNearLowPercent >= 65 ? 22 : 0) +
+      (volumeSpikeRatio >= 1.5 ? 18 : 0) +
+      (percentChange <= 0 ? 12 : 0) +
+      (phase44Score < 55 ? 14 : 0)
+  );
+
+  const liquiditySweepDecision =
+    distributionSweepScore >= 70 || stopHuntRisk >= 82
+      ? "BLOCK_WHALE_TRAP"
+      : accumulationSweepScore >= 75 && stopHuntRisk < 70
+      ? "ACCUMULATION_SWEEP_CONFIRMED"
+      : stopHuntRisk >= 65
+      ? "WAIT_AFTER_LIQUIDITY_SWEEP"
+      : accumulationSweepScore >= 58
+      ? "CAUTIOUS_SWEEP_ENTRY"
+      : "NO_MAJOR_SWEEP";
+
+  const liquiditySweepScore = clampScore(
+    accumulationSweepScore * 0.45 +
+      (100 - stopHuntRisk) * 0.35 +
+      phase44Score * 0.2 -
+      distributionSweepScore * 0.2
+  );
+
+  const blockLiquidityTrap =
+    liquiditySweepDecision === "BLOCK_WHALE_TRAP" ||
+    distributionSweepScore >= 78;
+
+  return {
+    phase: "47_CRYPTO_LIQUIDITY_SWEEP_INTELLIGENCE",
+    updatedAt: new Date().toISOString(),
+    symbol,
+    liquiditySweepDecision,
+    liquiditySweepScore,
+    stopHuntRisk,
+    accumulationSweepScore,
+    distributionSweepScore,
+    rangePercent: Number(rangePercent.toFixed(4)),
+    closeNearHighPercent: Number(closeNearHighPercent.toFixed(2)),
+    closeNearLowPercent: Number(closeNearLowPercent.toFixed(2)),
+    upperWickPercent: Number(upperWickPercent.toFixed(2)),
+    lowerWickPercent: Number(lowerWickPercent.toFixed(2)),
+    blockLiquidityTrap,
+    reason:
+      `${liquiditySweepDecision} • Sweep ${liquiditySweepScore}/100 • ` +
+      `Stop-hunt risk ${stopHuntRisk}/100 • Accumulation ${accumulationSweepScore}/100`,
+  };
+}
+
+function updatePhase47CryptoLiquiditySweepState(cryptoSignals = []) {
+  const reviewed = cryptoSignals.map((signal) =>
+    calculatePhase47CryptoLiquiditySweep(signal)
+  );
+
+  const blocked = reviewed.filter((item) => item.blockLiquidityTrap);
+  const confirmed = reviewed.filter(
+    (item) =>
+      item.liquiditySweepDecision === "ACCUMULATION_SWEEP_CONFIRMED" ||
+      item.liquiditySweepDecision === "CAUTIOUS_SWEEP_ENTRY"
+  );
+
+  const avgSweepScore =
+    reviewed.length > 0
+      ? reviewed.reduce(
+          (sum, item) => sum + Number(item.liquiditySweepScore || 0),
+          0
+        ) / reviewed.length
+      : 0;
+
+  const state = {
+    updatedAt: new Date().toISOString(),
+    phase: "47_CRYPTO_LIQUIDITY_SWEEP_INTELLIGENCE",
+    reviewedCount: reviewed.length,
+    confirmedSweepCount: confirmed.length,
+    blockedTrapCount: blocked.length,
+    avgSweepScore: Number(avgSweepScore.toFixed(2)),
+    confirmedLiquiditySweeps: confirmed
+      .sort(
+        (a, b) =>
+          Number(b.liquiditySweepScore || 0) -
+          Number(a.liquiditySweepScore || 0)
+      )
+      .slice(0, 10),
+    blockedWhaleTraps: blocked
+      .sort(
+        (a, b) =>
+          Number(b.stopHuntRisk || 0) - Number(a.stopHuntRisk || 0)
+      )
+      .slice(0, 10),
+    reason:
+      `Phase 47 reviewed ${reviewed.length} crypto signals • ` +
+      `${confirmed.length} sweep entries • ${blocked.length} whale traps blocked`,
+  };
+
+  engineState.phase47CryptoLiquiditySweepState = state;
+
+  if (!Array.isArray(engineState.phase47CryptoLiquiditySweepHistory)) {
+    engineState.phase47CryptoLiquiditySweepHistory = [];
+  }
+
+  engineState.phase47CryptoLiquiditySweepHistory.unshift(state);
+  engineState.phase47CryptoLiquiditySweepHistory =
+    engineState.phase47CryptoLiquiditySweepHistory.slice(0, 200);
+
+  engineState.cryptoLiquiditySweepMemory =
+    engineState.cryptoLiquiditySweepMemory || {};
+
+  for (const item of reviewed) {
+    engineState.cryptoLiquiditySweepMemory[normalizeSymbol(item.symbol)] = item;
+  }
+
+  saveEngineState("PHASE_47_CRYPTO_LIQUIDITY_SWEEP_UPDATED");
+
+  return state;
+}
+
+function applyPhase47CryptoLiquiditySweepToSignals(cryptoSignals = []) {
+  return cryptoSignals.map((signal) => {
+    const phase47 = calculatePhase47CryptoLiquiditySweep(signal);
+
+    signal.phase47CryptoLiquiditySweep = phase47;
+    signal.cryptoLiquiditySweepScore = phase47.liquiditySweepScore;
+    signal.cryptoStopHuntRisk = phase47.stopHuntRisk;
+    signal.cryptoLiquiditySweepDecision = phase47.liquiditySweepDecision;
+
+    if (phase47.blockLiquidityTrap) {
+      signal.qualifiedToBuy = false;
+      signal.phase47Suppressed = true;
+      signal.phase47SuppressionReason = phase47.reason;
+      signal.score = clampScore(Number(signal.score || 0) - 8);
+    }
+
+    if (phase47.liquiditySweepDecision === "ACCUMULATION_SWEEP_CONFIRMED") {
+      signal.score = clampScore(Number(signal.score || 0) + 5);
+      signal.cryptoAccumulationSweepConfirmed = true;
+    }
+
+    if (phase47.liquiditySweepDecision === "CAUTIOUS_SWEEP_ENTRY") {
+      signal.score = clampScore(Number(signal.score || 0) + 2);
+      signal.cryptoCautiousSweepEntry = true;
+    }
+
+    if (phase47.liquiditySweepDecision === "WAIT_AFTER_LIQUIDITY_SWEEP") {
+      signal.score = clampScore(Number(signal.score || 0) - 4);
+      signal.cryptoWaitAfterSweep = true;
+    }
+
+    return signal;
+  });
+}
+
+
+function calculatePhase48CrossMarketCorrelation(
+  stockSignals = [],
+  cryptoSignals = []
+) {
+  const stocks = Array.isArray(stockSignals) ? stockSignals : [];
+  const cryptos = Array.isArray(cryptoSignals) ? cryptoSignals : [];
+
+  const stockAverageScore =
+    stocks.length > 0
+      ? stocks.reduce((sum, s) => sum + Number(s.score || 0), 0) /
+        stocks.length
+      : 50;
+
+  const cryptoAverageScore =
+    cryptos.length > 0
+      ? cryptos.reduce((sum, s) => sum + Number(s.score || 0), 0) /
+        cryptos.length
+      : 50;
+
+  const stockMomentum =
+    stocks.length > 0
+      ? stocks.reduce(
+          (sum, s) =>
+            sum + Number(s.percentChange || s.changePercent || 0),
+          0
+        ) / stocks.length
+      : 0;
+
+  const cryptoMomentum =
+    cryptos.length > 0
+      ? cryptos.reduce(
+          (sum, s) =>
+            sum + Number(s.percentChange || s.changePercent || 0),
+          0
+        ) / cryptos.length
+      : 0;
+
+  const marketRegime = engineState.marketRegime || {};
+  const marketRegimeState = String(
+    marketRegime.state || marketRegime.label || "unknown"
+  ).toLowerCase();
+
+  const riskOffRegime =
+    marketRegimeState.includes("defensive") ||
+    marketRegimeState.includes("panic") ||
+    marketRegimeState.includes("bear") ||
+    Number(engineState.marketStressLevel || 0) >= 7;
+
+  const cryptoLeadershipSpread = cryptoAverageScore - stockAverageScore;
+  const momentumSpread = cryptoMomentum - stockMomentum;
+
+  const correlationScore = clampScore(
+    55 +
+      cryptoLeadershipSpread * 0.45 +
+      momentumSpread * 2 +
+      (cryptoAverageScore >= 75 ? 12 : 0) +
+      (stockAverageScore >= 75 ? 6 : 0) -
+      (riskOffRegime ? 18 : 0) -
+      (cryptoMomentum < -3 ? 14 : 0)
+  );
+
+  const crossMarketMode =
+    correlationScore >= 82 && cryptoLeadershipSpread >= 5
+      ? "CRYPTO_LEADERSHIP_RISK_ON"
+      : correlationScore >= 70
+      ? "BALANCED_RISK_ON"
+      : correlationScore >= 55
+      ? "SELECTIVE_CORRELATION"
+      : correlationScore >= 40
+      ? "CORRELATION_DEFENSE"
+      : "GLOBAL_RISK_OFF";
+
+  const crossMarketMultiplier =
+    crossMarketMode === "CRYPTO_LEADERSHIP_RISK_ON"
+      ? 1.15
+      : crossMarketMode === "BALANCED_RISK_ON"
+      ? 1
+      : crossMarketMode === "SELECTIVE_CORRELATION"
+      ? 0.75
+      : crossMarketMode === "CORRELATION_DEFENSE"
+      ? 0.45
+      : 0.2;
+
+  const blockWeakCrypto =
+    crossMarketMode === "GLOBAL_RISK_OFF" ||
+    crossMarketMode === "CORRELATION_DEFENSE";
+
+  const state = {
+    updatedAt: new Date().toISOString(),
+    phase: "48_CROSS_MARKET_CORRELATION_AI",
+    stockSignalCount: stocks.length,
+    cryptoSignalCount: cryptos.length,
+    stockAverageScore: Number(stockAverageScore.toFixed(2)),
+    cryptoAverageScore: Number(cryptoAverageScore.toFixed(2)),
+    stockMomentum: Number(stockMomentum.toFixed(4)),
+    cryptoMomentum: Number(cryptoMomentum.toFixed(4)),
+    cryptoLeadershipSpread: Number(cryptoLeadershipSpread.toFixed(2)),
+    momentumSpread: Number(momentumSpread.toFixed(4)),
+    riskOffRegime,
+    correlationScore: Number(correlationScore.toFixed(2)),
+    crossMarketMode,
+    crossMarketMultiplier,
+    blockWeakCrypto,
+    reason:
+      `${crossMarketMode} • Correlation ${correlationScore.toFixed(
+        0
+      )}/100 • Crypto leadership ${cryptoLeadershipSpread.toFixed(1)} • ` +
+      `Momentum spread ${momentumSpread.toFixed(2)}`,
+  };
+
+  engineState.phase48CrossMarketCorrelationState = state;
+
+  if (!Array.isArray(engineState.phase48CrossMarketCorrelationHistory)) {
+    engineState.phase48CrossMarketCorrelationHistory = [];
+  }
+
+  engineState.phase48CrossMarketCorrelationHistory.unshift(state);
+  engineState.phase48CrossMarketCorrelationHistory =
+    engineState.phase48CrossMarketCorrelationHistory.slice(0, 200);
+
+  engineState.crossMarketCorrelationMemory =
+    engineState.crossMarketCorrelationMemory || {};
+
+  engineState.crossMarketCorrelationMemory.latest = state;
+
+  saveEngineState("PHASE_48_CROSS_MARKET_CORRELATION_UPDATED");
+
+  return state;
+}
+
+function applyPhase48CrossMarketCorrelationToSignals(
+  cryptoSignals = [],
+  phase48State = {}
+) {
+  return cryptoSignals.map((signal) => {
+    const score = Number(signal.score || 0);
+    const cryptoMomentum = Number(
+      signal.percentChange || signal.changePercent || 0
+    );
+
+    const individualCorrelationScore = clampScore(
+      score * 0.5 +
+        Number(phase48State.correlationScore || 50) * 0.35 +
+        (cryptoMomentum > 0 ? 10 : -5) +
+        (signal.phase47Suppressed ? -15 : 0)
+    );
+
+    signal.phase48CrossMarketCorrelation = {
+      phase: "48_CROSS_MARKET_CORRELATION_AI",
+      crossMarketMode: phase48State.crossMarketMode || "UNKNOWN",
+      correlationScore: phase48State.correlationScore || 0,
+      individualCorrelationScore,
+      crossMarketMultiplier:
+        phase48State.crossMarketMultiplier || 1,
+      blockWeakCrypto: phase48State.blockWeakCrypto === true,
+      reason: phase48State.reason || "",
+    };
+
+    signal.crossMarketCorrelationScore = individualCorrelationScore;
+    signal.crossMarketMultiplier =
+      phase48State.crossMarketMultiplier || 1;
+
+    if (
+      phase48State.blockWeakCrypto === true &&
+      individualCorrelationScore < 65
+    ) {
+      signal.qualifiedToBuy = false;
+      signal.phase48Suppressed = true;
+      signal.phase48SuppressionReason =
+        "Phase 48 blocked weak crypto during cross-market risk-off defense.";
+      signal.score = clampScore(Number(signal.score || 0) - 7);
+    }
+
+    if (
+      phase48State.crossMarketMode === "CRYPTO_LEADERSHIP_RISK_ON" &&
+      individualCorrelationScore >= 78
+    ) {
+      signal.score = clampScore(Number(signal.score || 0) + 4);
+      signal.cryptoLeadershipConfirmed = true;
+    }
+
+    if (phase48State.crossMarketMode === "BALANCED_RISK_ON") {
+      signal.score = clampScore(Number(signal.score || 0) + 1);
+    }
+
+    return signal;
+  });
+}
+
+function calculatePhase49StablecoinFlowPressure(
+  cryptoSignals = [],
+  phase48State = {}
+) {
+  const cryptos = Array.isArray(cryptoSignals) ? cryptoSignals : [];
+
+  const avgCryptoScore =
+    cryptos.length > 0
+      ? cryptos.reduce((sum, s) => sum + Number(s.score || 0), 0) /
+        cryptos.length
+      : 50;
+
+  const avgMomentum =
+    cryptos.length > 0
+      ? cryptos.reduce(
+          (sum, s) => sum + Number(s.percentChange || s.changePercent || 0),
+          0
+        ) / cryptos.length
+      : 0;
+
+  const avgExecution =
+    cryptos.length > 0
+      ? cryptos.reduce(
+          (sum, s) => sum + Number(s.cryptoExecutionScore || 50),
+          0
+        ) / cryptos.length
+      : 50;
+
+  const avgSweepRisk =
+    cryptos.length > 0
+      ? cryptos.reduce(
+          (sum, s) => sum + Number(s.cryptoStopHuntRisk || 0),
+          0
+        ) / cryptos.length
+      : 0;
+
+  const suppressedCount = cryptos.filter(
+    (s) =>
+      s.phase42Suppressed ||
+      s.phase43Suppressed ||
+      s.phase44Suppressed ||
+      s.phase45Suppressed ||
+      s.phase46Suppressed ||
+      s.phase47Suppressed ||
+      s.phase48Suppressed
+  ).length;
+
+  const advancingCount = cryptos.filter(
+    (s) => Number(s.percentChange || s.changePercent || 0) > 0
+  ).length;
+
+  const decliningCount = cryptos.filter(
+    (s) => Number(s.percentChange || s.changePercent || 0) < 0
+  ).length;
+
+  const cryptoBreadth =
+    cryptos.length > 0 ? ((advancingCount - decliningCount) / cryptos.length) * 100 : 0;
+
+  const exchangePressureScore = clampScore(
+    50 -
+      avgMomentum * 2 +
+      avgSweepRisk * 0.35 +
+      suppressedCount * 4 -
+      cryptoBreadth * 0.25 -
+      (avgExecution >= 70 ? 8 : 0) +
+      (Number(phase48State.correlationScore || 50) < 50 ? 12 : 0)
+  );
+
+  const stablecoinDemandProxy = clampScore(
+    45 +
+      exchangePressureScore * 0.35 -
+      avgCryptoScore * 0.2 -
+      avgMomentum * 2 +
+      (decliningCount > advancingCount ? 15 : 0) +
+      (Number(phase48State.crossMarketMultiplier || 1) < 0.6 ? 12 : 0)
+  );
+
+  const flowMode =
+    exchangePressureScore >= 78 || stablecoinDemandProxy >= 80
+      ? "STABLECOIN_DEFENSE_ROTATION"
+      : exchangePressureScore >= 62
+      ? "EXCHANGE_PRESSURE_CAUTION"
+      : stablecoinDemandProxy <= 35 && avgMomentum > 0
+      ? "RISK_ON_CRYPTO_FLOW"
+      : "NEUTRAL_STABLECOIN_FLOW";
+
+  const stablecoinDefenseMultiplier =
+    flowMode === "STABLECOIN_DEFENSE_ROTATION"
+      ? 0.25
+      : flowMode === "EXCHANGE_PRESSURE_CAUTION"
+      ? 0.55
+      : flowMode === "RISK_ON_CRYPTO_FLOW"
+      ? 1.08
+      : 0.85;
+
+  const blockWeakCrypto =
+    flowMode === "STABLECOIN_DEFENSE_ROTATION" ||
+    flowMode === "EXCHANGE_PRESSURE_CAUTION";
+
+  const state = {
+    updatedAt: new Date().toISOString(),
+    phase: "49_STABLECOIN_FLOW_EXCHANGE_PRESSURE",
+    cryptoSignalCount: cryptos.length,
+    advancingCount,
+    decliningCount,
+    suppressedCount,
+    avgCryptoScore: Number(avgCryptoScore.toFixed(2)),
+    avgMomentum: Number(avgMomentum.toFixed(4)),
+    avgExecution: Number(avgExecution.toFixed(2)),
+    avgSweepRisk: Number(avgSweepRisk.toFixed(2)),
+    cryptoBreadth: Number(cryptoBreadth.toFixed(2)),
+    exchangePressureScore: Number(exchangePressureScore.toFixed(2)),
+    stablecoinDemandProxy: Number(stablecoinDemandProxy.toFixed(2)),
+    flowMode,
+    stablecoinDefenseMultiplier,
+    blockWeakCrypto,
+    reason:
+      `${flowMode} • Exchange pressure ${exchangePressureScore.toFixed(
+        0
+      )}/100 • Stablecoin demand proxy ${stablecoinDemandProxy.toFixed(
+        0
+      )}/100 • Breadth ${cryptoBreadth.toFixed(1)}`,
+  };
+
+  engineState.phase49StablecoinFlowState = state;
+
+  if (!Array.isArray(engineState.phase49StablecoinFlowHistory)) {
+    engineState.phase49StablecoinFlowHistory = [];
+  }
+
+  engineState.phase49StablecoinFlowHistory.unshift(state);
+  engineState.phase49StablecoinFlowHistory =
+    engineState.phase49StablecoinFlowHistory.slice(0, 200);
+
+  engineState.stablecoinFlowMemory =
+    engineState.stablecoinFlowMemory || {};
+
+  engineState.stablecoinFlowMemory.latest = state;
+
+  saveEngineState("PHASE_49_STABLECOIN_FLOW_UPDATED");
+
+  return state;
+}
+
+function applyPhase49StablecoinFlowToSignals(
+  cryptoSignals = [],
+  phase49State = {}
+) {
+  return cryptoSignals.map((signal) => {
+    const score = Number(signal.score || 0);
+    const momentum = Number(signal.percentChange || signal.changePercent || 0);
+    const executionScore = Number(signal.cryptoExecutionScore || 50);
+    const sweepRisk = Number(signal.cryptoStopHuntRisk || 0);
+
+    const stablecoinFlowSignalScore = clampScore(
+      score * 0.45 +
+        executionScore * 0.25 +
+        Number(phase49State.avgCryptoScore || 50) * 0.15 +
+        (momentum > 0 ? 10 : -8) -
+        sweepRisk * 0.15 -
+        Number(phase49State.exchangePressureScore || 50) * 0.2
+    );
+
+    signal.phase49StablecoinFlow = {
+      phase: "49_STABLECOIN_FLOW_EXCHANGE_PRESSURE",
+      flowMode: phase49State.flowMode || "UNKNOWN",
+      stablecoinFlowSignalScore,
+      exchangePressureScore: phase49State.exchangePressureScore || 0,
+      stablecoinDemandProxy: phase49State.stablecoinDemandProxy || 0,
+      stablecoinDefenseMultiplier:
+        phase49State.stablecoinDefenseMultiplier || 1,
+      blockWeakCrypto: phase49State.blockWeakCrypto === true,
+      reason: phase49State.reason || "",
+    };
+
+    signal.stablecoinFlowSignalScore = stablecoinFlowSignalScore;
+    signal.stablecoinDefenseMultiplier =
+      phase49State.stablecoinDefenseMultiplier || 1;
+
+    if (
+      phase49State.blockWeakCrypto === true &&
+      stablecoinFlowSignalScore < 68
+    ) {
+      signal.qualifiedToBuy = false;
+      signal.phase49Suppressed = true;
+      signal.phase49SuppressionReason =
+        "Phase 49 blocked weak crypto during stablecoin/exchange pressure defense.";
+      signal.score = clampScore(Number(signal.score || 0) - 7);
+    }
+
+    if (
+      phase49State.flowMode === "RISK_ON_CRYPTO_FLOW" &&
+      stablecoinFlowSignalScore >= 75
+    ) {
+      signal.score = clampScore(Number(signal.score || 0) + 4);
+      signal.cryptoRiskOnFlowConfirmed = true;
+    }
+
+    if (phase49State.flowMode === "EXCHANGE_PRESSURE_CAUTION") {
+      signal.score = clampScore(Number(signal.score || 0) - 2);
+      signal.cryptoExchangePressureCaution = true;
+    }
+
+    return signal;
+  });
+}
+
+
+function calculatePhase50WhaleSmartMoney(signal = {}) {
+  const symbol = normalizeSymbol(signal.symbol);
+  const score = Number(signal.score || 0);
+  const percentChange = Number(signal.percentChange || signal.changePercent || 0);
+
+  const volumeSpikeRatio = Number(
+    signal.volumeSpikeRatio ||
+      signal.relativeVolume ||
+      signal.confirmations?.volumeSpikeRatio ||
+      0
+  );
+
+  const phase42Score = Number(
+    signal.cryptoInstitutionalScore ||
+      signal.phase42CryptoInstitutional?.cryptoInstitutionalScore ||
+      score
+  );
+
+  const phase44Score = Number(
+    signal.cryptoExecutionScore ||
+      signal.phase44CryptoExecutionTiming?.cryptoExecutionScore ||
+      50
+  );
+
+  const phase47SweepScore = Number(
+    signal.cryptoLiquiditySweepScore ||
+      signal.phase47CryptoLiquiditySweep?.liquiditySweepScore ||
+      50
+  );
+
+  const stopHuntRisk = Number(
+    signal.cryptoStopHuntRisk ||
+      signal.phase47CryptoLiquiditySweep?.stopHuntRisk ||
+      0
+  );
+
+  const stablecoinFlowScore = Number(
+    signal.stablecoinFlowSignalScore ||
+      signal.phase49StablecoinFlow?.stablecoinFlowSignalScore ||
+      50
+  );
+
+  const accumulationProxy = clampScore(
+    phase42Score * 0.28 +
+      phase47SweepScore * 0.24 +
+      phase44Score * 0.18 +
+      stablecoinFlowScore * 0.15 +
+      (volumeSpikeRatio >= 1.5 ? 10 : 0) +
+      (volumeSpikeRatio >= 3 ? 10 : 0) +
+      (percentChange > 0 ? 8 : -5) -
+      (stopHuntRisk >= 75 ? 12 : 0)
+  );
+
+  const distributionProxy = clampScore(
+    (stopHuntRisk >= 70 ? 25 : 0) +
+      (signal.phase47Suppressed ? 20 : 0) +
+      (signal.phase49Suppressed ? 15 : 0) +
+      (percentChange <= -3 ? 14 : 0) +
+      (percentChange <= -8 ? 18 : 0) +
+      (volumeSpikeRatio >= 3 && percentChange < 0 ? 18 : 0) -
+      (phase42Score >= 80 ? 10 : 0)
+  );
+
+  const whaleSmartMoneyScore = clampScore(
+    accumulationProxy * 0.65 +
+      phase42Score * 0.2 +
+      phase44Score * 0.15 -
+      distributionProxy * 0.35
+  );
+
+  const whaleDecision =
+    distributionProxy >= 75
+      ? "WHALE_DISTRIBUTION_AVOID"
+      : whaleSmartMoneyScore >= 85
+      ? "WHALE_ACCUMULATION_CONFIRMED"
+      : whaleSmartMoneyScore >= 72
+      ? "SMART_MONEY_ACCUMULATION"
+      : whaleSmartMoneyScore >= 58
+      ? "NEUTRAL_WHALE_FLOW"
+      : "WEAK_WHALE_FLOW";
+
+  const blockWhaleTrap =
+    whaleDecision === "WHALE_DISTRIBUTION_AVOID" ||
+    distributionProxy >= 80;
+
+  return {
+    phase: "50_WHALE_WALLET_SMART_MONEY_TRACKING",
+    updatedAt: new Date().toISOString(),
+    symbol,
+    whaleDecision,
+    whaleSmartMoneyScore,
+    accumulationProxy,
+    distributionProxy,
+    volumeSpikeRatio,
+    stopHuntRisk,
+    blockWhaleTrap,
+    reason:
+      `${whaleDecision} • Whale score ${whaleSmartMoneyScore}/100 • ` +
+      `Accumulation ${accumulationProxy}/100 • Distribution ${distributionProxy}/100`,
+  };
+}
+
+function updatePhase50WhaleSmartMoneyState(cryptoSignals = []) {
+  const reviewed = cryptoSignals.map((signal) =>
+    calculatePhase50WhaleSmartMoney(signal)
+  );
+
+  const accumulation = reviewed.filter(
+    (item) =>
+      item.whaleDecision === "WHALE_ACCUMULATION_CONFIRMED" ||
+      item.whaleDecision === "SMART_MONEY_ACCUMULATION"
+  );
+
+  const blocked = reviewed.filter((item) => item.blockWhaleTrap);
+
+  const avgWhaleScore =
+    reviewed.length > 0
+      ? reviewed.reduce(
+          (sum, item) => sum + Number(item.whaleSmartMoneyScore || 0),
+          0
+        ) / reviewed.length
+      : 0;
+
+  const state = {
+    updatedAt: new Date().toISOString(),
+    phase: "50_WHALE_WALLET_SMART_MONEY_TRACKING",
+    reviewedCount: reviewed.length,
+    accumulationCount: accumulation.length,
+    blockedDistributionCount: blocked.length,
+    avgWhaleScore: Number(avgWhaleScore.toFixed(2)),
+    whaleAccumulationSetups: accumulation
+      .sort(
+        (a, b) =>
+          Number(b.whaleSmartMoneyScore || 0) -
+          Number(a.whaleSmartMoneyScore || 0)
+      )
+      .slice(0, 10),
+    whaleDistributionAvoidList: blocked
+      .sort(
+        (a, b) =>
+          Number(b.distributionProxy || 0) -
+          Number(a.distributionProxy || 0)
+      )
+      .slice(0, 10),
+    reason:
+      `Phase 50 reviewed ${reviewed.length} crypto signals • ` +
+      `${accumulation.length} accumulation setups • ` +
+      `${blocked.length} distribution traps blocked`,
+  };
+
+  engineState.phase50WhaleSmartMoneyState = state;
+
+  if (!Array.isArray(engineState.phase50WhaleSmartMoneyHistory)) {
+    engineState.phase50WhaleSmartMoneyHistory = [];
+  }
+
+  engineState.phase50WhaleSmartMoneyHistory.unshift(state);
+  engineState.phase50WhaleSmartMoneyHistory =
+    engineState.phase50WhaleSmartMoneyHistory.slice(0, 200);
+
+  engineState.whaleSmartMoneyMemory =
+    engineState.whaleSmartMoneyMemory || {};
+
+  for (const item of reviewed) {
+    engineState.whaleSmartMoneyMemory[normalizeSymbol(item.symbol)] = item;
+  }
+
+  saveEngineState("PHASE_50_WHALE_SMART_MONEY_UPDATED");
+
+  return state;
+}
+
+function applyPhase50WhaleSmartMoneyToSignals(cryptoSignals = []) {
+  return cryptoSignals.map((signal) => {
+    const phase50 = calculatePhase50WhaleSmartMoney(signal);
+
+    signal.phase50WhaleSmartMoney = phase50;
+    signal.whaleSmartMoneyScore = phase50.whaleSmartMoneyScore;
+    signal.whaleDecision = phase50.whaleDecision;
+    signal.whaleAccumulationProxy = phase50.accumulationProxy;
+    signal.whaleDistributionProxy = phase50.distributionProxy;
+
+    if (phase50.blockWhaleTrap) {
+      signal.qualifiedToBuy = false;
+      signal.phase50Suppressed = true;
+      signal.phase50SuppressionReason = phase50.reason;
+      signal.score = clampScore(Number(signal.score || 0) - 8);
+    }
+
+    if (phase50.whaleDecision === "WHALE_ACCUMULATION_CONFIRMED") {
+      signal.score = clampScore(Number(signal.score || 0) + 6);
+      signal.whaleAccumulationConfirmed = true;
+    }
+
+    if (phase50.whaleDecision === "SMART_MONEY_ACCUMULATION") {
+      signal.score = clampScore(Number(signal.score || 0) + 3);
+      signal.smartMoneyAccumulationConfirmed = true;
+    }
+
+    if (phase50.whaleDecision === "WEAK_WHALE_FLOW") {
+      signal.score = clampScore(Number(signal.score || 0) - 3);
+      signal.weakWhaleFlow = true;
+    }
+
+    return signal;
+  });
+}
+
+
+function calculatePhase51MultiTimeframeCrypto(signal = {}) {
+  const symbol = normalizeSymbol(signal.symbol);
+  const score = Number(signal.score || 0);
+  const percentChange = Number(signal.percentChange || signal.changePercent || 0);
+
+  const shortFrameScore = clampScore(
+    score * 0.45 +
+      Number(signal.cryptoExecutionScore || 50) * 0.3 +
+      (percentChange > 0 ? 12 : -8) +
+      (Math.abs(percentChange) >= 10 ? -8 : 0)
+  );
+
+  const midFrameScore = clampScore(
+    Number(signal.cryptoLiquiditySweepScore || 50) * 0.3 +
+      Number(signal.whaleSmartMoneyScore || 50) * 0.35 +
+      Number(signal.cryptoCapitalRotationScore || 50) * 0.2 +
+      Number(signal.stablecoinFlowSignalScore || 50) * 0.15
+  );
+
+  const longFrameScore = clampScore(
+    Number(signal.cryptoInstitutionalScore || 50) * 0.35 +
+      Number(signal.crossMarketCorrelationScore || 50) * 0.25 +
+      Number(signal.cryptoRiskScore || 50) * 0.2 +
+      Number(signal.cryptoRunnerStrength || 50) * 0.2
+  );
+
+  const timeframeAlignmentScore = clampScore(
+    shortFrameScore * 0.34 +
+      midFrameScore * 0.33 +
+      longFrameScore * 0.33
+  );
+
+  const disagreementPenalty =
+    Math.max(shortFrameScore, midFrameScore, longFrameScore) -
+      Math.min(shortFrameScore, midFrameScore, longFrameScore) >=
+    35
+      ? 15
+      : Math.max(shortFrameScore, midFrameScore, longFrameScore) -
+          Math.min(shortFrameScore, midFrameScore, longFrameScore) >=
+        25
+      ? 8
+      : 0;
+
+  const finalParliamentScore = clampScore(
+    timeframeAlignmentScore - disagreementPenalty
+  );
+
+  const parliamentDecision =
+    finalParliamentScore >= 85
+      ? "FULL_TIMEFRAME_ALIGNMENT"
+      : finalParliamentScore >= 74
+      ? "STRONG_TIMEFRAME_ALIGNMENT"
+      : finalParliamentScore >= 62
+      ? "PARTIAL_TIMEFRAME_ALIGNMENT"
+      : finalParliamentScore >= 48
+      ? "WAIT_FOR_TIMEFRAME_CONFIRMATION"
+      : "BLOCK_TIMEFRAME_CONFLICT";
+
+  const blockTimeframeConflict =
+    parliamentDecision === "BLOCK_TIMEFRAME_CONFLICT" ||
+    (parliamentDecision === "WAIT_FOR_TIMEFRAME_CONFIRMATION" &&
+      signal.qualifiedToBuy === false);
+
+  return {
+    phase: "51_MULTI_TIMEFRAME_CRYPTO_PARLIAMENT",
+    updatedAt: new Date().toISOString(),
+    symbol,
+    shortFrameScore,
+    midFrameScore,
+    longFrameScore,
+    timeframeAlignmentScore,
+    disagreementPenalty,
+    finalParliamentScore,
+    parliamentDecision,
+    blockTimeframeConflict,
+    reason:
+      `${parliamentDecision} • Final ${finalParliamentScore}/100 • ` +
+      `Short ${shortFrameScore}/100 • Mid ${midFrameScore}/100 • Long ${longFrameScore}/100`,
+  };
+}
+
+function updatePhase51MultiTimeframeCryptoState(cryptoSignals = []) {
+  const reviewed = cryptoSignals.map((signal) =>
+    calculatePhase51MultiTimeframeCrypto(signal)
+  );
+
+  const aligned = reviewed.filter(
+    (item) =>
+      item.parliamentDecision === "FULL_TIMEFRAME_ALIGNMENT" ||
+      item.parliamentDecision === "STRONG_TIMEFRAME_ALIGNMENT"
+  );
+
+  const blocked = reviewed.filter((item) => item.blockTimeframeConflict);
+
+  const avgParliamentScore =
+    reviewed.length > 0
+      ? reviewed.reduce(
+          (sum, item) => sum + Number(item.finalParliamentScore || 0),
+          0
+        ) / reviewed.length
+      : 0;
+
+  const state = {
+    updatedAt: new Date().toISOString(),
+    phase: "51_MULTI_TIMEFRAME_CRYPTO_PARLIAMENT",
+    reviewedCount: reviewed.length,
+    alignedCount: aligned.length,
+    blockedConflictCount: blocked.length,
+    avgParliamentScore: Number(avgParliamentScore.toFixed(2)),
+    alignedCryptoSetups: aligned
+      .sort(
+        (a, b) =>
+          Number(b.finalParliamentScore || 0) -
+          Number(a.finalParliamentScore || 0)
+      )
+      .slice(0, 10),
+    blockedTimeframeConflicts: blocked
+      .sort(
+        (a, b) =>
+          Number(b.disagreementPenalty || 0) -
+          Number(a.disagreementPenalty || 0)
+      )
+      .slice(0, 10),
+    reason:
+      `Phase 51 reviewed ${reviewed.length} crypto signals • ` +
+      `${aligned.length} aligned • ${blocked.length} timeframe conflicts blocked`,
+  };
+
+  engineState.phase51MultiTimeframeCryptoState = state;
+
+  if (!Array.isArray(engineState.phase51MultiTimeframeCryptoHistory)) {
+    engineState.phase51MultiTimeframeCryptoHistory = [];
+  }
+
+  engineState.phase51MultiTimeframeCryptoHistory.unshift(state);
+  engineState.phase51MultiTimeframeCryptoHistory =
+    engineState.phase51MultiTimeframeCryptoHistory.slice(0, 200);
+
+  engineState.multiTimeframeCryptoMemory =
+    engineState.multiTimeframeCryptoMemory || {};
+
+  for (const item of reviewed) {
+    engineState.multiTimeframeCryptoMemory[normalizeSymbol(item.symbol)] = item;
+  }
+
+  saveEngineState("PHASE_51_MULTI_TIMEFRAME_CRYPTO_UPDATED");
+
+  return state;
+}
+
+function applyPhase51MultiTimeframeCryptoToSignals(cryptoSignals = []) {
+  return cryptoSignals.map((signal) => {
+    const phase51 = calculatePhase51MultiTimeframeCrypto(signal);
+
+    signal.phase51MultiTimeframeCrypto = phase51;
+    signal.multiTimeframeCryptoScore = phase51.finalParliamentScore;
+    signal.multiTimeframeCryptoDecision = phase51.parliamentDecision;
+    signal.shortFrameCryptoScore = phase51.shortFrameScore;
+    signal.midFrameCryptoScore = phase51.midFrameScore;
+    signal.longFrameCryptoScore = phase51.longFrameScore;
+
+    if (phase51.blockTimeframeConflict) {
+      signal.qualifiedToBuy = false;
+      signal.phase51Suppressed = true;
+      signal.phase51SuppressionReason = phase51.reason;
+      signal.score = clampScore(Number(signal.score || 0) - 8);
+    }
+
+    if (phase51.parliamentDecision === "FULL_TIMEFRAME_ALIGNMENT") {
+      signal.score = clampScore(Number(signal.score || 0) + 6);
+      signal.fullCryptoTimeframeAlignment = true;
+    }
+
+    if (phase51.parliamentDecision === "STRONG_TIMEFRAME_ALIGNMENT") {
+      signal.score = clampScore(Number(signal.score || 0) + 3);
+      signal.strongCryptoTimeframeAlignment = true;
+    }
+
+    if (phase51.parliamentDecision === "WAIT_FOR_TIMEFRAME_CONFIRMATION") {
+      signal.score = clampScore(Number(signal.score || 0) - 3);
+      signal.waitForCryptoTimeframeConfirmation = true;
+    }
+
+    return signal;
+  });
+}
+
+function calculateProfitVelocityGovernor(stockSignals = [], cryptoSignals = []) {
+  const stocks = Array.isArray(stockSignals) ? stockSignals : [];
+  const cryptos = Array.isArray(cryptoSignals) ? cryptoSignals : [];
+  const signals = [...stocks, ...cryptos];
+
+  const account = engineState.cachedAccount || {};
+  const equity = Number(account.equity || 0);
+  const dailyStartEquity = Number(engineState.dailyStartEquity || equity || 0);
+  const dailyPeakEquity = Number(engineState.dailyPeakEquity || equity || 0);
+
+  const dailyProfitPercent =
+    dailyStartEquity > 0
+      ? ((equity - dailyStartEquity) / dailyStartEquity) * 100
+      : 0;
+
+  const drawdownFromPeakPercent =
+    dailyPeakEquity > 0
+      ? ((dailyPeakEquity - equity) / dailyPeakEquity) * 100
+      : 0;
+
+  const unifiedScore = Number(
+    engineState.unifiedInstitutionalOrchestratorState?.unifiedIntelligenceScore ||
+      50
+  );
+
+  const globalRiskOffScore = Number(
+    engineState.globalRiskOffDefenseState?.globalRiskOffScore || 0
+  );
+
+  const averageSignalScore =
+    signals.reduce((sum, signal) => sum + Number(signal.score || 0), 0) /
+    Math.max(1, signals.length);
+
+  const eliteSignalCount = signals.filter(
+    (signal) => Number(signal.score || 0) >= 85
+  ).length;
+
+  const profitVelocityScore = clampScore(
+    averageSignalScore * 0.25 +
+      unifiedScore * 0.25 +
+      eliteSignalCount * 4 +
+      Math.max(0, dailyProfitPercent) * 6 -
+      drawdownFromPeakPercent * 8 -
+      globalRiskOffScore * 0.18
+  );
+
+  const velocityMode =
+    profitVelocityScore >= 88 && globalRiskOffScore < 55
+      ? "ACCELERATE_PROFIT_VELOCITY"
+      : profitVelocityScore >= 74 && globalRiskOffScore < 70
+      ? "SELECTIVE_PROFIT_ACCELERATION"
+      : profitVelocityScore >= 58
+      ? "NORMAL_PROFIT_VELOCITY"
+      : "SLOW_PROFIT_VELOCITY";
+
+  const velocityCapitalMultiplier =
+    velocityMode === "ACCELERATE_PROFIT_VELOCITY"
+      ? 1.2
+      : velocityMode === "SELECTIVE_PROFIT_ACCELERATION"
+      ? 1
+      : velocityMode === "NORMAL_PROFIT_VELOCITY"
+      ? 0.75
+      : 0.4;
+
+  const governedSignals = signals.map((signal) => {
+    const symbol = normalizeSymbol(signal.symbol);
+    const baseScore = Number(signal.score || 0);
+
+    const finalVelocityScore = clampScore(
+      baseScore * 0.7 +
+        profitVelocityScore * 0.2 -
+        globalRiskOffScore * 0.1
+    );
+
+    const action =
+      velocityMode === "SLOW_PROFIT_VELOCITY"
+        ? "REDUCE_TRADE_SPEED"
+        : finalVelocityScore >= 88
+        ? "PRIORITIZE_FAST_COMPOUNDING"
+        : finalVelocityScore >= 74
+        ? "ALLOW_CONTROLLED_ACCELERATION"
+        : "NORMAL_SPEED_ONLY";
+
+    return {
+      symbol,
+      finalVelocityScore,
+      action,
+      velocityCapitalMultiplier,
+      shouldReduceSpeed: action === "REDUCE_TRADE_SPEED",
+      shouldAccelerate:
+        action === "PRIORITIZE_FAST_COMPOUNDING" ||
+        action === "ALLOW_CONTROLLED_ACCELERATION",
+      reason:
+        `${action} • Profit velocity ${profitVelocityScore}/100 • ` +
+        `Mode ${velocityMode} • Capital x${velocityCapitalMultiplier}`,
+    };
+  });
+
+  return {
+    updatedAt: new Date().toISOString(),
+    phase: "56_AUTONOMOUS_PROFIT_VELOCITY_GOVERNOR",
+    velocityMode,
+    profitVelocityScore,
+    velocityCapitalMultiplier,
+    dailyProfitPercent: Number(dailyProfitPercent.toFixed(2)),
+    drawdownFromPeakPercent: Number(drawdownFromPeakPercent.toFixed(2)),
+    averageSignalScore: Number(averageSignalScore.toFixed(2)),
+    eliteSignalCount,
+    globalRiskOffScore,
+    governedSignals,
+    acceleratedSignals: governedSignals.filter((item) => item.shouldAccelerate),
+    reducedSpeedSignals: governedSignals.filter((item) => item.shouldReduceSpeed),
+  };
+}
+
+function calculateUnifiedInstitutionalAIOrchestrator(stockSignals = [], cryptoSignals = []) {
+  const stocks = Array.isArray(stockSignals) ? stockSignals : [];
+  const cryptos = Array.isArray(cryptoSignals) ? cryptoSignals : [];
+  const allSignals = [...stocks, ...cryptos];
+
+  const riskOff = engineState.globalRiskOffDefenseState || {};
+  const cryptoRL = engineState.cryptoReinforcementLearningState || {};
+  const cryptoSelector = engineState.autonomousCryptoStrategySelectorState || {};
+  const brain = engineState.phase21AutonomousBrainState || {};
+  const parliament = engineState.autonomousTradingSystemState || {};
+  const capitalRotation = engineState.cryptoCapitalRotationState || {};
+  const exposure = engineState.institutionalExposureMode || "UNKNOWN";
+
+  const globalRiskOffScore = Number(riskOff.globalRiskOffScore || 0);
+  const defenseMultiplier = Number(riskOff.exposureMultiplier || 1);
+  const brainScore = Number(brain.autonomousIntelligenceScore || 50);
+  const parliamentScore = Number(parliament.probabilityScore || 50);
+
+  const averageSignalScore =
+    allSignals.reduce((sum, signal) => sum + Number(signal.score || 0), 0) /
+    Math.max(1, allSignals.length);
+
+  const averageCryptoRL =
+    (cryptoRL.reinforcedSignals || []).reduce(
+      (sum, signal) => sum + Number(signal.reinforcementScore || 0),
+      0
+    ) / Math.max(1, (cryptoRL.reinforcedSignals || []).length);
+
+  const averageCryptoStrategy =
+    (cryptoSelector.selectedCryptoSignals || []).reduce(
+      (sum, signal) => sum + Number(signal.strategyConfidence || 0),
+      0
+    ) / Math.max(1, (cryptoSelector.selectedCryptoSignals || []).length);
+
+  const unifiedIntelligenceScore = clampScore(
+    averageSignalScore * 0.25 +
+      brainScore * 0.2 +
+      parliamentScore * 0.15 +
+      averageCryptoRL * 0.15 +
+      averageCryptoStrategy * 0.15 +
+      Number(capitalRotation.cryptoRotationScore || 50) * 0.1 -
+      globalRiskOffScore * 0.18
+  );
+
+  const orchestratorMode =
+    globalRiskOffScore >= 85
+      ? "FULL_DEFENSE_ORCHESTRATION"
+      : unifiedIntelligenceScore >= 85
+      ? "MAXIMUM_INSTITUTIONAL_EXPANSION"
+      : unifiedIntelligenceScore >= 72
+      ? "SELECTIVE_INSTITUTIONAL_EXPANSION"
+      : unifiedIntelligenceScore >= 58
+      ? "BALANCED_INSTITUTIONAL_CONTROL"
+      : "CAPITAL_PROTECTION_MODE";
+
+  const finalCapitalMultiplier =
+    orchestratorMode === "MAXIMUM_INSTITUTIONAL_EXPANSION"
+      ? 1.15 * defenseMultiplier
+      : orchestratorMode === "SELECTIVE_INSTITUTIONAL_EXPANSION"
+      ? 0.9 * defenseMultiplier
+      : orchestratorMode === "BALANCED_INSTITUTIONAL_CONTROL"
+      ? 0.65 * defenseMultiplier
+      : orchestratorMode === "CAPITAL_PROTECTION_MODE"
+      ? 0.35 * defenseMultiplier
+      : 0.12;
+
+  const orchestratedSignals = allSignals.map((signal) => {
+    const symbol = normalizeSymbol(signal.symbol);
+    const isCrypto =
+      String(signal.assetClass || "").toLowerCase() === "crypto" ||
+      symbol.endsWith("USD") ||
+      symbol.includes("/");
+
+    const signalScore = Number(signal.score || 0);
+
+    const cryptoBoost = isCrypto
+      ? Number(signal.cryptoReinforcementScore || 50) * 0.15 +
+        Number(signal.cryptoStrategySelectorScore || 50) * 0.15
+      : 0;
+
+    const finalOrchestratedScore = clampScore(
+      signalScore * 0.65 +
+        unifiedIntelligenceScore * 0.2 +
+        cryptoBoost -
+        globalRiskOffScore * 0.12
+    );
+
+    const action =
+      orchestratorMode === "FULL_DEFENSE_ORCHESTRATION"
+        ? "BLOCK_NEW_RISK"
+        : finalOrchestratedScore >= 85
+        ? "PRIORITY_INSTITUTIONAL_BUY"
+        : finalOrchestratedScore >= 72
+        ? "APPROVED_INSTITUTIONAL_BUY"
+        : finalOrchestratedScore >= 62
+        ? "WATCHLIST_ONLY"
+        : "REJECT_LOW_EDGE";
+
+    return {
+      symbol,
+      assetClass: isCrypto ? "crypto" : "stock",
+      finalOrchestratedScore,
+      action,
+      finalCapitalMultiplier: Number(finalCapitalMultiplier.toFixed(2)),
+      shouldBlock:
+        action === "BLOCK_NEW_RISK" ||
+        action === "REJECT_LOW_EDGE",
+      reason:
+        `${action} • Unified AI ${unifiedIntelligenceScore}/100 • ` +
+        `Mode ${orchestratorMode} • Capital x${finalCapitalMultiplier.toFixed(2)}`,
+    };
+  });
+
+  return {
+    updatedAt: new Date().toISOString(),
+    phase: "55_FULL_UNIFIED_INSTITUTIONAL_AI_ORCHESTRATOR",
+    orchestratorMode,
+    unifiedIntelligenceScore: Number(unifiedIntelligenceScore.toFixed(2)),
+    finalCapitalMultiplier: Number(finalCapitalMultiplier.toFixed(2)),
+    globalRiskOffScore,
+    defenseMultiplier,
+    averageSignalScore: Number(averageSignalScore.toFixed(2)),
+    averageCryptoRL: Number(averageCryptoRL.toFixed(2)),
+    averageCryptoStrategy: Number(averageCryptoStrategy.toFixed(2)),
+    exposure,
+    reviewedSignals: allSignals.length,
+    reviewedStocks: stocks.length,
+    reviewedCryptos: cryptos.length,
+    orchestratedSignals,
+    topInstitutionalSignals: orchestratedSignals
+      .filter((item) =>
+        ["PRIORITY_INSTITUTIONAL_BUY", "APPROVED_INSTITUTIONAL_BUY"].includes(
+          item.action
+        )
+      )
+      .sort(
+        (a, b) =>
+          Number(b.finalOrchestratedScore || 0) -
+          Number(a.finalOrchestratedScore || 0)
+      )
+      .slice(0, 15),
+    blockedSignals: orchestratedSignals.filter((item) => item.shouldBlock),
+    reason:
+      `Phase 55 unified ${allSignals.length} signals • ` +
+      `${orchestratorMode} • Intelligence ${unifiedIntelligenceScore.toFixed(0)}/100`,
+  };
+}
+
+function calculateGlobalRiskOffDefenseNetwork(stockSignals = [], cryptoSignals = []) {
+  const stocks = Array.isArray(stockSignals) ? stockSignals : [];
+  const cryptos = Array.isArray(cryptoSignals) ? cryptoSignals : [];
+
+  const stockMomentum =
+    stocks.reduce((sum, signal) => sum + Number(signal.percentChange || 0), 0) /
+    Math.max(1, stocks.length);
+
+  const cryptoMomentum =
+    cryptos.reduce((sum, signal) => sum + Number(signal.percentChange || 0), 0) /
+    Math.max(1, cryptos.length);
+
+  const stockWeaknessCount = stocks.filter(
+    (signal) => Number(signal.percentChange || 0) <= -4
+  ).length;
+
+  const cryptoWeaknessCount = cryptos.filter(
+    (signal) => Number(signal.percentChange || 0) <= -4
+  ).length;
+
+  const marketStressLevel = Number(engineState.marketStressLevel || 0);
+  const marketVolatility = Number(engineState.marketVolatility || 0);
+
+  const crashRiskScore = Number(
+    engineState.marketCrashProtectionState?.crashRiskScore ||
+      engineState.macroRiskState?.macroRiskScore ||
+      0
+  );
+
+  const correlationRiskScore = Number(
+    engineState.correlationIntelligenceState?.correlationRiskScore ||
+      engineState.correlationIntelligenceState?.averageCorrelationScore ||
+      0
+  );
+
+  const stablecoinPressureRisk =
+    cryptos.reduce((sum, signal) => {
+      return (
+        sum +
+        Number(
+          signal.stablecoinPressure?.exchangePressureScore ||
+            signal.exchangePressureScore ||
+            signal.stablecoinFlowScore ||
+            0
+        )
+      );
+    }, 0) / Math.max(1, cryptos.length);
+
+  const whaleDistributionRisk =
+    cryptos.reduce((sum, signal) => {
+      return (
+        sum +
+        Number(
+          signal.whaleSmartMoney?.whaleDistributionScore ||
+            signal.whaleDistributionScore ||
+            0
+        )
+      );
+    }, 0) / Math.max(1, cryptos.length);
+
+  const globalRiskOffScore = clampScore(
+    marketStressLevel * 7 +
+      marketVolatility * 2.2 +
+      Math.max(0, -stockMomentum) * 3 +
+      Math.max(0, -cryptoMomentum) * 3 +
+      stockWeaknessCount * 3 +
+      cryptoWeaknessCount * 4 +
+      crashRiskScore * 0.35 +
+      correlationRiskScore * 0.25 +
+      stablecoinPressureRisk * 0.2 +
+      whaleDistributionRisk * 0.25
+  );
+
+  const defenseMode =
+    globalRiskOffScore >= 85
+      ? "GLOBAL_PANIC_DEFENSE"
+      : globalRiskOffScore >= 70
+      ? "RISK_OFF_DEFENSE"
+      : globalRiskOffScore >= 55
+      ? "CAUTION_DEFENSE"
+      : "NORMAL_RISK";
+
+  const exposureMultiplier =
+    defenseMode === "GLOBAL_PANIC_DEFENSE"
+      ? 0.15
+      : defenseMode === "RISK_OFF_DEFENSE"
+      ? 0.35
+      : defenseMode === "CAUTION_DEFENSE"
+      ? 0.65
+      : 1;
+
+  const protectedCryptoSignals = cryptos.map((signal) => {
+    const symbol = normalizeSymbol(signal.symbol);
+
+    const signalScore = Number(signal.score || 0);
+    const reinforcementScore = Number(signal.cryptoReinforcementScore || signalScore);
+    const strategyScore = Number(signal.cryptoStrategySelectorScore || signalScore);
+
+    const individualRiskScore = clampScore(
+      globalRiskOffScore * 0.55 +
+        Math.max(0, -Number(signal.percentChange || 0)) * 5 +
+        Number(signal.exitRiskScore || signal.cryptoExitParliament?.exitRiskScore || 0) * 0.25 +
+        Number(signal.whaleDistributionScore || signal.whaleSmartMoney?.whaleDistributionScore || 0) * 0.25
+    );
+
+    const action =
+      individualRiskScore >= 85
+        ? "BLOCK_CRYPTO_RISK_OFF"
+        : individualRiskScore >= 70
+        ? "REDUCE_CRYPTO_SIZE"
+        : individualRiskScore >= 55
+        ? "CAUTION_CRYPTO_ONLY"
+        : "ALLOW_NORMAL_CRYPTO";
+
+    const scorePenalty =
+      action === "BLOCK_CRYPTO_RISK_OFF"
+        ? -12
+        : action === "REDUCE_CRYPTO_SIZE"
+        ? -6
+        : action === "CAUTION_CRYPTO_ONLY"
+        ? -3
+        : 0;
+
+    return {
+      symbol,
+      individualRiskScore,
+      reinforcementScore,
+      strategyScore,
+      action,
+      scorePenalty,
+      exposureMultiplier,
+      shouldBlock: action === "BLOCK_CRYPTO_RISK_OFF",
+      shouldReduceSize:
+        action === "REDUCE_CRYPTO_SIZE" ||
+        action === "CAUTION_CRYPTO_ONLY",
+      reason:
+        `${action} • Global risk-off ${globalRiskOffScore}/100 • ` +
+        `Defense mode ${defenseMode} • Exposure x${exposureMultiplier}`,
+    };
+  });
+
+  return {
+    updatedAt: new Date().toISOString(),
+    phase: "54_GLOBAL_RISK_OFF_DEFENSE_NETWORK",
+    reviewedStockSignals: stocks.length,
+    reviewedCryptoSignals: cryptos.length,
+    globalRiskOffScore,
+    defenseMode,
+    exposureMultiplier,
+    stockMomentum: Number(stockMomentum.toFixed(2)),
+    cryptoMomentum: Number(cryptoMomentum.toFixed(2)),
+    stockWeaknessCount,
+    cryptoWeaknessCount,
+    marketStressLevel,
+    marketVolatility,
+    crashRiskScore,
+    correlationRiskScore,
+    stablecoinPressureRisk: Number(stablecoinPressureRisk.toFixed(2)),
+    whaleDistributionRisk: Number(whaleDistributionRisk.toFixed(2)),
+    protectedCryptoSignals,
+    blockedCryptoSignals: protectedCryptoSignals.filter((item) => item.shouldBlock),
+    reducedCryptoSignals: protectedCryptoSignals.filter((item) => item.shouldReduceSize),
+    reason:
+      `Phase 54 defense mode ${defenseMode} • ` +
+      `global risk-off score ${globalRiskOffScore}/100 • ` +
+      `crypto exposure multiplier ${exposureMultiplier}`,
+  };
+}
+
+function calculateCryptoReinforcementLearningExpansion(cryptoSignals = []) {
+  const signals = Array.isArray(cryptoSignals) ? cryptoSignals : [];
+  const closedTrades = Array.isArray(engineState.tradeJournalHistory)
+    ? engineState.tradeJournalHistory
+    : [];
+
+  const cryptoTrades = closedTrades.filter((trade) => {
+    const assetClass = String(trade.assetClass || "").toLowerCase();
+    const symbol = normalizeSymbol(trade.symbol);
+
+    return (
+      assetClass === "crypto" ||
+      symbol.endsWith("USD") ||
+      symbol.includes("/")
+    );
+  });
+
+  const strategyMemory = {};
+  const symbolMemory = {};
+
+  for (const trade of cryptoTrades.slice(0, 300)) {
+    const symbol = normalizeSymbol(trade.symbol);
+    const strategy =
+      trade.strategy ||
+      trade.selectedCryptoStrategy ||
+      trade.entryType ||
+      "UNKNOWN_CRYPTO_STRATEGY";
+
+    const profitPercent = Number(trade.profitPercent || 0);
+
+    if (!strategyMemory[strategy]) {
+      strategyMemory[strategy] = {
+        strategy,
+        trades: 0,
+        wins: 0,
+        losses: 0,
+        totalProfitPercent: 0,
+        averageProfitPercent: 0,
+        winRate: 0,
+        trustScore: 50,
+      };
+    }
+
+    strategyMemory[strategy].trades += 1;
+    strategyMemory[strategy].totalProfitPercent += profitPercent;
+
+    if (profitPercent > 0) {
+      strategyMemory[strategy].wins += 1;
+    } else if (profitPercent < 0) {
+      strategyMemory[strategy].losses += 1;
+    }
+
+    strategyMemory[strategy].averageProfitPercent =
+      strategyMemory[strategy].totalProfitPercent /
+      Math.max(1, strategyMemory[strategy].trades);
+
+    strategyMemory[strategy].winRate =
+      (strategyMemory[strategy].wins /
+        Math.max(1, strategyMemory[strategy].trades)) *
+      100;
+
+    strategyMemory[strategy].trustScore = clampScore(
+      45 +
+        strategyMemory[strategy].winRate * 0.35 +
+        strategyMemory[strategy].averageProfitPercent * 3 -
+        strategyMemory[strategy].losses * 1.5
+    );
+
+    if (!symbolMemory[symbol]) {
+      symbolMemory[symbol] = {
+        symbol,
+        trades: 0,
+        wins: 0,
+        losses: 0,
+        totalProfitPercent: 0,
+        averageProfitPercent: 0,
+        winRate: 0,
+        trustScore: 50,
+      };
+    }
+
+    symbolMemory[symbol].trades += 1;
+    symbolMemory[symbol].totalProfitPercent += profitPercent;
+
+    if (profitPercent > 0) {
+      symbolMemory[symbol].wins += 1;
+    } else if (profitPercent < 0) {
+      symbolMemory[symbol].losses += 1;
+    }
+
+    symbolMemory[symbol].averageProfitPercent =
+      symbolMemory[symbol].totalProfitPercent /
+      Math.max(1, symbolMemory[symbol].trades);
+
+    symbolMemory[symbol].winRate =
+      (symbolMemory[symbol].wins /
+        Math.max(1, symbolMemory[symbol].trades)) *
+      100;
+
+    symbolMemory[symbol].trustScore = clampScore(
+      45 +
+        symbolMemory[symbol].winRate * 0.35 +
+        symbolMemory[symbol].averageProfitPercent * 3 -
+        symbolMemory[symbol].losses * 2
+    );
+  }
+
+  const reinforcedSignals = signals.map((signal) => {
+    const symbol = normalizeSymbol(signal.symbol);
+    const selectedStrategy =
+      signal.selectedCryptoStrategy ||
+      signal.autonomousCryptoStrategySelector?.selectedStrategy ||
+      "UNKNOWN_CRYPTO_STRATEGY";
+
+    const strategyTrust =
+      strategyMemory[selectedStrategy]?.trustScore ?? 50;
+
+    const symbolTrust = symbolMemory[symbol]?.trustScore ?? 50;
+
+    const selectorConfidence = Number(
+      signal.cryptoStrategySelectorScore ||
+        signal.autonomousCryptoStrategySelector?.strategyConfidence ||
+        signal.score ||
+        50
+    );
+
+    const reinforcementScore = clampScore(
+      selectorConfidence * 0.45 +
+        strategyTrust * 0.3 +
+        symbolTrust * 0.25
+    );
+
+    const learningAdjustment =
+      reinforcementScore >= 82
+        ? 5
+        : reinforcementScore >= 72
+        ? 3
+        : reinforcementScore <= 38
+        ? -6
+        : reinforcementScore <= 48
+        ? -3
+        : 0;
+
+    const action =
+      reinforcementScore >= 82
+        ? "REINFORCE_CRYPTO_AGGRESSIVELY"
+        : reinforcementScore >= 72
+        ? "REINFORCE_CRYPTO_SELECTIVELY"
+        : reinforcementScore <= 38
+        ? "SUPPRESS_CRYPTO_SETUP"
+        : "OBSERVE_CRYPTO_SETUP";
+
+    return {
+      symbol,
+      selectedStrategy,
+      reinforcementScore,
+      strategyTrust,
+      symbolTrust,
+      learningAdjustment,
+      action,
+      shouldSuppressCrypto:
+        action === "SUPPRESS_CRYPTO_SETUP",
+      shouldBoostCrypto:
+        action === "REINFORCE_CRYPTO_AGGRESSIVELY" ||
+        action === "REINFORCE_CRYPTO_SELECTIVELY",
+      reason:
+        `${action} • RL ${reinforcementScore}/100 • ` +
+        `Strategy trust ${strategyTrust}/100 • Symbol trust ${symbolTrust}/100`,
+    };
+  });
+
+  return {
+    updatedAt: new Date().toISOString(),
+    phase: "53_CRYPTO_REINFORCEMENT_LEARNING_EXPANSION",
+    reviewedCryptoSignals: signals.length,
+    learnedCryptoTrades: cryptoTrades.length,
+    strategyMemory,
+    symbolMemory,
+    reinforcedSignals,
+    topReinforcedCryptoSignals: reinforcedSignals
+      .filter((item) => item.shouldBoostCrypto)
+      .sort(
+        (a, b) =>
+          Number(b.reinforcementScore || 0) -
+          Number(a.reinforcementScore || 0)
+      )
+      .slice(0, 10),
+    suppressedCryptoSignals: reinforcedSignals
+      .filter((item) => item.shouldSuppressCrypto)
+      .slice(0, 20),
+  };
+}
+
+function calculateAutonomousCryptoStrategySelector(cryptoSignals = []) {
+  const signals = Array.isArray(cryptoSignals) ? cryptoSignals : [];
+
+  const selectedCryptoSignals = signals.map((signal) => {
+    const symbol = normalizeSymbol(signal.symbol);
+
+    const baseScore = Number(signal.score || signal.realismAdjustedScore || 0);
+
+    const liquidityScore = Number(
+      signal.liquiditySweep?.liquidityScore ||
+        signal.cryptoLiquidityScore ||
+        signal.liquidityScore ||
+        50
+    );
+
+    const whaleScore = Number(
+      signal.whaleSmartMoney?.whaleAccumulationScore ||
+        signal.whaleScore ||
+        signal.smartMoneyWhaleScore ||
+        50
+    );
+
+    const stablecoinPressureScore = Number(
+      signal.stablecoinPressure?.stablecoinFlowScore ||
+        signal.stablecoinFlowScore ||
+        signal.exchangePressureScore ||
+        50
+    );
+
+    const correlationScore = Number(
+      signal.crossMarketCorrelation?.cryptoCorrelationScore ||
+        signal.correlationScore ||
+        50
+    );
+
+    const multiTimeframeScore = Number(
+      signal.cryptoMultiTimeframeParliament?.multiTimeframeScore ||
+        signal.multiTimeframeScore ||
+        signal.timeframeScore ||
+        50
+    );
+
+    const executionScore = Number(
+      signal.cryptoExecutionTiming?.executionTimingScore ||
+        signal.executionTimingScore ||
+        50
+    );
+
+    const positionSizingScore = Number(
+      signal.cryptoPositionSizing?.positionSizingScore ||
+        signal.positionSizingScore ||
+        50
+    );
+
+    const exitRiskScore = Number(
+      signal.cryptoExitParliament?.exitRiskScore ||
+        signal.exitRiskScore ||
+        35
+    );
+
+    const momentumStrategyScore = clampScore(
+      baseScore * 0.3 +
+        liquidityScore * 0.18 +
+        multiTimeframeScore * 0.22 +
+        executionScore * 0.15 +
+        whaleScore * 0.15 -
+        exitRiskScore * 0.1
+    );
+
+    const accumulationStrategyScore = clampScore(
+      whaleScore * 0.3 +
+        stablecoinPressureScore * 0.2 +
+        liquidityScore * 0.2 +
+        multiTimeframeScore * 0.2 +
+        baseScore * 0.1 -
+        exitRiskScore * 0.08
+    );
+
+    const defensiveStrategyScore = clampScore(
+      liquidityScore * 0.28 +
+        positionSizingScore * 0.22 +
+        correlationScore * 0.2 +
+        stablecoinPressureScore * 0.15 +
+        executionScore * 0.15 -
+        exitRiskScore * 0.18
+    );
+
+    const breakoutStrategyScore = clampScore(
+      baseScore * 0.22 +
+        liquidityScore * 0.2 +
+        whaleScore * 0.18 +
+        multiTimeframeScore * 0.25 +
+        executionScore * 0.15 -
+        exitRiskScore * 0.12
+    );
+
+    const strategies = [
+      {
+        strategy: "CRYPTO_MOMENTUM_CONTINUATION",
+        score: momentumStrategyScore,
+      },
+      {
+        strategy: "WHALE_ACCUMULATION_FOLLOW_THROUGH",
+        score: accumulationStrategyScore,
+      },
+      {
+        strategy: "DEFENSIVE_LIQUIDITY_PROTECTION",
+        score: defensiveStrategyScore,
+      },
+      {
+        strategy: "MULTI_TIMEFRAME_BREAKOUT",
+        score: breakoutStrategyScore,
+      },
+    ].sort((a, b) => Number(b.score || 0) - Number(a.score || 0));
+
+    const selectedStrategy = strategies[0] || {
+      strategy: "NO_CRYPTO_STRATEGY_EDGE",
+      score: 0,
+    };
+
+    const strategyConfidence = clampScore(selectedStrategy.score);
+
+    const action =
+      strategyConfidence >= 82
+        ? "DEPLOY_AGGRESSIVE_CRYPTO_STRATEGY"
+        : strategyConfidence >= 72
+        ? "DEPLOY_SELECTIVE_CRYPTO_STRATEGY"
+        : strategyConfidence >= 62
+        ? "WATCH_CRYPTO_STRATEGY"
+        : "BLOCK_WEAK_CRYPTO_STRATEGY";
+
+    return {
+      symbol,
+      selectedStrategy: selectedStrategy.strategy,
+      strategyConfidence,
+      strategyRanking: strategies,
+      action,
+      shouldBoostCryptoScore: strategyConfidence >= 72,
+      strategyScoreBoost:
+        strategyConfidence >= 82 ? 6 : strategyConfidence >= 72 ? 3 : 0,
+      reason:
+        `${action} • ${selectedStrategy.strategy} ` +
+        `${strategyConfidence}/100 • Liquidity ${liquidityScore}/100 • ` +
+        `Whale ${whaleScore}/100 • MTF ${multiTimeframeScore}/100`,
+    };
+  });
+
+  const deployableStrategies = selectedCryptoSignals.filter(
+    (item) =>
+      item.action === "DEPLOY_AGGRESSIVE_CRYPTO_STRATEGY" ||
+      item.action === "DEPLOY_SELECTIVE_CRYPTO_STRATEGY"
+  );
+
+  const averageStrategyConfidence =
+    selectedCryptoSignals.reduce(
+      (sum, item) => sum + Number(item.strategyConfidence || 0),
+      0
+    ) / Math.max(1, selectedCryptoSignals.length);
+
+  return {
+    updatedAt: new Date().toISOString(),
+    phase: "52_AUTONOMOUS_CRYPTO_STRATEGY_SELECTOR",
+    reviewedCryptoSignals: signals.length,
+    deployableStrategyCount: deployableStrategies.length,
+    averageStrategyConfidence: Number(averageStrategyConfidence.toFixed(2)),
+    selectedCryptoSignals,
+    topCryptoStrategies: deployableStrategies.slice(0, 10),
+    reason:
+      `Phase 52 reviewed ${signals.length} crypto signals • ` +
+      `${deployableStrategies.length} deployable autonomous crypto strategies found.`,
+  };
+}
 
 function detectMarketRegime(stockSignals = []) {
   if (!CONFIG.enableMarketRegimeEngine) {
@@ -20441,6 +23378,1575 @@ function calculatePhase20FinalMasterExecutionGate({
   return decision;
 }
 
+function calculatePhase34AdaptiveAggressionBalancer({
+  candidate = {},
+  account = {},
+  openBotPositions = [],
+  portfolioManager = {},
+  institutionalExecutionPlan = {},
+  phase14Governor = {},
+  phase15ExecutionDominance = {},
+  phase16PortfolioParliament = {},
+  capitalPressure = {},
+  suppressionBalancer = {},
+}) {
+  const symbol = normalizeSymbol(candidate.symbol);
+
+  const score = Number(candidate.score || 0);
+  const marketStress = Number(engineState.marketStressLevel || 0);
+
+  const runnerScore = Number(
+    candidate.runnerScore ||
+      candidate.explosiveRunnerScore ||
+      candidate.explosiveRunnerPrediction?.explosiveRunnerScore ||
+      candidate.adaptiveRunnerScore ||
+      0
+  );
+
+  const institutionalBrainScore = Number(
+    candidate.institutionalBrainScore ||
+      candidate.fullInstitutionalAiBrain?.dynamicConvictionScore ||
+      candidate.fullInstitutionalAiBrain?.consensusScore ||
+      0
+  );
+
+  const trendQualityScore = Number(candidate.trendQualityScore || 0);
+  const breakoutQualityScore = Number(candidate.breakoutQualityScore || 0);
+  const continuationProbability = Number(candidate.continuationProbability || 0);
+  const relativeStrengthPercentile = Number(candidate.relativeStrengthPercentile || 0);
+  const momentumPersistence = Number(candidate.momentumPersistence || 0);
+
+  const statisticalEdgeScore = Number(
+    candidate.statisticalEdgeScore ||
+      candidate.statisticalScore ||
+      candidate.statisticalEdge?.statisticalEdgeScore ||
+      0
+  );
+
+  const executionConfidence = Number(
+    institutionalExecutionPlan.executionConfidence ||
+      candidate.executionConfidence ||
+      50
+  );
+
+  const portfolioHeatRisk = Number(
+    phase16PortfolioParliament.portfolioHeatRisk ||
+      candidate.portfolioHeat?.portfolioHeatScore ||
+      0
+  );
+
+  const hiddenCorrelationRisk = Number(
+    phase16PortfolioParliament.hiddenCorrelationRisk ||
+      candidate.portfolioHeat?.correlationRiskScore ||
+      engineState.correlationIntelligenceState?.hiddenExposureRiskScore ||
+      0
+  );
+
+  const sameSectorOpenPositions = Number(
+    candidate.portfolioHeat?.sameSectorOpenPositions || 0
+  );
+
+  const liquidityRisk = Number(
+    phase15ExecutionDominance.liquidityRiskScore ||
+      candidate.liquiditySweepTrap?.trapRiskScore ||
+      0
+  );
+
+  const dcfReduce =
+    candidate.dcfValuation?.valuationAction === "Reduce Position Size" ||
+    candidate.valuationAction === "Reduce Position Size";
+
+  const earningsReduce =
+    candidate.earningsIntelligence?.earningsAction === "Reduce Position Size" ||
+    candidate.earningsAction === "Reduce Position Size";
+
+  const weakLongTermQuality =
+    Number(candidate.moatScore || 50) < 50 ||
+    Number(candidate.harvardDividendScore || 50) < 50 ||
+    Number(candidate.competitiveAdvantageScore || 50) < 50;
+
+  const executionReduce =
+    institutionalExecutionPlan.shouldReduceSize === true ||
+    Number(institutionalExecutionPlan.executionSizeMultiplier || 1) < 1;
+
+  const portfolioReduce =
+    String(portfolioManager.portfolioAction || candidate.portfolioAction || "")
+      .toUpperCase()
+      .includes("REDUCE") ||
+    String(candidate.aiPortfolioAction || "").toUpperCase().includes("REDUCE");
+
+  const governorReduce =
+    Number(phase14Governor.governorMultiplier || 1) < 1 ||
+    phase14Governor.suppressByGovernor === true;
+
+  const parliamentReduce =
+    Number(phase16PortfolioParliament.parliamentMultiplier || 1) < 1 ||
+    phase16PortfolioParliament.blockByPortfolioParliament === true;
+
+  const suppressionCount = [
+    dcfReduce,
+    earningsReduce,
+    weakLongTermQuality,
+    executionReduce,
+    portfolioReduce,
+    governorReduce,
+    parliamentReduce,
+    capitalPressure.pressureTier === "PROBE_PRESSURE",
+    Number(suppressionBalancer.balancedMultiplier || 1) < 1,
+  ].filter(Boolean).length;
+
+  const eliteMomentumQualityScore = clampScore(
+    score * 0.12 +
+      runnerScore * 0.18 +
+      institutionalBrainScore * 0.14 +
+      trendQualityScore * 0.14 +
+      breakoutQualityScore * 0.12 +
+      continuationProbability * 0.12 +
+      relativeStrengthPercentile * 0.08 +
+      momentumPersistence * 0.06 +
+      statisticalEdgeScore * 0.04
+  );
+
+  const trueDangerRiskScore = clampScore(
+    marketStress * 0.22 +
+      portfolioHeatRisk * 0.2 +
+      hiddenCorrelationRisk * 0.2 +
+      liquidityRisk * 0.16 +
+      Math.max(0, sameSectorOpenPositions - 2) * 6 +
+      (candidate.confirmations?.fakeBreakout === true ? 35 : 0) +
+      (candidate.liquiditySweepTrap?.shouldRejectEntry === true ? 30 : 0)
+  );
+
+  const explosiveMomentumSetup =
+    eliteMomentumQualityScore >= 72 &&
+    runnerScore >= 68 &&
+    trendQualityScore >= 75 &&
+    breakoutQualityScore >= 75 &&
+    continuationProbability >= 70 &&
+    relativeStrengthPercentile >= 85 &&
+    candidate.confirmations?.fakeBreakout !== true;
+
+  const longTermPenaltyOverweighted =
+    explosiveMomentumSetup &&
+    (dcfReduce || earningsReduce || weakLongTermQuality) &&
+    trueDangerRiskScore < 72;
+
+  const duplicateSuppressionStack =
+    suppressionCount >= 4 &&
+    explosiveMomentumSetup &&
+    trueDangerRiskScore < 78;
+
+  let aggressionMultiplier = 1;
+  let maxAggressionRelief = 1;
+  let action = "NO_RELIEF";
+
+  if (
+    phase14Governor.suppressByGovernor === true ||
+    phase15ExecutionDominance.blockByExecutionDominance === true ||
+    phase16PortfolioParliament.blockByPortfolioParliament === true ||
+    trueDangerRiskScore >= 88
+  ) {
+    action = "RESPECT_HARD_BLOCK";
+    aggressionMultiplier = 1;
+    maxAggressionRelief = 1;
+  } else if (duplicateSuppressionStack) {
+    action = "RELIEVE_DUPLICATE_SUPPRESSION";
+    maxAggressionRelief = eliteMomentumQualityScore >= 82 ? 1.45 : 1.25;
+    aggressionMultiplier = maxAggressionRelief;
+  } else if (longTermPenaltyOverweighted) {
+    action = "REDUCE_LONG_TERM_PENALTY_INFLUENCE";
+    maxAggressionRelief = eliteMomentumQualityScore >= 82 ? 1.32 : 1.18;
+    aggressionMultiplier = maxAggressionRelief;
+  } else if (
+    explosiveMomentumSetup &&
+    trueDangerRiskScore < 58 &&
+    suppressionCount >= 2
+  ) {
+    action = "CONTROLLED_AGGRESSION_RESTORE";
+    maxAggressionRelief = 1.15;
+    aggressionMultiplier = 1.15;
+  }
+
+  if (marketStress >= 70) {
+    aggressionMultiplier = Math.min(aggressionMultiplier, 1.08);
+  }
+
+  if (hiddenCorrelationRisk >= 75 || portfolioHeatRisk >= 82) {
+    aggressionMultiplier = Math.min(aggressionMultiplier, 1.05);
+  }
+
+  const state = {
+    phase: "34_ADAPTIVE_AGGRESSION_BALANCER",
+    updatedAt: new Date().toISOString(),
+    symbol,
+    action,
+    suppressionCount,
+    explosiveMomentumSetup,
+    longTermPenaltyOverweighted,
+    duplicateSuppressionStack,
+    eliteMomentumQualityScore,
+    trueDangerRiskScore,
+    marketStress,
+    portfolioHeatRisk,
+    hiddenCorrelationRisk,
+    liquidityRisk,
+    sameSectorOpenPositions,
+    dcfReduce,
+    earningsReduce,
+    weakLongTermQuality,
+    executionReduce,
+    portfolioReduce,
+    governorReduce,
+    parliamentReduce,
+    aggressionMultiplier: Number(aggressionMultiplier.toFixed(2)),
+    maxAggressionRelief,
+    reason:
+      `${action} • MomentumQuality ${eliteMomentumQualityScore}/100 • ` +
+      `Danger ${trueDangerRiskScore}/100 • Suppressors ${suppressionCount} • ` +
+      `Aggression x${aggressionMultiplier.toFixed(2)}`,
+  };
+
+  engineState.phase34AdaptiveAggressionBalancerState = state;
+
+  if (!Array.isArray(engineState.phase34AdaptiveAggressionBalancerHistory)) {
+    engineState.phase34AdaptiveAggressionBalancerHistory = [];
+  }
+
+  engineState.phase34AdaptiveAggressionBalancerHistory.unshift(state);
+  engineState.phase34AdaptiveAggressionBalancerHistory =
+    engineState.phase34AdaptiveAggressionBalancerHistory.slice(0, 200);
+
+  return state;
+}
+
+
+function calculatePhase35AiGovernanceLayer({
+  candidate = {},
+  account = {},
+  openBotPositions = [],
+  portfolioManager = {},
+  institutionalExecutionPlan = {},
+  phase14Governor = {},
+  phase15ExecutionDominance = {},
+  phase16PortfolioParliament = {},
+  phase34AdaptiveAggressionBalancer = {},
+  capitalPressure = {},
+  suppressionBalancer = {},
+}) {
+  const symbol = normalizeSymbol(candidate.symbol);
+
+  const score = Number(candidate.score || 0);
+  const marketStress = Number(engineState.marketStressLevel || 0);
+
+  const runnerScore = Number(
+    candidate.runnerScore ||
+      candidate.explosiveRunnerScore ||
+      candidate.explosiveRunnerPrediction?.explosiveRunnerScore ||
+      candidate.adaptiveRunnerScore ||
+      0
+  );
+
+  const institutionalBrainScore = Number(
+    candidate.institutionalBrainScore ||
+      candidate.fullInstitutionalAiBrain?.dynamicConvictionScore ||
+      candidate.fullInstitutionalAiBrain?.consensusScore ||
+      0
+  );
+
+  const executionConfidence = Number(
+    institutionalExecutionPlan.executionConfidence ||
+      candidate.executionConfidence ||
+      50
+  );
+
+  const portfolioHeatRisk = Number(
+    phase16PortfolioParliament.portfolioHeatRisk ||
+      candidate.portfolioHeat?.portfolioHeatScore ||
+      0
+  );
+
+  const hiddenCorrelationRisk = Number(
+    phase16PortfolioParliament.hiddenCorrelationRisk ||
+      candidate.portfolioHeat?.correlationRiskScore ||
+      engineState.correlationIntelligenceState?.hiddenExposureRiskScore ||
+      0
+  );
+
+  const liquidityRisk = Number(
+    phase15ExecutionDominance.liquidityRiskScore ||
+      candidate.liquiditySweepTrap?.trapRiskScore ||
+      0
+  );
+
+  const momentumAuthorityScore = clampScore(
+    score * 0.18 +
+      runnerScore * 0.24 +
+      institutionalBrainScore * 0.18 +
+      Number(candidate.trendQualityScore || 0) * 0.14 +
+      Number(candidate.breakoutQualityScore || 0) * 0.12 +
+      Number(candidate.continuationProbability || 0) * 0.14
+  );
+
+  const riskAuthorityScore = clampScore(
+    marketStress * 0.22 +
+      portfolioHeatRisk * 0.22 +
+      hiddenCorrelationRisk * 0.22 +
+      liquidityRisk * 0.18 +
+      Math.max(0, Number(candidate.portfolioHeat?.sameSectorOpenPositions || 0) - 2) * 6 +
+      (candidate.confirmations?.fakeBreakout === true ? 35 : 0)
+  );
+
+  const executionAuthorityScore = clampScore(
+    executionConfidence * 0.45 +
+      Number(institutionalExecutionPlan.liquidityScore || 50) * 0.3 +
+      (100 - Number(institutionalExecutionPlan.slippageRiskScore || 40)) * 0.25
+  );
+
+  const aggressionBalancerScore = Number(
+    phase34AdaptiveAggressionBalancer.eliteMomentumQualityScore || 50
+  );
+
+  const hardBlock =
+    phase14Governor.suppressByGovernor === true ||
+    phase15ExecutionDominance.blockByExecutionDominance === true ||
+    phase16PortfolioParliament.blockByPortfolioParliament === true ||
+    candidate.confirmations?.fakeBreakout === true ||
+    candidate.liquiditySweepTrap?.shouldRejectEntry === true;
+
+  let governingAuthority = "BALANCED_GOVERNANCE";
+  let governanceAction = "ALLOW";
+  let governanceMultiplier = 1;
+  let maxGovernanceMultiplier = 2.35;
+
+  if (hardBlock) {
+    governingAuthority = "HARD_RISK_AUTHORITY";
+    governanceAction = "BLOCK";
+    governanceMultiplier = 0;
+    maxGovernanceMultiplier = 0;
+  } else if (riskAuthorityScore >= 82) {
+    governingAuthority = "RISK_AUTHORITY";
+    governanceAction = "WATCHLIST_ONLY";
+    governanceMultiplier = 0;
+    maxGovernanceMultiplier = 0;
+  } else if (riskAuthorityScore >= 68) {
+    governingAuthority = "RISK_AUTHORITY";
+    governanceAction = "REDUCE";
+    governanceMultiplier = 0.65;
+    maxGovernanceMultiplier = 1.15;
+  } else if (
+    momentumAuthorityScore >= 78 &&
+    executionAuthorityScore >= 62 &&
+    riskAuthorityScore < 58
+  ) {
+    governingAuthority = "MOMENTUM_AUTHORITY";
+    governanceAction = "ALLOW_AGGRESSIVE";
+    governanceMultiplier = 1.12;
+    maxGovernanceMultiplier = 2.85;
+  } else if (
+    aggressionBalancerScore >= 75 &&
+    riskAuthorityScore < 65
+  ) {
+    governingAuthority = "AGGRESSION_BALANCER_AUTHORITY";
+    governanceAction = "ALLOW_CONTROLLED_AGGRESSION";
+    governanceMultiplier = 1.06;
+    maxGovernanceMultiplier = 2.45;
+  } else if (executionAuthorityScore < 45) {
+    governingAuthority = "EXECUTION_AUTHORITY";
+    governanceAction = "REDUCE_FOR_EXECUTION";
+    governanceMultiplier = 0.75;
+    maxGovernanceMultiplier = 1.25;
+  }
+
+  if (capitalPressure.pressureTier === "PROBE_PRESSURE") {
+    governanceMultiplier = Math.min(governanceMultiplier, 0.85);
+    maxGovernanceMultiplier = Math.min(maxGovernanceMultiplier, 1.1);
+    if (governanceAction === "ALLOW_AGGRESSIVE") {
+      governanceAction = "ALLOW_PROBE_ONLY";
+      governingAuthority = "CAPITAL_PRESSURE_AUTHORITY";
+    }
+  }
+
+  const state = {
+    phase: "35_AI_GOVERNANCE_LAYER",
+    updatedAt: new Date().toISOString(),
+    symbol,
+    governingAuthority,
+    governanceAction,
+    governanceMultiplier: Number(governanceMultiplier.toFixed(2)),
+    maxGovernanceMultiplier,
+    hardBlock,
+    momentumAuthorityScore,
+    riskAuthorityScore,
+    executionAuthorityScore,
+    aggressionBalancerScore,
+    marketStress,
+    portfolioHeatRisk,
+    hiddenCorrelationRisk,
+    liquidityRisk,
+    suppressionMultiplier: Number(suppressionBalancer.balancedMultiplier || 1),
+    phase34Action: phase34AdaptiveAggressionBalancer.action || null,
+    reason:
+      `${governingAuthority} • ${governanceAction} • ` +
+      `Momentum ${momentumAuthorityScore}/100 • Risk ${riskAuthorityScore}/100 • ` +
+      `Execution ${executionAuthorityScore}/100 • Governance x${governanceMultiplier.toFixed(2)}`,
+  };
+
+  engineState.phase35AiGovernanceLayerState = state;
+
+  if (!Array.isArray(engineState.phase35AiGovernanceLayerHistory)) {
+    engineState.phase35AiGovernanceLayerHistory = [];
+  }
+
+  engineState.phase35AiGovernanceLayerHistory.unshift(state);
+  engineState.phase35AiGovernanceLayerHistory =
+    engineState.phase35AiGovernanceLayerHistory.slice(0, 200);
+
+  return state;
+}
+
+function calculatePhase36PredictiveExecutionTiming({
+  candidate = {},
+  institutionalExecutionPlan = {},
+  phase15ExecutionDominance = {},
+  phase35AiGovernanceLayer = {},
+}) {
+  const symbol = normalizeSymbol(candidate.symbol);
+
+  const score = Number(candidate.score || 0);
+  const current = Number(candidate.current || candidate.price || 0);
+  const high = Number(candidate.high || current || 0);
+  const low = Number(candidate.low || current || 0);
+  const open = Number(candidate.open || current || 0);
+  const previousClose = Number(candidate.previousClose || 0);
+
+  const percentChange = Number(candidate.percentChange || 0);
+  const volumeRatio = Number(candidate.volumeRatio || 0);
+
+  const closeNearHighPercent = Number(
+    candidate.confirmations?.closeNearHighPercent ||
+      candidate.closeNearHighPercent ||
+      0
+  );
+
+  const pullbackFromHighPercent = Number(
+    candidate.confirmations?.pullbackFromHighPercent ||
+      candidate.pullbackFromHighPercent ||
+      (high > 0 && current > 0 ? ((high - current) / high) * 100 : 0)
+  );
+
+  const gapUpPercent = Number(
+    candidate.confirmations?.gapUpPercent ||
+      candidate.gapUpPercent ||
+      (previousClose > 0 && current > 0
+        ? ((current - previousClose) / previousClose) * 100
+        : 0)
+  );
+
+  const runnerScore = Number(
+    candidate.runnerScore ||
+      candidate.explosiveRunnerScore ||
+      candidate.explosiveRunnerPrediction?.explosiveRunnerScore ||
+      candidate.adaptiveRunnerScore ||
+      0
+  );
+
+  const trendQualityScore = Number(candidate.trendQualityScore || 0);
+  const breakoutQualityScore = Number(candidate.breakoutQualityScore || 0);
+  const executionTimingScore = Number(candidate.executionTimingScore || 0);
+  const continuationProbability = Number(candidate.continuationProbability || 0);
+  const exhaustionRiskScore = Number(candidate.exhaustionRiskScore || 0);
+
+  const liquidityScore = Number(
+    institutionalExecutionPlan.liquidityScore ||
+      phase15ExecutionDominance.liquidityScore ||
+      50
+  );
+
+  const slippageRiskScore = Number(
+    institutionalExecutionPlan.slippageRiskScore ||
+      phase15ExecutionDominance.slippageRiskScore ||
+      40
+  );
+
+  const executionConfidence = Number(
+    institutionalExecutionPlan.executionConfidence ||
+      candidate.executionConfidence ||
+      50
+  );
+
+  const openingDriveProbability = Number(
+    candidate.premarketDominance?.openingDriveProbability ||
+      candidate.explosiveRunnerPrediction?.premarket?.openingDriveProbability ||
+      0
+  );
+
+  const fadeRisk = Number(
+    candidate.premarketDominance?.premarket?.fadeRisk ||
+      candidate.explosiveRunnerPrediction?.premarket?.fadeRisk ||
+      35
+  );
+
+  const spreadPercent = Number(
+    institutionalExecutionPlan.spreadPercent ||
+      candidate.spreadPercent ||
+      0
+  );
+
+  const priceRangePercent =
+    low > 0 && high > low ? ((high - low) / low) * 100 : 0;
+
+  const accelerationScore = clampScore(
+    runnerScore * 0.18 +
+      trendQualityScore * 0.16 +
+      breakoutQualityScore * 0.15 +
+      continuationProbability * 0.15 +
+      closeNearHighPercent * 0.12 +
+      volumeRatio * 6 +
+      openingDriveProbability * 0.12 +
+      score * 0.12
+  );
+
+  const exhaustionPredictionScore = clampScore(
+    exhaustionRiskScore * 0.22 +
+      Math.max(0, percentChange - 25) * 1.1 +
+      Math.max(0, gapUpPercent - 20) * 1.2 +
+      Math.max(0, priceRangePercent - 18) * 1.1 +
+      Math.max(0, pullbackFromHighPercent - 2) * 6 +
+      fadeRisk * 0.15 +
+      slippageRiskScore * 0.12
+  );
+
+  const liquidityTransitionScore = clampScore(
+    liquidityScore * 0.38 +
+      executionConfidence * 0.28 +
+      Math.max(0, 100 - slippageRiskScore) * 0.18 +
+      Math.min(100, volumeRatio * 20) * 0.16
+  );
+
+  const predictiveEntryScore = clampScore(
+    accelerationScore * 0.42 +
+      liquidityTransitionScore * 0.28 +
+      executionTimingScore * 0.18 +
+      Math.max(0, 100 - exhaustionPredictionScore) * 0.12
+  );
+
+  let timingAction = "ENTER_NORMAL";
+  let timingMultiplier = 1;
+  let waitForPullback = false;
+
+  if (
+    phase35AiGovernanceLayer.governanceAction === "BLOCK" ||
+    phase35AiGovernanceLayer.governanceAction === "WATCHLIST_ONLY"
+  ) {
+    timingAction = "RESPECT_GOVERNANCE_BLOCK";
+    timingMultiplier = 0;
+  } else if (
+    exhaustionPredictionScore >= 82 ||
+    slippageRiskScore >= 75 ||
+    spreadPercent >= 1.5
+  ) {
+    timingAction = "AVOID_EXHAUSTION_ENTRY";
+    timingMultiplier = 0;
+  } else if (
+    exhaustionPredictionScore >= 68 ||
+    pullbackFromHighPercent >= 4 ||
+    liquidityTransitionScore < 42
+  ) {
+    timingAction = "WAIT_FOR_BETTER_ENTRY";
+    timingMultiplier = 0.55;
+    waitForPullback = true;
+  } else if (
+    predictiveEntryScore >= 78 &&
+    accelerationScore >= 75 &&
+    liquidityTransitionScore >= 58 &&
+    exhaustionPredictionScore < 58
+  ) {
+    timingAction = "ENTER_EARLY_ACCELERATION";
+    timingMultiplier = 1.15;
+  } else if (
+    predictiveEntryScore >= 68 &&
+    liquidityTransitionScore >= 50 &&
+    exhaustionPredictionScore < 65
+  ) {
+    timingAction = "ENTER_CONTROLLED";
+    timingMultiplier = 1.05;
+  }
+
+  if (gapUpPercent >= 30 && exhaustionPredictionScore >= 60) {
+    timingMultiplier = Math.min(timingMultiplier, 0.8);
+    if (timingAction === "ENTER_EARLY_ACCELERATION") {
+      timingAction = "ENTER_REDUCED_AFTER_LARGE_GAP";
+    }
+  }
+
+  const state = {
+    phase: "36_PREDICTIVE_EXECUTION_TIMING",
+    updatedAt: new Date().toISOString(),
+    symbol,
+    timingAction,
+    timingMultiplier: Number(timingMultiplier.toFixed(2)),
+    waitForPullback,
+    predictiveEntryScore,
+    accelerationScore,
+    exhaustionPredictionScore,
+    liquidityTransitionScore,
+    executionConfidence,
+    liquidityScore,
+    slippageRiskScore,
+    spreadPercent,
+    percentChange,
+    gapUpPercent,
+    pullbackFromHighPercent,
+    closeNearHighPercent,
+    volumeRatio,
+    reason:
+      `${timingAction} • PredictiveEntry ${predictiveEntryScore}/100 • ` +
+      `Acceleration ${accelerationScore}/100 • Exhaustion ${exhaustionPredictionScore}/100 • ` +
+      `LiquidityTransition ${liquidityTransitionScore}/100 • Timing x${timingMultiplier.toFixed(2)}`,
+  };
+
+  engineState.phase36PredictiveExecutionTimingState = state;
+
+  if (!Array.isArray(engineState.phase36PredictiveExecutionTimingHistory)) {
+    engineState.phase36PredictiveExecutionTimingHistory = [];
+  }
+
+  engineState.phase36PredictiveExecutionTimingHistory.unshift(state);
+  engineState.phase36PredictiveExecutionTimingHistory =
+    engineState.phase36PredictiveExecutionTimingHistory.slice(0, 200);
+
+  return state;
+}
+
+function calculatePhase37SelfBalancingAiEcosystem({
+  candidate = {},
+  phase14Governor = {},
+  phase15ExecutionDominance = {},
+  phase16PortfolioParliament = {},
+  phase34AdaptiveAggressionBalancer = {},
+  phase35AiGovernanceLayer = {},
+  phase36PredictiveExecutionTiming = {},
+  suppressionBalancer = {},
+  capitalPressure = {},
+}) {
+  const symbol = normalizeSymbol(candidate.symbol);
+
+  const marketStress = Number(engineState.marketStressLevel || 0);
+
+  const aggressionMultiplier = Number(
+    phase34AdaptiveAggressionBalancer.aggressionMultiplier || 1
+  );
+
+  const governanceMultiplier = Number(
+    phase35AiGovernanceLayer.governanceMultiplier || 1
+  );
+
+  const timingMultiplier = Number(
+    phase36PredictiveExecutionTiming.timingMultiplier || 1
+  );
+
+  const suppressionMultiplier = Number(
+    suppressionBalancer.balancedMultiplier || 1
+  );
+
+  const governorMultiplier = Number(
+    phase14Governor.governorMultiplier || 1
+  );
+
+  const executionMultiplier = Number(
+    phase15ExecutionDominance.executionDominanceMultiplier ||
+      phase15ExecutionDominance.executionMultiplier ||
+      1
+  );
+
+  const parliamentMultiplier = Number(
+    phase16PortfolioParliament.parliamentMultiplier || 1
+  );
+
+  const capitalPressureMultiplier = Number(
+    capitalPressure.pressureMultiplier || 1
+  );
+
+  const multipliers = [
+    aggressionMultiplier,
+    governanceMultiplier,
+    timingMultiplier,
+    suppressionMultiplier,
+    governorMultiplier,
+    executionMultiplier,
+    parliamentMultiplier,
+    capitalPressureMultiplier,
+  ].filter((value) => Number.isFinite(value) && value > 0);
+
+  const averageMultiplier =
+    multipliers.length > 0
+      ? multipliers.reduce((sum, value) => sum + value, 0) / multipliers.length
+      : 1;
+
+  const boostCount = multipliers.filter((value) => value > 1.05).length;
+  const suppressionCount = multipliers.filter((value) => value < 0.95).length;
+
+  const overAggressionRisk = clampScore(
+    boostCount * 18 +
+      Math.max(0, averageMultiplier - 1.15) * 120 +
+      marketStress * 0.18
+  );
+
+  const overSuppressionRisk = clampScore(
+    suppressionCount * 16 +
+      Math.max(0, 0.9 - averageMultiplier) * 130 +
+      Number(phase34AdaptiveAggressionBalancer.eliteMomentumQualityScore || 0) * 0.08
+  );
+
+  let ecosystemAction = "BALANCED";
+  let ecosystemMultiplier = 1;
+  let maxEcosystemMultiplier = 2.5;
+
+  if (
+    phase14Governor.suppressByGovernor === true ||
+    phase15ExecutionDominance.blockByExecutionDominance === true ||
+    phase16PortfolioParliament.blockByPortfolioParliament === true ||
+    phase35AiGovernanceLayer.governanceAction === "BLOCK" ||
+    phase36PredictiveExecutionTiming.timingAction === "AVOID_EXHAUSTION_ENTRY"
+  ) {
+    ecosystemAction = "RESPECT_HARD_BLOCK";
+    ecosystemMultiplier = 1;
+    maxEcosystemMultiplier = 1;
+  } else if (overAggressionRisk >= 75) {
+    ecosystemAction = "COOL_OVER_AGGRESSION";
+    ecosystemMultiplier = 0.82;
+    maxEcosystemMultiplier = 1.35;
+  } else if (overSuppressionRisk >= 75 && overAggressionRisk < 55) {
+    ecosystemAction = "RELIEVE_OVER_SUPPRESSION";
+    ecosystemMultiplier = 1.12;
+    maxEcosystemMultiplier = 2.65;
+  } else if (overAggressionRisk >= 58) {
+    ecosystemAction = "MILD_AGGRESSION_COOLING";
+    ecosystemMultiplier = 0.92;
+    maxEcosystemMultiplier = 1.75;
+  } else if (overSuppressionRisk >= 58) {
+    ecosystemAction = "MILD_SUPPRESSION_RELIEF";
+    ecosystemMultiplier = 1.06;
+    maxEcosystemMultiplier = 2.35;
+  }
+
+  if (marketStress >= 75) {
+    ecosystemMultiplier = Math.min(ecosystemMultiplier, 0.95);
+    maxEcosystemMultiplier = Math.min(maxEcosystemMultiplier, 1.25);
+  }
+
+  const state = {
+    phase: "37_SELF_BALANCING_AI_ECOSYSTEM",
+    updatedAt: new Date().toISOString(),
+    symbol,
+    ecosystemAction,
+    ecosystemMultiplier: Number(ecosystemMultiplier.toFixed(2)),
+    maxEcosystemMultiplier,
+    averageMultiplier: Number(averageMultiplier.toFixed(2)),
+    boostCount,
+    suppressionCount,
+    overAggressionRisk,
+    overSuppressionRisk,
+    marketStress,
+    multipliers: {
+      aggressionMultiplier,
+      governanceMultiplier,
+      timingMultiplier,
+      suppressionMultiplier,
+      governorMultiplier,
+      executionMultiplier,
+      parliamentMultiplier,
+      capitalPressureMultiplier,
+    },
+    reason:
+      `${ecosystemAction} • Avg x${averageMultiplier.toFixed(2)} • ` +
+      `Boosts ${boostCount} • Suppressors ${suppressionCount} • ` +
+      `OverAggression ${overAggressionRisk}/100 • OverSuppression ${overSuppressionRisk}/100`,
+  };
+
+  engineState.phase37SelfBalancingAiEcosystemState = state;
+
+  if (!Array.isArray(engineState.phase37SelfBalancingAiEcosystemHistory)) {
+    engineState.phase37SelfBalancingAiEcosystemHistory = [];
+  }
+
+  engineState.phase37SelfBalancingAiEcosystemHistory.unshift(state);
+  engineState.phase37SelfBalancingAiEcosystemHistory =
+    engineState.phase37SelfBalancingAiEcosystemHistory.slice(0, 200);
+
+  return state;
+}
+
+function calculatePhase38AutonomousCapitalParliament({
+  candidate = {},
+  account = {},
+  openBotPositions = [],
+  portfolioManager = {},
+  institutionalExecutionPlan = {},
+  phase14Governor = {},
+  phase15ExecutionDominance = {},
+  phase16PortfolioParliament = {},
+  phase34AdaptiveAggressionBalancer = {},
+  phase35AiGovernanceLayer = {},
+  phase36PredictiveExecutionTiming = {},
+  phase37SelfBalancingAiEcosystem = {},
+  capitalPressure = {},
+}) {
+  const symbol = normalizeSymbol(candidate.symbol);
+
+  const cash = Number(account.cash || 0);
+  const buyingPower = Number(account.buying_power || cash || 0);
+  const marketStress = Number(engineState.marketStressLevel || 0);
+
+  const score = Number(candidate.score || 0);
+  const runnerScore = Number(
+    candidate.runnerScore ||
+      candidate.explosiveRunnerScore ||
+      candidate.explosiveRunnerPrediction?.explosiveRunnerScore ||
+      candidate.adaptiveRunnerScore ||
+      0
+  );
+
+  const institutionalBrainScore = Number(
+    candidate.institutionalBrainScore ||
+      candidate.fullInstitutionalAiBrain?.dynamicConvictionScore ||
+      candidate.fullInstitutionalAiBrain?.consensusScore ||
+      0
+  );
+
+  const executionConfidence = Number(
+    institutionalExecutionPlan.executionConfidence ||
+      candidate.executionConfidence ||
+      50
+  );
+
+  const trendQualityScore = Number(candidate.trendQualityScore || 0);
+  const continuationProbability = Number(candidate.continuationProbability || 0);
+  const statisticalEdgeScore = Number(
+    candidate.statisticalEdgeScore ||
+      candidate.statisticalScore ||
+      candidate.statisticalEdge?.statisticalEdgeScore ||
+      0
+  );
+
+  const portfolioHeatRisk = Number(
+    phase16PortfolioParliament.portfolioHeatRisk ||
+      candidate.portfolioHeat?.portfolioHeatScore ||
+      0
+  );
+
+  const hiddenCorrelationRisk = Number(
+    phase16PortfolioParliament.hiddenCorrelationRisk ||
+      candidate.portfolioHeat?.correlationRiskScore ||
+      engineState.correlationIntelligenceState?.hiddenExposureRiskScore ||
+      0
+  );
+
+  const sameSectorOpenPositions = Number(
+    candidate.portfolioHeat?.sameSectorOpenPositions || 0
+  );
+
+  const engineVotes = [
+    {
+      engine: "MOMENTUM_DESK",
+      vote: runnerScore >= 70 || continuationProbability >= 75 ? "EXPAND" : score >= 65 ? "ALLOW" : "REDUCE",
+      strength: clampScore(runnerScore * 0.45 + continuationProbability * 0.35 + trendQualityScore * 0.2),
+    },
+    {
+      engine: "EXECUTION_DESK",
+      vote: executionConfidence >= 65 ? "EXPAND" : executionConfidence >= 45 ? "ALLOW" : "REDUCE",
+      strength: clampScore(executionConfidence),
+    },
+    {
+      engine: "RISK_COMMITTEE",
+      vote:
+        marketStress >= 75 ||
+        portfolioHeatRisk >= 82 ||
+        hiddenCorrelationRisk >= 78
+          ? "BLOCK"
+          : marketStress >= 60 || portfolioHeatRisk >= 70 || hiddenCorrelationRisk >= 65
+          ? "REDUCE"
+          : "ALLOW",
+      strength: clampScore(100 - Math.max(marketStress, portfolioHeatRisk, hiddenCorrelationRisk)),
+    },
+    {
+      engine: "PORTFOLIO_PARLIAMENT",
+      vote:
+        phase16PortfolioParliament.blockByPortfolioParliament === true
+          ? "BLOCK"
+          : Number(phase16PortfolioParliament.parliamentMultiplier || 1) < 1
+          ? "REDUCE"
+          : "ALLOW",
+      strength: clampScore(100 - portfolioHeatRisk),
+    },
+    {
+      engine: "AI_GOVERNANCE",
+      vote:
+        phase35AiGovernanceLayer.governanceAction === "BLOCK" ||
+        phase35AiGovernanceLayer.governanceAction === "WATCHLIST_ONLY"
+          ? "BLOCK"
+          : String(phase35AiGovernanceLayer.governanceAction || "").includes("REDUCE")
+          ? "REDUCE"
+          : String(phase35AiGovernanceLayer.governanceAction || "").includes("AGGRESSIVE")
+          ? "EXPAND"
+          : "ALLOW",
+      strength: clampScore(
+        Number(phase35AiGovernanceLayer.momentumAuthorityScore || institutionalBrainScore || 50)
+      ),
+    },
+    {
+      engine: "PREDICTIVE_EXECUTION",
+      vote:
+        phase36PredictiveExecutionTiming.timingAction === "AVOID_EXHAUSTION_ENTRY"
+          ? "BLOCK"
+          : phase36PredictiveExecutionTiming.timingAction === "WAIT_FOR_BETTER_ENTRY"
+          ? "REDUCE"
+          : phase36PredictiveExecutionTiming.timingAction === "ENTER_EARLY_ACCELERATION"
+          ? "EXPAND"
+          : "ALLOW",
+      strength: clampScore(
+        Number(phase36PredictiveExecutionTiming.predictiveEntryScore || executionConfidence || 50)
+      ),
+    },
+    {
+      engine: "AGGRESSION_BALANCER",
+      vote:
+        String(phase34AdaptiveAggressionBalancer.action || "").includes("RELIEVE") ||
+        String(phase34AdaptiveAggressionBalancer.action || "").includes("RESTORE")
+          ? "EXPAND"
+          : "ALLOW",
+      strength: clampScore(
+        Number(phase34AdaptiveAggressionBalancer.eliteMomentumQualityScore || 50)
+      ),
+    },
+    {
+      engine: "ECOSYSTEM_BALANCER",
+      vote:
+        phase37SelfBalancingAiEcosystem.ecosystemAction === "COOL_OVER_AGGRESSION"
+          ? "REDUCE"
+          : phase37SelfBalancingAiEcosystem.ecosystemAction === "RELIEVE_OVER_SUPPRESSION"
+          ? "EXPAND"
+          : "ALLOW",
+      strength: clampScore(
+        100 -
+          Math.max(
+            Number(phase37SelfBalancingAiEcosystem.overAggressionRisk || 0),
+            Number(phase37SelfBalancingAiEcosystem.overSuppressionRisk || 0)
+          )
+      ),
+    },
+    {
+      engine: "CAPITAL_PRESSURE",
+      vote:
+        capitalPressure.pressureTier === "PROBE_PRESSURE"
+          ? "REDUCE"
+          : Number(capitalPressure.pressureMultiplier || 1) > 1
+          ? "EXPAND"
+          : "ALLOW",
+      strength: clampScore(Number(capitalPressure.capitalEfficiencyScore || 50)),
+    },
+  ];
+
+  const voteWeights = {
+    BLOCK: -3,
+    REDUCE: -1,
+    ALLOW: 1,
+    EXPAND: 2,
+  };
+
+  const weightedVoteScore =
+    engineVotes.reduce((sum, item) => {
+      const weight = voteWeights[item.vote] ?? 0;
+      const strength = Number(item.strength || 50) / 100;
+      return sum + weight * strength;
+    }, 0) / Math.max(1, engineVotes.length);
+
+  const blockVotes = engineVotes.filter((item) => item.vote === "BLOCK").length;
+  const reduceVotes = engineVotes.filter((item) => item.vote === "REDUCE").length;
+  const expandVotes = engineVotes.filter((item) => item.vote === "EXPAND").length;
+  const allowVotes = engineVotes.filter((item) => item.vote === "ALLOW").length;
+
+  const capitalConfidenceScore = clampScore(
+    50 +
+      weightedVoteScore * 25 +
+      institutionalBrainScore * 0.12 +
+      statisticalEdgeScore * 0.08 -
+      sameSectorOpenPositions * 4
+  );
+
+  let parliamentDecision = "ALLOW_STANDARD_CAPITAL";
+  let capitalParliamentMultiplier = 1;
+  let maxCapitalAuthorityMultiplier = 2.25;
+
+  if (
+    cash <= 0 ||
+    buyingPower <= 0 ||
+    blockVotes >= 1 ||
+    phase14Governor.suppressByGovernor === true ||
+    phase15ExecutionDominance.blockByExecutionDominance === true ||
+    phase16PortfolioParliament.blockByPortfolioParliament === true
+  ) {
+    parliamentDecision = "BLOCK_CAPITAL";
+    capitalParliamentMultiplier = 0;
+    maxCapitalAuthorityMultiplier = 0;
+  } else if (reduceVotes >= 4 || capitalConfidenceScore < 38) {
+    parliamentDecision = "PROBE_CAPITAL_ONLY";
+    capitalParliamentMultiplier = 0.55;
+    maxCapitalAuthorityMultiplier = 0.85;
+  } else if (reduceVotes >= 2 && expandVotes < 2) {
+    parliamentDecision = "REDUCED_CAPITAL";
+    capitalParliamentMultiplier = 0.75;
+    maxCapitalAuthorityMultiplier = 1.15;
+  } else if (
+    expandVotes >= 3 &&
+    reduceVotes <= 2 &&
+    capitalConfidenceScore >= 68 &&
+    marketStress < 65
+  ) {
+    parliamentDecision = "EXPAND_CAPITAL_AUTHORITY";
+    capitalParliamentMultiplier = 1.14;
+    maxCapitalAuthorityMultiplier = 2.85;
+  } else if (
+    expandVotes >= 2 &&
+    capitalConfidenceScore >= 60 &&
+    marketStress < 70
+  ) {
+    parliamentDecision = "CONTROLLED_CAPITAL_EXPANSION";
+    capitalParliamentMultiplier = 1.06;
+    maxCapitalAuthorityMultiplier = 2.45;
+  }
+
+  if (hiddenCorrelationRisk >= 72 || portfolioHeatRisk >= 78) {
+    capitalParliamentMultiplier = Math.min(capitalParliamentMultiplier, 0.9);
+    maxCapitalAuthorityMultiplier = Math.min(maxCapitalAuthorityMultiplier, 1.1);
+    if (parliamentDecision.includes("EXPAND")) {
+      parliamentDecision = "CORRELATION_LIMITED_CAPITAL";
+    }
+  }
+
+  const state = {
+    phase: "38_AUTONOMOUS_CAPITAL_PARLIAMENT",
+    updatedAt: new Date().toISOString(),
+    symbol,
+    parliamentDecision,
+    capitalParliamentMultiplier: Number(capitalParliamentMultiplier.toFixed(2)),
+    maxCapitalAuthorityMultiplier,
+    capitalConfidenceScore,
+    weightedVoteScore: Number(weightedVoteScore.toFixed(3)),
+    blockVotes,
+    reduceVotes,
+    allowVotes,
+    expandVotes,
+    marketStress,
+    portfolioHeatRisk,
+    hiddenCorrelationRisk,
+    sameSectorOpenPositions,
+    engineVotes,
+    reason:
+      `${parliamentDecision} • Confidence ${capitalConfidenceScore}/100 • ` +
+      `Votes B${blockVotes}/R${reduceVotes}/A${allowVotes}/E${expandVotes} • ` +
+      `Capital x${capitalParliamentMultiplier.toFixed(2)}`,
+  };
+
+  engineState.phase38AutonomousCapitalParliamentState = state;
+
+  if (!Array.isArray(engineState.phase38AutonomousCapitalParliamentHistory)) {
+    engineState.phase38AutonomousCapitalParliamentHistory = [];
+  }
+
+  engineState.phase38AutonomousCapitalParliamentHistory.unshift(state);
+  engineState.phase38AutonomousCapitalParliamentHistory =
+    engineState.phase38AutonomousCapitalParliamentHistory.slice(0, 200);
+
+  return state;
+}
+
+function calculatePhase39MetaStrategyAi({
+  candidate = {},
+  institutionalExecutionPlan = {},
+  phase35AiGovernanceLayer = {},
+  phase36PredictiveExecutionTiming = {},
+  phase37SelfBalancingAiEcosystem = {},
+  phase38AutonomousCapitalParliament = {},
+}) {
+  const symbol = normalizeSymbol(candidate.symbol);
+
+  const marketStress = Number(engineState.marketStressLevel || 0);
+  const score = Number(candidate.score || 0);
+
+  const runnerScore = Number(
+    candidate.runnerScore ||
+      candidate.explosiveRunnerScore ||
+      candidate.explosiveRunnerPrediction?.explosiveRunnerScore ||
+      candidate.adaptiveRunnerScore ||
+      0
+  );
+
+  const accumulationScore = Number(
+    candidate.accumulationIntelligence?.accumulationScore ||
+      candidate.multiDayAccumulationScore ||
+      candidate.multiDayAccumulation?.preBreakoutScore ||
+      0
+  );
+
+  const breakoutQualityScore = Number(candidate.breakoutQualityScore || 0);
+  const trendQualityScore = Number(candidate.trendQualityScore || 0);
+  const continuationProbability = Number(candidate.continuationProbability || 0);
+  const relativeStrengthPercentile = Number(candidate.relativeStrengthPercentile || 0);
+
+  const executionConfidence = Number(
+    institutionalExecutionPlan.executionConfidence ||
+      candidate.executionConfidence ||
+      50
+  );
+
+  const predictiveEntryScore = Number(
+    phase36PredictiveExecutionTiming.predictiveEntryScore || 50
+  );
+
+  const capitalConfidenceScore = Number(
+    phase38AutonomousCapitalParliament.capitalConfidenceScore || 50
+  );
+
+  const riskAuthorityScore = Number(
+    phase35AiGovernanceLayer.riskAuthorityScore || 50
+  );
+
+  const ecosystemAction =
+    phase37SelfBalancingAiEcosystem.ecosystemAction || "BALANCED";
+
+  const runnerStrategyScore = clampScore(
+    runnerScore * 0.32 +
+      continuationProbability * 0.22 +
+      trendQualityScore * 0.18 +
+      relativeStrengthPercentile * 0.14 +
+      predictiveEntryScore * 0.14
+  );
+
+  const breakoutStrategyScore = clampScore(
+    breakoutQualityScore * 0.3 +
+      trendQualityScore * 0.2 +
+      executionConfidence * 0.18 +
+      score * 0.16 +
+      predictiveEntryScore * 0.16
+  );
+
+  const accumulationStrategyScore = clampScore(
+    accumulationScore * 0.38 +
+      Number(candidate.multiDayAccumulation?.supportHoldingScore || 50) * 0.18 +
+      Number(candidate.statisticalEdgeScore || candidate.statisticalScore || 50) * 0.18 +
+      score * 0.14 +
+      executionConfidence * 0.12
+  );
+
+  const defensiveStrategyScore = clampScore(
+    marketStress * 0.28 +
+      riskAuthorityScore * 0.28 +
+      Number(candidate.portfolioHeat?.sameSectorOpenPositions || 0) * 8 +
+      Number(candidate.valuationRiskScore || 50) * 0.14 +
+      Number(candidate.earningsVolatilityRiskScore || 50) * 0.14
+  );
+
+  const strategies = [
+    {
+      name: "RUNNER_DOMINANCE",
+      score: runnerStrategyScore,
+      multiplier: 1.12,
+    },
+    {
+      name: "BREAKOUT_DOMINANCE",
+      score: breakoutStrategyScore,
+      multiplier: 1.08,
+    },
+    {
+      name: "ACCUMULATION_DOMINANCE",
+      score: accumulationStrategyScore,
+      multiplier: 1.05,
+    },
+    {
+      name: "DEFENSIVE_CAPITAL_PROTECTION",
+      score: defensiveStrategyScore,
+      multiplier: 0.72,
+    },
+  ].sort((a, b) => b.score - a.score);
+
+  const dominantStrategy = strategies[0];
+  const secondStrategy = strategies[1];
+
+  let metaStrategyAction = "ALLOW_STRATEGY";
+  let metaStrategyMultiplier = dominantStrategy.multiplier;
+
+  if (marketStress >= 78 || defensiveStrategyScore >= 82) {
+    metaStrategyAction = "DEFENSIVE_STRATEGY_OVERRIDE";
+    metaStrategyMultiplier = 0.65;
+  } else if (
+    dominantStrategy.name === "RUNNER_DOMINANCE" &&
+    runnerStrategyScore >= 78 &&
+    capitalConfidenceScore >= 60 &&
+    executionConfidence >= 55
+  ) {
+    metaStrategyAction = "PRESS_RUNNER_STRATEGY";
+    metaStrategyMultiplier = 1.18;
+  } else if (
+    dominantStrategy.name === "BREAKOUT_DOMINANCE" &&
+    breakoutStrategyScore >= 75 &&
+    predictiveEntryScore >= 65
+  ) {
+    metaStrategyAction = "PRESS_BREAKOUT_STRATEGY";
+    metaStrategyMultiplier = 1.12;
+  } else if (
+    dominantStrategy.name === "ACCUMULATION_DOMINANCE" &&
+    accumulationStrategyScore >= 72
+  ) {
+    metaStrategyAction = "EARLY_ACCUMULATION_STRATEGY";
+    metaStrategyMultiplier = 1.06;
+  }
+
+  if (ecosystemAction === "COOL_OVER_AGGRESSION") {
+    metaStrategyMultiplier = Math.min(metaStrategyMultiplier, 0.95);
+  }
+
+  if (ecosystemAction === "RELIEVE_OVER_SUPPRESSION" && defensiveStrategyScore < 70) {
+    metaStrategyMultiplier = Math.max(metaStrategyMultiplier, 1.08);
+  }
+
+  const state = {
+    phase: "39_META_STRATEGY_AI",
+    updatedAt: new Date().toISOString(),
+    symbol,
+    dominantStrategy: dominantStrategy.name,
+    secondStrategy: secondStrategy.name,
+    metaStrategyAction,
+    metaStrategyMultiplier: Number(metaStrategyMultiplier.toFixed(2)),
+    runnerStrategyScore,
+    breakoutStrategyScore,
+    accumulationStrategyScore,
+    defensiveStrategyScore,
+    capitalConfidenceScore,
+    predictiveEntryScore,
+    executionConfidence,
+    marketStress,
+    strategies,
+    reason:
+      `${metaStrategyAction} • Dominant ${dominantStrategy.name} ${dominantStrategy.score}/100 • ` +
+      `Second ${secondStrategy.name} ${secondStrategy.score}/100 • Meta x${metaStrategyMultiplier.toFixed(2)}`,
+  };
+
+  engineState.phase39MetaStrategyAiState = state;
+
+  if (!Array.isArray(engineState.phase39MetaStrategyAiHistory)) {
+    engineState.phase39MetaStrategyAiHistory = [];
+  }
+
+  engineState.phase39MetaStrategyAiHistory.unshift(state);
+  engineState.phase39MetaStrategyAiHistory =
+    engineState.phase39MetaStrategyAiHistory.slice(0, 200);
+
+  return state;
+}
+
+
+function calculatePhase40RecursiveRealTimeLearning({
+  candidate = {},
+  phase34AdaptiveAggressionBalancer = {},
+  phase35AiGovernanceLayer = {},
+  phase36PredictiveExecutionTiming = {},
+  phase37SelfBalancingAiEcosystem = {},
+  phase38AutonomousCapitalParliament = {},
+  phase39MetaStrategyAi = {},
+}) {
+  const symbol = normalizeSymbol(candidate.symbol);
+
+  const score = Number(candidate.score || 0);
+  const marketStress = Number(engineState.marketStressLevel || 0);
+
+  const recentDecisions = (engineState.aiDecisionHistory || []).slice(0, 50);
+  const recentOrders = (engineState.recentOrders || []).slice(0, 50);
+  const recentFailures = (engineState.failedOrders || []).slice(0, 25);
+
+  const sameSymbolRecentOrders = recentOrders.filter(
+    (item) => normalizeSymbol(item.symbol) === symbol
+  );
+
+  const skippedRecently = recentOrders.filter((item) =>
+    String(item.type || "").includes("SKIPPED")
+  ).length;
+
+  const failedRecently = recentFailures.length;
+
+  const averageRecentDecisionScore =
+    recentDecisions.length > 0
+      ? recentDecisions.reduce(
+          (sum, item) => sum + Number(item.score || item.confidenceScore || 0),
+          0
+        ) / recentDecisions.length
+      : 50;
+
+  const liveLearningPressure = clampScore(
+    skippedRecently * 1.2 +
+      failedRecently * 3 +
+      marketStress * 0.25 +
+      sameSymbolRecentOrders.length * 8
+  );
+
+  const currentOpportunityStrength = clampScore(
+    score * 0.18 +
+      Number(phase34AdaptiveAggressionBalancer.eliteMomentumQualityScore || 50) * 0.2 +
+      Number(phase35AiGovernanceLayer.momentumAuthorityScore || 50) * 0.15 +
+      Number(phase36PredictiveExecutionTiming.predictiveEntryScore || 50) * 0.15 +
+      Number(phase38AutonomousCapitalParliament.capitalConfidenceScore || 50) * 0.16 +
+      Number(phase39MetaStrategyAi.runnerStrategyScore || 50) * 0.08 +
+      Number(phase39MetaStrategyAi.breakoutStrategyScore || 50) * 0.08
+  );
+
+  const instabilityScore = clampScore(
+    liveLearningPressure * 0.38 +
+      Number(phase37SelfBalancingAiEcosystem.overAggressionRisk || 0) * 0.22 +
+      Number(phase37SelfBalancingAiEcosystem.overSuppressionRisk || 0) * 0.18 +
+      Math.max(0, 55 - averageRecentDecisionScore) * 0.22
+  );
+
+  let recursiveAction = "KEEP_CURRENT_WEIGHTS";
+  let recursiveLearningMultiplier = 1;
+  let learningMode = "STABLE_LEARNING";
+
+  if (instabilityScore >= 82) {
+    recursiveAction = "TEMPORARILY_REDUCE_AI_MUTATION";
+    recursiveLearningMultiplier = 0.78;
+    learningMode = "DEFENSIVE_RECURSIVE_LEARNING";
+  } else if (instabilityScore >= 68) {
+    recursiveAction = "COOL_RECENT_BEHAVIOR";
+    recursiveLearningMultiplier = 0.9;
+    learningMode = "CAUTION_RECURSIVE_LEARNING";
+  } else if (
+    currentOpportunityStrength >= 76 &&
+    instabilityScore < 55 &&
+    marketStress < 65
+  ) {
+    recursiveAction = "REINFORCE_STRONG_LIVE_PATTERN";
+    recursiveLearningMultiplier = 1.1;
+    learningMode = "AGGRESSIVE_RECURSIVE_LEARNING";
+  } else if (
+    currentOpportunityStrength >= 68 &&
+    instabilityScore < 62
+  ) {
+    recursiveAction = "MILD_LIVE_PATTERN_REINFORCEMENT";
+    recursiveLearningMultiplier = 1.04;
+    learningMode = "BALANCED_RECURSIVE_LEARNING";
+  }
+
+  if (sameSymbolRecentOrders.length >= 2) {
+    recursiveLearningMultiplier = Math.min(recursiveLearningMultiplier, 0.9);
+    recursiveAction = "PREVENT_SYMBOL_RECURSIVE_OVERFOCUS";
+  }
+
+  const state = {
+    phase: "40_RECURSIVE_REAL_TIME_LEARNING",
+    updatedAt: new Date().toISOString(),
+    symbol,
+    recursiveAction,
+    learningMode,
+    recursiveLearningMultiplier: Number(recursiveLearningMultiplier.toFixed(2)),
+    currentOpportunityStrength,
+    instabilityScore,
+    liveLearningPressure,
+    averageRecentDecisionScore: Number(averageRecentDecisionScore.toFixed(2)),
+    skippedRecently,
+    failedRecently,
+    sameSymbolRecentOrderCount: sameSymbolRecentOrders.length,
+    marketStress,
+    reason:
+      `${recursiveAction} • Opportunity ${currentOpportunityStrength}/100 • ` +
+      `Instability ${instabilityScore}/100 • LivePressure ${liveLearningPressure}/100 • ` +
+      `Recursive x${recursiveLearningMultiplier.toFixed(2)}`,
+  };
+
+  engineState.phase40RecursiveRealTimeLearningState = state;
+
+  if (!Array.isArray(engineState.phase40RecursiveRealTimeLearningHistory)) {
+    engineState.phase40RecursiveRealTimeLearningHistory = [];
+  }
+
+  engineState.phase40RecursiveRealTimeLearningHistory.unshift(state);
+  engineState.phase40RecursiveRealTimeLearningHistory =
+    engineState.phase40RecursiveRealTimeLearningHistory.slice(0, 200);
+
+  return state;
+}
+
+function calculatePhase41InstitutionalCompressionIntelligence({
+  candidate = {},
+  institutionalExecutionPlan = {},
+  phase36PredictiveExecutionTiming = {},
+  phase39MetaStrategyAi = {},
+  phase40RecursiveRealTimeLearning = {},
+}) {
+  const symbol = normalizeSymbol(candidate.symbol);
+
+  const current = Number(candidate.current || candidate.price || 0);
+  const high = Number(candidate.high || current || 0);
+  const low = Number(candidate.low || current || 0);
+  const open = Number(candidate.open || current || 0);
+
+  const rangePercent =
+    low > 0 && high > low ? ((high - low) / low) * 100 : 0;
+
+  const openToCloseStrength =
+    open > 0 && current > 0 ? ((current - open) / open) * 100 : 0;
+
+  const volumeRatio = Number(candidate.volumeRatio || 0);
+
+  const closeNearHighPercent = Number(
+    candidate.confirmations?.closeNearHighPercent ||
+      candidate.closeNearHighPercent ||
+      0
+  );
+
+  const pullbackFromHighPercent = Number(
+    candidate.confirmations?.pullbackFromHighPercent ||
+      candidate.pullbackFromHighPercent ||
+      (high > 0 && current > 0 ? ((high - current) / high) * 100 : 0)
+  );
+
+  const accumulationScore = Number(
+    candidate.accumulationIntelligence?.accumulationScore ||
+      candidate.multiDayAccumulationScore ||
+      candidate.multiDayAccumulation?.preBreakoutScore ||
+      0
+  );
+
+  const compressionScore = Number(
+    candidate.volatilityCompression?.compressionScore || 0
+  );
+
+  const trendQualityScore = Number(candidate.trendQualityScore || 0);
+  const breakoutQualityScore = Number(candidate.breakoutQualityScore || 0);
+  const continuationProbability = Number(candidate.continuationProbability || 0);
+  const statisticalEdgeScore = Number(
+    candidate.statisticalEdgeScore ||
+      candidate.statisticalScore ||
+      candidate.statisticalEdge?.statisticalEdgeScore ||
+      0
+  );
+
+  const liquidityScore = Number(
+    institutionalExecutionPlan.liquidityScore || 50
+  );
+
+  const predictiveEntryScore = Number(
+    phase36PredictiveExecutionTiming.predictiveEntryScore || 50
+  );
+
+  const metaRunnerScore = Number(
+    phase39MetaStrategyAi.runnerStrategyScore || 50
+  );
+
+  const recursiveOpportunityStrength = Number(
+    phase40RecursiveRealTimeLearning.currentOpportunityStrength || 50
+  );
+
+  const stealthLoadingScore = clampScore(
+    accumulationScore * 0.32 +
+      volumeRatio * 10 +
+      closeNearHighPercent * 0.18 +
+      trendQualityScore * 0.16 +
+      statisticalEdgeScore * 0.14
+  );
+
+  const volatilityCompressionScore = clampScore(
+    compressionScore * 0.45 +
+      Math.max(0, 22 - rangePercent) * 2.1 +
+      Math.max(0, 3 - pullbackFromHighPercent) * 6 +
+      breakoutQualityScore * 0.16
+  );
+
+  const liquidityVacuumScore = clampScore(
+    liquidityScore * 0.26 +
+      Math.min(100, volumeRatio * 22) * 0.28 +
+      closeNearHighPercent * 0.18 +
+      predictiveEntryScore * 0.16 +
+      continuationProbability * 0.12
+  );
+
+  const pressureBuildUpScore = clampScore(
+    stealthLoadingScore * 0.28 +
+      volatilityCompressionScore * 0.24 +
+      liquidityVacuumScore * 0.2 +
+      metaRunnerScore * 0.14 +
+      recursiveOpportunityStrength * 0.14
+  );
+
+  let compressionAction = "NO_COMPRESSION_EDGE";
+  let compressionMultiplier = 1;
+  let compressionTier = "NORMAL";
+
+  if (
+    pressureBuildUpScore >= 82 &&
+    stealthLoadingScore >= 72 &&
+    liquidityVacuumScore >= 65
+  ) {
+    compressionAction = "INSTITUTIONAL_PRESSURE_BUILDUP";
+    compressionTier = "ELITE_COMPRESSION";
+    compressionMultiplier = 1.18;
+  } else if (
+    pressureBuildUpScore >= 72 &&
+    stealthLoadingScore >= 65
+  ) {
+    compressionAction = "EARLY_EXPANSION_PRESSURE";
+    compressionTier = "STRONG_COMPRESSION";
+    compressionMultiplier = 1.1;
+  } else if (
+    pressureBuildUpScore >= 62 &&
+    accumulationScore >= 60
+  ) {
+    compressionAction = "WATCH_COMPRESSION_SETUP";
+    compressionTier = "DEVELOPING_COMPRESSION";
+    compressionMultiplier = 1.04;
+  }
+
+  if (pullbackFromHighPercent >= 5 || openToCloseStrength < -4) {
+    compressionMultiplier = Math.min(compressionMultiplier, 0.9);
+    compressionAction = "COMPRESSION_FADE_WARNING";
+  }
+
+  const state = {
+    phase: "41_INSTITUTIONAL_COMPRESSION_INTELLIGENCE",
+    updatedAt: new Date().toISOString(),
+    symbol,
+    compressionAction,
+    compressionTier,
+    compressionMultiplier: Number(compressionMultiplier.toFixed(2)),
+    pressureBuildUpScore,
+    stealthLoadingScore,
+    volatilityCompressionScore,
+    liquidityVacuumScore,
+    accumulationScore,
+    compressionScore,
+    rangePercent: Number(rangePercent.toFixed(2)),
+    openToCloseStrength: Number(openToCloseStrength.toFixed(2)),
+    volumeRatio,
+    closeNearHighPercent,
+    pullbackFromHighPercent,
+    predictiveEntryScore,
+    reason:
+      `${compressionAction} • Pressure ${pressureBuildUpScore}/100 • ` +
+      `Stealth ${stealthLoadingScore}/100 • Compression ${volatilityCompressionScore}/100 • ` +
+      `LiquidityVacuum ${liquidityVacuumScore}/100 • Compression x${compressionMultiplier.toFixed(2)}`,
+  };
+
+  engineState.phase41InstitutionalCompressionState = state;
+
+  if (!Array.isArray(engineState.phase41InstitutionalCompressionHistory)) {
+    engineState.phase41InstitutionalCompressionHistory = [];
+  }
+
+  engineState.phase41InstitutionalCompressionHistory.unshift(state);
+  engineState.phase41InstitutionalCompressionHistory =
+    engineState.phase41InstitutionalCompressionHistory.slice(0, 200);
+
+  return state;
+}
+
 async function autoBuySignals(signals = []) {
   if (!["live_stock", "smart"].includes(TRADING_MODE)) return;
 
@@ -21215,6 +25721,178 @@ const phase16PortfolioParliamentSizingMultiplier =
         entryTimingMultiplier,
       });
 
+    const phase34AdaptiveAggressionBalancer =
+      calculatePhase34AdaptiveAggressionBalancer({
+        candidate,
+        account,
+        openBotPositions,
+        portfolioManager,
+        institutionalExecutionPlan,
+        phase14Governor,
+        phase15ExecutionDominance,
+        phase16PortfolioParliament,
+        capitalPressure,
+        suppressionBalancer,
+      });
+
+    const phase34AggressionSizingMultiplier =
+      Number(phase34AdaptiveAggressionBalancer.aggressionMultiplier || 1);
+
+    const phase35AiGovernanceLayer =
+      calculatePhase35AiGovernanceLayer({
+        candidate,
+        account,
+        openBotPositions,
+        portfolioManager,
+        institutionalExecutionPlan,
+        phase14Governor,
+        phase15ExecutionDominance,
+        phase16PortfolioParliament,
+        phase34AdaptiveAggressionBalancer,
+        capitalPressure,
+        suppressionBalancer,
+      });
+
+    if (
+      phase35AiGovernanceLayer.governanceAction === "BLOCK" ||
+      phase35AiGovernanceLayer.governanceAction === "WATCHLIST_ONLY"
+    ) {
+      saveRecentOrder(
+        "AUTO_STOCK_BUY_SKIPPED_PHASE_35_AI_GOVERNANCE",
+        symbol,
+        {
+          score: candidate.score,
+          phase35AiGovernanceLayer,
+          reason:
+            "Phase 35 AI Governance Layer blocked or watchlisted this trade.",
+        }
+      );
+
+      continue;
+    }
+
+    const phase35GovernanceSizingMultiplier =
+      Number(phase35AiGovernanceLayer.governanceMultiplier || 1);
+
+    const phase36PredictiveExecutionTiming =
+      calculatePhase36PredictiveExecutionTiming({
+        candidate,
+        institutionalExecutionPlan,
+        phase15ExecutionDominance,
+        phase35AiGovernanceLayer,
+      });
+
+    if (
+      phase36PredictiveExecutionTiming.timingAction === "AVOID_EXHAUSTION_ENTRY" ||
+      phase36PredictiveExecutionTiming.timingAction === "RESPECT_GOVERNANCE_BLOCK"
+    ) {
+      saveRecentOrder(
+        "AUTO_STOCK_BUY_SKIPPED_PHASE_36_PREDICTIVE_TIMING",
+        symbol,
+        {
+          score: candidate.score,
+          phase36PredictiveExecutionTiming,
+          reason:
+            "Phase 36 predictive timing avoided this entry due to exhaustion, liquidity, spread, or governance risk.",
+        }
+      );
+
+      continue;
+    }
+
+    const phase36PredictiveTimingMultiplier =
+      Number(phase36PredictiveExecutionTiming.timingMultiplier || 1);
+
+    const phase37SelfBalancingAiEcosystem =
+      calculatePhase37SelfBalancingAiEcosystem({
+        candidate,
+        phase14Governor,
+        phase15ExecutionDominance,
+        phase16PortfolioParliament,
+        phase34AdaptiveAggressionBalancer,
+        phase35AiGovernanceLayer,
+        phase36PredictiveExecutionTiming,
+        suppressionBalancer,
+        capitalPressure,
+      });
+
+    const phase37EcosystemSizingMultiplier =
+      Number(phase37SelfBalancingAiEcosystem.ecosystemMultiplier || 1);
+    const phase38AutonomousCapitalParliament =
+      calculatePhase38AutonomousCapitalParliament({
+        candidate,
+        account,
+        openBotPositions,
+        portfolioManager,
+        institutionalExecutionPlan,
+        phase14Governor,
+        phase15ExecutionDominance,
+        phase16PortfolioParliament,
+        phase34AdaptiveAggressionBalancer,
+        phase35AiGovernanceLayer,
+        phase36PredictiveExecutionTiming,
+        phase37SelfBalancingAiEcosystem,
+        capitalPressure,
+      });
+
+    if (phase38AutonomousCapitalParliament.parliamentDecision === "BLOCK_CAPITAL") {
+      saveRecentOrder(
+        "AUTO_STOCK_BUY_SKIPPED_PHASE_38_CAPITAL_PARLIAMENT",
+        symbol,
+        {
+          score: candidate.score,
+          phase38AutonomousCapitalParliament,
+          reason:
+            "Phase 38 Autonomous Capital Parliament blocked capital authority for this trade.",
+        }
+      );
+
+      continue;
+    }
+
+    const phase38CapitalParliamentSizingMultiplier =
+      Number(phase38AutonomousCapitalParliament.capitalParliamentMultiplier || 1);
+
+    const phase39MetaStrategyAi =
+      calculatePhase39MetaStrategyAi({
+        candidate,
+        institutionalExecutionPlan,
+        phase35AiGovernanceLayer,
+        phase36PredictiveExecutionTiming,
+        phase37SelfBalancingAiEcosystem,
+        phase38AutonomousCapitalParliament,
+      });
+
+    const phase39MetaStrategySizingMultiplier =
+      Number(phase39MetaStrategyAi.metaStrategyMultiplier || 1);
+      
+    const phase40RecursiveRealTimeLearning =
+      calculatePhase40RecursiveRealTimeLearning({
+        candidate,
+        phase34AdaptiveAggressionBalancer,
+        phase35AiGovernanceLayer,
+        phase36PredictiveExecutionTiming,
+        phase37SelfBalancingAiEcosystem,
+        phase38AutonomousCapitalParliament,
+        phase39MetaStrategyAi,
+      });
+
+    const phase40RecursiveLearningSizingMultiplier =
+      Number(phase40RecursiveRealTimeLearning.recursiveLearningMultiplier || 1);
+      
+    const phase41InstitutionalCompression =
+      calculatePhase41InstitutionalCompressionIntelligence({
+        candidate,
+        institutionalExecutionPlan,
+        phase36PredictiveExecutionTiming,
+        phase39MetaStrategyAi,
+        phase40RecursiveRealTimeLearning,
+      });
+
+    const phase41CompressionSizingMultiplier =
+      Number(phase41InstitutionalCompression.compressionMultiplier || 1);
+      
+      
 
 const capitalPressureSizingMultiplier =
   Number(capitalPressure.pressureMultiplier || 1);
@@ -21240,7 +25918,16 @@ const rawSizingMultiplier =
   sectorDominanceMultiplier *
   liquidityTrapMultiplier *
   entryTimingMultiplier *
-  suppressionBalancer.balancedMultiplier;
+  suppressionBalancer.balancedMultiplier *
+  phase34AggressionSizingMultiplier *
+  phase35GovernanceSizingMultiplier *
+  phase36PredictiveTimingMultiplier *
+  phase37EcosystemSizingMultiplier *
+  phase38CapitalParliamentSizingMultiplier *
+  phase39MetaStrategySizingMultiplier *
+  phase40RecursiveLearningSizingMultiplier *
+  phase41CompressionSizingMultiplier;
+
 
 const finalInstitutionalNormalization =
   calculatePhase14FinalInstitutionalNormalization({
@@ -21253,7 +25940,7 @@ const finalInstitutionalNormalization =
     capitalPressure,
     suppressionBalancer,
   });
-  
+
 
 const phase20FinalExecutionGate =
   calculatePhase20FinalMasterExecutionGate({
@@ -21367,6 +26054,23 @@ const finalTradeAmount = Number(
         phase15ExecutionSizingMultiplier,
         phase16PortfolioParliament,
         phase16PortfolioParliamentSizingMultiplier,           
+        phase34AdaptiveAggressionBalancer,
+        phase34AggressionSizingMultiplier, 
+        phase35AiGovernanceLayer,
+        phase35GovernanceSizingMultiplier,
+        phase36PredictiveExecutionTiming,
+        phase36PredictiveTimingMultiplier,   
+        phase37SelfBalancingAiEcosystem,
+        phase37EcosystemSizingMultiplier,  
+        phase38AutonomousCapitalParliament,
+        phase38CapitalParliamentSizingMultiplier,        
+        phase39MetaStrategyAi,
+        phase39MetaStrategySizingMultiplier,      
+        phase40RecursiveRealTimeLearning,
+        phase40RecursiveLearningSizingMultiplier,
+        phase41InstitutionalCompression,
+        phase41CompressionSizingMultiplier,        
+
         statisticalScore: candidate.statisticalScore,
         setupType:
           classifyInstitutionalSetup({
@@ -22069,8 +26773,407 @@ engineState.institutionalExposureMode =
       : "NORMAL";
 });
 
+for (const signal of cryptoSignals) {
+  const phase42CryptoInstitutional =
+    calculatePhase42CryptoInstitutionalSignal(signal);
+
+  signal.phase42CryptoInstitutional = phase42CryptoInstitutional;
+  signal.cryptoInstitutionalScore =
+    phase42CryptoInstitutional.cryptoInstitutionalScore;
+  signal.cryptoLiquidityScore =
+    phase42CryptoInstitutional.cryptoLiquidityScore;
+  signal.cryptoMomentumScore =
+    phase42CryptoInstitutional.cryptoMomentumScore;
+  signal.cryptoRegime =
+    phase42CryptoInstitutional.cryptoRegime;
+
+  if (Number(phase42CryptoInstitutional.scoreBoost || 0) !== 0) {
+    signal.score = clampScore(
+      Number(signal.score || 0) +
+        Number(phase42CryptoInstitutional.scoreBoost || 0)
+    );
+  }
+
+  if (phase42CryptoInstitutional.suppressCrypto) {
+    signal.qualifiedToBuy = false;
+    signal.phase42Suppressed = true;
+    signal.phase42SuppressionReason =
+      phase42CryptoInstitutional.reason;
+  }
+}
+
+const phase42CryptoInstitutionalState =
+  updatePhase42CryptoInstitutionalState(cryptoSignals);
+
+saveRecentOrder("PHASE_42_CRYPTO_INSTITUTIONAL_UPDATED", "CRYPTO", {
+  reviewedCount: phase42CryptoInstitutionalState.reviewedCount,
+  approvedCount: phase42CryptoInstitutionalState.approvedCount,
+  blockedCount: phase42CryptoInstitutionalState.blockedCount,
+});
+
+
+const phase43CryptoCapitalRotationState =
+  calculatePhase43CryptoCapitalRotation(cryptoSignals);
+
+cryptoSignals = applyPhase43CryptoCapitalRotationToSignals(
+  cryptoSignals,
+  phase43CryptoCapitalRotationState
+);
+
+saveRecentOrder("PHASE_43_CRYPTO_CAPITAL_ROTATION_UPDATED", "CRYPTO", {
+  reviewedCount: phase43CryptoCapitalRotationState.reviewedCount,
+  approvedCount: phase43CryptoCapitalRotationState.approvedCount,
+  cryptoCapitalMode:
+    phase43CryptoCapitalRotationState.cryptoCapitalMode,
+  cryptoCapitalMultiplier:
+    phase43CryptoCapitalRotationState.cryptoCapitalMultiplier,
+});
+
+const phase44CryptoExecutionTimingState =
+  updatePhase44CryptoExecutionTimingState(cryptoSignals);
+
+cryptoSignals = applyPhase44CryptoExecutionTimingToSignals(cryptoSignals);
+
+saveRecentOrder("PHASE_44_CRYPTO_EXECUTION_TIMING_UPDATED", "CRYPTO", {
+  reviewedCount: phase44CryptoExecutionTimingState.reviewedCount,
+  executableCount: phase44CryptoExecutionTimingState.executableCount,
+  blockedCount: phase44CryptoExecutionTimingState.blockedCount,
+  avgExecutionScore:
+    phase44CryptoExecutionTimingState.avgExecutionScore,
+});
+
+const phase45CryptoPositionSizingState =
+  updatePhase45CryptoPositionSizingState(cryptoSignals);
+
+cryptoSignals = applyPhase45CryptoPositionSizingToSignals(cryptoSignals);
+
+saveRecentOrder("PHASE_45_CRYPTO_POSITION_SIZING_UPDATED", "CRYPTO", {
+  reviewedCount: phase45CryptoPositionSizingState.reviewedCount,
+  tradableCount: phase45CryptoPositionSizingState.tradableCount,
+  blockedCount: phase45CryptoPositionSizingState.blockedCount,
+  avgSizingScore: phase45CryptoPositionSizingState.avgSizingScore,
+});
+
+
+const phase46CryptoExitParliamentState =
+  updatePhase46CryptoExitParliamentState(cryptoSignals);
+
+cryptoSignals = applyPhase46CryptoExitParliamentToSignals(cryptoSignals);
+
+saveRecentOrder("PHASE_46_CRYPTO_EXIT_PARLIAMENT_UPDATED", "CRYPTO", {
+  reviewedCount: phase46CryptoExitParliamentState.reviewedCount,
+  runnerCount: phase46CryptoExitParliamentState.runnerCount,
+  exitCandidateCount:
+    phase46CryptoExitParliamentState.exitCandidateCount,
+  avgRunnerStrength:
+    phase46CryptoExitParliamentState.avgRunnerStrength,
+});
+
+const phase47CryptoLiquiditySweepState =
+  updatePhase47CryptoLiquiditySweepState(cryptoSignals);
+
+cryptoSignals = applyPhase47CryptoLiquiditySweepToSignals(cryptoSignals);
+
+saveRecentOrder("PHASE_47_CRYPTO_LIQUIDITY_SWEEP_UPDATED", "CRYPTO", {
+  reviewedCount: phase47CryptoLiquiditySweepState.reviewedCount,
+  confirmedSweepCount:
+    phase47CryptoLiquiditySweepState.confirmedSweepCount,
+  blockedTrapCount:
+    phase47CryptoLiquiditySweepState.blockedTrapCount,
+  avgSweepScore: phase47CryptoLiquiditySweepState.avgSweepScore,
+});
+
+
+const phase48CrossMarketCorrelationState =
+  calculatePhase48CrossMarketCorrelation(stockSignals, cryptoSignals);
+
+cryptoSignals = applyPhase48CrossMarketCorrelationToSignals(
+  cryptoSignals,
+  phase48CrossMarketCorrelationState
+);
+
+saveRecentOrder("PHASE_48_CROSS_MARKET_CORRELATION_UPDATED", "CRYPTO", {
+  stockSignalCount:
+    phase48CrossMarketCorrelationState.stockSignalCount,
+  cryptoSignalCount:
+    phase48CrossMarketCorrelationState.cryptoSignalCount,
+  crossMarketMode:
+    phase48CrossMarketCorrelationState.crossMarketMode,
+  correlationScore:
+    phase48CrossMarketCorrelationState.correlationScore,
+});
+
+const phase49StablecoinFlowState =
+  calculatePhase49StablecoinFlowPressure(
+    cryptoSignals,
+    phase48CrossMarketCorrelationState
+  );
+
+cryptoSignals = applyPhase49StablecoinFlowToSignals(
+  cryptoSignals,
+  phase49StablecoinFlowState
+);
+
+saveRecentOrder("PHASE_49_STABLECOIN_FLOW_UPDATED", "CRYPTO", {
+  cryptoSignalCount: phase49StablecoinFlowState.cryptoSignalCount,
+  flowMode: phase49StablecoinFlowState.flowMode,
+  exchangePressureScore:
+    phase49StablecoinFlowState.exchangePressureScore,
+  stablecoinDemandProxy:
+    phase49StablecoinFlowState.stablecoinDemandProxy,
+});
+
+
+const phase50WhaleSmartMoneyState =
+  updatePhase50WhaleSmartMoneyState(cryptoSignals);
+
+cryptoSignals = applyPhase50WhaleSmartMoneyToSignals(cryptoSignals);
+
+saveRecentOrder("PHASE_50_WHALE_SMART_MONEY_UPDATED", "CRYPTO", {
+  reviewedCount: phase50WhaleSmartMoneyState.reviewedCount,
+  accumulationCount: phase50WhaleSmartMoneyState.accumulationCount,
+  blockedDistributionCount:
+    phase50WhaleSmartMoneyState.blockedDistributionCount,
+  avgWhaleScore: phase50WhaleSmartMoneyState.avgWhaleScore,
+});
+
+
+const phase51MultiTimeframeCryptoState =
+  updatePhase51MultiTimeframeCryptoState(cryptoSignals);
+
+cryptoSignals = applyPhase51MultiTimeframeCryptoToSignals(cryptoSignals);
+
+saveRecentOrder("PHASE_51_MULTI_TIMEFRAME_CRYPTO_UPDATED", "CRYPTO", {
+  reviewedCount: phase51MultiTimeframeCryptoState.reviewedCount,
+  alignedCount: phase51MultiTimeframeCryptoState.alignedCount,
+  blockedConflictCount:
+    phase51MultiTimeframeCryptoState.blockedConflictCount,
+  avgParliamentScore:
+    phase51MultiTimeframeCryptoState.avgParliamentScore,
+});
+
+
+
 const signals = [...stockSignals, ...cryptoSignals];
 
+const autonomousCryptoStrategySelector =
+  calculateAutonomousCryptoStrategySelector(cryptoSignals);
+
+engineState.autonomousCryptoStrategySelectorState =
+  autonomousCryptoStrategySelector;
+
+engineState.autonomousCryptoStrategySelectorHistory.unshift(
+  autonomousCryptoStrategySelector
+);
+
+engineState.autonomousCryptoStrategySelectorHistory =
+  engineState.autonomousCryptoStrategySelectorHistory.slice(0, 200);
+
+for (const selectedCrypto of autonomousCryptoStrategySelector.selectedCryptoSignals) {
+  const matchingSignal = cryptoSignals.find(
+    (signal) =>
+      normalizeSymbol(signal.symbol) ===
+      normalizeSymbol(selectedCrypto.symbol)
+  );
+
+  if (!matchingSignal) continue;
+
+  matchingSignal.autonomousCryptoStrategySelector = selectedCrypto;
+  matchingSignal.cryptoStrategySelectorScore =
+    selectedCrypto.strategyConfidence;
+  matchingSignal.selectedCryptoStrategy =
+    selectedCrypto.selectedStrategy;
+
+  if (selectedCrypto.shouldBoostCryptoScore) {
+    matchingSignal.score = clampScore(
+      Number(matchingSignal.score || 0) +
+        Number(selectedCrypto.strategyScoreBoost || 0)
+    );
+  }
+
+  if (selectedCrypto.action === "BLOCK_WEAK_CRYPTO_STRATEGY") {
+    matchingSignal.autoTradeApproved = false;
+    matchingSignal.decisionLevel = "Blocked Weak Crypto Strategy";
+  }
+}
+
+const cryptoReinforcementLearning =
+  calculateCryptoReinforcementLearningExpansion(cryptoSignals);
+
+engineState.cryptoReinforcementLearningState =
+  cryptoReinforcementLearning;
+
+engineState.cryptoReinforcementLearningHistory.unshift(
+  cryptoReinforcementLearning
+);
+
+engineState.cryptoReinforcementLearningHistory =
+  engineState.cryptoReinforcementLearningHistory.slice(0, 200);
+
+for (const reinforcedCrypto of cryptoReinforcementLearning.reinforcedSignals) {
+  const matchingSignal = cryptoSignals.find(
+    (signal) =>
+      normalizeSymbol(signal.symbol) ===
+      normalizeSymbol(reinforcedCrypto.symbol)
+  );
+
+  if (!matchingSignal) continue;
+
+  matchingSignal.cryptoReinforcementLearning = reinforcedCrypto;
+  matchingSignal.cryptoReinforcementScore =
+    reinforcedCrypto.reinforcementScore;
+
+  matchingSignal.score = clampScore(
+    Number(matchingSignal.score || 0) +
+      Number(reinforcedCrypto.learningAdjustment || 0)
+  );
+
+  if (reinforcedCrypto.shouldSuppressCrypto) {
+    matchingSignal.autoTradeApproved = false;
+    matchingSignal.decisionLevel =
+      "Blocked By Crypto Reinforcement Learning";
+  }
+}
+
+const globalRiskOffDefense =
+  calculateGlobalRiskOffDefenseNetwork(stockSignals, cryptoSignals);
+
+engineState.globalRiskOffDefenseState = globalRiskOffDefense;
+
+engineState.globalRiskOffDefenseHistory.unshift(globalRiskOffDefense);
+
+engineState.globalRiskOffDefenseHistory =
+  engineState.globalRiskOffDefenseHistory.slice(0, 200);
+
+engineState.globalRiskOffDefenseMode =
+  globalRiskOffDefense.defenseMode;
+
+engineState.globalRiskOffExposureMultiplier =
+  globalRiskOffDefense.exposureMultiplier;
+
+for (const protectedCrypto of globalRiskOffDefense.protectedCryptoSignals) {
+  const matchingSignal = cryptoSignals.find(
+    (signal) =>
+      normalizeSymbol(signal.symbol) === normalizeSymbol(protectedCrypto.symbol)
+  );
+
+  if (!matchingSignal) continue;
+
+  matchingSignal.globalRiskOffDefense = protectedCrypto;
+  matchingSignal.globalRiskOffScore =
+    protectedCrypto.individualRiskScore;
+  matchingSignal.globalRiskOffDefenseMode =
+    globalRiskOffDefense.defenseMode;
+  matchingSignal.globalRiskOffExposureMultiplier =
+    globalRiskOffDefense.exposureMultiplier;
+
+  matchingSignal.score = clampScore(
+    Number(matchingSignal.score || 0) +
+      Number(protectedCrypto.scorePenalty || 0)
+  );
+
+  if (protectedCrypto.shouldReduceSize) {
+    matchingSignal.cryptoRiskAdjustedSizeMultiplier =
+      globalRiskOffDefense.exposureMultiplier;
+  }
+
+  if (protectedCrypto.shouldBlock) {
+    matchingSignal.autoTradeApproved = false;
+    matchingSignal.decisionLevel =
+      "Blocked By Global Risk-Off Defense";
+  }
+}
+
+const unifiedInstitutionalOrchestrator =
+  calculateUnifiedInstitutionalAIOrchestrator(stockSignals, cryptoSignals);
+
+engineState.unifiedInstitutionalOrchestratorState =
+  unifiedInstitutionalOrchestrator;
+
+engineState.unifiedInstitutionalOrchestratorHistory.unshift(
+  unifiedInstitutionalOrchestrator
+);
+
+engineState.unifiedInstitutionalOrchestratorHistory =
+  engineState.unifiedInstitutionalOrchestratorHistory.slice(0, 200);
+
+engineState.unifiedInstitutionalMode =
+  unifiedInstitutionalOrchestrator.orchestratorMode;
+
+engineState.unifiedInstitutionalCapitalMultiplier =
+  unifiedInstitutionalOrchestrator.finalCapitalMultiplier;
+
+for (const orchestrated of unifiedInstitutionalOrchestrator.orchestratedSignals) {
+  const matchingSignal = [...stockSignals, ...cryptoSignals].find(
+    (signal) =>
+      normalizeSymbol(signal.symbol) === normalizeSymbol(orchestrated.symbol)
+  );
+
+  if (!matchingSignal) continue;
+
+  matchingSignal.unifiedInstitutionalOrchestrator = orchestrated;
+  matchingSignal.finalOrchestratedScore =
+    orchestrated.finalOrchestratedScore;
+  matchingSignal.unifiedInstitutionalMode =
+    unifiedInstitutionalOrchestrator.orchestratorMode;
+  matchingSignal.finalCapitalMultiplier =
+    unifiedInstitutionalOrchestrator.finalCapitalMultiplier;
+
+  matchingSignal.score = clampScore(
+    Number(matchingSignal.score || 0) * 0.85 +
+      Number(orchestrated.finalOrchestratedScore || 0) * 0.15
+  );
+
+  if (orchestrated.shouldBlock) {
+    matchingSignal.autoTradeApproved = false;
+    matchingSignal.decisionLevel =
+      "Blocked By Unified Institutional Orchestrator";
+  }
+
+  if (
+    orchestrated.action === "PRIORITY_INSTITUTIONAL_BUY" ||
+    orchestrated.action === "APPROVED_INSTITUTIONAL_BUY"
+  ) {
+    matchingSignal.decisionLevel = orchestrated.action;
+  }
+}
+const profitVelocityGovernor =
+  calculateProfitVelocityGovernor(stockSignals, cryptoSignals);
+
+engineState.profitVelocityGovernorState = profitVelocityGovernor;
+
+engineState.profitVelocityGovernorHistory.unshift(profitVelocityGovernor);
+
+engineState.profitVelocityGovernorHistory =
+  engineState.profitVelocityGovernorHistory.slice(0, 200);
+
+engineState.profitVelocityMode = profitVelocityGovernor.velocityMode;
+engineState.profitVelocityCapitalMultiplier =
+  profitVelocityGovernor.velocityCapitalMultiplier;
+
+for (const governed of profitVelocityGovernor.governedSignals) {
+  const matchingSignal = [...stockSignals, ...cryptoSignals].find(
+    (signal) =>
+      normalizeSymbol(signal.symbol) === normalizeSymbol(governed.symbol)
+  );
+
+  if (!matchingSignal) continue;
+
+  matchingSignal.profitVelocityGovernor = governed;
+  matchingSignal.profitVelocityScore = governed.finalVelocityScore;
+  matchingSignal.profitVelocityMode = profitVelocityGovernor.velocityMode;
+  matchingSignal.profitVelocityCapitalMultiplier =
+    profitVelocityGovernor.velocityCapitalMultiplier;
+
+  if (governed.shouldReduceSpeed) {
+    matchingSignal.autoTradeApproved = false;
+    matchingSignal.decisionLevel = "Reduced By Profit Velocity Governor";
+  }
+
+  if (governed.shouldAccelerate) {
+    matchingSignal.score = clampScore(Number(matchingSignal.score || 0) + 2);
+  }
+}
     engineState.marketRegime = detectMarketRegime(stockSignals);
     const marketRegimeDominance =
       calculateMarketRegimeDominance(
