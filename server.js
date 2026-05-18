@@ -761,7 +761,7 @@ cryptoReinforcementLearningState:
   engineState.cryptoReinforcementLearningState || null,
 
 cryptoReinforcementLearningHistory:
-  (engineState.cryptoReinforcementLearningHistory || []).slice(0, 200),
+  (engineState.ryptoReinforcementLearningHistory || []).slice(0, 200),
 
 globalRiskOffDefenseState:
   engineState.globalRiskOffDefenseState || null,
@@ -779,7 +779,65 @@ profitVelocityGovernorState:
   engineState.profitVelocityGovernorState || null,
 
 profitVelocityGovernorHistory:
-  (engineState.profitVelocityGovernorHistory || []).slice(0, 200),  
+  (engineState.profitVelocityGovernorHistory || []).slice(0, 200),
+
+phase63StrategyEvolutionState:
+  engineState.phase63StrategyEvolutionState || null,
+
+phase63StrategyEvolutionHistory:
+  (engineState.phase63StrategyEvolutionHistory || []).slice(0, 200),
+
+phase63StrategyEvolutionMemory:
+  engineState.phase63StrategyEvolutionMemory || {},
+
+phase62MarketPersonalityState:
+  engineState.phase62MarketPersonalityState || null,
+
+phase62MarketPersonalityHistory:
+  (engineState.phase62MarketPersonalityHistory || []).slice(0, 200),
+
+phase62MarketPersonalityMemory:
+  engineState.phase62MarketPersonalityMemory || {},
+
+phase61ProfitAggressionState:
+  engineState.phase61ProfitAggressionState || null,
+
+phase61ProfitAggressionHistory:
+  (engineState.phase61ProfitAggressionHistory || []).slice(0, 200),
+
+phase61AggressionMemory:
+  engineState.phase61AggressionMemory || {},
+
+phase62MarketPersonality:
+      engineState.phase62MarketPersonalityState || null,
+
+phase61ProfitAggression:
+      engineState.phase61ProfitAggressionState || null,
+
+phase60AdaptiveExecutionState:
+  engineState.phase60AdaptiveExecutionState || null,
+
+phase60AdaptiveExecutionHistory:
+  (engineState.phase60AdaptiveExecutionHistory || []).slice(0, 200),
+
+phase60ExecutionMemory:
+  engineState.phase60ExecutionMemory || {},
+  
+  
+phase59InstitutionalOrderFlowState:
+  engineState.phase59InstitutionalOrderFlowState || null,
+
+phase59InstitutionalOrderFlowHistory:
+  (engineState.phase59InstitutionalOrderFlowHistory || []).slice(0, 200),
+
+phase59OrderFlowMemory:
+  engineState.phase59OrderFlowMemory || {},
+
+centralAutonomousDecisionCoreState:
+  engineState.centralAutonomousDecisionCoreState || null,
+
+centralAutonomousDecisionCoreHistory:
+  (engineState.centralAutonomousDecisionCoreHistory || []).slice(0, 200),
 
 finalDashboardSignalSyncState:
   engineState.finalDashboardSignalSyncState || null,
@@ -1290,6 +1348,23 @@ unifiedInstitutionalOrchestratorState: null,
 unifiedInstitutionalOrchestratorHistory: [],
 profitVelocityGovernorState: null,
 profitVelocityGovernorHistory: [],
+phase63StrategyEvolutionState: null,
+phase63StrategyEvolutionHistory: [],
+phase63StrategyEvolutionMemory: {},
+phase62MarketPersonalityState: null,
+phase62MarketPersonalityHistory: [],
+phase62MarketPersonalityMemory: {},
+phase61ProfitAggressionState: null,
+phase61ProfitAggressionHistory: [],
+phase61AggressionMemory: {},
+phase60AdaptiveExecutionState: null,
+phase60AdaptiveExecutionHistory: [],
+phase60ExecutionMemory: {},
+phase59InstitutionalOrderFlowState: null,
+phase59InstitutionalOrderFlowHistory: [],
+phase59OrderFlowMemory: {},
+centralAutonomousDecisionCoreState: null,
+centralAutonomousDecisionCoreHistory: [],
 penaltyCompressionState: null,
 penaltyCompressionHistory: [],
 fullInstitutionalAiBrainState: null,
@@ -20418,6 +20493,14 @@ async function executeAdaptiveBuyOrder({
   const timing =
     engineState.adaptiveExecutionTimingState || {};
 
+const phase60AdaptiveExecution =
+  signal.phase60AdaptiveExecution ||
+  calculatePhase60AdaptiveExecutionAlgorithms(signal, amount);
+
+if (phase60AdaptiveExecution.shouldBlockExecution) {
+  throw new Error("Phase 60 adaptive execution blocked unsafe execution");
+}
+
 const phase15ExecutionDominance =
   signal.phase15ExecutionDominance ||
   calculatePhase15AutonomousExecutionDominance(signal, amount);
@@ -20442,6 +20525,13 @@ if (phase15ExecutionDominance.blockExecution) {
   if (Number(timing.maxSlices || 0) > 0) {
     slices = Math.min(slices, Number(timing.maxSlices || slices));
   }
+
+if (Number(phase60AdaptiveExecution.sliceCount || 0) > 0) {
+  slices = Math.max(
+    slices,
+    Number(phase60AdaptiveExecution.sliceCount || slices)
+  );
+}
 
 if (Number(phase15ExecutionDominance.maxSlices || 0) > 0) {
   slices = Math.min(
@@ -20472,7 +20562,9 @@ if (Number(phase15ExecutionDominance.maxSlices || 0) > 0) {
       : 0;
 
 const delayMs =
-  Number(phase15ExecutionDominance.recommendedDelayMs || 0) > 0
+  Number(phase60AdaptiveExecution.sliceDelayMs || 0) > 0
+    ? Number(phase60AdaptiveExecution.sliceDelayMs || 0)
+    : Number(phase15ExecutionDominance.recommendedDelayMs || 0) > 0
     ? Number(phase15ExecutionDominance.recommendedDelayMs || 0)
     : Number(timing.recommendedDelayMs || 0) > 0
     ? Number(timing.recommendedDelayMs || 0)
@@ -28405,6 +28497,335 @@ for (const governed of profitVelocityGovernor.governedSignals) {
   }
 }
 
+const phase59InstitutionalOrderFlow =
+  calculatePhase59InstitutionalOrderFlowIntelligence(stockSignals, cryptoSignals);
+
+engineState.phase59InstitutionalOrderFlowState =
+  phase59InstitutionalOrderFlow.state;
+
+if (!Array.isArray(engineState.phase59InstitutionalOrderFlowHistory)) {
+  engineState.phase59InstitutionalOrderFlowHistory = [];
+}
+
+engineState.phase59InstitutionalOrderFlowHistory.unshift(
+  phase59InstitutionalOrderFlow.state
+);
+
+engineState.phase59InstitutionalOrderFlowHistory =
+  engineState.phase59InstitutionalOrderFlowHistory.slice(0, 200);
+
+for (const orderFlow of phase59InstitutionalOrderFlow.analyzedSignals) {
+  const matchingSignal = signals.find(
+    (signal) =>
+      normalizeSymbol(signal.symbol) === normalizeSymbol(orderFlow.symbol)
+  );
+
+  if (!matchingSignal) continue;
+
+  matchingSignal.phase59InstitutionalOrderFlow = orderFlow;
+  matchingSignal.orderFlowConvictionScore =
+    orderFlow.orderFlowConvictionScore;
+  matchingSignal.orderFlowLabel = orderFlow.flowLabel;
+  matchingSignal.orderFlowMultiplier = orderFlow.orderFlowMultiplier;
+  matchingSignal.liquidityTrapScore = orderFlow.liquidityTrapScore;
+  matchingSignal.exhaustionRiskScore = orderFlow.exhaustionRiskScore;
+  matchingSignal.institutionalAccumulationPressure =
+    orderFlow.institutionalAccumulationPressure;
+
+  matchingSignal.score = clampScore(
+    Number(matchingSignal.score || 0) * 0.9 +
+      Number(orderFlow.orderFlowConvictionScore || 0) * 0.1
+  );
+
+  if (orderFlow.shouldBlock) {
+    matchingSignal.autoTradeApproved = false;
+    matchingSignal.approved = false;
+    matchingSignal.decisionLevel =
+      "Blocked By Phase 59 Order Flow Intelligence";
+  }
+
+  if (
+    orderFlow.orderFlowConvictionScore >= 82 &&
+    orderFlow.liquidityTrapScore < 55
+  ) {
+    matchingSignal.allocationMultiplier = Number(
+      (
+        Number(matchingSignal.allocationMultiplier || 1) *
+        Number(orderFlow.orderFlowMultiplier || 1)
+      ).toFixed(2)
+    );
+  }
+}
+
+for (const signal of signals) {
+  const estimatedAmount = Number(
+    signal.recommendedTradeAmount ||
+      signal.finalTradeAmount ||
+      signal.tradeAmount ||
+      0
+  );
+
+  const phase60Execution =
+    calculatePhase60AdaptiveExecutionAlgorithms(signal, estimatedAmount);
+
+  signal.phase60AdaptiveExecution = phase60Execution;
+  signal.adaptiveExecutionScore =
+    phase60Execution.adaptiveExecutionScore;
+  signal.executionStyle =
+    phase60Execution.executionStyle;
+  signal.executionMultiplier =
+    phase60Execution.executionMultiplier;
+
+  if (phase60Execution.shouldBlockExecution) {
+    signal.autoTradeApproved = false;
+    signal.approved = false;
+    signal.decisionLevel =
+      "Blocked By Phase 60 Adaptive Execution";
+  }
+
+  if (phase60Execution.executionMultiplier !== 1) {
+    signal.allocationMultiplier = Number(
+      (
+        Number(signal.allocationMultiplier || 1) *
+        Number(phase60Execution.executionMultiplier || 1)
+      ).toFixed(2)
+    );
+  }
+}
+const phase63StrategyEvolution =
+  calculatePhase63StrategyEvolutionEngine(signals);
+
+engineState.phase63StrategyEvolutionState =
+  phase63StrategyEvolution.state;
+
+if (!Array.isArray(engineState.phase63StrategyEvolutionHistory)) {
+  engineState.phase63StrategyEvolutionHistory = [];
+}
+
+engineState.phase63StrategyEvolutionHistory.unshift(
+  phase63StrategyEvolution.state
+);
+
+engineState.phase63StrategyEvolutionHistory =
+  engineState.phase63StrategyEvolutionHistory.slice(0, 200);
+
+for (const evolution of phase63StrategyEvolution.analyzedSignals) {
+  const matchingSignal = signals.find(
+    (signal) =>
+      normalizeSymbol(signal.symbol) === normalizeSymbol(evolution.symbol)
+  );
+
+  if (!matchingSignal) continue;
+
+  matchingSignal.phase63StrategyEvolution = evolution;
+  matchingSignal.strategyEvolutionScore =
+    evolution.strategyEvolutionScore;
+  matchingSignal.strategyAction =
+    evolution.strategyAction;
+  matchingSignal.strategyEvolutionMultiplier =
+    evolution.strategyEvolutionMultiplier;
+  matchingSignal.evolvedMinScoreOffset =
+    evolution.evolvedMinScoreOffset;
+
+  matchingSignal.score = clampScore(
+    Number(matchingSignal.score || 0) * 0.94 +
+      Number(evolution.strategyEvolutionScore || 0) * 0.06
+  );
+
+  if (evolution.shouldStrategyBlock) {
+    matchingSignal.autoTradeApproved = false;
+    matchingSignal.approved = false;
+    matchingSignal.decisionLevel =
+      "Blocked By Phase 63 Strategy Evolution";
+  } else if (evolution.strategyEvolutionMultiplier !== 1) {
+    matchingSignal.allocationMultiplier = Number(
+      (
+        Number(matchingSignal.allocationMultiplier || 1) *
+        Number(evolution.strategyEvolutionMultiplier || 1)
+      ).toFixed(2)
+    );
+  }
+}
+
+const phase62MarketPersonality =
+  calculatePhase62MarketPersonalityMemory(signals);
+
+engineState.phase62MarketPersonalityState =
+  phase62MarketPersonality.state;
+
+if (!Array.isArray(engineState.phase62MarketPersonalityHistory)) {
+  engineState.phase62MarketPersonalityHistory = [];
+}
+
+engineState.phase62MarketPersonalityHistory.unshift(
+  phase62MarketPersonality.state
+);
+
+engineState.phase62MarketPersonalityHistory =
+  engineState.phase62MarketPersonalityHistory.slice(0, 200);
+
+for (const personality of phase62MarketPersonality.analyzedSignals) {
+  const matchingSignal = signals.find(
+    (signal) =>
+      normalizeSymbol(signal.symbol) === normalizeSymbol(personality.symbol)
+  );
+
+  if (!matchingSignal) continue;
+
+  matchingSignal.phase62MarketPersonality = personality;
+  matchingSignal.personalityFitScore =
+    personality.personalityFitScore;
+  matchingSignal.personalityMode =
+    personality.personalityMode;
+  matchingSignal.personalityMultiplier =
+    personality.personalityMultiplier;
+
+  matchingSignal.score = clampScore(
+    Number(matchingSignal.score || 0) * 0.94 +
+      Number(personality.personalityFitScore || 0) * 0.06
+  );
+
+  if (personality.shouldPersonalityBlock) {
+    matchingSignal.autoTradeApproved = false;
+    matchingSignal.approved = false;
+    matchingSignal.decisionLevel =
+      "Blocked By Phase 62 Market Personality";
+  } else if (personality.personalityMultiplier !== 1) {
+    matchingSignal.allocationMultiplier = Number(
+      (
+        Number(matchingSignal.allocationMultiplier || 1) *
+        Number(personality.personalityMultiplier || 1)
+      ).toFixed(2)
+    );
+  }
+}
+
+const phase61ProfitAggression =
+  calculatePhase61ProfitAggressionAI(signals);
+
+engineState.phase61ProfitAggressionState =
+  phase61ProfitAggression.state;
+
+if (!Array.isArray(engineState.phase61ProfitAggressionHistory)) {
+  engineState.phase61ProfitAggressionHistory = [];
+}
+
+engineState.phase61ProfitAggressionHistory.unshift(
+  phase61ProfitAggression.state
+);
+
+engineState.phase61ProfitAggressionHistory =
+  engineState.phase61ProfitAggressionHistory.slice(0, 200);
+
+for (const aggression of phase61ProfitAggression.analyzedSignals) {
+  const matchingSignal = signals.find(
+    (signal) =>
+      normalizeSymbol(signal.symbol) === normalizeSymbol(aggression.symbol)
+  );
+
+  if (!matchingSignal) continue;
+
+  matchingSignal.phase61ProfitAggression = aggression;
+  matchingSignal.profitAggressionScore =
+    aggression.profitAggressionScore;
+  matchingSignal.aggressionMode =
+    aggression.aggressionMode;
+  matchingSignal.aggressionMultiplier =
+    aggression.aggressionMultiplier;
+  matchingSignal.maxAllowedExposurePercent =
+    aggression.maxAllowedExposurePercent;
+
+  matchingSignal.score = clampScore(
+    Number(matchingSignal.score || 0) * 0.92 +
+      Number(aggression.profitAggressionScore || 0) * 0.08
+  );
+
+  if (aggression.shouldBlockAggression) {
+    matchingSignal.allocationMultiplier = Number(
+      (
+        Number(matchingSignal.allocationMultiplier || 1) *
+        0.55
+      ).toFixed(2)
+    );
+
+    matchingSignal.decisionLevel =
+      "Aggression Blocked By Phase 61";
+  } else if (aggression.aggressionMultiplier !== 1) {
+    matchingSignal.allocationMultiplier = Number(
+      (
+        Number(matchingSignal.allocationMultiplier || 1) *
+        Number(aggression.aggressionMultiplier || 1)
+      ).toFixed(2)
+    );
+
+    if (
+      aggression.aggressionMode === "MAX_CONTROLLED_ATTACK" ||
+      aggression.aggressionMode === "AGGRESSIVE_COMPOUND_ATTACK"
+    ) {
+      matchingSignal.decisionLevel =
+        `Phase 61 ${aggression.aggressionMode}`;
+      matchingSignal.portfolioAction = "AGGRESSIVE_DEPLOY";
+      matchingSignal.aiPortfolioAction = "AGGRESSIVE_DEPLOY";
+    }
+  }
+}
+
+const centralAutonomousDecisionCore =
+  calculateCentralAutonomousDecisionCore(stockSignals, cryptoSignals);
+
+engineState.centralAutonomousDecisionCoreState =
+  centralAutonomousDecisionCore.state;
+
+if (!Array.isArray(engineState.centralAutonomousDecisionCoreHistory)) {
+  engineState.centralAutonomousDecisionCoreHistory = [];
+}
+
+engineState.centralAutonomousDecisionCoreHistory.unshift(
+  centralAutonomousDecisionCore.state
+);
+
+engineState.centralAutonomousDecisionCoreHistory =
+  engineState.centralAutonomousDecisionCoreHistory.slice(0, 200);
+
+for (const decision of centralAutonomousDecisionCore.rankedDecisions) {
+  const matchingSignal = signals.find(
+    (signal) =>
+      normalizeSymbol(signal.symbol) === normalizeSymbol(decision.symbol)
+  );
+
+  if (!matchingSignal) continue;
+
+  matchingSignal.centralAutonomousDecisionCore = decision;
+  matchingSignal.finalAutonomousDecisionScore =
+    decision.finalDecisionScore;
+  matchingSignal.centralAutonomousAction = decision.action;
+  matchingSignal.masterCapitalMultiplier =
+    decision.masterCapitalMultiplier;
+
+  matchingSignal.score = clampScore(
+    Number(matchingSignal.score || 0) * 0.75 +
+      Number(decision.finalDecisionScore || 0) * 0.25
+  );
+
+  if (decision.shouldBlock) {
+    matchingSignal.autoTradeApproved = false;
+    matchingSignal.approved = false;
+    matchingSignal.decisionLevel =
+      "Blocked By Central Autonomous Decision Core";
+  }
+
+  if (decision.shouldAccelerate) {
+    matchingSignal.decisionLevel =
+      "Central Core Accelerated Capital";
+    matchingSignal.allocationMultiplier = Number(
+      (
+        Number(matchingSignal.allocationMultiplier || 1) *
+        Number(decision.masterCapitalMultiplier || 1)
+      ).toFixed(2)
+    );
+  }
+}
+
 const penaltyCompression =
   calculatePenaltyCompressionAndEliteOverride(signals);
 
@@ -30562,6 +30983,1362 @@ function calculateAutonomousMetaStrategyOrchestrator(signals = []) {
   };
 }
 
+function calculatePhase63StrategyEvolutionEngine(signals = []) {
+  if (!engineState.phase63StrategyEvolutionMemory) {
+    engineState.phase63StrategyEvolutionMemory = {};
+  }
+
+  const marketStress = Number(engineState.marketStressLevel || 0);
+  const regimeKey =
+    engineState.marketRegime?.state ||
+    engineState.marketRegime ||
+    "unknown";
+
+  const analyzedSignals = (Array.isArray(signals) ? signals : []).map((signal) => {
+    const symbol = normalizeSymbol(signal.symbol);
+
+    const strategyKey =
+      signal.strategy ||
+      signal.phase62MarketPersonality?.setupType ||
+      (typeof classifyInstitutionalSetup === "function"
+        ? classifyInstitutionalSetup(signal)
+        : "GENERAL_SETUP");
+
+    const score = Number(signal.score || 0);
+    const orderFlowScore = Number(
+      signal.orderFlowConvictionScore ||
+        signal.phase59InstitutionalOrderFlow?.orderFlowConvictionScore ||
+        0
+    );
+    const executionScore = Number(
+      signal.adaptiveExecutionScore ||
+        signal.phase60AdaptiveExecution?.adaptiveExecutionScore ||
+        signal.executionConfidence ||
+        0
+    );
+    const aggressionScore = Number(
+      signal.profitAggressionScore ||
+        signal.phase61ProfitAggression?.profitAggressionScore ||
+        0
+    );
+    const personalityScore = Number(
+      signal.personalityFitScore ||
+        signal.phase62MarketPersonality?.personalityFitScore ||
+        0
+    );
+
+        const strategyEvolutionScore = Number(
+      signal.strategyEvolutionScore ||
+        signal.phase63StrategyEvolution?.strategyEvolutionScore ||
+        0
+    );
+
+
+    const runnerScore = Number(
+      signal.runnerScore ||
+        signal.explosiveRunnerScore ||
+        signal.adaptiveRunnerScore ||
+        0
+    );
+
+    const memoryKey = `${regimeKey}_${strategyKey}`;
+    const memory =
+      engineState.phase63StrategyEvolutionMemory[memoryKey] || {
+        memoryKey,
+        regimeKey,
+        strategyKey,
+        appearances: 0,
+        strongSignals: 0,
+        weakSignals: 0,
+        averageScore: 0,
+        averageOrderFlow: 0,
+        averageExecution: 0,
+        averageAggression: 0,
+        averagePersonality: 0,
+        evolutionTrustScore: 50,
+        mutationBias: "NEUTRAL",
+        lastUpdated: null,
+      };
+
+    memory.appearances += 1;
+    memory.strongSignals +=
+      score >= 75 && orderFlowScore >= 70 && executionScore >= 65 ? 1 : 0;
+    memory.weakSignals +=
+      score < 60 || orderFlowScore < 45 || executionScore < 45 ? 1 : 0;
+
+    memory.averageScore = Number(
+      ((Number(memory.averageScore || 0) * (memory.appearances - 1) + score) /
+        memory.appearances).toFixed(2)
+    );
+
+    memory.averageOrderFlow = Number(
+      ((Number(memory.averageOrderFlow || 0) * (memory.appearances - 1) + orderFlowScore) /
+        memory.appearances).toFixed(2)
+    );
+
+    memory.averageExecution = Number(
+      ((Number(memory.averageExecution || 0) * (memory.appearances - 1) + executionScore) /
+        memory.appearances).toFixed(2)
+    );
+
+    memory.averageAggression = Number(
+      ((Number(memory.averageAggression || 0) * (memory.appearances - 1) + aggressionScore) /
+        memory.appearances).toFixed(2)
+    );
+
+    memory.averagePersonality = Number(
+      ((Number(memory.averagePersonality || 0) * (memory.appearances - 1) + personalityScore) /
+        memory.appearances).toFixed(2)
+    );
+
+    memory.evolutionTrustScore = clampScore(
+      42 +
+        memory.averageScore * 0.16 +
+        memory.averageOrderFlow * 0.2 +
+        memory.averageExecution * 0.18 +
+        memory.averageAggression * 0.15 +
+        memory.averagePersonality * 0.15 +
+        memory.strongSignals * 1.6 -
+        memory.weakSignals * 2.1 -
+        (marketStress >= 70 ? 10 : 0)
+    );
+
+    memory.mutationBias =
+      memory.evolutionTrustScore >= 82
+        ? "AMPLIFY_STRATEGY"
+        : memory.evolutionTrustScore >= 72
+        ? "FAVOR_STRATEGY"
+        : memory.evolutionTrustScore <= 42
+        ? "SUPPRESS_STRATEGY"
+        : memory.evolutionTrustScore <= 52
+        ? "REDUCE_STRATEGY"
+        : "NEUTRAL";
+
+    memory.lastUpdated = new Date().toISOString();
+    engineState.phase63StrategyEvolutionMemory[memoryKey] = memory;
+
+    const strategyEvolutionScore = clampScore(
+      memory.evolutionTrustScore * 0.5 +
+        score * 0.14 +
+        orderFlowScore * 0.12 +
+        executionScore * 0.1 +
+        aggressionScore * 0.08 +
+        personalityScore * 0.06
+    );
+
+    const strategyAction =
+      strategyEvolutionScore >= 82
+        ? "EVOLVE_AND_AMPLIFY"
+        : strategyEvolutionScore >= 72
+        ? "FAVOR_THIS_STRATEGY"
+        : strategyEvolutionScore <= 42
+        ? "SUPPRESS_THIS_STRATEGY"
+        : strategyEvolutionScore <= 52
+        ? "REDUCE_THIS_STRATEGY"
+        : "KEEP_STRATEGY_NEUTRAL";
+
+    const strategyEvolutionMultiplier =
+      strategyAction === "EVOLVE_AND_AMPLIFY"
+        ? 1.22
+        : strategyAction === "FAVOR_THIS_STRATEGY"
+        ? 1.12
+        : strategyAction === "REDUCE_THIS_STRATEGY"
+        ? 0.85
+        : strategyAction === "SUPPRESS_THIS_STRATEGY"
+        ? 0.65
+        : 1;
+
+    const evolvedMinScoreOffset =
+      strategyAction === "EVOLVE_AND_AMPLIFY"
+        ? -4
+        : strategyAction === "FAVOR_THIS_STRATEGY"
+        ? -2
+        : strategyAction === "REDUCE_THIS_STRATEGY"
+        ? 3
+        : strategyAction === "SUPPRESS_THIS_STRATEGY"
+        ? 6
+        : 0;
+
+    const shouldStrategyBlock =
+      strategyAction === "SUPPRESS_THIS_STRATEGY" &&
+      score < 78 &&
+      orderFlowScore < 65;
+
+    return {
+      phase: "63_STRATEGY_EVOLUTION_ENGINE",
+      updatedAt: new Date().toISOString(),
+      symbol,
+      regimeKey,
+      strategyKey,
+      memoryKey,
+      strategyEvolutionScore,
+      strategyAction,
+      strategyEvolutionMultiplier,
+      evolvedMinScoreOffset,
+      shouldStrategyBlock,
+      components: {
+        score,
+        orderFlowScore,
+        executionScore,
+        aggressionScore,
+        personalityScore,
+        runnerScore,
+      },
+      memory,
+      reason:
+        `${strategyAction} • Evolution ${strategyEvolutionScore}/100 • ` +
+        `${regimeKey}/${strategyKey} • Threshold offset ${evolvedMinScoreOffset}`,
+    };
+  });
+
+  const amplified = analyzedSignals.filter((item) =>
+    ["EVOLVE_AND_AMPLIFY", "FAVOR_THIS_STRATEGY"].includes(item.strategyAction)
+  );
+
+  const suppressed = analyzedSignals.filter((item) =>
+    ["SUPPRESS_THIS_STRATEGY", "REDUCE_THIS_STRATEGY"].includes(item.strategyAction)
+  );
+
+  const averageStrategyEvolution =
+    analyzedSignals.length > 0
+      ? analyzedSignals.reduce(
+          (sum, item) => sum + Number(item.strategyEvolutionScore || 0),
+          0
+        ) / analyzedSignals.length
+      : 0;
+
+  const state = {
+    phase: "63_STRATEGY_EVOLUTION_ENGINE",
+    updatedAt: new Date().toISOString(),
+    reviewedCount: analyzedSignals.length,
+    amplifiedCount: amplified.length,
+    suppressedCount: suppressed.length,
+    regimeKey,
+    marketStress,
+    averageStrategyEvolution: Number(averageStrategyEvolution.toFixed(2)),
+    amplifiedStrategies: amplified.slice(0, 10),
+    suppressedStrategies: suppressed.slice(0, 10),
+    rankedStrategyEvolution: analyzedSignals
+      .sort(
+        (a, b) =>
+          Number(b.strategyEvolutionScore || 0) -
+          Number(a.strategyEvolutionScore || 0)
+      )
+      .slice(0, 25),
+    reason:
+      `Phase 63 reviewed ${analyzedSignals.length} signals • ` +
+      `${amplified.length} amplified • ${suppressed.length} suppressed`,
+  };
+
+  return {
+    state,
+    analyzedSignals,
+  };
+}
+
+
+function calculatePhase62MarketPersonalityMemory(signals = []) {
+  if (!engineState.phase62MarketPersonalityMemory) {
+    engineState.phase62MarketPersonalityMemory = {};
+  }
+
+  const now = new Date();
+  const etHour = Number(
+    now.toLocaleString("en-US", {
+      timeZone: "America/New_York",
+      hour: "2-digit",
+      hour12: false,
+    })
+  );
+
+  const sessionKey =
+    etHour < 9
+      ? "PREMARKET"
+      : etHour < 11
+      ? "MORNING_MOMENTUM"
+      : etHour < 14
+      ? "MIDDAY"
+      : etHour < 16
+      ? "POWER_HOUR"
+      : "AFTER_HOURS";
+
+  const regimeKey =
+    engineState.marketRegime?.state ||
+    engineState.marketRegime ||
+    "unknown";
+
+  const marketStress = Number(engineState.marketStressLevel || 0);
+
+  const analyzedSignals = (Array.isArray(signals) ? signals : []).map((signal) => {
+    const symbol = normalizeSymbol(signal.symbol);
+    const sector = signal.estimatedSector || signal.sector || "General Market";
+
+    const setupType =
+      typeof classifyInstitutionalSetup === "function"
+        ? classifyInstitutionalSetup(signal)
+        : signal.strategy || "GENERAL_SETUP";
+
+    const key = `${regimeKey}_${sessionKey}_${sector}_${setupType}`;
+
+    const score = Number(signal.score || 0);
+    const orderFlowScore = Number(
+      signal.orderFlowConvictionScore ||
+        signal.phase59InstitutionalOrderFlow?.orderFlowConvictionScore ||
+        0
+    );
+
+    const executionScore = Number(
+      signal.adaptiveExecutionScore ||
+        signal.phase60AdaptiveExecution?.adaptiveExecutionScore ||
+        signal.executionConfidence ||
+        0
+    );
+
+    const runnerScore = Number(
+      signal.runnerScore ||
+        signal.explosiveRunnerScore ||
+        signal.adaptiveRunnerScore ||
+        0
+    );
+
+    const memory =
+      engineState.phase62MarketPersonalityMemory[key] || {
+        key,
+        regimeKey,
+        sessionKey,
+        sector,
+        setupType,
+        appearances: 0,
+        strongAppearances: 0,
+        weakAppearances: 0,
+        averageScore: 0,
+        averageOrderFlow: 0,
+        averageExecution: 0,
+        averageRunnerScore: 0,
+        personalityTrustScore: 50,
+        lastSeenAt: null,
+      };
+
+    memory.appearances += 1;
+    memory.strongAppearances += score >= 75 && orderFlowScore >= 70 ? 1 : 0;
+    memory.weakAppearances += score < 60 || orderFlowScore < 45 ? 1 : 0;
+
+    memory.averageScore = Number(
+      (
+        (Number(memory.averageScore || 0) * (memory.appearances - 1) + score) /
+        memory.appearances
+      ).toFixed(2)
+    );
+
+    memory.averageOrderFlow = Number(
+      (
+        (Number(memory.averageOrderFlow || 0) * (memory.appearances - 1) +
+          orderFlowScore) /
+        memory.appearances
+      ).toFixed(2)
+    );
+
+    memory.averageExecution = Number(
+      (
+        (Number(memory.averageExecution || 0) * (memory.appearances - 1) +
+          executionScore) /
+        memory.appearances
+      ).toFixed(2)
+    );
+
+    memory.averageRunnerScore = Number(
+      (
+        (Number(memory.averageRunnerScore || 0) * (memory.appearances - 1) +
+          runnerScore) /
+        memory.appearances
+      ).toFixed(2)
+    );
+
+    memory.personalityTrustScore = clampScore(
+      45 +
+        memory.averageScore * 0.18 +
+        memory.averageOrderFlow * 0.22 +
+        memory.averageExecution * 0.18 +
+        memory.averageRunnerScore * 0.14 +
+        memory.strongAppearances * 1.8 -
+        memory.weakAppearances * 2.2 -
+        (marketStress >= 70 ? 10 : 0)
+    );
+
+    memory.lastSeenAt = new Date().toISOString();
+
+    engineState.phase62MarketPersonalityMemory[key] = memory;
+
+    const personalityFitScore = clampScore(
+      memory.personalityTrustScore * 0.55 +
+        score * 0.15 +
+        orderFlowScore * 0.15 +
+        executionScore * 0.15
+    );
+
+    const personalityMode =
+      personalityFitScore >= 82
+        ? "MARKET_PERSONALITY_ELITE_MATCH"
+        : personalityFitScore >= 72
+        ? "MARKET_PERSONALITY_STRONG_MATCH"
+        : personalityFitScore >= 60
+        ? "MARKET_PERSONALITY_ACCEPTABLE"
+        : personalityFitScore <= 42
+        ? "MARKET_PERSONALITY_REJECT"
+        : "MARKET_PERSONALITY_WEAK";
+
+    const personalityMultiplier =
+      personalityMode === "MARKET_PERSONALITY_ELITE_MATCH"
+        ? 1.18
+        : personalityMode === "MARKET_PERSONALITY_STRONG_MATCH"
+        ? 1.1
+        : personalityMode === "MARKET_PERSONALITY_ACCEPTABLE"
+        ? 1.03
+        : personalityMode === "MARKET_PERSONALITY_REJECT"
+        ? 0.65
+        : 0.85;
+
+    const shouldPersonalityBlock =
+      personalityMode === "MARKET_PERSONALITY_REJECT" &&
+      score < 75 &&
+      orderFlowScore < 65;
+
+    return {
+      phase: "62_MARKET_PERSONALITY_MEMORY",
+      updatedAt: new Date().toISOString(),
+      symbol,
+      key,
+      regimeKey,
+      sessionKey,
+      sector,
+      setupType,
+      personalityFitScore,
+      personalityMode,
+      personalityMultiplier,
+      shouldPersonalityBlock,
+      memory,
+      reason:
+        `${personalityMode} • Fit ${personalityFitScore}/100 • ` +
+        `${regimeKey}/${sessionKey}/${setupType}`,
+    };
+  });
+
+  const eliteMatches = analyzedSignals.filter(
+    (item) => item.personalityFitScore >= 82
+  );
+
+  const blockedMatches = analyzedSignals.filter(
+    (item) => item.shouldPersonalityBlock
+  );
+
+  const averagePersonalityFit =
+    analyzedSignals.length > 0
+      ? analyzedSignals.reduce(
+          (sum, item) => sum + Number(item.personalityFitScore || 0),
+          0
+        ) / analyzedSignals.length
+      : 0;
+
+  const state = {
+    phase: "62_MARKET_PERSONALITY_MEMORY",
+    updatedAt: new Date().toISOString(),
+    reviewedCount: analyzedSignals.length,
+    eliteMatchCount: eliteMatches.length,
+    blockedCount: blockedMatches.length,
+    regimeKey,
+    sessionKey,
+    marketStress,
+    averagePersonalityFit: Number(averagePersonalityFit.toFixed(2)),
+    elitePersonalityMatches: eliteMatches.slice(0, 10),
+    blockedPersonalityMatches: blockedMatches.slice(0, 10),
+    strongestPersonalitySignals: analyzedSignals
+      .sort(
+        (a, b) =>
+          Number(b.personalityFitScore || 0) -
+          Number(a.personalityFitScore || 0)
+      )
+      .slice(0, 25),
+    reason:
+      `Phase 62 reviewed ${analyzedSignals.length} signals • ` +
+      `${eliteMatches.length} elite personality matches • ${blockedMatches.length} blocked`,
+  };
+
+  return {
+    state,
+    analyzedSignals,
+  };
+}
+
+function calculatePhase61ProfitAggressionAI(signals = []) {
+  if (!engineState.phase61AggressionMemory) {
+    engineState.phase61AggressionMemory = {};
+  }
+
+  const marketStress = Number(engineState.marketStressLevel || 0);
+  const regimeState =
+    engineState.marketRegime?.state ||
+    engineState.marketRegime ||
+    "unknown";
+
+  const governorThrottle = Number(
+    engineState.portfolioGovernorState?.capitalThrottleMultiplier || 1
+  );
+
+  const centralCore =
+    engineState.centralAutonomousDecisionCoreState || {};
+
+  const analyzedSignals = (Array.isArray(signals) ? signals : []).map((signal) => {
+    const symbol = normalizeSymbol(signal.symbol);
+
+    const score = Number(signal.score || 0);
+    const centralScore = Number(
+      signal.finalAutonomousDecisionScore ||
+        signal.centralAutonomousDecisionCore?.finalDecisionScore ||
+        0
+    );
+
+    const orderFlowScore = Number(
+      signal.orderFlowConvictionScore ||
+        signal.phase59InstitutionalOrderFlow?.orderFlowConvictionScore ||
+        0
+    );
+
+    const adaptiveExecutionScore = Number(
+      signal.adaptiveExecutionScore ||
+        signal.phase60AdaptiveExecution?.adaptiveExecutionScore ||
+        signal.executionConfidence ||
+        0
+    );
+
+    const runnerScore = Number(
+      signal.runnerScore ||
+        signal.explosiveRunnerScore ||
+        signal.explosiveRunnerPrediction?.explosiveRunnerScore ||
+        signal.adaptiveRunnerScore ||
+        0
+    );
+
+    const institutionalScore = Number(
+      signal.institutionalBrainScore ||
+        signal.fullInstitutionalAiBrain?.dynamicConvictionScore ||
+        signal.institutionalScore ||
+        signal.aiConfidence ||
+        0
+    );
+
+    const liquidityTrapScore = Number(
+      signal.liquidityTrapScore ||
+        signal.phase59InstitutionalOrderFlow?.liquidityTrapScore ||
+        0
+    );
+
+    const exhaustionRiskScore = Number(
+      signal.exhaustionRiskScore ||
+        signal.phase59InstitutionalOrderFlow?.exhaustionRiskScore ||
+        0
+    );
+
+    const fakeBreakout =
+      signal.confirmations?.fakeBreakout === true ||
+      liquidityTrapScore >= 75;
+
+    const eliteSetup =
+      score >= 75 &&
+      centralScore >= 72 &&
+      orderFlowScore >= 70 &&
+      adaptiveExecutionScore >= 65 &&
+      institutionalScore >= 70 &&
+      liquidityTrapScore < 60 &&
+      exhaustionRiskScore < 75 &&
+      !fakeBreakout;
+
+    const monsterSetup =
+      score >= 82 &&
+      centralScore >= 80 &&
+      orderFlowScore >= 82 &&
+      adaptiveExecutionScore >= 75 &&
+      runnerScore >= 75 &&
+      institutionalScore >= 78 &&
+      marketStress < 45 &&
+      !fakeBreakout;
+
+    const aggressionPenalty =
+      (marketStress >= 70 ? 25 : 0) +
+      (marketStress >= 85 ? 25 : 0) +
+      (governorThrottle < 0.75 ? 10 : 0) +
+      (liquidityTrapScore >= 65 ? 18 : 0) +
+      (exhaustionRiskScore >= 75 ? 16 : 0) +
+      (fakeBreakout ? 25 : 0);
+
+    const profitAggressionScore = clampScore(
+      score * 0.18 +
+        centralScore * 0.2 +
+        orderFlowScore * 0.2 +
+        adaptiveExecutionScore * 0.16 +
+        runnerScore * 0.14 +
+        institutionalScore * 0.12 -
+        aggressionPenalty
+    );
+
+    const aggressionMode =
+      monsterSetup && profitAggressionScore >= 85
+        ? "MAX_CONTROLLED_ATTACK"
+        : eliteSetup && profitAggressionScore >= 76
+        ? "AGGRESSIVE_COMPOUND_ATTACK"
+        : profitAggressionScore >= 66
+        ? "SELECTIVE_PRESS"
+        : profitAggressionScore <= 42
+        ? "CAPITAL_DEFENSE"
+        : "NORMAL_DEPLOYMENT";
+
+    const aggressionMultiplier =
+      aggressionMode === "MAX_CONTROLLED_ATTACK"
+        ? 1.55
+        : aggressionMode === "AGGRESSIVE_COMPOUND_ATTACK"
+        ? 1.32
+        : aggressionMode === "SELECTIVE_PRESS"
+        ? 1.12
+        : aggressionMode === "CAPITAL_DEFENSE"
+        ? 0.55
+        : 1;
+
+    const maxAllowedExposurePercent =
+      aggressionMode === "MAX_CONTROLLED_ATTACK"
+        ? 35
+        : aggressionMode === "AGGRESSIVE_COMPOUND_ATTACK"
+        ? 28
+        : aggressionMode === "SELECTIVE_PRESS"
+        ? 22
+        : 15;
+
+    const shouldBlockAggression =
+      fakeBreakout ||
+      marketStress >= 88 ||
+      liquidityTrapScore >= 78 ||
+      exhaustionRiskScore >= 88;
+
+    const memory =
+      engineState.phase61AggressionMemory[symbol] || {
+        symbol,
+        appearances: 0,
+        maxAggressionScore: 0,
+        aggressiveApprovals: 0,
+        defensiveBlocks: 0,
+        lastMode: null,
+        lastUpdated: null,
+      };
+
+    memory.appearances += 1;
+    memory.maxAggressionScore = Math.max(
+      Number(memory.maxAggressionScore || 0),
+      profitAggressionScore
+    );
+    memory.aggressiveApprovals +=
+      aggressionMode === "MAX_CONTROLLED_ATTACK" ||
+      aggressionMode === "AGGRESSIVE_COMPOUND_ATTACK"
+        ? 1
+        : 0;
+    memory.defensiveBlocks += shouldBlockAggression ? 1 : 0;
+    memory.lastMode = aggressionMode;
+    memory.lastUpdated = new Date().toISOString();
+
+    engineState.phase61AggressionMemory[symbol] = memory;
+
+    return {
+      phase: "61_PROFIT_AGGRESSION_AI",
+      updatedAt: new Date().toISOString(),
+      symbol,
+      regimeState,
+      marketStress,
+      score,
+      centralScore,
+      orderFlowScore,
+      adaptiveExecutionScore,
+      runnerScore,
+      institutionalScore,
+      liquidityTrapScore,
+      exhaustionRiskScore,
+      profitAggressionScore,
+      aggressionMode,
+      aggressionMultiplier,
+      maxAllowedExposurePercent,
+      eliteSetup,
+      monsterSetup,
+      shouldBlockAggression,
+      memory,
+      reason:
+        `${aggressionMode} • Aggression ${profitAggressionScore}/100 • ` +
+        `OrderFlow ${orderFlowScore}/100 • Execution ${adaptiveExecutionScore}/100`,
+    };
+  });
+
+  const aggressiveSignals = analyzedSignals.filter((item) =>
+    ["MAX_CONTROLLED_ATTACK", "AGGRESSIVE_COMPOUND_ATTACK"].includes(
+      item.aggressionMode
+    )
+  );
+
+  const defensiveSignals = analyzedSignals.filter(
+    (item) => item.shouldBlockAggression || item.aggressionMode === "CAPITAL_DEFENSE"
+  );
+
+  const averageAggressionScore =
+    analyzedSignals.length > 0
+      ? analyzedSignals.reduce(
+          (sum, item) => sum + Number(item.profitAggressionScore || 0),
+          0
+        ) / analyzedSignals.length
+      : 0;
+
+  const state = {
+    phase: "61_PROFIT_AGGRESSION_AI",
+    updatedAt: new Date().toISOString(),
+    reviewedCount: analyzedSignals.length,
+    aggressiveCount: aggressiveSignals.length,
+    defensiveCount: defensiveSignals.length,
+    averageAggressionScore: Number(averageAggressionScore.toFixed(2)),
+    marketStress,
+    regimeState,
+    governorThrottle,
+    centralCoreMode: centralCore.reason || null,
+    strongestAggressionSignals: aggressiveSignals
+      .sort(
+        (a, b) =>
+          Number(b.profitAggressionScore || 0) -
+          Number(a.profitAggressionScore || 0)
+      )
+      .slice(0, 10),
+    defensiveAggressionBlocks: defensiveSignals.slice(0, 10),
+    reason:
+      `Phase 61 reviewed ${analyzedSignals.length} signals • ` +
+      `${aggressiveSignals.length} aggressive • ${defensiveSignals.length} defensive`,
+  };
+
+  return {
+    state,
+    analyzedSignals,
+  };
+}
+
+function calculatePhase60AdaptiveExecutionAlgorithms(signal = {}, amount = 0) {
+  const symbol = normalizeSymbol(signal.symbol);
+  const tradeAmount = Number(amount || 0);
+
+  const executionPlan = signal.institutionalExecutionPlan || {};
+  const orderFlow = signal.phase59InstitutionalOrderFlow || {};
+  const liquidity = signal.liquidityIntelligence || {};
+
+  const executionConfidence = Number(
+    signal.executionConfidence ||
+      executionPlan.executionConfidence ||
+      50
+  );
+
+  const liquidityScore = Number(
+    executionPlan.liquidityScore ||
+      liquidity.executionQualityScore ||
+      liquidity.liquidityDepthScore ||
+      50
+  );
+
+  const slippageRiskScore = Number(
+    executionPlan.slippageRiskScore ||
+      liquidity.estimatedSlippagePercent * 100 ||
+      35
+  );
+
+  const orderFlowScore = Number(
+    signal.orderFlowConvictionScore ||
+      orderFlow.orderFlowConvictionScore ||
+      50
+  );
+
+  const spreadPercent = Number(
+    signal.spreadPercent ||
+      executionPlan.spreadPercent ||
+      orderFlow.spreadPercent ||
+      0
+  );
+
+  const dollarVolume = Number(
+    signal.dollarVolume ||
+      executionPlan.dollarVolume ||
+      liquidity.dollarVolume ||
+      0
+  );
+
+  const marketStress = Number(engineState.marketStressLevel || 0);
+
+  const weakExecution =
+    executionConfidence < 45 ||
+    liquidityScore < 40 ||
+    slippageRiskScore >= 65 ||
+    spreadPercent >= 2.5;
+
+  const eliteExecution =
+    executionConfidence >= 75 &&
+    liquidityScore >= 65 &&
+    orderFlowScore >= 75 &&
+    slippageRiskScore <= 30 &&
+    spreadPercent <= 0.75;
+
+  let executionStyle = "SINGLE_MARKET_ORDER";
+  let sliceCount = 1;
+  let sliceDelayMs = 0;
+  let priceProtectionMode = "NORMAL_MARKET";
+  let shouldBlockExecution = false;
+  let executionMultiplier = 1;
+
+  if (weakExecution) {
+    executionStyle = "BLOCK_OR_MICRO_PROBE";
+    sliceCount = 1;
+    sliceDelayMs = 0;
+    priceProtectionMode = "PROTECT_FROM_SLIPPAGE";
+    executionMultiplier = 0.35;
+    shouldBlockExecution = executionConfidence < 35 || spreadPercent >= 3;
+  } else if (eliteExecution && tradeAmount >= 30) {
+    executionStyle = "ADAPTIVE_ICEBERG_SCALE_IN";
+    sliceCount = 4;
+    sliceDelayMs = 12000;
+    priceProtectionMode = "STEALTH_ACCUMULATION";
+    executionMultiplier = 1.12;
+  } else if (orderFlowScore >= 70 && tradeAmount >= 20) {
+    executionStyle = "VWAP_STYLE_STAGGERED_ENTRY";
+    sliceCount = 3;
+    sliceDelayMs = 10000;
+    priceProtectionMode = "VWAP_PROTECTION";
+    executionMultiplier = 1.05;
+  } else if (marketStress >= 60 || slippageRiskScore >= 45) {
+    executionStyle = "TWAP_DEFENSIVE_ENTRY";
+    sliceCount = 2;
+    sliceDelayMs = 15000;
+    priceProtectionMode = "DEFENSIVE_TIMING";
+    executionMultiplier = 0.8;
+  }
+
+  if (tradeAmount > 0 && tradeAmount / sliceCount < 1) {
+    sliceCount = 1;
+    sliceDelayMs = 0;
+  }
+
+  const adaptiveSliceAmount = Number(
+    (tradeAmount / Math.max(1, sliceCount)).toFixed(2)
+  );
+
+  const adaptiveExecutionScore = clampScore(
+    executionConfidence * 0.3 +
+      liquidityScore * 0.25 +
+      orderFlowScore * 0.25 +
+      (100 - slippageRiskScore) * 0.15 -
+      marketStress * 0.05
+  );
+
+  const decision = {
+    phase: "60_ADAPTIVE_EXECUTION_ALGORITHMS",
+    updatedAt: new Date().toISOString(),
+    symbol,
+    tradeAmount,
+    executionStyle,
+    sliceCount,
+    adaptiveSliceAmount,
+    sliceDelayMs,
+    priceProtectionMode,
+    shouldBlockExecution,
+    executionMultiplier,
+    adaptiveExecutionScore,
+    executionConfidence,
+    liquidityScore,
+    slippageRiskScore,
+    orderFlowScore,
+    spreadPercent,
+    dollarVolume,
+    reason:
+      `${executionStyle} • Exec ${adaptiveExecutionScore}/100 • ` +
+      `Slices ${sliceCount} • Slice $${adaptiveSliceAmount}`,
+  };
+
+  if (!engineState.phase60ExecutionMemory) {
+    engineState.phase60ExecutionMemory = {};
+  }
+
+  engineState.phase60ExecutionMemory[symbol] = {
+    ...(engineState.phase60ExecutionMemory[symbol] || {}),
+    symbol,
+    lastExecutionStyle: executionStyle,
+    lastAdaptiveExecutionScore: adaptiveExecutionScore,
+    lastSliceCount: sliceCount,
+    lastSliceAmount: adaptiveSliceAmount,
+    lastUpdated: new Date().toISOString(),
+  };
+
+  engineState.phase60AdaptiveExecutionState = decision;
+
+  if (!Array.isArray(engineState.phase60AdaptiveExecutionHistory)) {
+    engineState.phase60AdaptiveExecutionHistory = [];
+  }
+
+  engineState.phase60AdaptiveExecutionHistory.unshift(decision);
+  engineState.phase60AdaptiveExecutionHistory =
+    engineState.phase60AdaptiveExecutionHistory.slice(0, 200);
+
+  return decision;
+}
+
+
+
+function calculatePhase59InstitutionalOrderFlowIntelligence(stockSignals = [], cryptoSignals = []) {
+  const allSignals = [...stockSignals, ...cryptoSignals].filter(Boolean);
+
+  if (!engineState.phase59OrderFlowMemory) {
+    engineState.phase59OrderFlowMemory = {};
+  }
+
+  const analyzedSignals = allSignals.map((signal) => {
+    const symbol = normalizeSymbol(signal.symbol);
+    const price = Number(signal.current || signal.price || signal.c || 0);
+    const bid = Number(signal.bid || 0);
+    const ask = Number(signal.ask || 0);
+    const volume = Number(signal.volume || signal.barVolume || signal.v || 0);
+    const avgVolume = Number(
+      signal.avgVolume ||
+        signal.confirmations?.avgVolume ||
+        signal.confirmations?.averageVolume ||
+        0
+    );
+
+    const volumeRatio = Number(
+      signal.volumeRatio ||
+        signal.relativeVolume ||
+        signal.confirmations?.volumeSpikeRatio ||
+        (avgVolume > 0 ? volume / avgVolume : 1)
+    );
+
+    const high = Number(signal.high || signal.h || 0);
+    const low = Number(signal.low || signal.l || 0);
+    const open = Number(signal.open || signal.o || 0);
+
+    const spreadPercent =
+      bid > 0 && ask > 0 && price > 0
+        ? ((ask - bid) / price) * 100
+        : Number(signal.spreadPercent || 0);
+
+    const closeLocationPercent =
+      high > low && price > 0
+        ? ((price - low) / (high - low)) * 100
+        : Number(signal.confirmations?.closeNearHighPercent || 50);
+
+    const openToCloseStrength =
+      open > 0 && price > 0
+        ? ((price - open) / open) * 100
+        : Number(signal.percentChange || signal.change || 0);
+
+    const pullbackFromHighPercent =
+      high > 0 && price > 0
+        ? ((high - price) / high) * 100
+        : Number(signal.confirmations?.pullbackFromHighPercent || 0);
+
+    const bidAskQualityScore = clampScore(
+      80 -
+        spreadPercent * 18 +
+        (bid > 0 && ask > 0 ? 8 : -8)
+    );
+
+    const tapeAggressionScore = clampScore(
+      35 +
+        volumeRatio * 12 +
+        Math.max(0, openToCloseStrength) * 2.2 +
+        (closeLocationPercent >= 85 ? 14 : 0) +
+        (closeLocationPercent >= 95 ? 8 : 0) -
+        (pullbackFromHighPercent >= 3 ? 14 : 0)
+    );
+
+    const absorptionScore = clampScore(
+      40 +
+        (volumeRatio >= 2 ? 14 : 0) +
+        (volumeRatio >= 4 ? 10 : 0) +
+        (closeLocationPercent >= 80 ? 14 : 0) +
+        (pullbackFromHighPercent <= 1.5 ? 10 : 0) -
+        (openToCloseStrength < 0 ? 20 : 0)
+    );
+
+    const exhaustionRiskScore = clampScore(
+      20 +
+        (pullbackFromHighPercent >= 4 ? 28 : 0) +
+        (spreadPercent >= 1.5 ? 18 : 0) +
+        (volumeRatio >= 6 && closeLocationPercent < 60 ? 24 : 0) +
+        (openToCloseStrength > 35 ? 15 : 0) -
+        (closeLocationPercent >= 90 ? 12 : 0)
+    );
+
+    const liquidityTrapScore = clampScore(
+      15 +
+        (signal.confirmations?.fakeBreakout ? 35 : 0) +
+        (spreadPercent >= 2 ? 22 : 0) +
+        (pullbackFromHighPercent >= 4 ? 18 : 0) +
+        (volumeRatio >= 3 && closeLocationPercent < 55 ? 20 : 0)
+    );
+
+    const institutionalAccumulationPressure = clampScore(
+      absorptionScore * 0.45 +
+        tapeAggressionScore * 0.35 +
+        bidAskQualityScore * 0.2 -
+        liquidityTrapScore * 0.25
+    );
+
+    const orderFlowConvictionScore = clampScore(
+      bidAskQualityScore * 0.18 +
+        tapeAggressionScore * 0.28 +
+        absorptionScore * 0.24 +
+        institutionalAccumulationPressure * 0.2 -
+        exhaustionRiskScore * 0.08 -
+        liquidityTrapScore * 0.12
+    );
+
+    const flowLabel =
+      orderFlowConvictionScore >= 82
+        ? "ELITE_INSTITUTIONAL_FLOW"
+        : orderFlowConvictionScore >= 72
+        ? "STRONG_ORDER_FLOW"
+        : orderFlowConvictionScore >= 60
+        ? "ACCEPTABLE_FLOW"
+        : liquidityTrapScore >= 65
+        ? "LIQUIDITY_TRAP_RISK"
+        : exhaustionRiskScore >= 70
+        ? "EXHAUSTION_RISK"
+        : "WEAK_ORDER_FLOW";
+
+    const shouldBlock =
+      liquidityTrapScore >= 75 ||
+      (exhaustionRiskScore >= 82 && Number(signal.score || 0) < 85);
+
+    const orderFlowMultiplier =
+      orderFlowConvictionScore >= 85
+        ? 1.18
+        : orderFlowConvictionScore >= 75
+        ? 1.1
+        : orderFlowConvictionScore >= 65
+        ? 1.04
+        : orderFlowConvictionScore <= 45
+        ? 0.78
+        : 1;
+
+    const memory =
+      engineState.phase59OrderFlowMemory[symbol] || {
+        symbol,
+        appearances: 0,
+        highestOrderFlowScore: 0,
+        averageOrderFlowScore: 0,
+        trapWarnings: 0,
+        eliteFlowCount: 0,
+        lastSeenAt: null,
+      };
+
+    memory.appearances += 1;
+    memory.highestOrderFlowScore = Math.max(
+      Number(memory.highestOrderFlowScore || 0),
+      orderFlowConvictionScore
+    );
+    memory.averageOrderFlowScore = Number(
+      (
+        (
+          Number(memory.averageOrderFlowScore || 0) *
+            (memory.appearances - 1) +
+          orderFlowConvictionScore
+        ) / memory.appearances
+      ).toFixed(2)
+    );
+    memory.trapWarnings += liquidityTrapScore >= 65 ? 1 : 0;
+    memory.eliteFlowCount += orderFlowConvictionScore >= 82 ? 1 : 0;
+    memory.lastSeenAt = new Date().toISOString();
+
+    engineState.phase59OrderFlowMemory[symbol] = memory;
+
+    return {
+      symbol,
+      phase: "59_INSTITUTIONAL_ORDER_FLOW_INTELLIGENCE",
+      bidAskQualityScore,
+      tapeAggressionScore,
+      absorptionScore,
+      exhaustionRiskScore,
+      liquidityTrapScore,
+      institutionalAccumulationPressure,
+      orderFlowConvictionScore,
+      orderFlowMultiplier,
+      flowLabel,
+      shouldBlock,
+      spreadPercent: Number(spreadPercent.toFixed(3)),
+      volumeRatio: Number(volumeRatio.toFixed(2)),
+      closeLocationPercent: Number(closeLocationPercent.toFixed(2)),
+      pullbackFromHighPercent: Number(pullbackFromHighPercent.toFixed(2)),
+      memory,
+      reason:
+        `${flowLabel} • Flow ${orderFlowConvictionScore}/100 • ` +
+        `Tape ${tapeAggressionScore}/100 • Absorption ${absorptionScore}/100 • ` +
+        `Trap ${liquidityTrapScore}/100`,
+    };
+  });
+
+  const eliteFlowSignals = analyzedSignals.filter(
+    (item) => item.orderFlowConvictionScore >= 82
+  );
+
+  const blockedFlowSignals = analyzedSignals.filter(
+    (item) => item.shouldBlock
+  );
+
+  const averageOrderFlowScore =
+    analyzedSignals.length > 0
+      ? analyzedSignals.reduce(
+          (sum, item) => sum + Number(item.orderFlowConvictionScore || 0),
+          0
+        ) / analyzedSignals.length
+      : 0;
+
+  const state = {
+    updatedAt: new Date().toISOString(),
+    phase: "59_INSTITUTIONAL_ORDER_FLOW_INTELLIGENCE",
+    reviewedCount: analyzedSignals.length,
+    eliteFlowCount: eliteFlowSignals.length,
+    blockedFlowCount: blockedFlowSignals.length,
+    averageOrderFlowScore: Number(averageOrderFlowScore.toFixed(2)),
+    eliteFlowSignals: eliteFlowSignals.slice(0, 10),
+    blockedFlowSignals: blockedFlowSignals.slice(0, 10),
+    rankedOrderFlowSignals: analyzedSignals
+      .sort(
+        (a, b) =>
+          Number(b.orderFlowConvictionScore || 0) -
+          Number(a.orderFlowConvictionScore || 0)
+      )
+      .slice(0, 25),
+    reason:
+      `Phase 59 reviewed ${analyzedSignals.length} signals • ` +
+      `${eliteFlowSignals.length} elite flow • ${blockedFlowSignals.length} blocked`,
+  };
+
+  return {
+    state,
+    analyzedSignals,
+  };
+}
+
+
+
+function calculateCentralAutonomousDecisionCore(stockSignals = [], cryptoSignals = []) {
+  const allSignals = [...stockSignals, ...cryptoSignals].filter(Boolean);
+
+  const marketRegime = engineState.marketRegime?.state || "unknown";
+  const marketStress = Number(engineState.marketStressLevel || 0);
+  const governorMode =
+    engineState.portfolioGovernorState?.governorMode || "UNKNOWN";
+  const metaMode =
+    engineState.autonomousMetaStrategyState?.capitalRoutingMode || "UNKNOWN";
+  const unifiedMode =
+    engineState.unifiedInstitutionalOrchestratorState?.orchestratorMode ||
+    "UNKNOWN";
+  const profitVelocityMode =
+    engineState.profitVelocityGovernorState?.velocityMode || "UNKNOWN";
+
+  const globalRiskMultiplier = Number(
+    engineState.globalRiskOffDefenseState?.exposureMultiplier || 1
+  );
+
+  const unifiedCapitalMultiplier = Number(
+    engineState.unifiedInstitutionalOrchestratorState
+      ?.finalCapitalMultiplier || 1
+  );
+
+  const profitVelocityMultiplier = Number(
+    engineState.profitVelocityGovernorState
+      ?.velocityCapitalMultiplier || 1
+  );
+
+  const governorThrottle = Number(
+    engineState.portfolioGovernorState?.capitalThrottleMultiplier || 1
+  );
+
+  const masterCapitalMultiplier = Number(
+    (
+      globalRiskMultiplier *
+      unifiedCapitalMultiplier *
+      profitVelocityMultiplier *
+      governorThrottle
+    ).toFixed(2)
+  );
+
+  const decisions = allSignals.map((signal) => {
+    const baseScore = Number(signal.score || 0);
+    const institutionalScore = Number(
+      signal.institutionalBrainScore ||
+        signal.fullInstitutionalAiBrain?.dynamicConvictionScore ||
+        signal.fullInstitutionalAiBrain?.consensusScore ||
+        signal.institutionalScore ||
+        signal.aiConfidence ||
+        0
+    );
+
+const executionScore = Number(
+  signal.executionConfidence ||
+    signal.institutionalExecutionPlan?.executionConfidence ||
+    0
+);
+
+const orderFlowScore = Number(
+  signal.orderFlowConvictionScore ||
+    signal.phase59InstitutionalOrderFlow?.orderFlowConvictionScore ||
+    0
+);
+
+const runnerScore = Number(
+  signal.runnerScore ||
+    signal.explosiveRunnerScore ||
+    signal.explosiveRunnerPrediction?.explosiveRunnerScore ||
+    signal.adaptiveRunnerScore ||
+    0
+);
+    const metaScore = Number(
+      signal.metaStrategyScore ||
+        signal.autonomousMetaStrategy?.metaStrategyScore ||
+        0
+    );
+
+    const velocityScore = Number(
+      signal.profitVelocityScore ||
+        signal.profitVelocityGovernor?.finalVelocityScore ||
+        0
+    );
+
+    const profitAggressionScore = Number(
+      signal.profitAggressionScore ||
+        signal.phase61ProfitAggression?.profitAggressionScore ||
+        0
+    );    
+
+    const personalityScore = Number(
+      signal.personalityFitScore ||
+        signal.phase62MarketPersonality?.personalityFitScore ||
+        0
+    );
+
+    const riskPenalty =
+      (signal.confirmations?.fakeBreakout ? 18 : 0) +
+      (signal.confirmations?.gapTooHigh ? 12 : 0) +
+      (signal.confirmations?.newsRisk ? 20 : 0) +
+      (marketStress >= 75 ? 18 : 0) +
+      (signal.globalRiskOffDefense?.shouldBlock ? 30 : 0);
+
+    const finalDecisionScore = clampScore(
+      baseScore * 0.28 +
+        institutionalScore * 0.22 +
+        executionScore * 0.16 +
+        runnerScore * 0.12 +
+        orderFlowScore * 0.1 +
+        profitAggressionScore * 0.09 +
+        personalityScore * 0.07 +
+        strategyEvolutionScore * 0.08 +
+        metaScore * 0.06 +
+        velocityScore * 0.06 -
+        riskPenalty
+    );
+
+    const shouldBlock =
+      signal.autoTradeApproved === false ||
+      signal.globalRiskOffDefense?.shouldBlock === true ||
+      signal.unifiedInstitutionalOrchestrator?.shouldBlock === true ||
+      signal.phase59InstitutionalOrderFlow?.shouldBlock === true || 
+      signal.phase61ProfitAggression?.shouldBlockAggression === true ||
+      signal.phase62MarketPersonality?.shouldPersonalityBlock === true ||  
+      signal.phase63StrategyEvolution?.shouldStrategyBlock === true ||               
+      finalDecisionScore < CONFIG.minScoreToBuy ||
+      marketStress >= 90;
+
+    const shouldAccelerate =
+      !shouldBlock &&
+      finalDecisionScore >= 82 &&
+      executionScore >= 60 &&
+      institutionalScore >= 70 &&
+      orderFlowScore >= 65 &&
+      profitAggressionScore >= 65 &&
+      personalityScore >= 55 &&
+      strategyEvolutionScore >= 52 &&
+      marketStress < 60;
+    const action = shouldBlock
+      ? "BLOCK"
+      : shouldAccelerate
+      ? "ACCELERATE_CAPITAL"
+      : finalDecisionScore >= CONFIG.minScoreToBuy
+      ? "ALLOW"
+      : "WATCH";
+
+    return {
+      symbol: signal.symbol,
+      assetClass:
+        signal.assetType ||
+        (String(signal.symbol || "").includes("/") ||
+        String(signal.symbol || "").endsWith("USD")
+          ? "crypto"
+          : "stock"),
+      baseScore,
+      institutionalScore,
+      executionScore,
+      runnerScore,
+      metaScore,
+      orderFlowScore,
+      velocityScore,
+      profitAggressionScore,
+      personalityScore,  
+      strategyEvolutionScore,
+      riskPenalty,
+      finalDecisionScore,
+      action,
+      shouldBlock,
+      shouldAccelerate,
+      masterCapitalMultiplier,
+      reason:
+        `${action} • Final ${finalDecisionScore}/100 • ` +
+        `Institutional ${institutionalScore}/100 • Execution ${executionScore}/100`,
+    };
+  });
+
+  const rankedDecisions = decisions.sort(
+    (a, b) => b.finalDecisionScore - a.finalDecisionScore
+  );
+
+  const approvedDecisions = rankedDecisions.filter(
+    (decision) => !decision.shouldBlock && decision.action !== "WATCH"
+  );
+
+  const blockedDecisions = rankedDecisions.filter(
+    (decision) => decision.shouldBlock
+  );
+
+  const state = {
+    phase: "58_CENTRAL_AUTONOMOUS_DECISION_CORE",
+    updatedAt: new Date().toISOString(),
+    reviewedCount: allSignals.length,
+    approvedCount: approvedDecisions.length,
+    blockedCount: blockedDecisions.length,
+    marketRegime,
+    marketStress,
+    governorMode,
+    metaMode,
+    unifiedMode,
+    profitVelocityMode,
+    masterCapitalMultiplier,
+    topApprovedSymbols: approvedDecisions.slice(0, 5).map((d) => d.symbol),
+    topBlockedSymbols: blockedDecisions.slice(0, 5).map((d) => d.symbol),
+    rankedDecisions: rankedDecisions.slice(0, 25),
+    autonomousControlActive: true,
+    reason:
+      `Central core reviewed ${allSignals.length} signals • ` +
+      `${approvedDecisions.length} approved • ${blockedDecisions.length} blocked`,
+  };
+
+  return {
+    state,
+    rankedDecisions,
+  };
+}
+
 function syncFinalInstitutionalDashboardSignals(finalStockSignals = [], finalCryptoSignals = []) {
   const stockSignalsForDashboard =
     Array.isArray(finalStockSignals) && finalStockSignals.length > 0
@@ -30750,6 +32527,24 @@ function buildInstitutionalDashboardPayload() {
 
     institutionalExecutionLayer:
       engineState.institutionalExecutionLayerState || null,
+
+phase63StrategyEvolution:
+      engineState.phase63StrategyEvolutionState || null,
+
+phase62MarketPersonality:
+      engineState.phase62MarketPersonalityState || null,
+
+phase61ProfitAggression:
+      engineState.phase61ProfitAggressionState || null,
+
+phase60AdaptiveExecution:
+      engineState.phase60AdaptiveExecutionState || null,
+
+    phase59InstitutionalOrderFlow:
+      engineState.phase59InstitutionalOrderFlowState || null,
+
+    centralAutonomousDecisionCore:
+      engineState.centralAutonomousDecisionCoreState || null,
 
     finalDashboardSignalSync:
       engineState.finalDashboardSignalSyncState || null,      
