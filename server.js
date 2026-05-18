@@ -6803,25 +6803,28 @@ function calculatePortfolioHeatEngine(signal, openBotPositions = []) {
   );
 
   const portfolioHeatScore = clampScore(
-    concentrationRiskScore * 0.55 +
-      correlationRiskScore * 0.45
+    100 -
+      (
+        concentrationRiskScore * 0.55 +
+        correlationRiskScore * 0.45
+      )
   );
 
   const portfolioHeatLabel =
     portfolioHeatScore >= 80
-      ? "Low Portfolio Heat"
-      : portfolioHeatScore >= 65
-      ? "Moderate Portfolio Heat"
-      : portfolioHeatScore >= 50
+      ? "High Portfolio Heat"
+      : portfolioHeatScore >= 55
       ? "Elevated Portfolio Heat"
-      : "High Portfolio Heat";
+      : portfolioHeatScore >= 30
+      ? "Moderate Portfolio Heat"
+      : "Low Portfolio Heat";
 
   const correlationAction =
     duplicateSymbolRisk
       ? "Block Duplicate Symbol"
-      : portfolioHeatScore >= 65
+      : portfolioHeatScore <= 30
       ? "Allow Allocation"
-      : portfolioHeatScore >= 50
+      : portfolioHeatScore <= 55
       ? "Reduce Allocation"
       : "Avoid Additional Exposure";
 
@@ -7522,8 +7525,7 @@ function calculateAiPortfolioManagerDecision(
   const approved =
     recommendedTradeAmount > 0 &&
     (
-      dynamicHeatRelaxation.relaxedHeatScore >= effectiveHeatApprovalThreshold ||
-      eliteHeatOverride ||
+      dynamicHeatRelaxation.relaxedHeatScore <= effectiveHeatApprovalThreshold ||
       tacticalEliteRunnerOverride ||
       strongSetupOverride ||
       phase57EliteOverride.overrideApproved ||
