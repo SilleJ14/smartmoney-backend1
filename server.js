@@ -6830,22 +6830,29 @@ function calculateAiPortfolioManagerDecision(
   );
 
   const runnerScore = Number(
-    signal.explosiveRunnerScore ||
+    signal.runnerScore ||
+      signal.explosiveRunnerScore ||
       signal.explosiveRunnerPrediction?.explosiveRunnerScore ||
       signal.adaptiveRunnerScore ||
       signal.adaptiveRunnerLearning?.adaptiveRunnerScore ||
       signal.adaptiveRunnerLearning?.breakoutProbability ||
+      signal.breakoutProbability ||
+      signal.continuationProbability ||
       0
   );
 
   const executionConfidence = Number(
-    signal.institutionalExecutionPlan?.executionConfidence ||
-      signal.executionConfidence ||
+    signal.executionConfidence ||
+      signal.institutionalExecutionPlan?.executionConfidence ||
+      signal.executionTimingScore ||
+      signal.technicalIntelligence?.executionTimingScore ||
       50
   );
 
   const institutionalBrainScore = Number(
     signal.institutionalBrainScore ||
+      signal.institutionalScore ||
+      signal.aiConfidence ||
       signal.fullInstitutionalAiBrain?.masterOpportunityScore ||
       signal.fullInstitutionalAiBrain?.dynamicConvictionScore ||
       signal.fullInstitutionalAiBrain?.consensusScore ||
@@ -6896,30 +6903,40 @@ function calculateAiPortfolioManagerDecision(
     ).toFixed(2)
   );
 
-  const eliteHeatOverride =
+  const baseEliteQuality =
     signal.qualifiedToBuy === true &&
-    Number(signal.score || 0) >= 70 &&
-    runnerScore >= 70 &&
-    executionConfidence >= 55 &&
+    Number(signal.score || 0) >= CONFIG.minScoreToBuy &&
+    institutionalBrainScore >= 70 &&
     signal.confirmations?.fakeBreakout !== true;
+
+  const eliteHeatOverride =
+    baseEliteQuality &&
+    (
+      runnerScore >= 70 ||
+      executionConfidence >= 65 ||
+      Number(signal.technicalScore || 0) >= 78 ||
+      Number(signal.statisticalScore || signal.statisticalEdgeScore || 0) >= 85
+    );
 
   const tacticalEliteRunnerOverride =
     eliteHeatOverride &&
     portfolioHeat.duplicateSymbolRisk !== true &&
     (
       (
-        premarketDominanceScore >= 72 &&
-        executionConfidence >= 60 &&
-        runnerScore >= 70
-      ) ||
-      (
-        institutionalBrainScore >= 60 &&
-        executionConfidence >= 62 &&
-        runnerScore >= 72
-      ) ||
-      (
-        runnerScore >= 78 &&
+        runnerScore >= 70 &&
         executionConfidence >= 60
+      ) ||
+      (
+        institutionalBrainScore >= 70 &&
+        executionConfidence >= 65
+      ) ||
+      (
+        premarketDominanceScore >= 68 &&
+        runnerScore >= 68
+      ) ||
+      (
+        Number(signal.breakoutProbability || 0) >= 85 &&
+        Number(signal.continuationProbability || 0) >= 80
       )
     );
 
@@ -6977,8 +6994,9 @@ function calculateAiPortfolioManagerDecision(
     tacticalEliteRunnerReason:
       tacticalEliteRunnerOverride
         ? "Tactical elite runner allowed through defensive portfolio heat."
-        : "No tactical elite override.",
-    runnerScore,
+        : eliteHeatOverride
+        ? "Elite heat override detected, but tactical runner confirmation did not pass."
+        : `No tactical elite override. Runner ${runnerScore}, execution ${executionConfidence}, institutional ${institutionalBrainScore}.`,
     executionConfidence,
     institutionalBrainScore,
     premarketDominanceScore,
