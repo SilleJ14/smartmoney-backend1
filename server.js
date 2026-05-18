@@ -781,6 +781,13 @@ profitVelocityGovernorState:
 profitVelocityGovernorHistory:
   (engineState.profitVelocityGovernorHistory || []).slice(0, 200),  
 
+finalDashboardSignalSyncState:
+  engineState.finalDashboardSignalSyncState || null,
+
+finalDashboardSignalSyncHistory:
+  (engineState.finalDashboardSignalSyncHistory || []).slice(0, 200),
+
+
 pyramidScalingState:
   engineState.pyramidScalingState || null,
 
@@ -1135,6 +1142,8 @@ engineFreezeCount: 0,
   pyramidScalingState: null,
   pyramidScalingHistory: [],
   pyramidAddsBySymbol: {},
+  finalDashboardSignalSyncState: null,
+  finalDashboardSignalSyncHistory: [],
 
   dailyStartEquity: null,
   dailyPeakEquity: null,
@@ -28890,6 +28899,19 @@ engineState.analyticsSnapshots =
       }
 
 
+    const finalDashboardSignalSync =
+      syncFinalInstitutionalDashboardSignals(
+        stockSignals,
+        cryptoSignals
+      );
+
+    saveRecentOrder("FINAL_DASHBOARD_SIGNAL_SYNC_UPDATED", "DASHBOARD", {
+      reviewedCount: finalDashboardSignalSync.reviewedCount,
+      stockSignalCount: finalDashboardSignalSync.stockSignalCount,
+      cryptoSignalCount: finalDashboardSignalSync.cryptoSignalCount,
+      topSymbols: finalDashboardSignalSync.topSymbols,
+    });
+
     engineState.lastSignals = signals;
     engineState.lastStockSignals = stockSignals;
 
@@ -29729,6 +29751,119 @@ function calculateAutonomousMetaStrategyOrchestrator(signals = []) {
   };
 }
 
+function syncFinalInstitutionalDashboardSignals(finalStockSignals = [], finalCryptoSignals = []) {
+  const stockSignalsForDashboard =
+    Array.isArray(finalStockSignals) && finalStockSignals.length > 0
+      ? finalStockSignals
+      : Array.isArray(engineState.lastStockSignals)
+      ? engineState.lastStockSignals
+      : [];
+
+  const cryptoSignalsForDashboard =
+    Array.isArray(finalCryptoSignals) && finalCryptoSignals.length > 0
+      ? finalCryptoSignals
+      : Array.isArray(engineState.lastCryptoSignals)
+      ? engineState.lastCryptoSignals
+      : [];
+
+  const mergedDashboardSignals = [
+    ...stockSignalsForDashboard,
+    ...cryptoSignalsForDashboard,
+  ].filter(Boolean);
+
+  if (!mergedDashboardSignals.length) {
+    return {
+      phase: "56.5_FINAL_INSTITUTIONAL_DASHBOARD_SIGNAL_SYNC",
+      synced: false,
+      reviewedCount: 0,
+      reason: "No finalized signals available for dashboard sync.",
+    };
+  }
+
+  if (typeof updateThemeMomentumState === "function") {
+    engineState.themeMomentumState =
+      updateThemeMomentumState(stockSignalsForDashboard);
+  }
+
+  if (typeof updateExplosiveRunnerState === "function") {
+    engineState.explosiveRunnerState =
+      updateExplosiveRunnerState(stockSignalsForDashboard);
+  }
+
+  if (typeof updateAdaptiveRunnerLearningState === "function") {
+    engineState.adaptiveRunnerLearningState =
+      updateAdaptiveRunnerLearningState(stockSignalsForDashboard);
+  }
+
+  if (typeof updatePremarketDominanceState === "function") {
+    engineState.premarketDominanceState =
+      updatePremarketDominanceState(stockSignalsForDashboard);
+  }
+
+  if (typeof updateMultiDayAccumulationState === "function") {
+    engineState.multiDayAccumulationState =
+      updateMultiDayAccumulationState(stockSignalsForDashboard);
+  }
+
+  if (typeof updateInstitutionalExecutionLayerState === "function") {
+    engineState.institutionalExecutionLayerState =
+      updateInstitutionalExecutionLayerState(mergedDashboardSignals);
+  }
+
+  if (typeof updateFullInstitutionalAiBrainState === "function") {
+    engineState.fullInstitutionalAiBrainState =
+      updateFullInstitutionalAiBrainState(mergedDashboardSignals);
+  }
+
+  if (typeof updateAutonomousMetaStrategyState === "function") {
+    const metaStrategyResult =
+      updateAutonomousMetaStrategyState(mergedDashboardSignals);
+
+    if (metaStrategyResult?.state) {
+      engineState.autonomousMetaStrategyState =
+        metaStrategyResult.state;
+    }
+  } else if (typeof calculateAutonomousMetaStrategyOrchestrator === "function") {
+    const metaStrategyResult =
+      calculateAutonomousMetaStrategyOrchestrator(mergedDashboardSignals);
+
+    if (metaStrategyResult?.state) {
+      engineState.autonomousMetaStrategyState =
+        metaStrategyResult.state;
+    }
+  }
+
+  engineState.finalDashboardSignalSyncState = {
+    phase: "56.5_FINAL_INSTITUTIONAL_DASHBOARD_SIGNAL_SYNC",
+    updatedAt: new Date().toISOString(),
+    synced: true,
+    stockSignalCount: stockSignalsForDashboard.length,
+    cryptoSignalCount: cryptoSignalsForDashboard.length,
+    reviewedCount: mergedDashboardSignals.length,
+    topSymbols: mergedDashboardSignals
+      .slice()
+      .sort((a, b) => Number(b.score || 0) - Number(a.score || 0))
+      .slice(0, 10)
+      .map((signal) => signal.symbol),
+    reason:
+      `Final dashboard sync reviewed ${mergedDashboardSignals.length} finalized signals ` +
+      `(${stockSignalsForDashboard.length} stocks / ${cryptoSignalsForDashboard.length} crypto).`,
+  };
+
+  if (!Array.isArray(engineState.finalDashboardSignalSyncHistory)) {
+    engineState.finalDashboardSignalSyncHistory = [];
+  }
+
+  engineState.finalDashboardSignalSyncHistory.unshift(
+    engineState.finalDashboardSignalSyncState
+  );
+
+  engineState.finalDashboardSignalSyncHistory =
+    engineState.finalDashboardSignalSyncHistory.slice(0, 200);
+
+  return engineState.finalDashboardSignalSyncState;
+}
+
 function buildInstitutionalDashboardPayload() {
   return {
     generatedAt: new Date().toISOString(),
@@ -29762,6 +29897,9 @@ function buildInstitutionalDashboardPayload() {
 
     institutionalExecutionLayer:
       engineState.institutionalExecutionLayerState || null,
+
+    finalDashboardSignalSync:
+      engineState.finalDashboardSignalSyncState || null,      
 
     reinforcementLearning:
       engineState.reinforcementWeightState || null,
