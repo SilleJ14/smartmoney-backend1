@@ -31027,11 +31027,11 @@ function calculatePhase63StrategyEvolutionEngine(signals = []) {
         0
     );
 
-        const strategyEvolutionScore = Number(
-      signal.strategyEvolutionScore ||
-        signal.phase63StrategyEvolution?.strategyEvolutionScore ||
-        0
-    );
+const strategyEvolutionValue = Number(
+  signal.strategyEvolutionScore ||
+    signal.phase63StrategyEvolution?.strategyEvolutionScore ||
+    0
+);
 
 
     const runnerScore = Number(
