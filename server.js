@@ -28878,6 +28878,11 @@ engineState.analyticsSnapshots =
       signal.finalSizingReconciliation = finalSizingReconciliation;
       signal.recommendedTradeAmount =
         finalSizingReconciliation.finalTradeAmount;
+      signal.finalApprovedTradeAmount =
+        finalSizingReconciliation.finalTradeAmount;
+
+      signal.displayTradeAmount =
+        finalSizingReconciliation.finalTradeAmount;        
 
       signal.aiAllocationPercentOfBotBudget =
         finalSizingReconciliation.maxBotBudget > 0
@@ -28899,33 +28904,35 @@ engineState.analyticsSnapshots =
       }
 
 
-    signals = [...stockSignals, ...cryptoSignals];
+signals = [...stockSignals, ...cryptoSignals];
 
-    stockSignals = syncSignalObjectsBySymbol(
-      stockSignals,
-      signals
-    );
+stockSignals = syncSignalObjectsBySymbol(
+  stockSignals,
+  signals
+);
 
-    cryptoSignals = syncSignalObjectsBySymbol(
-      cryptoSignals,
-      signals
-    );
+cryptoSignals = syncSignalObjectsBySymbol(
+  cryptoSignals,
+  signals
+);
 
-    signals = [...stockSignals, ...cryptoSignals];
+signals = [...stockSignals, ...cryptoSignals];
 
-    const finalDashboardSignalSync =
-      syncFinalInstitutionalDashboardSignals(
-        stockSignals,
-        cryptoSignals
-      );
+const finalDashboardSignalSync =
+  syncFinalInstitutionalDashboardSignals(
+    stockSignals,
+    cryptoSignals
+  );
 
-
-    saveRecentOrder("FINAL_DASHBOARD_SIGNAL_SYNC_UPDATED", "DASHBOARD", {
-      reviewedCount: finalDashboardSignalSync.reviewedCount,
-      stockSignalCount: finalDashboardSignalSync.stockSignalCount,
-      cryptoSignalCount: finalDashboardSignalSync.cryptoSignalCount,
-      topSymbols: finalDashboardSignalSync.topSymbols,
-    });
+saveRecentOrder("FINAL_DASHBOARD_SIGNAL_SYNC_UPDATED", "DASHBOARD", {
+  reviewedCount: finalDashboardSignalSync.reviewedCount || 0,
+  stockSignalCount:
+    finalDashboardSignalSync.stockSignalCount || 0,
+  cryptoSignalCount:
+    finalDashboardSignalSync.cryptoSignalCount || 0,
+  topSymbols:
+    finalDashboardSignalSync.topSymbols || [],
+});
 
     engineState.lastSignals = signals;
     engineState.lastStockSignals = stockSignals;
