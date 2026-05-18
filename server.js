@@ -6903,11 +6903,17 @@ function calculateAiPortfolioManagerDecision(
     ).toFixed(2)
   );
 
-  const baseEliteQuality =
-    signal.qualifiedToBuy === true &&
-    Number(signal.score || 0) >= CONFIG.minScoreToBuy &&
-    institutionalBrainScore >= 70 &&
+  const preQualifiedSignal =
+    (
+      signal.qualifiedToBuy === true ||
+      signal.autoTradeApproved === true ||
+      Number(signal.score || 0) >= CONFIG.minScoreToBuy
+    ) &&
     signal.confirmations?.fakeBreakout !== true;
+
+  const baseEliteQuality =
+    preQualifiedSignal &&
+    institutionalBrainScore >= 70;
 
   const eliteHeatOverride =
     baseEliteQuality &&
