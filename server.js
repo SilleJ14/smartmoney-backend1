@@ -7388,15 +7388,128 @@ function calculateAiPortfolioManagerDecision(
       eliteCapital,
     });
 
+  const dynamicHeatRelaxation =
+    (() => {
+      const score = Number(signal.score || signal.institutionalScore || 0);
+
+      const heatScore = Number(
+        portfolioHeat.portfolioHeatScore || 0
+      );
+
+      const sameSectorOpenPositions = Number(
+        portfolioHeat.sameSectorOpenPositions || 0
+      );
+
+      const totalOpenBotPositions = Number(
+        portfolioHeat.totalOpenBotPositions || 0
+      );
+
+      const breakoutProbability = Number(
+        signal.breakoutProbability || 0
+      );
+
+      const continuationProbability = Number(
+        signal.continuationProbability || 0
+      );
+
+      const volumeConfirmationQuality = Number(
+        signal.volumeConfirmationQuality || 0
+      );
+
+      const squeezeProbability = Number(
+        signal.explosiveRunnerPrediction
+          ?.floatRotation
+          ?.squeezeProbability ||
+          signal.floatRotation?.squeezeProbability ||
+          0
+      );
+
+      const closeNearHighPercent = Number(
+        signal.confirmations?.closeNearHighPercent || 0
+      );
+
+      const pullbackFromHighPercent = Number(
+        signal.confirmations?.pullbackFromHighPercent || 100
+      );
+
+      const highQualityMomentum =
+        score >= CONFIG.minScoreToBuy &&
+        runnerScore >= 70 &&
+        institutionalBrainScore >= 70 &&
+        executionConfidence >= 60 &&
+        premarketDominanceScore >= 68 &&
+        breakoutProbability >= 85 &&
+        continuationProbability >= 80 &&
+        volumeConfirmationQuality >= 90 &&
+        closeNearHighPercent >= 85 &&
+        pullbackFromHighPercent <= 2 &&
+        signal.confirmations?.fakeBreakout !== true;
+
+      const squeezeContinuationEdge =
+        score >= CONFIG.minScoreToBuy &&
+        squeezeProbability >= 90 &&
+        runnerScore >= 70 &&
+        institutionalBrainScore >= 70 &&
+        continuationProbability >= 80 &&
+        volumeConfirmationQuality >= 90 &&
+        signal.confirmations?.fakeBreakout !== true;
+
+      const heatRelaxationApproved =
+        portfolioHeat.duplicateSymbolRisk !== true &&
+        marketStress <= 20 &&
+        sameSectorOpenPositions <=
+          Number(CONFIG.maxStockOpenTrades || 5) &&
+        totalOpenBotPositions <=
+          Number(CONFIG.maxStockOpenTrades || 5) &&
+        (
+          highQualityMomentum ||
+          squeezeContinuationEdge ||
+          phase57EliteOverride.overrideApproved === true
+        );
+
+      const relaxedHeatScore =
+        heatRelaxationApproved
+          ? Math.max(heatScore, 58)
+          : heatScore;
+
+      const relaxedHeatApprovalThreshold =
+        heatRelaxationApproved
+          ? 35
+          : heatApprovalThreshold;
+
+      return {
+        phase: "57.3_DYNAMIC_INSTITUTIONAL_HEAT_RELAXATION",
+        updatedAt: new Date().toISOString(),
+        heatRelaxationApproved,
+        highQualityMomentum,
+        squeezeContinuationEdge,
+        originalHeatScore: heatScore,
+        relaxedHeatScore,
+        originalHeatApprovalThreshold: heatApprovalThreshold,
+        relaxedHeatApprovalThreshold,
+        sameSectorOpenPositions,
+        totalOpenBotPositions,
+        reason:
+          heatRelaxationApproved
+            ? "Elite-quality setup allowed through portfolio heat without lowering elite standards."
+            : "No heat relaxation; setup does not meet elite heat bypass requirements.",
+      };
+    })();
+    
+
   const portfolioScore = clampScore(
-    portfolioHeat.portfolioHeatScore * 0.55 +
+    dynamicHeatRelaxation.relaxedHeatScore * 0.55 +
       (100 - marketStress) * 0.2 +
       Number(eliteCapital.eliteScore || 0) * 0.25 +
-      (tacticalEliteRunnerOverride ? 8 : 0)
+      (tacticalEliteRunnerOverride ? 8 : 0) +
+      (dynamicHeatRelaxation.heatRelaxationApproved ? 8 : 0)
   );
 
   const heatApprovalThreshold =
     tacticalEliteRunnerOverride ? 25 : 45;
+
+  const effectiveHeatApprovalThreshold =
+    dynamicHeatRelaxation.relaxedHeatApprovalThreshold;
 
   const strongSetupOverride =
     recommendedTradeAmount > 0 &&
@@ -7409,7 +7522,7 @@ function calculateAiPortfolioManagerDecision(
   const approved =
     recommendedTradeAmount > 0 &&
     (
-      portfolioHeat.portfolioHeatScore >= heatApprovalThreshold ||
+      dynamicHeatRelaxation.relaxedHeatScore >= effectiveHeatApprovalThreshold ||
       eliteHeatOverride ||
       tacticalEliteRunnerOverride ||
       strongSetupOverride ||
@@ -7432,6 +7545,7 @@ function calculateAiPortfolioManagerDecision(
         ? Number(((recommendedTradeAmount / reconciledMaxBotBudget) * 100).toFixed(2))
         : 0,
     portfolioHeat,
+    dynamicHeatRelaxation,
     marketStress,
      allocationMultiplier: Number(
       (
@@ -7455,6 +7569,7 @@ function calculateAiPortfolioManagerDecision(
     institutionalBrainScore,
     premarketDominanceScore,
     heatApprovalThreshold,
+    effectiveHeatApprovalThreshold,
     portfolioManagerReason:
       `${portfolioHeat.portfolioHeatLabel} • ${eliteCapital.concentrationTier} • ` +
       `Elite Score ${Number(eliteCapital.eliteScore || 0)}/100 • ` +
