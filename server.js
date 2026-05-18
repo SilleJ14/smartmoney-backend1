@@ -7522,14 +7522,11 @@ function calculateAiPortfolioManagerDecision(
       phase572EliteDiscovery.eliteDiscoveryScore >= 85 ||
       eliteCapital.concentrationTier === "ELITE_CONCENTRATION"
     );
-  const institutionalMinimumScore =
-  Number(CONFIG.minScoreToBuy || 65);
 
+ const institutionalMinimumScore =
+  Number(CONFIG.minScoreToBuy || 65);
 
 const reconciledMaxBotBudget = maxBotBudget;
-
-const institutionalMinimumScore =
-  Number(CONFIG.minScoreToBuy || 65);
 
 if (Number(score || 0) < institutionalMinimumScore) {
   approved = false;
