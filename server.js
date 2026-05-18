@@ -6811,23 +6811,22 @@ function calculatePortfolioHeatEngine(signal, openBotPositions = []) {
   );
 
   const portfolioHeatLabel =
-    portfolioHeatScore >= 80
-      ? "High Portfolio Heat"
-      : portfolioHeatScore >= 55
-      ? "Elevated Portfolio Heat"
-      : portfolioHeatScore >= 30
+    portfolioHeatScore <= 25
+      ? "Low Portfolio Heat"
+      : portfolioHeatScore <= 55
       ? "Moderate Portfolio Heat"
-      : "Low Portfolio Heat";
+      : portfolioHeatScore <= 80
+      ? "Elevated Portfolio Heat"
+      : "High Portfolio Heat";
 
   const correlationAction =
     duplicateSymbolRisk
       ? "Block Duplicate Symbol"
-      : portfolioHeatScore <= 30
+      : portfolioHeatScore <= 25
       ? "Allow Allocation"
       : portfolioHeatScore <= 55
       ? "Reduce Allocation"
       : "Avoid Additional Exposure";
-
   return {
     portfolioHeatScore,
     portfolioHeatLabel,
