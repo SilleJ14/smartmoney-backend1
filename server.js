@@ -1264,6 +1264,8 @@ unifiedInstitutionalOrchestratorState: null,
 unifiedInstitutionalOrchestratorHistory: [],
 profitVelocityGovernorState: null,
 profitVelocityGovernorHistory: [],
+penaltyCompressionState: null,
+penaltyCompressionHistory: [],
 fullInstitutionalAiBrainState: null,
 fullInstitutionalAiBrainHistory: [],
 autonomousMetaStrategyState: null,
@@ -5838,6 +5840,187 @@ function updateInstitutionalWatchlist(signals = []) {
   return engineState.institutionalWatchlist;
 }
 
+function calculatePenaltyCompressionAndEliteOverride(signals = []) {
+  const reviewedSignals = Array.isArray(signals) ? signals : [];
+
+  const compressedSignals = reviewedSignals.map((signal) => {
+    const symbol = normalizeSymbol(signal.symbol);
+    const score = Number(signal.score || 0);
+    const percentChange = Number(signal.percentChange || 0);
+    const volumeRatio = Number(
+      signal.volumeRatio ||
+        signal.confirmations?.volumeSpikeRatio ||
+        0
+    );
+
+    const runnerScore = Number(
+      signal.runnerScore ||
+        signal.explosiveRunnerScore ||
+        signal.explosiveRunnerPrediction?.explosiveRunnerScore ||
+        0
+    );
+
+    const executionConfidence = Number(
+      signal.executionConfidence ||
+        signal.institutionalExecutionPlan?.executionConfidence ||
+        50
+    );
+
+    const institutionalBrainScore = Number(
+      signal.institutionalBrainScore ||
+        signal.fullInstitutionalAiBrain?.dynamicConvictionScore ||
+        signal.fullInstitutionalAiBrain?.consensusScore ||
+        0
+    );
+
+    const premarketDominanceScore = Number(
+      signal.premarketDominanceScore ||
+        signal.premarketDominance?.premarketDominanceScore ||
+        0
+    );
+
+    const portfolioHeatScore = Number(
+      signal.portfolioHeat?.portfolioHeatScore ?? 50
+    );
+
+    const sameSectorOpenPositions = Number(
+      signal.portfolioHeat?.sameSectorOpenPositions || 0
+    );
+
+    const executionSizeMultiplier = Number(
+      signal.institutionalExecutionPlan?.executionSizeMultiplier || 1
+    );
+
+    const allocationMultiplier = Number(signal.allocationMultiplier || 1);
+
+    const globalRiskMultiplier = Number(
+      signal.globalRiskOffExposureMultiplier ||
+        engineState.globalRiskOffExposureMultiplier ||
+        1
+    );
+
+    const unifiedMultiplier = Number(
+      signal.finalCapitalMultiplier ||
+        engineState.unifiedInstitutionalCapitalMultiplier ||
+        1
+    );
+
+    const profitVelocityMultiplier = Number(
+      signal.profitVelocityCapitalMultiplier ||
+        engineState.profitVelocityCapitalMultiplier ||
+        1
+    );
+
+    const rawStackedMultiplier =
+      executionSizeMultiplier *
+      allocationMultiplier *
+      globalRiskMultiplier *
+      unifiedMultiplier *
+      profitVelocityMultiplier;
+
+    const isEliteMomentum =
+      score >= 72 &&
+      runnerScore >= 70 &&
+      percentChange >= 8 &&
+      volumeRatio >= 1.3 &&
+      executionConfidence >= 60;
+
+    const isInstitutionalElite =
+      score >= 75 &&
+      institutionalBrainScore >= 70 &&
+      executionConfidence >= 60;
+
+    const isPremarketElite =
+      premarketDominanceScore >= 70 &&
+      runnerScore >= 68 &&
+      volumeRatio >= 1.2;
+
+    const eliteOverride =
+      isEliteMomentum || isInstitutionalElite || isPremarketElite;
+
+    const heatPenaltyActive =
+      portfolioHeatScore <= 25 || sameSectorOpenPositions >= 4;
+
+    const executionPenaltyActive = executionSizeMultiplier <= 0.4;
+    const riskPenaltyActive = globalRiskMultiplier <= 0.5;
+    const velocityPenaltyActive = profitVelocityMultiplier <= 0.5;
+
+    const activePenaltyCount = [
+      heatPenaltyActive,
+      executionPenaltyActive,
+      riskPenaltyActive,
+      velocityPenaltyActive,
+    ].filter(Boolean).length;
+
+    let compressedMultiplier = rawStackedMultiplier;
+
+    if (activePenaltyCount >= 2) {
+      compressedMultiplier = Math.max(compressedMultiplier, 0.45);
+    }
+
+    if (eliteOverride) {
+      compressedMultiplier = Math.max(compressedMultiplier, 0.65);
+    }
+
+    if (score >= 80 && executionConfidence >= 65) {
+      compressedMultiplier = Math.max(compressedMultiplier, 0.75);
+    }
+
+    compressedMultiplier = Number(
+      Math.min(1.25, Math.max(0.15, compressedMultiplier)).toFixed(2)
+    );
+
+    const shouldRestoreApproval =
+      eliteOverride &&
+      score >= CONFIG.minScoreToBuy &&
+      executionConfidence >= 60 &&
+      signal.qualifiedToBuy !== false;
+
+    const correctedDecisionLevel = shouldRestoreApproval
+      ? "Elite Override Approved"
+      : signal.autoTradeApproved === false
+      ? "Blocked / Reduced By Risk Stack"
+      : signal.decisionLevel || "No Final Decision";
+
+    return {
+      symbol,
+      score,
+      rawStackedMultiplier: Number(rawStackedMultiplier.toFixed(2)),
+      compressedMultiplier,
+      activePenaltyCount,
+      eliteOverride,
+      shouldRestoreApproval,
+      correctedDecisionLevel,
+      reasons: {
+        isEliteMomentum,
+        isInstitutionalElite,
+        isPremarketElite,
+        heatPenaltyActive,
+        executionPenaltyActive,
+        riskPenaltyActive,
+        velocityPenaltyActive,
+      },
+    };
+  });
+
+  return {
+    updatedAt: new Date().toISOString(),
+    phase: "57_PENALTY_COMPRESSION_ELITE_OVERRIDE",
+    reviewedCount: reviewedSignals.length,
+    eliteOverrideCount: compressedSignals.filter((item) => item.eliteOverride)
+      .length,
+    approvalRestoreCount: compressedSignals.filter(
+      (item) => item.shouldRestoreApproval
+    ).length,
+    compressedSignals,
+    topEliteOverrides: compressedSignals
+      .filter((item) => item.eliteOverride)
+      .sort((a, b) => Number(b.score || 0) - Number(a.score || 0))
+      .slice(0, 15),
+    reason:
+      "Phase 57 compresses stacked risk penalties so strong setups are not crushed by repeated defensive multipliers.",
+  };
+}
 
 
 function calculateAiSectorRotationEngine(stockSignals = []) {
@@ -27174,6 +27357,55 @@ for (const governed of profitVelocityGovernor.governedSignals) {
     matchingSignal.score = clampScore(Number(matchingSignal.score || 0) + 2);
   }
 }
+
+const penaltyCompression =
+  calculatePenaltyCompressionAndEliteOverride(signals);
+
+engineState.penaltyCompressionState = penaltyCompression;
+
+engineState.penaltyCompressionHistory.unshift(penaltyCompression);
+
+engineState.penaltyCompressionHistory =
+  engineState.penaltyCompressionHistory.slice(0, 200);
+
+for (const compressed of penaltyCompression.compressedSignals) {
+  const matchingSignal = signals.find(
+    (signal) =>
+      normalizeSymbol(signal.symbol) === normalizeSymbol(compressed.symbol)
+  );
+
+  if (!matchingSignal) continue;
+
+  matchingSignal.penaltyCompression = compressed;
+  matchingSignal.penaltyCompressedMultiplier =
+    compressed.compressedMultiplier;
+  matchingSignal.rawStackedMultiplier =
+    compressed.rawStackedMultiplier;
+  matchingSignal.eliteOverride =
+    compressed.eliteOverride;
+  matchingSignal.penaltyCompressionActive =
+    compressed.activePenaltyCount >= 2;
+
+  if (compressed.shouldRestoreApproval) {
+    matchingSignal.autoTradeApproved = true;
+    matchingSignal.approved = true;
+    matchingSignal.decisionLevel =
+      compressed.correctedDecisionLevel;
+    matchingSignal.allocationMultiplier =
+      compressed.compressedMultiplier;
+    matchingSignal.portfolioAction = "ELITE_OVERRIDE_DEPLOY";
+    matchingSignal.aiPortfolioAction = "ELITE_OVERRIDE_DEPLOY";
+  } else {
+    matchingSignal.decisionLevel =
+      compressed.correctedDecisionLevel;
+    matchingSignal.allocationMultiplier =
+      Math.max(
+        Number(matchingSignal.allocationMultiplier || 0.25),
+        compressed.compressedMultiplier
+      );
+  }
+}
+
     engineState.marketRegime = detectMarketRegime(stockSignals);
     const marketRegimeDominance =
       calculateMarketRegimeDominance(
