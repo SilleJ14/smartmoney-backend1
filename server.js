@@ -27701,6 +27701,8 @@ engineState.marketCycleIntelligenceHistory =
       engineState.institutionalDashboardSnapshots = [];
     }
 
+    engineState.lastSignals = signals;
+
     engineState.institutionalDashboardSnapshots.unshift({
       createdAt: new Date().toISOString(),
       dashboard:
@@ -27712,8 +27714,6 @@ engineState.marketCycleIntelligenceHistory =
         0,
         200
       );
-
-    engineState.lastSignals = signals;
     engineState.lastSuccessfulCycleAt =
   new Date().toISOString();
   engineState.marketMomentumScore =
@@ -28899,11 +28899,26 @@ engineState.analyticsSnapshots =
       }
 
 
+    signals = [...stockSignals, ...cryptoSignals];
+
+    stockSignals = syncSignalObjectsBySymbol(
+      stockSignals,
+      signals
+    );
+
+    cryptoSignals = syncSignalObjectsBySymbol(
+      cryptoSignals,
+      signals
+    );
+
+    signals = [...stockSignals, ...cryptoSignals];
+
     const finalDashboardSignalSync =
       syncFinalInstitutionalDashboardSignals(
         stockSignals,
         cryptoSignals
       );
+
 
     saveRecentOrder("FINAL_DASHBOARD_SIGNAL_SYNC_UPDATED", "DASHBOARD", {
       reviewedCount: finalDashboardSignalSync.reviewedCount,
@@ -29862,6 +29877,31 @@ function syncFinalInstitutionalDashboardSignals(finalStockSignals = [], finalCry
     engineState.finalDashboardSignalSyncHistory.slice(0, 200);
 
   return engineState.finalDashboardSignalSyncState;
+}
+
+function syncSignalObjectsBySymbol(primarySignals = [], secondarySignals = []) {
+  const primaryBySymbol = new Map();
+
+  primarySignals.forEach((signal) => {
+    const symbol = normalizeSymbol(signal.symbol);
+    if (!symbol) return;
+    primaryBySymbol.set(symbol, signal);
+  });
+
+  secondarySignals.forEach((signal) => {
+    const symbol = normalizeSymbol(signal.symbol);
+    const primary = primaryBySymbol.get(symbol);
+
+    if (!symbol || !primary || primary === signal) return;
+
+    Object.assign(signal, primary);
+  });
+
+  return primarySignals.map((signal) => {
+    const symbol = normalizeSymbol(signal.symbol);
+    const freshest = primaryBySymbol.get(symbol);
+    return freshest || signal;
+  });
 }
 
 function buildInstitutionalDashboardPayload() {
