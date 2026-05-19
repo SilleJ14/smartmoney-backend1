@@ -845,9 +845,6 @@ finalDashboardSignalSyncState:
 finalDashboardSignalSyncHistory:
   (engineState.finalDashboardSignalSyncHistory || []).slice(0, 200),
 
-finalDashboardSignalSyncHistory:
-  (engineState.finalDashboardSignalSyncHistory || []).slice(0, 200),
-
 phase57EliteOverrideState:
   engineState.phase57EliteOverrideState || null,
 
@@ -30080,7 +30077,7 @@ engineState.analyticsSnapshots =
             "Penalty compression restored approval; later portfolio refresh was not allowed to overwrite it.",
         };
       }
-    }
+    
       const finalSizingReconciliation =
         calculateFinalPositionSizingReconciliation({
           signal,
@@ -30097,22 +30094,7 @@ engineState.analyticsSnapshots =
         });
 
       signal.finalSizingReconciliation = finalSizingReconciliation;
-signal.gradeAllocation = gradeAllocation;
 
-signal.finalInstitutionalGrade =
-  gradeAllocation.grade;
-
-signal.finalInstitutionalGradeMultiplier =
-  gradeAllocation.gradeMultiplier;
-
-signal.riskAdjustmentMultiplier =
-  gradeAllocation.riskAdjustmentMultiplier;
-
-signal.finalAllocationMultiplier =
-  gradeAllocation.finalAllocationMultiplier;
-
-signal.allocationReason =
-  gradeAllocation.reason;      
       signal.recommendedTradeAmount =
         finalSizingReconciliation.finalTradeAmount;
       signal.finalApprovedTradeAmount =
@@ -30142,6 +30124,7 @@ signal.allocationReason =
         signal.portfolioAction = "FINAL_SIZE_BLOCK";
         signal.aiPortfolioAction = "FINAL_SIZE_BLOCK";
       }
+    }
 
 signals = [...stockSignals, ...cryptoSignals];
 
