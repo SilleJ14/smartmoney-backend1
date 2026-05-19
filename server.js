@@ -29810,14 +29810,16 @@ engineState.analyticsSnapshots =
             )
           : 0;
 
-      if (finalSizingReconciliation.finalBlocked) {
+      if (
+        finalSizingReconciliation.finalBlocked &&
+        signal.finalApprovalProtection?.protected !== true
+      ) {
         signal.autoTradeApproved = false;
         signal.approved = false;
         signal.decisionLevel = "Blocked By Final Sizing Reconciliation";
         signal.portfolioAction = "FINAL_SIZE_BLOCK";
         signal.aiPortfolioAction = "FINAL_SIZE_BLOCK";
       }
-
 
 signals = [...stockSignals, ...cryptoSignals];
 
