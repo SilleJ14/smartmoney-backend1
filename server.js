@@ -762,7 +762,7 @@ cryptoReinforcementLearningState:
 
 cryptoReinforcementLearningHistory:
   (engineState.cryptoReinforcementLearningHistory || []).slice(0, 200),
-  
+
 globalRiskOffDefenseState:
   engineState.globalRiskOffDefenseState || null,
 
@@ -7599,17 +7599,34 @@ const gradeEligibleForAllocation =
     gradeAllocation.grade
   );
 
-  recommendedTradeAmount = Number(
-    (
-      Number(rawRecommendedTradeAmount || recommendedTradeAmount || 0) *
-      Number(gradeAllocation.finalAllocationMultiplier || 0)
-    ).toFixed(2)
-  );
+const gradeRemainingBotBudget = Math.max(
+  0,
+  Number(maxBotBudget || 0) - Number(currentBotExposure || 0)
+);
 
-  rawRecommendedTradeAmount = Number(
-    Number(rawRecommendedTradeAmount || 0).toFixed(2)
-  );
+const perTradeMax = Math.max(
+  Number(CONFIG.eliteConcentrationMinTradeAmount || 5),
+  Number(maxBotBudget || 0) /
+    Math.max(1, Number(CONFIG.maxOpenTrades || 8))
+);
 
+rawRecommendedTradeAmount = Number(
+  Number(rawRecommendedTradeAmount || recommendedTradeAmount || 0).toFixed(2)
+);
+
+recommendedTradeAmount = Number(
+  Math.max(
+    0,
+    Math.min(
+      rawRecommendedTradeAmount *
+        Number(gradeAllocation.finalAllocationMultiplier || 0),
+      perTradeMax,
+      gradeRemainingBotBudget,
+      Number(account?.cash || 0),
+      Number(account?.buying_power || account?.cash || 0)
+    )
+  ).toFixed(2)
+);
 
 signal.gradeAllocation = gradeAllocation;
 
