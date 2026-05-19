@@ -50,6 +50,12 @@ const PORT = Number(process.env.PORT || 10000);
 
 const FINNHUB_API_KEY = process.env.FINNHUB_API_KEY;
 
+const ENABLE_FINNHUB_WEBSOCKET =
+  process.env.ENABLE_FINNHUB_WEBSOCKET !== "false";
+
+const FINNHUB_WS_URL =
+  "wss://ws.finnhub.io?token=" + FINNHUB_API_KEY;
+
 const POLYGON_API_KEY =
   process.env.POLYGON_API_KEY;
 
@@ -127,6 +133,26 @@ function resetDailySafetyStateIfNewDay(account) {
 
   return false;
 }
+
+let engineStateSaveTimer = null;
+let pendingEngineStateSnapshot = null;
+let pendingEngineStateReason = "STATE_UPDATE";
+
+function flushEngineStateSave() {
+  if (!pendingEngineStateSnapshot) return;
+
+  const snapshot = pendingEngineStateSnapshot;
+  pendingEngineStateSnapshot = null;
+
+  fs.promises.writeFile(
+    ENGINE_STATE_FILE,
+    JSON.stringify(snapshot, null, 2)
+  ).catch((err) => {
+    console.error("Async engine-state save failed:", err.message);
+  });
+}
+
+
 function saveEngineState(reason = "STATE_UPDATE") {
   try {
     const safeState = {
@@ -833,8 +859,62 @@ phase59InstitutionalOrderFlowHistory:
 phase59OrderFlowMemory:
   engineState.phase59OrderFlowMemory || {},
 
+executionStyleMemoryState:
+  engineState.executionStyleMemoryState || {},
+
+executionStyleMemoryHistory:
+  (engineState.executionStyleMemoryHistory || []).slice(0, 300),  
+
+archetypeMemoryState:
+  engineState.archetypeMemoryState || {},
+
+archetypeMemoryHistory:
+  (engineState.archetypeMemoryHistory || []).slice(0, 300), 
+
+autonomousHedgeFundLayerState:
+  engineState.autonomousHedgeFundLayerState || null,
+
+autonomousHedgeFundLayerHistory:
+  (engineState.autonomousHedgeFundLayerHistory || []).slice(0, 300),
+
+liquiditySweepTrapState:
+  engineState.liquiditySweepTrapState || null,
+
+liquiditySweepTrapHistory:
+  (engineState.liquiditySweepTrapHistory || []).slice(0, 300),  
+
+autonomousMetaReinforcementState:
+  engineState.autonomousMetaReinforcementState || null,
+
+autonomousMetaReinforcementHistory:
+  (engineState.autonomousMetaReinforcementHistory || []).slice(0, 300),  
+
+aiParliamentVotingState:
+  engineState.aiParliamentVotingState || null,
+
+aiParliamentVotingHistory:
+  (engineState.aiParliamentVotingHistory || []).slice(0, 300),  
+  
+liveMomentumMutationState:
+  engineState.liveMomentumMutationState || null,
+
+liveMomentumMutationHistory:
+  (engineState.liveMomentumMutationHistory || []).slice(0, 300),  
+
+dynamicCapitalParliamentState:
+  engineState.dynamicCapitalParliamentState || null,
+
+dynamicCapitalParliamentHistory:
+  (engineState.dynamicCapitalParliamentHistory || []).slice(0, 300),
+
+portfolioEcosystemState:
+  engineState.portfolioEcosystemState || null,
+
+portfolioEcosystemHistory:
+  (engineState.portfolioEcosystemHistory || []).slice(0, 300), 
+
 centralAutonomousDecisionCoreState:
-  engineState.centralAutonomousDecisionCoreState || null,
+  engineState.centralAutonomousDecisionCoreState || null, 
 
 centralAutonomousDecisionCoreHistory:
   (engineState.centralAutonomousDecisionCoreHistory || []).slice(0, 200),
@@ -868,12 +948,15 @@ pyramidAddsBySymbol:
       pendingExits: engineState.pendingExits || [],
     };
 
-    fs.promises.writeFile(
-      ENGINE_STATE_FILE,
-      JSON.stringify(safeState, null, 2)
-    ).catch((err) => {
-      console.error("Async engine-state save failed:", err.message);
-    });
+    pendingEngineStateSnapshot = safeState;
+    pendingEngineStateReason = reason;
+
+    if (!engineStateSaveTimer) {
+      engineStateSaveTimer = setTimeout(() => {
+        engineStateSaveTimer = null;
+        flushEngineStateSave();
+      }, 1000);
+    }
 
     return safeState;
   } catch (err) {
@@ -1203,6 +1286,7 @@ engineFreezeCount: 0,
   dailyDateKey: null,
 
   lastSignals: [],
+  liveQuoteCache: {},
 
   recentOrders: [],
   failedOrders: [],
@@ -1360,6 +1444,24 @@ phase60ExecutionMemory: {},
 phase59InstitutionalOrderFlowState: null,
 phase59InstitutionalOrderFlowHistory: [],
 phase59OrderFlowMemory: {},
+executionStyleMemoryState: {},
+executionStyleMemoryHistory: [],
+archetypeMemoryState: {},
+archetypeMemoryHistory: [],
+autonomousHedgeFundLayerState: null,
+autonomousHedgeFundLayerHistory: [],
+liquiditySweepTrapState: null,
+liquiditySweepTrapHistory: [],
+autonomousMetaReinforcementState: null,
+autonomousMetaReinforcementHistory: [],
+aiParliamentVotingState: null,
+aiParliamentVotingHistory: [],
+liveMomentumMutationState: null,
+liveMomentumMutationHistory: [],
+dynamicCapitalParliamentState: null,
+dynamicCapitalParliamentHistory: [],
+portfolioEcosystemState: null,
+portfolioEcosystemHistory: [],
 centralAutonomousDecisionCoreState: null,
 centralAutonomousDecisionCoreHistory: [],
 penaltyCompressionState: null,
@@ -1498,6 +1600,18 @@ engineState = {
   cachedAccount: null,
   lastError: null,
 };
+
+const activeBuyExecutionLocks = new Set();
+const activeScanLocks = {
+  scanMarket: false,
+};
+
+
+const liveSignalClients = new Set();
+let finnhubLiveSocket = null;
+let finnhubSocketReconnectTimer = null;
+let finnhubSubscribedSymbols = new Set();
+let finnhubSocketReconnectAttempts = 0;
 
 const sellingNow = new Set();
 const buyingNow = new Set();
@@ -2127,6 +2241,278 @@ function updateInstitutionalMarketMemoryFromClosedTrade(
     confirmationMemory,
   };
 }
+
+function updateExecutionStyleMemoryFromClosedTrade(closedTrade = {}) {
+  if (!engineState.executionStyleMemoryState) {
+    engineState.executionStyleMemoryState = {};
+  }
+
+  if (!Array.isArray(engineState.executionStyleMemoryHistory)) {
+    engineState.executionStyleMemoryHistory = [];
+  }
+
+  const executionStyle =
+    closedTrade.executionStyle ||
+    closedTrade.centralCoreExecutionStyle ||
+    closedTrade.centralCoreExecution?.executionStyle ||
+    "UNKNOWN_EXECUTION_STYLE";
+
+  const tradeArchetype =
+    closedTrade.tradeArchetype ||
+    classifyTradeArchetype(closedTrade);
+
+  const profitPercent = Number(closedTrade.profitPercent || 0);
+  const isWin = profitPercent > 0;
+
+  const key = `${tradeArchetype}_${executionStyle}`;
+
+  const current =
+    engineState.executionStyleMemoryState[key] || {
+      key,
+      tradeArchetype,
+      executionStyle,
+      trades: 0,
+      wins: 0,
+      losses: 0,
+      totalProfitPercent: 0,
+      averageProfitPercent: 0,
+      winRate: 0,
+      executionTrustScore: 50,
+      executionTrustMultiplier: 1,
+      lastUpdated: null,
+    };
+
+  current.trades += 1;
+  if (isWin) current.wins += 1;
+  if (profitPercent < 0) current.losses += 1;
+
+  current.totalProfitPercent =
+    Number(current.totalProfitPercent || 0) + profitPercent;
+
+  current.averageProfitPercent = Number(
+    (
+      current.totalProfitPercent /
+      Math.max(1, current.trades)
+    ).toFixed(2)
+  );
+
+  current.winRate = Number(
+    ((current.wins / Math.max(1, current.trades)) * 100).toFixed(2)
+  );
+
+  current.executionTrustScore = clampScore(
+    50 +
+      current.averageProfitPercent * 5 +
+      (current.winRate - 50) * 0.7
+  );
+
+  current.executionTrustMultiplier =
+    current.trades < 5
+      ? 1
+      : current.executionTrustScore >= 75
+      ? 1.12
+      : current.executionTrustScore >= 65
+      ? 1.06
+      : current.executionTrustScore <= 38
+      ? 0.82
+      : current.executionTrustScore <= 45
+      ? 0.9
+      : 1;
+
+  current.lastUpdated = new Date().toISOString();
+
+  engineState.executionStyleMemoryState[key] = current;
+
+  const snapshot = {
+    updatedAt: new Date().toISOString(),
+    symbol: closedTrade.symbol,
+    tradeArchetype,
+    executionStyle,
+    profitPercent,
+    executionTrustScore: current.executionTrustScore,
+    executionTrustMultiplier: current.executionTrustMultiplier,
+    stats: current,
+    reason:
+      `${executionStyle} for ${tradeArchetype} now has trust ` +
+      `${current.executionTrustScore}/100 and multiplier x${current.executionTrustMultiplier}`,
+  };
+
+  engineState.executionStyleMemoryHistory.unshift(snapshot);
+  engineState.executionStyleMemoryHistory =
+    engineState.executionStyleMemoryHistory.slice(0, 300);
+
+  return snapshot;
+}
+
+function getExecutionStyleTrustAdjustment(signal = {}) {
+  const tradeArchetype =
+    signal.tradeArchetype ||
+    classifyTradeArchetype(signal);
+
+  const executionStyle =
+    signal.executionStyle ||
+    signal.centralCoreExecution?.executionStyle ||
+    "UNKNOWN_EXECUTION_STYLE";
+
+  const key = `${tradeArchetype}_${executionStyle}`;
+  const memory = engineState.executionStyleMemoryState?.[key];
+
+  if (!memory || Number(memory.trades || 0) < 5) {
+    return {
+      tradeArchetype,
+      executionStyle,
+      executionTrustScore: 50,
+      executionTrustMultiplier: 1,
+      reason: "Not enough execution style history yet.",
+    };
+  }
+
+  return {
+    tradeArchetype,
+    executionStyle,
+    executionTrustScore: memory.executionTrustScore,
+    executionTrustMultiplier: memory.executionTrustMultiplier,
+    memory,
+    reason:
+      `${executionStyle} trust for ${tradeArchetype}: ` +
+      `${memory.executionTrustScore}/100 x${memory.executionTrustMultiplier}`,
+  };
+}
+
+function updateArchetypeMemoryFromClosedTrade(closedTrade = {}) {
+  if (!engineState.archetypeMemoryState) {
+    engineState.archetypeMemoryState = {};
+  }
+
+  if (!Array.isArray(engineState.archetypeMemoryHistory)) {
+    engineState.archetypeMemoryHistory = [];
+  }
+
+  const tradeArchetype =
+    closedTrade.tradeArchetype ||
+    classifyTradeArchetype(closedTrade);
+
+  const profitPercent = Number(closedTrade.profitPercent || 0);
+  const isWin = profitPercent > 0;
+
+  const regimeKey =
+    closedTrade.marketRegime || "unknown_regime";
+
+  const key = `${tradeArchetype}_${regimeKey}`;
+
+  const current =
+    engineState.archetypeMemoryState[key] || {
+      key,
+      tradeArchetype,
+      regimeKey,
+      trades: 0,
+      wins: 0,
+      losses: 0,
+      totalProfitPercent: 0,
+      averageProfitPercent: 0,
+      winRate: 0,
+      archetypeTrustScore: 50,
+      archetypeTrustMultiplier: 1,
+      lastUpdated: null,
+    };
+
+  current.trades += 1;
+  if (isWin) current.wins += 1;
+  if (profitPercent < 0) current.losses += 1;
+
+  current.totalProfitPercent =
+    Number(current.totalProfitPercent || 0) + profitPercent;
+
+  current.averageProfitPercent = Number(
+    (
+      current.totalProfitPercent /
+      Math.max(1, current.trades)
+    ).toFixed(2)
+  );
+
+  current.winRate = Number(
+    ((current.wins / Math.max(1, current.trades)) * 100).toFixed(2)
+  );
+
+  current.archetypeTrustScore = clampScore(
+    50 +
+      current.averageProfitPercent * 5 +
+      (current.winRate - 50) * 0.7
+  );
+
+  current.archetypeTrustMultiplier =
+    current.trades < 5
+      ? 1
+      : current.archetypeTrustScore >= 75
+      ? 1.12
+      : current.archetypeTrustScore >= 65
+      ? 1.06
+      : current.archetypeTrustScore <= 38
+      ? 0.82
+      : current.archetypeTrustScore <= 45
+      ? 0.9
+      : 1;
+
+  current.lastUpdated = new Date().toISOString();
+
+  engineState.archetypeMemoryState[key] = current;
+
+  const snapshot = {
+    updatedAt: new Date().toISOString(),
+    symbol: closedTrade.symbol,
+    tradeArchetype,
+    regimeKey,
+    profitPercent,
+    archetypeTrustScore: current.archetypeTrustScore,
+    archetypeTrustMultiplier: current.archetypeTrustMultiplier,
+    stats: current,
+    reason:
+      `${tradeArchetype} in ${regimeKey} now has trust ` +
+      `${current.archetypeTrustScore}/100 and multiplier x${current.archetypeTrustMultiplier}`,
+  };
+
+  engineState.archetypeMemoryHistory.unshift(snapshot);
+  engineState.archetypeMemoryHistory =
+    engineState.archetypeMemoryHistory.slice(0, 300);
+
+  return snapshot;
+}
+
+function getArchetypeTrustAdjustment(signal = {}) {
+  const tradeArchetype =
+    signal.tradeArchetype ||
+    classifyTradeArchetype(signal);
+
+  const regimeKey =
+    signal.marketRegime ||
+    engineState.marketRegime?.state ||
+    "unknown_regime";
+
+  const key = `${tradeArchetype}_${regimeKey}`;
+  const memory = engineState.archetypeMemoryState?.[key];
+
+  if (!memory || Number(memory.trades || 0) < 5) {
+    return {
+      tradeArchetype,
+      regimeKey,
+      archetypeTrustScore: 50,
+      archetypeTrustMultiplier: 1,
+      reason: "Not enough archetype history yet.",
+    };
+  }
+
+  return {
+    tradeArchetype,
+    regimeKey,
+    archetypeTrustScore: memory.archetypeTrustScore,
+    archetypeTrustMultiplier: memory.archetypeTrustMultiplier,
+    memory,
+    reason:
+      `${tradeArchetype} trust in ${regimeKey}: ` +
+      `${memory.archetypeTrustScore}/100 x${memory.archetypeTrustMultiplier}`,
+  };
+}
+
 
 function updateReinforcementWeightStateFromClosedTrade(closedTrade = {}) {
   const confidenceScore = Number(
@@ -2762,11 +3148,33 @@ function journalTradeExit(symbol, exit = {}) {
     enteredAt: entry.enteredAt || null,
     reinforcementSizing:
       entry.reinforcementSizing || null,    
+    tradeArchetype:
+      entry.tradeArchetype ||
+      exit.tradeArchetype ||
+      null,   
+    executionStyle:
+      entry.executionStyle ||
+      exit.executionStyle ||
+      entry.centralCoreExecution?.executionStyle ||
+      exit.centralCoreExecution?.executionStyle ||
+      null,
+
+    centralCoreExecution:
+      entry.centralCoreExecution ||
+      exit.centralCoreExecution ||
+      null,         
     exitedAt: new Date().toISOString(),
   };
 
+const executionStyleMemorySnapshot =
+  updateExecutionStyleMemoryFromClosedTrade(closedTrade);
+
+const archetypeMemorySnapshot =
+  updateArchetypeMemoryFromClosedTrade(closedTrade);
+
 const reinforcementSnapshot =
-  updateReinforcementWeightStateFromClosedTrade(closedTrade);  
+  updateReinforcementWeightStateFromClosedTrade(closedTrade);
+
 const exitOutcomeLearningSnapshot =
   updateExitOutcomeLearningState(closedTrade);
 
@@ -10848,6 +11256,8 @@ function calculateFinalPositionSizingReconciliation({
   const executionMultiplier = Number(
     institutionalExecutionPlan.executionSizeMultiplier ||
       signal.institutionalExecutionPlan?.executionSizeMultiplier ||
+      signal.executionSizeMultiplier ||
+      signal.centralCoreExecution?.executionSizeMultiplier ||
       1
   );
 
@@ -10860,6 +11270,67 @@ function calculateFinalPositionSizingReconciliation({
   const pressureAmount = Number(
     capitalPressure.capitalPressureAmount || 0
   );
+
+  const isCryptoSignal =
+    signal.assetType === "crypto" ||
+    signal.assetClass === "crypto" ||
+    String(symbol || "").includes("/") ||
+    String(symbol || "").endsWith("USD");
+
+  const liveQuoteFreshness = isLiveQuoteFresh(symbol, 120);
+
+  if (!liveQuoteFreshness.fresh && !isCryptoSignal) {
+    return {
+      phase: "56.2_FINAL_POSITION_SIZING_RECONCILIATION",
+      updatedAt: new Date().toISOString(),
+      symbol,
+      finalTradeAmount: 0,
+      recommendedTradeAmount: 0,
+      rawRequestedAmount: 0,
+      perTradeMax: Number(perTradeMax.toFixed(2)),
+      maxBotBudget: Number(maxBotBudget.toFixed(2)),
+      remainingBotBudget: Number(remainingBotBudget.toFixed(2)),
+      currentBotExposure: Number(currentBotExposure.toFixed(2)),
+      cash: Number(cash.toFixed(2)),
+      buyingPower: Number(buyingPower.toFixed(2)),
+      governorMultiplier: Number(governorMultiplier.toFixed(2)),
+      executionMultiplier: 0,
+      centralCoreExecution:
+        signal.centralCoreExecution || null,
+      centralCoreExecutionStyle:
+        signal.centralCoreExecution?.executionStyle ||
+        signal.executionStyle ||
+        null,
+      allocationMultiplier: Number(allocationMultiplier.toFixed(2)),
+      confidenceBoost: 0,
+      unifiedMultiplier: 0,
+      eliteOverride: false,
+      finalBlocked: true,
+      blockedBySizing: true,
+      sizingDecision: "STALE_LIVE_QUOTE_NO_ENTRY",
+      liveQuoteFreshness,
+      reason:
+        `Blocked by stale live quote guard. ${liveQuoteFreshness.reason}`,
+    };
+  }
+
+
+  if (
+    signal.shouldWaitForPullback === true ||
+    signal.centralCoreExecution?.shouldWaitForPullback === true ||
+    signal.centralAutonomousAction === "WAIT_FOR_PULLBACK"
+  ) {
+    return {
+      symbol,
+      finalTradeAmount: 0,
+      recommendedTradeAmount: 0,
+      blockedBySizing: true,
+      sizingDecision: "WAIT_FOR_PULLBACK_NO_ENTRY",
+      executionMultiplier: 0,
+      reason:
+        "Central core is waiting for a micro pullback; no entry size assigned.",
+    };
+  }  
 
   const rawRequestedAmount = Math.max(
     Number(baseTradeAmount || 0),
@@ -10920,6 +11391,14 @@ function calculateFinalPositionSizingReconciliation({
     buyingPower: Number(buyingPower.toFixed(2)),
     governorMultiplier: Number(governorMultiplier.toFixed(2)),
     executionMultiplier: Number(executionMultiplier.toFixed(2)),
+
+    centralCoreExecution:
+      signal.centralCoreExecution || null,
+
+    centralCoreExecutionStyle:
+      signal.centralCoreExecution?.executionStyle ||
+      signal.executionStyle ||
+      null,    
     allocationMultiplier: Number(allocationMultiplier.toFixed(2)),
     confidenceBoost: Number(confidenceBoost.toFixed(2)),
     unifiedMultiplier: Number(unifiedMultiplier.toFixed(2)),
@@ -15562,6 +16041,7 @@ function calculatePhase44CryptoExecutionTiming(signal = {}) {
     spreadPercent: Number(spreadPercent.toFixed(4)),
     executionDecision,
     executionMultiplier,
+    
     blockExecution,
     reason:
       `${executionDecision} • Execution ${cryptoExecutionScore}/100 • ` +
@@ -19738,6 +20218,17 @@ function narrowSmartUniverse(symbols = []) {
 }
 
 async function scanMarket() {
+  if (activeScanLocks.scanMarket) {
+    console.warn("scanMarket skipped: scan already running");
+
+    return Array.isArray(engineState.lastStockSignals)
+      ? engineState.lastStockSignals
+      : [];
+  }
+
+  activeScanLocks.scanMarket = true;
+
+  try {
   const symbols = await getTopMovers();
 
   // PHASE 24 — Smart Universe Narrowing
@@ -20715,6 +21206,9 @@ return finalResults
     return b.percentChange - a.percentChange;
   })
   .slice(0, CONFIG.maxSignalsToReturn);
+  } finally {
+    activeScanLocks.scanMarket = false;
+  }
 }
 
 async function placeMarketBuy(symbol, dollars, score = 0) {
@@ -20810,13 +21304,51 @@ async function executeAdaptiveBuyOrder({
     throw new Error("Invalid adaptive buy order");
   }
 
+   const isCryptoExecution =
+    assetClass === "crypto" ||
+    signal.assetType === "crypto" ||
+    signal.assetClass === "crypto" ||
+    String(symbol || "").includes("/") ||
+    String(symbol || "").endsWith("USD");
+
+  const liveQuoteFreshness = isLiveQuoteFresh(symbol, 120);
+
+  if (!isCryptoExecution && !liveQuoteFreshness.fresh) {
+    throw new Error(
+      `Live quote stale for ${symbol}; adaptive buy blocked. ${liveQuoteFreshness.reason}`
+    );
+  }
+
+  if (
+    signal.shouldWaitForPullback === true ||
+    signal.centralCoreExecution?.shouldWaitForPullback === true ||
+    signal.executionStyle === "WAIT_FOR_MICRO_PULLBACK" ||
+    signal.centralAutonomousAction === "WAIT_FOR_PULLBACK"
+  ) {
+    throw new Error(
+      "Central core is waiting for micro pullback; buy execution blocked."
+    );
+  }  
+
+  if (activeBuyExecutionLocks.has(symbol)) {
+    throw new Error(`Duplicate buy blocked for ${symbol}; execution already active.`);
+  }
+
+  activeBuyExecutionLocks.add(symbol);  
+
+    try {
+
   const executionReview =
     engineState.executionIntelligenceState?.executionReviews?.find(
       (review) => normalizeSymbol(review.symbol) === symbol
     ) || {};
 
   const entryStyle =
-    executionReview.entryStyle || "SINGLE_ENTRY";
+    signal.centralCoreExecution?.executionStyle === "ENTER_REDUCED_SIZE"
+      ? "SMALL_PROBE_ENTRY"
+      : signal.centralCoreExecution?.executionStyle === "MOMENTUM_BREAKOUT_ENTRY"
+      ? "SINGLE_ENTRY"
+      : executionReview.entryStyle || "SINGLE_ENTRY";
 
   if (entryStyle === "NO_EXECUTION") {
     throw new Error("Execution intelligence blocked order");
@@ -20840,6 +21372,23 @@ const phase15ExecutionDominance =
 if (phase15ExecutionDominance.blockExecution) {
   throw new Error("Phase 15 execution dominance blocked weak execution");
 }
+
+  const centralCoreExecutionMultiplier = Number(
+    signal.centralCoreExecution?.executionSizeMultiplier ||
+      signal.executionSizeMultiplier ||
+      1
+  );
+
+  const effectiveAmount = Number(
+    Math.max(
+      0,
+      amount * Math.min(1.25, Math.max(0, centralCoreExecutionMultiplier))
+    ).toFixed(2)
+  );
+
+  if (effectiveAmount <= 0) {
+    throw new Error("Central core execution multiplier reduced order to zero");
+  }
 
 
   let slices =
@@ -20876,13 +21425,13 @@ if (Number(phase15ExecutionDominance.maxSlices || 0) > 0) {
   const minSliceAmount =
     assetClass === "crypto" ? 25 : 1;
 
-  if (amount / slices < minSliceAmount) {
-    slices = Math.max(1, Math.floor(amount / minSliceAmount));
+  if (effectiveAmount / slices < minSliceAmount) {
+    slices = Math.max(1, Math.floor(effectiveAmount / minSliceAmount));
   }
 
   slices = Math.max(1, slices);
 
-  const sliceAmount = Number((amount / slices).toFixed(2));
+  const sliceAmount = Number((effectiveAmount / slices).toFixed(2));
 
   const defaultDelayMs =
     entryStyle === "STEALTH_SCALE_IN"
@@ -20924,20 +21473,25 @@ const delayMs =
       await sleep(delayMs);
     }
   }
-
-  return {
-    symbol,
-    assetClass,
-    entryStyle,
-    timingMode: timing.timingMode || "DEFAULT_TIMING",
-    slices,
-    sliceAmount,
-    delayMs,
-    totalAmount: amount,
-    executionReview,
-    timing,
-    orders,
-  };
+    return {
+      symbol,
+      assetClass,
+      entryStyle,
+      timingMode: timing.timingMode || "DEFAULT_TIMING",
+      slices,
+      sliceAmount,
+      delayMs,
+      requestedAmount: amount,
+      totalAmount: effectiveAmount,
+      centralCoreExecution:
+        signal.centralCoreExecution || null,
+      executionReview,
+      timing,
+      orders,
+    };
+  } finally {
+    activeBuyExecutionLocks.delete(symbol);
+  }
 }
 
 async function placeMarketSell(symbol, qty, reason = "AI_EXIT") {
@@ -28698,6 +29252,16 @@ for (const decision of earlyCentralAutonomousDecisionCore.rankedDecisions) {
   matchingSignal.centralAutonomousAction = decision.action;
   matchingSignal.masterCapitalMultiplier =
     decision.masterCapitalMultiplier;
+  matchingSignal.centralCoreExecution = decision.centralCoreExecution;
+  matchingSignal.executionSizeMultiplier =
+    decision.executionSizeMultiplier;
+  matchingSignal.executionStyleTrustAdjustment =
+    decision.executionStyleTrustAdjustment;
+
+  matchingSignal.executionStyleTrustMultiplier =
+    decision.executionStyleTrustMultiplier;    
+  matchingSignal.shouldWaitForPullback =
+    decision.shouldWaitForPullback;    
 }
 
 const phase61ProfitAggression =
@@ -29075,8 +29639,395 @@ for (const governed of profitVelocityGovernor.governedSignals) {
   }
 }
 
+const portfolioEcosystem =
+  calculatePortfolioEcosystemIntelligence(
+    signals,
+    engineState.cachedPositions || []
+  );
+
+engineState.portfolioEcosystemState =
+  portfolioEcosystem.state;
+
+engineState.portfolioEcosystemHistory.unshift(
+  portfolioEcosystem.state
+);
+
+engineState.portfolioEcosystemHistory =
+  engineState.portfolioEcosystemHistory.slice(0, 300);
+
+for (const ecosystem of portfolioEcosystem.adjustedSignals) {
+  const matchingSignal = signals.find(
+    (signal) =>
+      normalizeSymbol(signal.symbol) === normalizeSymbol(ecosystem.symbol)
+  );
+
+  if (!matchingSignal) continue;
+
+  matchingSignal.portfolioEcosystem = ecosystem;
+  matchingSignal.portfolioEcosystemMultiplier =
+    ecosystem.ecosystemMultiplier;
+  matchingSignal.portfolioPressureScore =
+    ecosystem.portfolioPressureScore;
+  matchingSignal.portfolioEcosystemMode =
+    ecosystem.ecosystemMode;
+
+  matchingSignal.allocationMultiplier = Number(
+    (
+      Number(matchingSignal.allocationMultiplier || 1) *
+      Number(ecosystem.ecosystemMultiplier || 1)
+    ).toFixed(2)
+  );
+
+  if (ecosystem.blockNewTrade) {
+    matchingSignal.autoTradeApproved = false;
+    matchingSignal.approved = false;
+    matchingSignal.decisionLevel =
+      "Blocked By Portfolio Ecosystem Intelligence";
+  }
+
+  if (ecosystem.reduceSize && !ecosystem.blockNewTrade) {
+    matchingSignal.decisionLevel =
+      "Reduced By Portfolio Ecosystem Intelligence";
+  }
+}
+
+saveRecentOrder("PHASE_71_PORTFOLIO_ECOSYSTEM_UPDATED", "MARKET", {
+  reviewedSignals: portfolioEcosystem.state.reviewedSignals,
+  ecosystemMode: portfolioEcosystem.state.ecosystemMode,
+  portfolioPressureScore:
+    portfolioEcosystem.state.portfolioPressureScore,
+  dominantArchetype:
+    portfolioEcosystem.state.dominantArchetype,
+  dominantSector:
+    portfolioEcosystem.state.dominantSector,
+});
+
+const liveMomentumMutation =
+  calculateLiveMomentumMutation(signals);
+
+engineState.liveMomentumMutationState =
+  liveMomentumMutation.state;
+
+engineState.liveMomentumMutationHistory.unshift(
+  liveMomentumMutation.state
+);
+
+engineState.liveMomentumMutationHistory =
+  engineState.liveMomentumMutationHistory.slice(0, 300);
+
+for (const mutation of liveMomentumMutation.mutatedSignals) {
+  const matchingSignal = signals.find(
+    (signal) =>
+      normalizeSymbol(signal.symbol) === normalizeSymbol(mutation.symbol)
+  );
+
+  if (!matchingSignal) continue;
+
+  matchingSignal.liveMomentumMutation = mutation;
+  matchingSignal.liveMutatedScore = mutation.liveMutatedScore;
+  matchingSignal.liveMutationMode = mutation.mutationMode;
+  matchingSignal.liveMovePercent = mutation.liveMovePercent;
+  matchingSignal.livePrice = mutation.livePrice;
+  matchingSignal.displayPrice = mutation.livePrice;
+
+  matchingSignal.score = clampScore(
+    Number(matchingSignal.score || 0) * 0.82 +
+      Number(mutation.liveMutatedScore || 0) * 0.18
+  );
+
+  if (mutation.liveFade) {
+    matchingSignal.autoTradeApproved = false;
+    matchingSignal.decisionLevel =
+      "Live Momentum Fade Warning";
+  }
+
+  if (mutation.liveIgnition) {
+    matchingSignal.decisionLevel =
+      "Live Runner Ignition Detected";
+    matchingSignal.allocationMultiplier = Number(
+      (
+        Number(matchingSignal.allocationMultiplier || 1) * 1.08
+      ).toFixed(2)
+    );
+  }
+}
+
+saveRecentOrder("PHASE_73_LIVE_MOMENTUM_MUTATION_UPDATED", "MARKET", {
+  reviewedCount: liveMomentumMutation.state.reviewedCount,
+  ignitionCount: liveMomentumMutation.state.ignitionCount,
+  fadeCount: liveMomentumMutation.state.fadeCount,
+  staleCount: liveMomentumMutation.state.staleCount,
+});
+
+const dynamicCapitalParliament =
+  calculateDynamicCapitalParliament(
+    signals,
+    engineState.portfolioEcosystemState
+  );
+
+engineState.dynamicCapitalParliamentState =
+  dynamicCapitalParliament.state;
+
+engineState.dynamicCapitalParliamentHistory.unshift(
+  dynamicCapitalParliament.state
+);
+
+engineState.dynamicCapitalParliamentHistory =
+  engineState.dynamicCapitalParliamentHistory.slice(0, 300);
+
+for (const capitalVote of dynamicCapitalParliament.adjustedSignals) {
+  const matchingSignal = signals.find(
+    (signal) =>
+      normalizeSymbol(signal.symbol) === normalizeSymbol(capitalVote.symbol)
+  );
+
+  if (!matchingSignal) continue;
+
+  matchingSignal.dynamicCapitalParliament = capitalVote;
+  matchingSignal.capitalVoteScore = capitalVote.capitalVoteScore;
+  matchingSignal.capitalPriority = capitalVote.capitalPriority;
+  matchingSignal.capitalParliamentAction =
+    capitalVote.capitalParliamentAction;
+  matchingSignal.capitalParliamentMultiplier =
+    capitalVote.capitalParliamentMultiplier;
+  matchingSignal.capitalMode = capitalVote.capitalMode;
+
+  matchingSignal.allocationMultiplier = Number(
+    (
+      Number(matchingSignal.allocationMultiplier || 1) *
+      Number(capitalVote.capitalParliamentMultiplier || 1)
+    ).toFixed(2)
+  );
+
+  if (capitalVote.capitalParliamentAction === "NO_CAPITAL") {
+    matchingSignal.autoTradeApproved = false;
+    matchingSignal.approved = false;
+    matchingSignal.decisionLevel =
+      "No Capital From Dynamic Capital Parliament";
+  }
+
+  if (
+    capitalVote.capitalParliamentAction === "ROUTE_ELITE_CAPITAL" ||
+    capitalVote.capitalParliamentAction === "ROUTE_PRIORITY_CAPITAL"
+  ) {
+    matchingSignal.decisionLevel =
+      capitalVote.capitalParliamentAction;
+  }
+}
+
+saveRecentOrder("PHASE_72_DYNAMIC_CAPITAL_PARLIAMENT_UPDATED", "MARKET", {
+  reviewedCount: dynamicCapitalParliament.state.reviewedCount,
+  approvedVoteCount:
+    dynamicCapitalParliament.state.approvedVoteCount,
+  capitalMode:
+    dynamicCapitalParliament.state.capitalMode,
+  dominantCapitalArchetype:
+    dynamicCapitalParliament.state.dominantCapitalArchetype,
+});
+
+const liquiditySweepTrap =
+  calculateLiquiditySweepTrapIntelligence(signals);
+
+engineState.liquiditySweepTrapState =
+  liquiditySweepTrap.state;
+
+engineState.liquiditySweepTrapHistory.unshift(
+  liquiditySweepTrap.state
+);
+
+engineState.liquiditySweepTrapHistory =
+  engineState.liquiditySweepTrapHistory.slice(0, 300);
+
+for (const trap of liquiditySweepTrap.reviewedSignals) {
+  const matchingSignal = signals.find(
+    (signal) =>
+      normalizeSymbol(signal.symbol) === normalizeSymbol(trap.symbol)
+  );
+
+  if (!matchingSignal) continue;
+
+  matchingSignal.liquiditySweepTrap = trap;
+  matchingSignal.liquiditySweepMode =
+    trap.liquiditySweepMode;
+  matchingSignal.trapRiskScore =
+    trap.trapRiskScore;
+  matchingSignal.squeezeIgnition =
+    trap.squeezeIgnition;
+
+  matchingSignal.allocationMultiplier = Number(
+    (
+      Number(matchingSignal.allocationMultiplier || 1) *
+      Number(trap.liquidityTrapMultiplier || 1)
+    ).toFixed(2)
+  );
+
+  if (trap.shouldBlockForTrap) {
+    matchingSignal.autoTradeApproved = false;
+    matchingSignal.approved = false;
+    matchingSignal.decisionLevel =
+      "Blocked By Liquidity Sweep Trap Intelligence";
+  }
+
+  if (trap.shouldReduceForTrap && !trap.shouldBlockForTrap) {
+    matchingSignal.decisionLevel =
+      "Reduced By Liquidity Sweep Trap Intelligence";
+  }
+
+  if (trap.squeezeIgnition) {
+    matchingSignal.decisionLevel =
+      "Squeeze Ignition Confirmed";
+  }
+}
+
+saveRecentOrder("PHASE_77_LIQUIDITY_SWEEP_TRAP_UPDATED", "MARKET", {
+  reviewedCount: liquiditySweepTrap.state.reviewedCount,
+  trapCount: liquiditySweepTrap.state.trapCount,
+  squeezeIgnitionCount:
+    liquiditySweepTrap.state.squeezeIgnitionCount,
+});
+
+const autonomousHedgeFundLayer =
+  calculateAutonomousHedgeFundLayer(signals);
+
+engineState.autonomousHedgeFundLayerState =
+  autonomousHedgeFundLayer.state;
+
+engineState.autonomousHedgeFundLayerHistory.unshift(
+  autonomousHedgeFundLayer.state
+);
+
+engineState.autonomousHedgeFundLayerHistory =
+  engineState.autonomousHedgeFundLayerHistory.slice(0, 300);
+
+for (const hedge of autonomousHedgeFundLayer.adjustedSignals) {
+  const matchingSignal = signals.find(
+    (signal) =>
+      normalizeSymbol(signal.symbol) === normalizeSymbol(hedge.symbol)
+  );
+
+  if (!matchingSignal) continue;
+
+  matchingSignal.autonomousHedgeFundLayer = hedge;
+  matchingSignal.hedgeFundMode = hedge.hedgeFundMode;
+  matchingSignal.hedgeFundAction = hedge.hedgeFundAction;
+  matchingSignal.hedgeFundSignalMultiplier =
+    hedge.hedgeFundSignalMultiplier;
+
+  matchingSignal.allocationMultiplier = Number(
+    (
+      Number(matchingSignal.allocationMultiplier || 1) *
+      Number(hedge.hedgeFundSignalMultiplier || 1)
+    ).toFixed(2)
+  );
+
+  if (
+    hedge.hedgeFundAction === "DEFEND_CAPITAL_REDUCE" ||
+    hedge.hedgeFundAction === "DECONCENTRATE_REDUCE"
+  ) {
+    matchingSignal.decisionLevel = hedge.hedgeFundAction;
+  }
+
+  if (hedge.hedgeFundAction === "EXPAND_RUNNER_CAPITAL") {
+    matchingSignal.decisionLevel =
+      "Autonomous Hedge Fund Expanding Runner Capital";
+  }
+}
+
+saveRecentOrder("PHASE_78_AUTONOMOUS_HEDGE_FUND_LAYER_UPDATED", "MARKET", {
+  reviewedCount: autonomousHedgeFundLayer.state.reviewedCount,
+  hedgeFundMode: autonomousHedgeFundLayer.state.hedgeFundMode,
+  globalCapitalMultiplier:
+    autonomousHedgeFundLayer.state.globalCapitalMultiplier,
+  eliteCandidateCount:
+    autonomousHedgeFundLayer.state.eliteCandidateCount,
+});
+
+const autonomousMetaReinforcement =
+  calculateAutonomousMetaReinforcement(signals);
+
+engineState.autonomousMetaReinforcementState =
+  autonomousMetaReinforcement.state;
+
+engineState.autonomousMetaReinforcementHistory.unshift(
+  autonomousMetaReinforcement.state
+);
+
+engineState.autonomousMetaReinforcementHistory =
+  engineState.autonomousMetaReinforcementHistory.slice(0, 300);
+
+for (const meta of autonomousMetaReinforcement.adjustedSignals) {
+  const matchingSignal = signals.find(
+    (signal) =>
+      normalizeSymbol(signal.symbol) === normalizeSymbol(meta.symbol)
+  );
+
+  if (!matchingSignal) continue;
+
+  matchingSignal.autonomousMetaReinforcement = meta;
+  matchingSignal.metaAggressionMultiplier =
+    meta.metaAggressionMultiplier;
+  matchingSignal.metaThresholdAdjustment =
+    meta.metaThresholdAdjustment;
+  matchingSignal.metaScoreAdjustment =
+    meta.metaScoreAdjustment;
+  matchingSignal.metaAggressionMode =
+    meta.aggressionMode;
+
+  matchingSignal.score = clampScore(
+    Number(matchingSignal.score || 0) +
+      Number(meta.metaScoreAdjustment || 0)
+  );
+
+  matchingSignal.allocationMultiplier = Number(
+    (
+      Number(matchingSignal.allocationMultiplier || 1) *
+      Number(meta.metaAggressionMultiplier || 1)
+    ).toFixed(2)
+  );
+
+  if (meta.blockedButStrong) {
+    matchingSignal.decisionLevel =
+      "Meta Reinforcement Suppression Relief Candidate";
+  }
+}
+
+saveRecentOrder("PHASE_76_AUTONOMOUS_META_REINFORCEMENT_UPDATED", "MARKET", {
+  reviewedCount:
+    autonomousMetaReinforcement.state.reviewedCount,
+  aggressionMode:
+    autonomousMetaReinforcement.state.aggressionMode,
+  approvalRate:
+    autonomousMetaReinforcement.state.approvalRate,
+  blockRate:
+    autonomousMetaReinforcement.state.blockRate,
+});
+
 const centralAutonomousDecisionCore =
   calculateCentralAutonomousDecisionCore(stockSignals, cryptoSignals);
+
+engineState.aiParliamentVotingState = {
+  updatedAt: new Date().toISOString(),
+  phase: "75_AI_PARLIAMENT_VOTING_SYSTEM",
+  reviewedCount:
+    centralAutonomousDecisionCore.rankedDecisions?.length || 0,
+  topVotes:
+    (centralAutonomousDecisionCore.rankedDecisions || [])
+      .map((decision) => ({
+        symbol: decision.symbol,
+        tradeArchetype: decision.tradeArchetype,
+        parliamentDecision: decision.parliamentDecision,
+        parliamentConfidence: decision.parliamentConfidence,
+        action: decision.action,
+      }))
+      .slice(0, 15),
+};
+
+engineState.aiParliamentVotingHistory.unshift(
+  engineState.aiParliamentVotingState
+);
+
+engineState.aiParliamentVotingHistory =
+  engineState.aiParliamentVotingHistory.slice(0, 300);
 
 engineState.centralAutonomousDecisionCoreState =
   centralAutonomousDecisionCore.state;
@@ -29104,6 +30055,22 @@ for (const decision of centralAutonomousDecisionCore.rankedDecisions) {
   if (!matchingSignal) continue;
 
   matchingSignal.centralAutonomousDecisionCore = decision;
+  matchingSignal.tradeArchetype = decision.tradeArchetype;
+  matchingSignal.dynamicEngineWeights = decision.dynamicEngineWeights;
+  matchingSignal.archetypeAdjustedScore = decision.archetypeAdjustedScore;
+  matchingSignal.aiParliamentVote = decision.aiParliamentVote;
+  matchingSignal.parliamentDecision = decision.parliamentDecision;
+  matchingSignal.parliamentConfidence = decision.parliamentConfidence;
+  matchingSignal.contradictionState = decision.contradictionState;
+  matchingSignal.eliteOverride = decision.eliteOverride;
+  matchingSignal.centralCoreExecution = decision.centralCoreExecution;
+  matchingSignal.executionStyle = decision.executionStyle;
+  matchingSignal.executionSizeMultiplier =
+   decision.executionSizeMultiplier;
+  matchingSignal.shouldWaitForPullback =
+   decision.shouldWaitForPullback;  
+  matchingSignal.centralCoreHardBlock = decision.hardBlock;
+  matchingSignal.centralCoreSoftBlock = decision.softBlock;  
   matchingSignal.finalAutonomousDecisionScore =
     decision.finalDecisionScore;
   matchingSignal.centralAutonomousAction = decision.action;
@@ -29115,11 +30082,31 @@ for (const decision of centralAutonomousDecisionCore.rankedDecisions) {
       Number(decision.finalDecisionScore || 0) * 0.25
   );
 
-  if (decision.shouldBlock) {
+  if (decision.shouldBlock && decision.action !== "ALLOW_REDUCED_SIZE") {
     matchingSignal.autoTradeApproved = false;
     matchingSignal.approved = false;
     matchingSignal.decisionLevel =
       "Blocked By Central Autonomous Decision Core";
+  }
+
+    if (decision.action === "WAIT_FOR_PULLBACK") {
+    matchingSignal.autoTradeApproved = false;
+    matchingSignal.approved = true;
+    matchingSignal.decisionLevel =
+      "Central Core Waiting For Micro Pullback";
+    matchingSignal.pullbackWatch = true;
+  }
+
+  if (decision.action === "ALLOW_REDUCED_SIZE") {
+    matchingSignal.autoTradeApproved = true;
+    matchingSignal.approved = true;
+    matchingSignal.decisionLevel =
+      "Elite Override: Reduced Size Approval";
+    matchingSignal.allocationMultiplier = Number(
+      (
+        Number(matchingSignal.allocationMultiplier || 1) * 0.5
+      ).toFixed(2)
+    );
   }
 
   if (decision.shouldAccelerate) {
@@ -29269,6 +30256,8 @@ engineState.marketCycleIntelligenceHistory =
     }
 
     engineState.lastSignals = signals;
+    pushLiveSignalUpdate(buildLiveSignalPushPayload());
+    refreshFinnhubLiveSubscriptions();    
 
     engineState.institutionalDashboardSnapshots.unshift({
       createdAt: new Date().toISOString(),
@@ -32540,6 +33529,1581 @@ function calculatePhase59InstitutionalOrderFlowIntelligence(stockSignals = [], c
   };
 }
 
+function classifyTradeArchetype(signal = {}) {
+  const symbol = normalizeSymbol(signal.symbol);
+  const isCrypto =
+    signal.assetType === "crypto" ||
+    signal.assetClass === "crypto" ||
+    String(symbol).includes("/") ||
+    String(symbol).endsWith("USD");
+
+  const runnerScore = Number(
+    signal.runnerScore ||
+      signal.explosiveRunnerScore ||
+      signal.explosiveRunnerPrediction?.explosiveRunnerScore ||
+      signal.adaptiveRunnerScore ||
+      0
+  );
+
+  const velocityScore = Number(
+    signal.profitVelocityScore ||
+      signal.profitVelocityGovernor?.finalVelocityScore ||
+      0
+  );
+
+  const premarketScore = Number(
+    signal.premarketDominanceScore ||
+      signal.premarketDominance?.dominanceScore ||
+      signal.morningStrikeScore ||
+      0
+  );
+
+  const accumulationScore = Number(
+    signal.multiDayAccumulationScore ||
+      signal.multiDayAccumulation?.accumulationScore ||
+      0
+  );
+
+  const dcfScore = Number(
+    signal.dcfValuationScore ||
+      signal.dcfValuation?.valuationScore ||
+      0
+  );
+
+  const defensiveScore = Number(
+    signal.portfolioGovernorScore ||
+      signal.macroRiskScore ||
+      signal.correlationRiskScore ||
+      0
+  );
+
+  if (isCrypto) return "CRYPTO_ROTATION";
+
+  if (
+    runnerScore >= 75 ||
+    velocityScore >= 75 ||
+    premarketScore >= 75 ||
+    Number(signal.percentChange || signal.changePercent || 0) >= 8
+  ) {
+    return "EXPLOSIVE_RUNNER";
+  }
+
+  if (accumulationScore >= 70) {
+    return "SWING_ACCUMULATION";
+  }
+
+  if (dcfScore >= 70) {
+    return "VALUE_BREAKOUT";
+  }
+
+  if (defensiveScore >= 70) {
+    return "DEFENSIVE_SETUP";
+  }
+
+  return "MEAN_REVERSION";
+}
+
+function getArchetypeEngineWeights(tradeArchetype) {
+  const weightsByArchetype = {
+    EXPLOSIVE_RUNNER: {
+      base: 0.12,
+      institutional: 0.16,
+      execution: 0.12,
+      runner: 0.25,
+      orderFlow: 0.15,
+      profitAggression: 0.08,
+      personality: 0.04,
+      strategyEvolution: 0.04,
+      meta: 0.03,
+      velocity: 0.20,
+    },
+
+    SWING_ACCUMULATION: {
+      base: 0.14,
+      institutional: 0.22,
+      execution: 0.08,
+      runner: 0.05,
+      orderFlow: 0.08,
+      profitAggression: 0.05,
+      personality: 0.08,
+      strategyEvolution: 0.14,
+      meta: 0.08,
+      velocity: 0.05,
+    },
+
+    VALUE_BREAKOUT: {
+      base: 0.14,
+      institutional: 0.22,
+      execution: 0.08,
+      runner: 0.03,
+      orderFlow: 0.08,
+      profitAggression: 0.04,
+      personality: 0.08,
+      strategyEvolution: 0.14,
+      meta: 0.10,
+      velocity: 0.04,
+    },
+
+    CRYPTO_ROTATION: {
+      base: 0.14,
+      institutional: 0.14,
+      execution: 0.12,
+      runner: 0.10,
+      orderFlow: 0.18,
+      profitAggression: 0.10,
+      personality: 0.05,
+      strategyEvolution: 0.08,
+      meta: 0.08,
+      velocity: 0.14,
+    },
+
+    DEFENSIVE_SETUP: {
+      base: 0.14,
+      institutional: 0.18,
+      execution: 0.10,
+      runner: 0.03,
+      orderFlow: 0.08,
+      profitAggression: 0.04,
+      personality: 0.10,
+      strategyEvolution: 0.12,
+      meta: 0.12,
+      velocity: 0.04,
+    },
+
+    MEAN_REVERSION: {
+      base: 0.16,
+      institutional: 0.18,
+      execution: 0.12,
+      runner: 0.06,
+      orderFlow: 0.10,
+      profitAggression: 0.06,
+      personality: 0.08,
+      strategyEvolution: 0.10,
+      meta: 0.08,
+      velocity: 0.06,
+    },
+  };
+
+  return weightsByArchetype[tradeArchetype] || weightsByArchetype.MEAN_REVERSION;
+}
+
+function calculateArchetypeWeightedDecisionScore({
+  signal,
+  baseScore,
+  institutionalScore,
+  executionScore,
+  runnerScore,
+  orderFlowScore,
+  profitAggressionScore,
+  personalityScore,
+  strategyEvolutionDecisionScore,
+  metaScore,
+  velocityScore,
+  riskPenalty,
+}) {
+  const tradeArchetype = classifyTradeArchetype(signal);
+  const weights = getArchetypeEngineWeights(tradeArchetype);
+
+  const archetypeTrustAdjustment =
+    getArchetypeTrustAdjustment({
+      ...signal,
+      tradeArchetype,
+    });
+
+  const archetypeMemoryBonus =
+    Number(archetypeTrustAdjustment.archetypeTrustMultiplier || 1) > 1
+      ? (Number(archetypeTrustAdjustment.archetypeTrustMultiplier || 1) - 1) * 25
+      : 0;
+
+  const archetypeMemoryPenalty =
+    Number(archetypeTrustAdjustment.archetypeTrustMultiplier || 1) < 1
+      ? (1 - Number(archetypeTrustAdjustment.archetypeTrustMultiplier || 1)) * 25
+      : 0;  
+
+  const rawWeightedScore =
+    baseScore * weights.base +
+    institutionalScore * weights.institutional +
+    executionScore * weights.execution +
+    runnerScore * weights.runner +
+    orderFlowScore * weights.orderFlow +
+    profitAggressionScore * weights.profitAggression +
+    personalityScore * weights.personality +
+    strategyEvolutionDecisionScore * weights.strategyEvolution +
+    metaScore * weights.meta +
+    velocityScore * weights.velocity;
+
+  const finalDecisionScore = clampScore(
+    rawWeightedScore -
+      riskPenalty +
+      archetypeMemoryBonus -
+      archetypeMemoryPenalty
+  );
+
+  return {
+    tradeArchetype,
+    dynamicEngineWeights: weights,
+    archetypeAdjustedScore: finalDecisionScore,
+    archetypeTrustAdjustment,
+    archetypeMemoryBonus: Number(archetypeMemoryBonus.toFixed(2)),
+    archetypeMemoryPenalty: Number(archetypeMemoryPenalty.toFixed(2)),    
+    finalDecisionScore,
+    reason:
+      `${tradeArchetype} weighted decision • ` +
+      `Relevant engines dominate • Final ${finalDecisionScore}/100`,
+  };
+}
+
+function calculateAutonomousHedgeFundLayer(signals = []) {
+  const activeSignals = (Array.isArray(signals) ? signals : []).filter(Boolean);
+
+  const marketStress = Number(engineState.marketStressLevel || 0);
+  const portfolioPressure = Number(
+    engineState.portfolioEcosystemState?.portfolioPressureScore || 0
+  );
+
+  const capitalMode =
+    engineState.dynamicCapitalParliamentState?.capitalMode ||
+    "UNKNOWN_CAPITAL_MODE";
+
+  const metaMode =
+    engineState.autonomousMetaReinforcementState?.aggressionMode ||
+    "UNKNOWN_META_MODE";
+
+  const trapCount = Number(
+    engineState.liquiditySweepTrapState?.trapCount || 0
+  );
+
+  const squeezeIgnitionCount = Number(
+    engineState.liquiditySweepTrapState?.squeezeIgnitionCount || 0
+  );
+
+  const eliteCandidates = activeSignals.filter((signal) => {
+    const score = Number(
+      signal.finalAutonomousDecisionScore ||
+        signal.archetypeAdjustedScore ||
+        signal.score ||
+        0
+    );
+
+    return (
+      score >= 82 &&
+      signal.autoTradeApproved !== false &&
+      signal.approved !== false
+    );
+  });
+
+  const blockedSignals = activeSignals.filter(
+    (signal) =>
+      signal.autoTradeApproved === false ||
+      signal.approved === false
+  );
+
+  const approvalRate =
+    activeSignals.length > 0
+      ? Number(
+          (
+            ((activeSignals.length - blockedSignals.length) /
+              activeSignals.length) *
+            100
+          ).toFixed(2)
+        )
+      : 0;
+
+  const hedgeFundMode =
+    marketStress >= 85
+      ? "CAPITAL_DEFENSE_MODE"
+      : portfolioPressure >= 80
+      ? "PORTFOLIO_DECONCENTRATION_MODE"
+      : squeezeIgnitionCount >= 2 && eliteCandidates.length >= 2
+      ? "RUNNER_EXPANSION_MODE"
+      : capitalMode === "ELITE_CAPITAL_CONCENTRATION"
+      ? "ELITE_CONCENTRATION_MODE"
+      : metaMode === "SUPPRESSION_RELIEF_MODE"
+      ? "SUPPRESSION_RELIEF_MODE"
+      : "BALANCED_HEDGE_FUND_MODE";
+
+  const globalCapitalMultiplier =
+    hedgeFundMode === "CAPITAL_DEFENSE_MODE"
+      ? 0.55
+      : hedgeFundMode === "PORTFOLIO_DECONCENTRATION_MODE"
+      ? 0.7
+      : hedgeFundMode === "RUNNER_EXPANSION_MODE"
+      ? 1.18
+      : hedgeFundMode === "ELITE_CONCENTRATION_MODE"
+      ? 1.12
+      : hedgeFundMode === "SUPPRESSION_RELIEF_MODE"
+      ? 1.05
+      : 1;
+
+  const shouldReduceNewTrades =
+    ["CAPITAL_DEFENSE_MODE", "PORTFOLIO_DECONCENTRATION_MODE"].includes(
+      hedgeFundMode
+    );
+
+  const state = {
+    updatedAt: new Date().toISOString(),
+    phase: "78_AUTONOMOUS_HEDGE_FUND_LAYER",
+    reviewedCount: activeSignals.length,
+    hedgeFundMode,
+    globalCapitalMultiplier,
+    shouldReduceNewTrades,
+    marketStress,
+    portfolioPressure,
+    capitalMode,
+    metaMode,
+    trapCount,
+    squeezeIgnitionCount,
+    eliteCandidateCount: eliteCandidates.length,
+    approvalRate,
+    reason:
+      `${hedgeFundMode} • Global capital x${globalCapitalMultiplier} • ` +
+      `Stress ${marketStress} • Portfolio pressure ${portfolioPressure} • ` +
+      `Elite candidates ${eliteCandidates.length}`,
+  };
+
+  const adjustedSignals = activeSignals.map((signal) => {
+    const score = Number(
+      signal.finalAutonomousDecisionScore ||
+        signal.archetypeAdjustedScore ||
+        signal.score ||
+        0
+    );
+
+    const isElite = score >= 82;
+    const isSqueeze =
+      signal.squeezeIgnition === true ||
+      signal.liquiditySweepTrap?.squeezeIgnition === true;
+
+    const protectCapital =
+      hedgeFundMode === "CAPITAL_DEFENSE_MODE" && !isElite;
+
+    const deconcentrate =
+      hedgeFundMode === "PORTFOLIO_DECONCENTRATION_MODE" &&
+      signal.portfolioEcosystem?.reduceSize === true;
+
+    const expandRunner =
+      hedgeFundMode === "RUNNER_EXPANSION_MODE" &&
+      isSqueeze &&
+      isElite;
+
+    const hedgeFundSignalMultiplier =
+      protectCapital
+        ? 0.45
+        : deconcentrate
+        ? 0.65
+        : expandRunner
+        ? 1.22
+        : globalCapitalMultiplier;
+
+    const hedgeFundAction =
+      protectCapital
+        ? "DEFEND_CAPITAL_REDUCE"
+        : deconcentrate
+        ? "DECONCENTRATE_REDUCE"
+        : expandRunner
+        ? "EXPAND_RUNNER_CAPITAL"
+        : hedgeFundMode;
+
+    return {
+      symbol: signal.symbol,
+      score,
+      isElite,
+      isSqueeze,
+      hedgeFundMode,
+      hedgeFundAction,
+      hedgeFundSignalMultiplier,
+      reason:
+        `${hedgeFundAction} • Signal multiplier x${hedgeFundSignalMultiplier}`,
+    };
+  });
+
+  return {
+    state,
+    adjustedSignals,
+  };
+}
+
+function calculateLiquiditySweepTrapIntelligence(signals = []) {
+  const activeSignals = (Array.isArray(signals) ? signals : []).filter(Boolean);
+
+  const reviewedSignals = activeSignals.map((signal) => {
+    const tradeArchetype =
+      signal.tradeArchetype ||
+      classifyTradeArchetype(signal);
+
+    const percentChange = Number(
+      signal.percentChange ||
+        signal.changePercent ||
+        signal.dp ||
+        0
+    );
+
+    const closeNearHighPercent = Number(
+      signal.closeNearHighPercent ||
+        signal.confirmations?.closeNearHighPercent ||
+        0
+    );
+
+    const rvol = Number(
+      signal.rvol ||
+        signal.relativeVolume ||
+        signal.relativeVolumeRatio ||
+        0
+    );
+
+    const volumeSpike =
+      signal.confirmations?.volumeSpike === true ||
+      rvol >= 2.5;
+
+    const fakeBreakout =
+      signal.confirmations?.fakeBreakout === true ||
+      signal.fakeBreakout === true;
+
+    const liveMovePercent = Number(
+      signal.liveMovePercent ||
+        signal.liveMomentumMutation?.liveMovePercent ||
+        0
+    );
+
+    const orderFlowScore = Number(
+      signal.phase59InstitutionalOrderFlow?.orderFlowConvictionScore ||
+        signal.orderFlowConvictionScore ||
+        0
+    );
+
+    const runnerScore = Number(
+      signal.runnerScore ||
+        signal.explosiveRunnerScore ||
+        signal.explosiveRunnerPrediction?.explosiveRunnerScore ||
+        0
+    );
+
+    const extendedButStrong =
+      percentChange >= 12 &&
+      closeNearHighPercent >= 80 &&
+      volumeSpike &&
+      orderFlowScore >= 68;
+
+    const likelyStopHunt =
+      liveMovePercent <= -1.5 &&
+      volumeSpike &&
+      closeNearHighPercent <= 45 &&
+      orderFlowScore >= 60;
+
+    const failedBreakoutTrap =
+      fakeBreakout ||
+      (
+        percentChange >= 8 &&
+        closeNearHighPercent <= 35 &&
+        liveMovePercent < 0
+      );
+
+    const squeezeIgnition =
+      ["EXPLOSIVE_RUNNER", "CRYPTO_ROTATION"].includes(tradeArchetype) &&
+      runnerScore >= 78 &&
+      orderFlowScore >= 68 &&
+      liveMovePercent >= 1.2 &&
+      volumeSpike;
+
+    const trapRiskScore = clampScore(
+      (failedBreakoutTrap ? 45 : 0) +
+        (likelyStopHunt ? 22 : 0) +
+        (percentChange >= 20 && closeNearHighPercent < 50 ? 18 : 0) -
+        (squeezeIgnition ? 30 : 0) -
+        (extendedButStrong ? 12 : 0)
+    );
+
+    const liquiditySweepMode =
+      squeezeIgnition
+        ? "SQUEEZE_IGNITION"
+        : failedBreakoutTrap
+        ? "FAILED_BREAKOUT_TRAP"
+        : likelyStopHunt
+        ? "POSSIBLE_STOP_HUNT"
+        : extendedButStrong
+        ? "EXTENDED_BUT_CONFIRMED"
+        : "NO_LIQUIDITY_TRAP";
+
+    const shouldBlockForTrap =
+      trapRiskScore >= 70 &&
+      !squeezeIgnition;
+
+    const shouldReduceForTrap =
+      trapRiskScore >= 45 &&
+      trapRiskScore < 70 &&
+      !squeezeIgnition;
+
+    const liquidityTrapMultiplier =
+      shouldBlockForTrap
+        ? 0
+        : shouldReduceForTrap
+        ? 0.65
+        : squeezeIgnition
+        ? 1.12
+        : 1;
+
+    return {
+      symbol: signal.symbol,
+      tradeArchetype,
+      percentChange,
+      closeNearHighPercent,
+      rvol,
+      volumeSpike,
+      fakeBreakout,
+      liveMovePercent,
+      orderFlowScore,
+      runnerScore,
+      extendedButStrong,
+      likelyStopHunt,
+      failedBreakoutTrap,
+      squeezeIgnition,
+      trapRiskScore,
+      liquiditySweepMode,
+      shouldBlockForTrap,
+      shouldReduceForTrap,
+      liquidityTrapMultiplier,
+      reason:
+        `${liquiditySweepMode} • Trap risk ${trapRiskScore}/100 • ` +
+        `Multiplier x${liquidityTrapMultiplier}`,
+    };
+  });
+
+  const trapCount = reviewedSignals.filter(
+    (item) => item.shouldBlockForTrap || item.shouldReduceForTrap
+  ).length;
+
+  const squeezeIgnitionCount = reviewedSignals.filter(
+    (item) => item.squeezeIgnition
+  ).length;
+
+  const state = {
+    updatedAt: new Date().toISOString(),
+    phase: "77_LIQUIDITY_SWEEP_TRAP_INTELLIGENCE",
+    reviewedCount: reviewedSignals.length,
+    trapCount,
+    squeezeIgnitionCount,
+    topTrapRisks: reviewedSignals
+      .filter((item) => item.trapRiskScore >= 45)
+      .sort((a, b) => b.trapRiskScore - a.trapRiskScore)
+      .slice(0, 12),
+    squeezeIgnitions: reviewedSignals
+      .filter((item) => item.squeezeIgnition)
+      .slice(0, 12),
+    reason:
+      `Liquidity trap engine reviewed ${reviewedSignals.length} signals, ` +
+      `found ${trapCount} traps and ${squeezeIgnitionCount} squeeze ignitions.`,
+  };
+
+  return {
+    state,
+    reviewedSignals,
+  };
+}
+function calculateAutonomousMetaReinforcement(signals = []) {
+  const activeSignals = (Array.isArray(signals) ? signals : []).filter(Boolean);
+
+  const approvedSignals = activeSignals.filter(
+    (signal) =>
+      signal.autoTradeApproved !== false &&
+      signal.approved !== false
+  );
+
+  const eliteSignals = activeSignals.filter(
+    (signal) =>
+      Number(
+        signal.finalAutonomousDecisionScore ||
+          signal.archetypeAdjustedScore ||
+          signal.score ||
+          0
+      ) >= 82
+  );
+
+  const blockedSignals = activeSignals.filter(
+    (signal) =>
+      signal.autoTradeApproved === false ||
+      signal.approved === false
+  );
+
+  const averageScore =
+    activeSignals.reduce(
+      (sum, signal) =>
+        sum +
+        Number(
+          signal.finalAutonomousDecisionScore ||
+            signal.archetypeAdjustedScore ||
+            signal.score ||
+            0
+        ),
+      0
+    ) / Math.max(1, activeSignals.length);
+
+  const approvalRate =
+    activeSignals.length > 0
+      ? Number(((approvedSignals.length / activeSignals.length) * 100).toFixed(2))
+      : 0;
+
+  const blockRate =
+    activeSignals.length > 0
+      ? Number(((blockedSignals.length / activeSignals.length) * 100).toFixed(2))
+      : 0;
+
+  const marketStress = Number(engineState.marketStressLevel || 0);
+  const portfolioPressure = Number(
+    engineState.portfolioEcosystemState?.portfolioPressureScore || 0
+  );
+
+  const parliamentMode =
+    engineState.aiParliamentVotingState?.topVotes?.[0]?.parliamentDecision ||
+    "UNKNOWN_PARLIAMENT_MODE";
+
+  const aggressionMode =
+    marketStress >= 80 || portfolioPressure >= 80
+      ? "DEFENSIVE_META_REINFORCEMENT"
+      : eliteSignals.length >= 3 && approvalRate >= 35
+      ? "AGGRESSIVE_META_REINFORCEMENT"
+      : blockRate >= 75 && averageScore >= 70
+      ? "SUPPRESSION_RELIEF_MODE"
+      : "BALANCED_META_REINFORCEMENT";
+
+  const metaAggressionMultiplier =
+    aggressionMode === "AGGRESSIVE_META_REINFORCEMENT"
+      ? 1.12
+      : aggressionMode === "SUPPRESSION_RELIEF_MODE"
+      ? 1.06
+      : aggressionMode === "DEFENSIVE_META_REINFORCEMENT"
+      ? 0.78
+      : 1;
+
+  const metaThresholdAdjustment =
+    aggressionMode === "AGGRESSIVE_META_REINFORCEMENT"
+      ? -2
+      : aggressionMode === "SUPPRESSION_RELIEF_MODE"
+      ? -1
+      : aggressionMode === "DEFENSIVE_META_REINFORCEMENT"
+      ? 4
+      : 0;
+
+  const state = {
+    updatedAt: new Date().toISOString(),
+    phase: "76_AUTONOMOUS_META_REINFORCEMENT",
+    reviewedCount: activeSignals.length,
+    approvedCount: approvedSignals.length,
+    blockedCount: blockedSignals.length,
+    eliteCount: eliteSignals.length,
+    averageScore: Number(averageScore.toFixed(2)),
+    approvalRate,
+    blockRate,
+    marketStress,
+    portfolioPressure,
+    parliamentMode,
+    aggressionMode,
+    metaAggressionMultiplier,
+    metaThresholdAdjustment,
+    reason:
+      `${aggressionMode} • Approval ${approvalRate}% • Block ${blockRate}% • ` +
+      `Avg score ${averageScore.toFixed(2)} • Threshold adjust ${metaThresholdAdjustment}`,
+  };
+
+  const adjustedSignals = activeSignals.map((signal) => {
+    const currentScore = Number(
+      signal.finalAutonomousDecisionScore ||
+        signal.archetypeAdjustedScore ||
+        signal.score ||
+        0
+    );
+
+    const eliteSetup = currentScore >= 82;
+    const blockedButStrong =
+      (
+        signal.autoTradeApproved === false ||
+        signal.approved === false
+      ) &&
+      currentScore >= 75 &&
+      aggressionMode === "SUPPRESSION_RELIEF_MODE";
+
+    const metaScoreAdjustment =
+      aggressionMode === "AGGRESSIVE_META_REINFORCEMENT" && eliteSetup
+        ? 3
+        : blockedButStrong
+        ? 2
+        : aggressionMode === "DEFENSIVE_META_REINFORCEMENT"
+        ? -4
+        : 0;
+
+    return {
+      symbol: signal.symbol,
+      currentScore,
+      metaScoreAdjustment,
+      metaAggressionMultiplier,
+      metaThresholdAdjustment,
+      aggressionMode,
+      blockedButStrong,
+      reason:
+        `Meta reinforcement ${aggressionMode} adjusted score by ${metaScoreAdjustment}`,
+    };
+  });
+
+  return {
+    state,
+    adjustedSignals,
+  };
+}
+
+function calculateAiParliamentVote({
+  signal,
+  tradeArchetype,
+  finalDecisionScore,
+  institutionalScore,
+  executionScore,
+  runnerScore,
+  orderFlowScore,
+  velocityScore,
+  riskPenalty,
+  contradictionState,
+  eliteOverride,
+  marketStress,
+}) {
+  const votes = [];
+
+  function addVote(engine, vote, confidence, reason) {
+    votes.push({
+      engine,
+      vote,
+      confidence: clampScore(confidence),
+      reason,
+    });
+  }
+
+  addVote(
+    "RUNNER_AI",
+    runnerScore >= 80 ? "BUY" : runnerScore >= 65 ? "WATCH" : "NEUTRAL",
+    runnerScore,
+    `Runner score ${runnerScore}/100`
+  );
+
+  addVote(
+    "ORDER_FLOW_AI",
+    orderFlowScore >= 75 ? "BUY" : orderFlowScore < 45 ? "REDUCE" : "NEUTRAL",
+    orderFlowScore,
+    `Order flow score ${orderFlowScore}/100`
+  );
+
+  addVote(
+    "EXECUTION_AI",
+    executionScore >= 70 ? "BUY_NOW" : executionScore < 50 ? "WAIT" : "NEUTRAL",
+    executionScore,
+    `Execution score ${executionScore}/100`
+  );
+
+  addVote(
+    "INSTITUTIONAL_AI",
+    institutionalScore >= 75 ? "BUY" : institutionalScore < 50 ? "WATCH" : "NEUTRAL",
+    institutionalScore,
+    `Institutional score ${institutionalScore}/100`
+  );
+
+  addVote(
+    "RISK_AI",
+    riskPenalty >= 30 || marketStress >= 80 ? "BLOCK" : riskPenalty >= 18 ? "REDUCE" : "ALLOW",
+    clampScore(100 - riskPenalty),
+    `Risk penalty ${riskPenalty}, market stress ${marketStress}`
+  );
+
+  addVote(
+    "CENTRAL_CORE",
+    finalDecisionScore >= 82 ? "ACCELERATE" : finalDecisionScore >= CONFIG.minScoreToBuy ? "ALLOW" : "WATCH",
+    finalDecisionScore,
+    `Final central score ${finalDecisionScore}/100`
+  );
+
+  const buyPower = votes
+    .filter((v) => ["BUY", "BUY_NOW", "ACCELERATE", "ALLOW"].includes(v.vote))
+    .reduce((sum, v) => sum + v.confidence, 0);
+
+  const waitPower = votes
+    .filter((v) => ["WAIT", "WATCH", "NEUTRAL"].includes(v.vote))
+    .reduce((sum, v) => sum + v.confidence, 0);
+
+  const defensivePower = votes
+    .filter((v) => ["REDUCE", "BLOCK"].includes(v.vote))
+    .reduce((sum, v) => sum + v.confidence, 0);
+
+  const blockVote = votes.some((v) => v.vote === "BLOCK" && v.confidence >= 75);
+
+  const parliamentDecision =
+    blockVote && !eliteOverride?.eligibleForEliteOverride
+      ? "PARLIAMENT_BLOCK"
+      : eliteOverride?.eligibleForEliteOverride && defensivePower > 0
+      ? "PARLIAMENT_REDUCED_SIZE_APPROVAL"
+      : buyPower > defensivePower && buyPower > waitPower
+      ? "PARLIAMENT_APPROVE"
+      : waitPower >= buyPower
+      ? "PARLIAMENT_WAIT"
+      : "PARLIAMENT_REDUCE";
+
+  const parliamentConfidence = clampScore(
+    Math.max(buyPower, waitPower, defensivePower) /
+      Math.max(1, votes.length)
+  );
+
+  return {
+    phase: "75_AI_PARLIAMENT_VOTING_SYSTEM",
+    updatedAt: new Date().toISOString(),
+    symbol: signal.symbol,
+    tradeArchetype,
+    votes,
+    buyPower: Number(buyPower.toFixed(2)),
+    waitPower: Number(waitPower.toFixed(2)),
+    defensivePower: Number(defensivePower.toFixed(2)),
+    parliamentDecision,
+    parliamentConfidence,
+    contradictionLevel:
+      contradictionState?.contradictionLevel || "NO_CONFLICT",
+    eliteOverrideMode:
+      eliteOverride?.overrideMode || "NO_OVERRIDE",
+    reason:
+      `${parliamentDecision} • Confidence ${parliamentConfidence}/100 • ` +
+      `Buy ${buyPower.toFixed(1)} / Wait ${waitPower.toFixed(1)} / Defense ${defensivePower.toFixed(1)}`,
+  };
+}
+
+function calculateCentralCoreExecutionStyle({
+  signal,
+  tradeArchetype,
+  finalDecisionScore,
+  executionScore,
+  runnerScore,
+  velocityScore,
+  riskPenalty,
+  contradictionState,
+  eliteOverride,
+}) {
+  const percentChange = Number(
+    signal.percentChange ||
+      signal.changePercent ||
+      signal.dp ||
+      0
+  );
+
+  const closeNearHighPercent = Number(
+    signal.closeNearHighPercent ||
+      signal.confirmations?.closeNearHighPercent ||
+      0
+  );
+
+  const isExtended =
+    percentChange >= 18 ||
+    closeNearHighPercent >= 95 ||
+    riskPenalty >= 22;
+
+  const isEliteRunner =
+    tradeArchetype === "EXPLOSIVE_RUNNER" &&
+    runnerScore >= 82 &&
+    velocityScore >= 75 &&
+    finalDecisionScore >= CONFIG.minScoreToBuy;
+
+  const needsPullback =
+    isExtended &&
+    executionScore < 65 &&
+    tradeArchetype !== "DEFENSIVE_SETUP";
+
+  const reducedSize =
+    eliteOverride?.adjustedAction === "ALLOW_REDUCED_SIZE" ||
+    contradictionState?.hasContradiction === true ||
+    riskPenalty >= 18;
+
+  const executionStyleTrustAdjustment =
+    getExecutionStyleTrustAdjustment({
+      ...signal,
+      tradeArchetype,
+      executionStyle:
+        needsPullback
+          ? "WAIT_FOR_MICRO_PULLBACK"
+          : reducedSize
+          ? "ENTER_REDUCED_SIZE"
+          : isEliteRunner
+          ? "MOMENTUM_BREAKOUT_ENTRY"
+          : finalDecisionScore >= 82
+          ? "STANDARD_ENTRY"
+          : "WATCH_FOR_CONFIRMATION",
+    });
+
+  const executionStyleTrustMultiplier = Number(
+    executionStyleTrustAdjustment.executionTrustMultiplier || 1
+  );    
+
+  const executionStyle =
+    needsPullback
+      ? "WAIT_FOR_MICRO_PULLBACK"
+      : reducedSize
+      ? "ENTER_REDUCED_SIZE"
+      : isEliteRunner
+      ? "MOMENTUM_BREAKOUT_ENTRY"
+      : finalDecisionScore >= 82
+      ? "STANDARD_ENTRY"
+      : "WATCH_FOR_CONFIRMATION";
+
+  const baseExecutionSizeMultiplier =
+    executionStyle === "WAIT_FOR_MICRO_PULLBACK"
+      ? 0
+      : executionStyle === "ENTER_REDUCED_SIZE"
+      ? 0.5
+      : executionStyle === "MOMENTUM_BREAKOUT_ENTRY"
+      ? 1.1
+      : executionStyle === "STANDARD_ENTRY"
+      ? 1
+      : 0;
+
+  const executionSizeMultiplier = Number(
+    (
+      baseExecutionSizeMultiplier *
+      Math.min(
+        1.25,
+        Math.max(0.65, executionStyleTrustMultiplier)
+      )
+    ).toFixed(2)
+  );
+
+  const shouldWaitForPullback =
+    executionStyle === "WAIT_FOR_MICRO_PULLBACK";
+
+  return {
+    executionStyle,
+    executionSizeMultiplier,
+    executionStyleTrustAdjustment,
+    executionStyleTrustMultiplier,    
+    shouldWaitForPullback,
+    isExtended,
+    isEliteRunner,
+    reducedSize,
+    reason:
+      `${executionStyle} • ${tradeArchetype} • ` +
+      `Execution ${executionScore}/100 • Risk penalty ${riskPenalty}`,
+  };
+}
+
+function detectCentralCoreContradictions({
+  signal,
+  finalDecisionScore,
+  institutionalScore,
+  executionScore,
+  runnerScore,
+  orderFlowScore,
+  velocityScore,
+  riskPenalty,
+  marketStress,
+}) {
+  const bullishVotes = [];
+  const defensiveVotes = [];
+
+  if (runnerScore >= 80) bullishVotes.push("RUNNER_AI_BUY");
+  if (velocityScore >= 75) bullishVotes.push("VELOCITY_AI_BUY");
+  if (institutionalScore >= 75) bullishVotes.push("INSTITUTIONAL_AI_BUY");
+  if (orderFlowScore >= 72) bullishVotes.push("ORDER_FLOW_BUY");
+
+  if (executionScore < 45) defensiveVotes.push("EXECUTION_AI_WAIT");
+  if (riskPenalty >= 25) defensiveVotes.push("RISK_AI_REDUCE");
+  if (marketStress >= 70) defensiveVotes.push("MARKET_STRESS_DEFENSE");
+  if (signal.phase59InstitutionalOrderFlow?.shouldBlock === true) {
+    defensiveVotes.push("ORDER_FLOW_BLOCK");
+  }
+
+  const hasContradiction =
+    bullishVotes.length >= 2 && defensiveVotes.length >= 1;
+
+  const contradictionLevel =
+    bullishVotes.length >= 3 && defensiveVotes.length >= 2
+      ? "HIGH_CONFLICT"
+      : hasContradiction
+      ? "MODERATE_CONFLICT"
+      : "NO_CONFLICT";
+
+  return {
+    hasContradiction,
+    contradictionLevel,
+    bullishVotes,
+    defensiveVotes,
+    reason: hasContradiction
+      ? `${contradictionLevel}: bullish engines ${bullishVotes.join(", ")} vs defensive engines ${defensiveVotes.join(", ")}`
+      : "No major engine contradiction detected.",
+  };
+}
+
+function calculateEliteOverrideEscalation({
+  signal,
+  tradeArchetype,
+  finalDecisionScore,
+  institutionalScore,
+  executionScore,
+  runnerScore,
+  orderFlowScore,
+  velocityScore,
+  riskPenalty,
+  marketStress,
+  contradictionState,
+}) {
+  const eliteRunnerSetup =
+    tradeArchetype === "EXPLOSIVE_RUNNER" &&
+    runnerScore >= 82 &&
+    velocityScore >= 75 &&
+    orderFlowScore >= 68 &&
+    institutionalScore >= 68;
+
+  const eliteCryptoSetup =
+    tradeArchetype === "CRYPTO_ROTATION" &&
+    velocityScore >= 78 &&
+    orderFlowScore >= 72 &&
+    finalDecisionScore >= 72;
+
+  const eliteSwingSetup =
+    tradeArchetype === "SWING_ACCUMULATION" &&
+    institutionalScore >= 78 &&
+    finalDecisionScore >= 76 &&
+    riskPenalty <= 22;
+
+  const hardRiskBlock =
+    marketStress >= 90 ||
+    signal.globalRiskOffDefense?.shouldBlock === true ||
+    signal.confirmations?.fakeBreakout === true ||
+    signal.confirmations?.newsRisk === true;
+
+  const eligibleForEliteOverride =
+    !hardRiskBlock &&
+    riskPenalty <= 28 &&
+    (
+      eliteRunnerSetup ||
+      eliteCryptoSetup ||
+      eliteSwingSetup
+    );
+
+  const overrideMode =
+    eligibleForEliteOverride && contradictionState?.hasContradiction
+      ? "CONFLICT_RESOLVED_ELITE_ESCALATION"
+      : eligibleForEliteOverride
+      ? "ELITE_ESCALATION"
+      : "NO_OVERRIDE";
+
+  const adjustedAction =
+    overrideMode === "CONFLICT_RESOLVED_ELITE_ESCALATION"
+      ? "ALLOW_REDUCED_SIZE"
+      : overrideMode === "ELITE_ESCALATION"
+      ? "ALLOW"
+      : null;
+
+  return {
+    eligibleForEliteOverride,
+    overrideMode,
+    adjustedAction,
+    hardRiskBlock,
+    reason: eligibleForEliteOverride
+      ? `${overrideMode}: ${tradeArchetype} has elite relevant-engine confirmation.`
+      : hardRiskBlock
+      ? "No override: hard risk block active."
+      : "No override: setup is not elite enough.",
+  };
+}
+
+function calculateLiveMomentumMutation(signals = []) {
+  const activeSignals = (Array.isArray(signals) ? signals : []).filter(Boolean);
+
+  const mutatedSignals = activeSignals.map((signal) => {
+    const symbol = normalizeSymbol(signal.symbol);
+    const liveQuote = engineState.liveQuoteCache?.[symbol] || null;
+
+    const scanPrice = Number(
+      signal.staleScanPrice ||
+        signal.scanPrice ||
+        signal.price ||
+        signal.current ||
+        signal.c ||
+        0
+    );
+
+    const livePrice = Number(
+      liveQuote?.price ||
+        liveQuote?.current ||
+        signal.livePrice ||
+        signal.displayPrice ||
+        scanPrice ||
+        0
+    );
+
+    const liveMovePercent =
+      scanPrice > 0 && livePrice > 0
+        ? Number((((livePrice - scanPrice) / scanPrice) * 100).toFixed(2))
+        : 0;
+
+    const secondsSinceLiveUpdate =
+      liveQuote?.updatedAt
+        ? Math.max(
+            0,
+            Math.round(
+              (Date.now() - new Date(liveQuote.updatedAt).getTime()) / 1000
+            )
+          )
+        : null;
+
+    const tradeArchetype =
+      signal.tradeArchetype ||
+      classifyTradeArchetype(signal);
+
+    const baseScore = Number(
+      signal.finalAutonomousDecisionScore ||
+        signal.archetypeAdjustedScore ||
+        signal.score ||
+        0
+    );
+
+    const liveIgnition =
+      liveMovePercent >= 2.5 &&
+      ["EXPLOSIVE_RUNNER", "CRYPTO_ROTATION"].includes(tradeArchetype);
+
+    const liveAcceleration =
+      liveMovePercent >= 1.2 &&
+      Number(signal.volume || signal.v || 0) > 0;
+
+    const liveFade =
+      liveMovePercent <= -2.2;
+
+    const staleLiveQuote =
+      secondsSinceLiveUpdate !== null &&
+      secondsSinceLiveUpdate > 90;
+
+    const mutationBonus =
+      liveIgnition
+        ? 6
+        : liveAcceleration
+        ? 3
+        : 0;
+
+    const mutationPenalty =
+      liveFade
+        ? 7
+        : staleLiveQuote
+        ? 3
+        : 0;
+
+    const liveMutatedScore = clampScore(
+      baseScore + mutationBonus - mutationPenalty
+    );
+
+    const mutationMode =
+      liveIgnition
+        ? "LIVE_RUNNER_IGNITION"
+        : liveAcceleration
+        ? "LIVE_ACCELERATION"
+        : liveFade
+        ? "LIVE_FADE_WARNING"
+        : staleLiveQuote
+        ? "STALE_LIVE_QUOTE"
+        : "NO_LIVE_MUTATION";
+
+    return {
+      symbol,
+      tradeArchetype,
+      scanPrice,
+      livePrice,
+      liveMovePercent,
+      secondsSinceLiveUpdate,
+      baseScore,
+      liveMutatedScore,
+      mutationBonus,
+      mutationPenalty,
+      mutationMode,
+      liveIgnition,
+      liveAcceleration,
+      liveFade,
+      staleLiveQuote,
+      reason:
+        `${mutationMode} • Live move ${liveMovePercent}% • ` +
+        `Score ${baseScore} → ${liveMutatedScore}`,
+    };
+  });
+
+  const ignitionCount = mutatedSignals.filter((item) => item.liveIgnition).length;
+  const fadeCount = mutatedSignals.filter((item) => item.liveFade).length;
+  const staleCount = mutatedSignals.filter((item) => item.staleLiveQuote).length;
+
+  const state = {
+    updatedAt: new Date().toISOString(),
+    phase: "73_LIVE_MOMENTUM_MUTATION_ENGINE",
+    reviewedCount: mutatedSignals.length,
+    ignitionCount,
+    fadeCount,
+    staleCount,
+    strongestLiveMutations: mutatedSignals
+      .sort((a, b) => b.liveMutatedScore - a.liveMutatedScore)
+      .slice(0, 12),
+    reason:
+      `Live mutation reviewed ${mutatedSignals.length} signals, ` +
+      `ignitions ${ignitionCount}, fades ${fadeCount}, stale ${staleCount}.`,
+  };
+
+  return {
+    state,
+    mutatedSignals,
+  };
+}
+
+function calculateDynamicCapitalParliament(signals = [], portfolioEcosystemState = null) {
+  const activeSignals = (Array.isArray(signals) ? signals : []).filter(Boolean);
+
+  const reviewedSignals = activeSignals.map((signal) => {
+    const tradeArchetype =
+      signal.tradeArchetype ||
+      classifyTradeArchetype(signal);
+
+    const score = Number(
+      signal.finalAutonomousDecisionScore ||
+        signal.archetypeAdjustedScore ||
+        signal.score ||
+        0
+    );
+
+    const riskPenalty = Number(
+      signal.centralAutonomousDecisionCore?.riskPenalty ||
+        signal.riskPenalty ||
+        0
+    );
+
+    const ecosystemMultiplier = Number(
+      signal.portfolioEcosystemMultiplier ||
+        signal.portfolioEcosystem?.ecosystemMultiplier ||
+        1
+    );
+
+    const executionMultiplier = Number(
+      signal.executionSizeMultiplier ||
+        signal.centralCoreExecution?.executionSizeMultiplier ||
+        1
+    );
+
+    const approved =
+      signal.autoTradeApproved !== false &&
+      signal.approved !== false &&
+      signal.shouldWaitForPullback !== true &&
+      signal.centralAutonomousAction !== "WAIT_FOR_PULLBACK";
+
+    const capitalVoteScore = clampScore(
+      score * 0.58 +
+        Math.max(0, 100 - riskPenalty) * 0.18 +
+        ecosystemMultiplier * 10 +
+        executionMultiplier * 8 +
+        (approved ? 8 : -18)
+    );
+
+    const capitalPriority =
+      capitalVoteScore >= 85
+        ? "ELITE_CAPITAL_PRIORITY"
+        : capitalVoteScore >= 75
+        ? "HIGH_CAPITAL_PRIORITY"
+        : capitalVoteScore >= 65
+        ? "NORMAL_CAPITAL_PRIORITY"
+        : capitalVoteScore >= 55
+        ? "LOW_CAPITAL_PRIORITY"
+        : "NO_CAPITAL_PRIORITY";
+
+    return {
+      symbol: signal.symbol,
+      tradeArchetype,
+      score,
+      riskPenalty,
+      ecosystemMultiplier,
+      executionMultiplier,
+      approved,
+      capitalVoteScore,
+      capitalPriority,
+    };
+  });
+
+  const approvedVotes = reviewedSignals.filter((item) => item.approved);
+
+  const archetypeBuckets = {};
+
+  for (const vote of approvedVotes) {
+    if (!archetypeBuckets[vote.tradeArchetype]) {
+      archetypeBuckets[vote.tradeArchetype] = {
+        tradeArchetype: vote.tradeArchetype,
+        count: 0,
+        totalCapitalVoteScore: 0,
+        averageCapitalVoteScore: 0,
+        strongestSymbol: null,
+        strongestScore: 0,
+      };
+    }
+
+    const bucket = archetypeBuckets[vote.tradeArchetype];
+
+    bucket.count += 1;
+    bucket.totalCapitalVoteScore += Number(vote.capitalVoteScore || 0);
+
+    if (Number(vote.capitalVoteScore || 0) > bucket.strongestScore) {
+      bucket.strongestScore = Number(vote.capitalVoteScore || 0);
+      bucket.strongestSymbol = vote.symbol;
+    }
+
+    bucket.averageCapitalVoteScore = Number(
+      (bucket.totalCapitalVoteScore / Math.max(1, bucket.count)).toFixed(2)
+    );
+  }
+
+  const rankedArchetypes = Object.values(archetypeBuckets).sort(
+    (a, b) => b.averageCapitalVoteScore - a.averageCapitalVoteScore
+  );
+
+  const dominantCapitalArchetype =
+    rankedArchetypes[0]?.tradeArchetype || "NONE";
+
+  const portfolioPressureScore = Number(
+    portfolioEcosystemState?.portfolioPressureScore || 0
+  );
+
+  const capitalMode =
+    portfolioPressureScore >= 75
+      ? "DEFENSIVE_CAPITAL_ROUTING"
+      : approvedVotes.some((item) => item.capitalVoteScore >= 85)
+      ? "ELITE_CAPITAL_CONCENTRATION"
+      : approvedVotes.some((item) => item.capitalVoteScore >= 75)
+      ? "AGGRESSIVE_CAPITAL_ROUTING"
+      : "BALANCED_CAPITAL_ROUTING";
+
+  const state = {
+    updatedAt: new Date().toISOString(),
+    phase: "72_DYNAMIC_CAPITAL_PARLIAMENT",
+    reviewedCount: reviewedSignals.length,
+    approvedVoteCount: approvedVotes.length,
+    capitalMode,
+    dominantCapitalArchetype,
+    rankedArchetypes,
+    topCapitalCandidates: reviewedSignals
+      .sort((a, b) => b.capitalVoteScore - a.capitalVoteScore)
+      .slice(0, 12),
+    portfolioPressureScore,
+    reason:
+      `${capitalMode} • Dominant capital archetype ${dominantCapitalArchetype} • ` +
+      `${approvedVotes.length}/${reviewedSignals.length} approved candidates`,
+  };
+
+  const adjustedSignals = reviewedSignals.map((vote) => {
+    const isDominantArchetype =
+      vote.tradeArchetype === dominantCapitalArchetype;
+
+    const elitePriority =
+      vote.capitalPriority === "ELITE_CAPITAL_PRIORITY";
+
+    const highPriority =
+      vote.capitalPriority === "HIGH_CAPITAL_PRIORITY";
+
+    const capitalParliamentMultiplier =
+      vote.approved === false
+        ? 0
+        : portfolioPressureScore >= 75 && !elitePriority
+        ? 0.65
+        : elitePriority
+        ? 1.22
+        : highPriority && isDominantArchetype
+        ? 1.12
+        : vote.capitalPriority === "LOW_CAPITAL_PRIORITY"
+        ? 0.75
+        : 1;
+
+    const capitalParliamentAction =
+      vote.approved === false
+        ? "NO_CAPITAL"
+        : elitePriority
+        ? "ROUTE_ELITE_CAPITAL"
+        : highPriority && isDominantArchetype
+        ? "ROUTE_PRIORITY_CAPITAL"
+        : portfolioPressureScore >= 75
+        ? "DEFENSIVE_REDUCED_CAPITAL"
+        : "STANDARD_CAPITAL";
+
+    return {
+      ...vote,
+      dominantCapitalArchetype,
+      capitalMode,
+      capitalParliamentMultiplier,
+      capitalParliamentAction,
+      reason:
+        `${capitalParliamentAction} • Vote ${vote.capitalVoteScore}/100 • ` +
+        `Mode ${capitalMode}`,
+    };
+  });
+
+  return {
+    state,
+    adjustedSignals,
+  };
+}
+
+function calculatePortfolioEcosystemIntelligence(signals = [], openPositions = []) {
+  const activeSignals = (Array.isArray(signals) ? signals : []).filter(Boolean);
+  const activePositions = (Array.isArray(openPositions) ? openPositions : []).filter(Boolean);
+
+  const archetypeCounts = {};
+  const sectorCounts = {};
+  const symbolExposure = {};
+
+  for (const signal of activeSignals) {
+    const symbol = normalizeSymbol(signal.symbol);
+    const tradeArchetype =
+      signal.tradeArchetype ||
+      classifyTradeArchetype(signal);
+
+    const sector =
+      signal.estimatedSector ||
+      signal.sector ||
+      "Unknown Sector";
+
+    archetypeCounts[tradeArchetype] =
+      Number(archetypeCounts[tradeArchetype] || 0) + 1;
+
+    sectorCounts[sector] =
+      Number(sectorCounts[sector] || 0) + 1;
+
+    symbolExposure[symbol] = {
+      symbol,
+      tradeArchetype,
+      sector,
+      score: Number(signal.score || 0),
+      finalDecisionScore:
+        Number(signal.finalAutonomousDecisionScore || 0),
+    };
+  }
+
+  for (const position of activePositions) {
+    const symbol = normalizeSymbol(position.symbol);
+    const sector =
+      position.estimatedSector ||
+      position.sector ||
+      "Open Position";
+
+    sectorCounts[sector] =
+      Number(sectorCounts[sector] || 0) + 1;
+
+    if (!symbolExposure[symbol]) {
+      symbolExposure[symbol] = {
+        symbol,
+        tradeArchetype: "OPEN_POSITION",
+        sector,
+        score: 0,
+        finalDecisionScore: 0,
+      };
+    }
+  }
+
+  const dominantArchetype = Object.entries(archetypeCounts)
+    .sort((a, b) => b[1] - a[1])[0] || ["NONE", 0];
+
+  const dominantSector = Object.entries(sectorCounts)
+    .sort((a, b) => b[1] - a[1])[0] || ["NONE", 0];
+
+  const totalReviewed = activeSignals.length;
+  const archetypeConcentrationPercent =
+    totalReviewed > 0
+      ? Number(((dominantArchetype[1] / totalReviewed) * 100).toFixed(2))
+      : 0;
+
+  const sectorConcentrationPercent =
+    totalReviewed > 0
+      ? Number(((dominantSector[1] / totalReviewed) * 100).toFixed(2))
+      : 0;
+
+  const portfolioPressureScore = clampScore(
+    archetypeConcentrationPercent * 0.45 +
+      sectorConcentrationPercent * 0.45 +
+      Math.min(25, activePositions.length * 3)
+  );
+
+  const ecosystemMode =
+    portfolioPressureScore >= 75
+      ? "HIGH_PORTFOLIO_PRESSURE"
+      : portfolioPressureScore >= 55
+      ? "MODERATE_PORTFOLIO_PRESSURE"
+      : "NORMAL_PORTFOLIO_PRESSURE";
+
+  const state = {
+    updatedAt: new Date().toISOString(),
+    phase: "71_PORTFOLIO_ECOSYSTEM_INTELLIGENCE",
+    reviewedSignals: totalReviewed,
+    openPositionCount: activePositions.length,
+    dominantArchetype: dominantArchetype[0],
+    dominantArchetypeCount: dominantArchetype[1],
+    dominantSector: dominantSector[0],
+    dominantSectorCount: dominantSector[1],
+    archetypeConcentrationPercent,
+    sectorConcentrationPercent,
+    portfolioPressureScore,
+    ecosystemMode,
+    archetypeCounts,
+    sectorCounts,
+    reason:
+      `${ecosystemMode} • Dominant archetype ${dominantArchetype[0]} ` +
+      `${archetypeConcentrationPercent}% • Dominant sector ${dominantSector[0]} ` +
+      `${sectorConcentrationPercent}%`,
+  };
+
+  const adjustedSignals = activeSignals.map((signal) => {
+    const tradeArchetype =
+      signal.tradeArchetype ||
+      classifyTradeArchetype(signal);
+
+    const sector =
+      signal.estimatedSector ||
+      signal.sector ||
+      "Unknown Sector";
+
+    const sameArchetypePressure =
+      tradeArchetype === dominantArchetype[0] &&
+      archetypeConcentrationPercent >= 55;
+
+    const sameSectorPressure =
+      sector === dominantSector[0] &&
+      sectorConcentrationPercent >= 55;
+
+    const reduceSize =
+      portfolioPressureScore >= 55 &&
+      (sameArchetypePressure || sameSectorPressure);
+
+    const blockNewTrade =
+      portfolioPressureScore >= 80 &&
+      sameArchetypePressure &&
+      sameSectorPressure &&
+      Number(signal.finalAutonomousDecisionScore || signal.score || 0) < 82;
+
+    const ecosystemMultiplier =
+      blockNewTrade
+        ? 0
+        : reduceSize
+        ? 0.65
+        : portfolioPressureScore <= 35
+        ? 1.05
+        : 1;
+
+    return {
+      symbol: signal.symbol,
+      tradeArchetype,
+      sector,
+      sameArchetypePressure,
+      sameSectorPressure,
+      reduceSize,
+      blockNewTrade,
+      ecosystemMultiplier,
+      portfolioPressureScore,
+      ecosystemMode,
+      reason: blockNewTrade
+        ? "Blocked by portfolio ecosystem pressure."
+        : reduceSize
+        ? "Reduced because portfolio is crowded in same archetype/sector."
+        : "Portfolio ecosystem clear.",
+    };
+  });
+
+  return {
+    state,
+    adjustedSignals,
+  };
+}
 
 
 function calculateCentralAutonomousDecisionCore(stockSignals = [], cryptoSignals = []) {
@@ -32651,33 +35215,105 @@ const strategyEvolutionDecisionScore = Number(
       (marketStress >= 75 ? 18 : 0) +
       (signal.globalRiskOffDefense?.shouldBlock ? 30 : 0);
 
-    const finalDecisionScore = clampScore(
-      baseScore * 0.28 +
-        institutionalScore * 0.22 +
-        executionScore * 0.16 +
-        runnerScore * 0.12 +
-        orderFlowScore * 0.1 +
-        profitAggressionScore * 0.09 +
-        personalityScore * 0.07 +
-        strategyEvolutionDecisionScore * 0.08 +
-        metaScore * 0.06 +
-        velocityScore * 0.06 -
-        riskPenalty
-    );
+    const archetypeDecision =
+      calculateArchetypeWeightedDecisionScore({
+        signal,
+        baseScore,
+        institutionalScore,
+        executionScore,
+        runnerScore,
+        orderFlowScore,
+        profitAggressionScore,
+        personalityScore,
+        strategyEvolutionDecisionScore,
+        metaScore,
+        velocityScore,
+        riskPenalty,
+      });
+
+    const finalDecisionScore =
+      archetypeDecision.finalDecisionScore;
+
+    const contradictionState =
+      detectCentralCoreContradictions({
+        signal,
+        finalDecisionScore,
+        institutionalScore,
+        executionScore,
+        runnerScore,
+        orderFlowScore,
+        velocityScore,
+        riskPenalty,
+        marketStress,
+      });
+
+    const eliteOverride =
+      calculateEliteOverrideEscalation({
+        signal,
+        tradeArchetype: archetypeDecision.tradeArchetype,
+        finalDecisionScore,
+        institutionalScore,
+        executionScore,
+        runnerScore,
+        orderFlowScore,
+        velocityScore,
+        riskPenalty,
+        marketStress,
+        contradictionState,
+      });
+
+    const hardBlock =
+      signal.globalRiskOffDefense?.shouldBlock === true ||
+      marketStress >= 90 ||
+      signal.confirmations?.fakeBreakout === true ||
+      signal.confirmations?.newsRisk === true;
+
+    const softBlock =
+      signal.autoTradeApproved === false ||
+      signal.unifiedInstitutionalOrchestrator?.shouldBlock === true ||
+      signal.phase59InstitutionalOrderFlow?.shouldBlock === true ||
+      signal.phase61ProfitAggression?.shouldBlockAggression === true ||
+      signal.phase62MarketPersonality?.shouldPersonalityBlock === true ||
+      signal.phase63StrategyEvolution?.shouldStrategyBlock === true ||
+      finalDecisionScore < CONFIG.minScoreToBuy;
 
     const shouldBlock =
-      signal.autoTradeApproved === false ||
-      signal.globalRiskOffDefense?.shouldBlock === true ||
-      signal.unifiedInstitutionalOrchestrator?.shouldBlock === true ||
-      signal.phase59InstitutionalOrderFlow?.shouldBlock === true || 
-      signal.phase61ProfitAggression?.shouldBlockAggression === true ||
-      signal.phase62MarketPersonality?.shouldPersonalityBlock === true ||  
-      signal.phase63StrategyEvolution?.shouldStrategyBlock === true ||               
-      finalDecisionScore < CONFIG.minScoreToBuy ||
-      marketStress >= 90;
+      hardBlock ||
+      (softBlock && !eliteOverride.eligibleForEliteOverride);
+
+    const aiParliamentVote =
+      calculateAiParliamentVote({
+        signal,
+        tradeArchetype: archetypeDecision.tradeArchetype,
+        finalDecisionScore,
+        institutionalScore,
+        executionScore,
+        runnerScore,
+        orderFlowScore,
+        velocityScore,
+        riskPenalty,
+        contradictionState,
+        eliteOverride,
+        marketStress,
+      });
+
+
+    const centralCoreExecution =
+      calculateCentralCoreExecutionStyle({
+        signal,
+        tradeArchetype: archetypeDecision.tradeArchetype,
+        finalDecisionScore,
+        executionScore,
+        runnerScore,
+        velocityScore,
+        riskPenalty,
+        contradictionState,
+        eliteOverride,
+      });
 
     const shouldAccelerate =
       !shouldBlock &&
+      centralCoreExecution.shouldWaitForPullback !== true &&
       finalDecisionScore >= 82 &&
       executionScore >= 60 &&
       institutionalScore >= 70 &&
@@ -32686,13 +35322,23 @@ const strategyEvolutionDecisionScore = Number(
       personalityScore >= 55 &&
       strategyEvolutionDecisionScore >= 52 &&
       marketStress < 60;
-    const action = shouldBlock
-      ? "BLOCK"
-      : shouldAccelerate
-      ? "ACCELERATE_CAPITAL"
-      : finalDecisionScore >= CONFIG.minScoreToBuy
-      ? "ALLOW"
-      : "WATCH";
+    const action =
+      aiParliamentVote.parliamentDecision === "PARLIAMENT_BLOCK"
+        ? "BLOCK"
+        : aiParliamentVote.parliamentDecision === "PARLIAMENT_REDUCED_SIZE_APPROVAL"
+        ? "ALLOW_REDUCED_SIZE"
+        : aiParliamentVote.parliamentDecision === "PARLIAMENT_WAIT"
+        ? "WAIT_FOR_PULLBACK"
+        : centralCoreExecution.shouldWaitForPullback === true
+        ? "WAIT_FOR_PULLBACK"
+        : eliteOverride.adjustedAction ||
+          (shouldBlock
+            ? "BLOCK"
+            : shouldAccelerate
+            ? "ACCELERATE_CAPITAL"
+            : finalDecisionScore >= CONFIG.minScoreToBuy
+            ? "ALLOW"
+            : "WATCH");
 
     return {
       symbol: signal.symbol,
@@ -32702,6 +35348,12 @@ const strategyEvolutionDecisionScore = Number(
         String(signal.symbol || "").endsWith("USD")
           ? "crypto"
           : "stock"),
+      tradeArchetype: archetypeDecision.tradeArchetype,
+      dynamicEngineWeights: archetypeDecision.dynamicEngineWeights,
+      archetypeAdjustedScore: archetypeDecision.archetypeAdjustedScore,  
+      archetypeTrustAdjustment: archetypeDecision.archetypeTrustAdjustment,
+      archetypeMemoryBonus: archetypeDecision.archetypeMemoryBonus,
+      archetypeMemoryPenalty: archetypeDecision.archetypeMemoryPenalty,              
       baseScore,
       institutionalScore,
       executionScore,
@@ -32712,6 +35364,26 @@ const strategyEvolutionDecisionScore = Number(
       profitAggressionScore,
       personalityScore,  
       strategyEvolutionScore: strategyEvolutionDecisionScore,
+      aiParliamentVote,
+      parliamentDecision:
+        aiParliamentVote.parliamentDecision,
+      parliamentConfidence:
+        aiParliamentVote.parliamentConfidence,
+      contradictionState,
+      eliteOverride,
+      centralCoreExecution,
+      executionStyle: centralCoreExecution.executionStyle,
+      executionSizeMultiplier:
+      centralCoreExecution.executionSizeMultiplier,
+      shouldWaitForPullback:
+      centralCoreExecution.shouldWaitForPullback,      
+      executionStyleTrustAdjustment:
+        centralCoreExecution.executionStyleTrustAdjustment,
+
+      executionStyleTrustMultiplier:
+        centralCoreExecution.executionStyleTrustMultiplier,      
+      hardBlock,
+      softBlock,      
       riskPenalty,
       finalDecisionScore,
       action,
@@ -32719,8 +35391,9 @@ const strategyEvolutionDecisionScore = Number(
       shouldAccelerate,
       masterCapitalMultiplier,
       reason:
-        `${action} • Final ${finalDecisionScore}/100 • ` +
-        `Institutional ${institutionalScore}/100 • Execution ${executionScore}/100`,
+        `${action} • ${archetypeDecision.tradeArchetype} • ` +
+        `Final ${finalDecisionScore}/100 • ` +
+        `${eliteOverride.overrideMode} • ${contradictionState.contradictionLevel}`,
     };
   });
 
@@ -32729,7 +35402,9 @@ const strategyEvolutionDecisionScore = Number(
   );
 
   const approvedDecisions = rankedDecisions.filter(
-    (decision) => !decision.shouldBlock && decision.action !== "WATCH"
+    (decision) =>
+      (!decision.shouldBlock || decision.action === "ALLOW_REDUCED_SIZE") &&
+      decision.action !== "WATCH"
   );
 
   const blockedDecisions = rankedDecisions.filter(
@@ -33445,6 +36120,418 @@ app.get("/frontend/dashboard", async (req, res) => {
   }
 });
 
+function isLiveQuoteFresh(symbol, maxAgeSeconds = 90) {
+  const cleanSymbol = normalizeSymbol(symbol);
+  const quote = engineState.liveQuoteCache?.[cleanSymbol];
+
+  if (!quote?.updatedAt) {
+    return {
+      fresh: false,
+      ageSeconds: null,
+      reason: "No live quote available.",
+    };
+  }
+
+  const ageSeconds = Math.max(
+    0,
+    Math.round((Date.now() - new Date(quote.updatedAt).getTime()) / 1000)
+  );
+
+  return {
+    fresh: ageSeconds <= maxAgeSeconds,
+    ageSeconds,
+    quote,
+    reason:
+      ageSeconds <= maxAgeSeconds
+        ? "Live quote fresh."
+        : `Live quote stale: ${ageSeconds}s old.`,
+  };
+}
+
+let lastLiveSignalPushAt = 0;
+let pendingLiveSignalPushPayload = null;
+let liveSignalPushTimer = null;
+
+function pushLiveSignalUpdate(payload = {}) {
+  pendingLiveSignalPushPayload = payload;
+
+  const now = Date.now();
+  const elapsedMs = now - Number(lastLiveSignalPushAt || 0);
+  const minPushIntervalMs = 750;
+
+  if (elapsedMs < minPushIntervalMs) {
+    if (!liveSignalPushTimer) {
+      liveSignalPushTimer = setTimeout(() => {
+        liveSignalPushTimer = null;
+        pushLiveSignalUpdate(pendingLiveSignalPushPayload || {});
+      }, minPushIntervalMs - elapsedMs);
+    }
+
+    return;
+  }
+
+  lastLiveSignalPushAt = now;
+
+  const message = `data: ${JSON.stringify({
+    ...(pendingLiveSignalPushPayload || payload),
+    pushedAt: new Date().toISOString(),
+  })}\n\n`;
+
+  pendingLiveSignalPushPayload = null;
+
+  for (const client of liveSignalClients) {
+    try {
+      client.write(message);
+    } catch {
+      liveSignalClients.delete(client);
+    }
+  }
+}
+
+function buildLiveSignalPushPayload() {
+  const stockSignals = getTopSignals(
+    engineState.lastStockSignals || [],
+    25
+  );
+
+  const cryptoSignals = getTopSignals(
+    engineState.lastCryptoSignals || [],
+    25
+  );
+
+  return {
+    type: "LIVE_SIGNAL_UPDATE",
+    generatedAt: new Date().toISOString(),
+    liveQuoteStreamState:
+      engineState.liveQuoteStreamState || null,
+    marketOpen: engineState.marketOpen,
+    mode: TRADING_MODE,
+    effectiveMode: engineState.effectiveMode,
+    autoTradingEnabled,
+    stockSignals,
+    cryptoSignals,
+    signalCount:
+      stockSignals.length + cryptoSignals.length,
+  };
+}
+
+function updateLiveQuoteCache(symbol, quote = {}) {
+  const cleanSymbol = normalizeSymbol(symbol);
+  const price = Number(
+    quote.price ||
+      quote.current ||
+      quote.c ||
+      quote.last ||
+      quote.p ||
+      0
+  );
+
+  if (!cleanSymbol || !price || price <= 0) return null;
+
+  if (!engineState.liveQuoteCache) {
+    engineState.liveQuoteCache = {};
+  }
+
+  const previous = engineState.liveQuoteCache[cleanSymbol] || {};
+  const previousPrice = Number(previous.price || 0);
+
+  const liveMoveFromPreviousPercent =
+    previousPrice > 0
+      ? Number((((price - previousPrice) / previousPrice) * 100).toFixed(4))
+      : 0;
+
+  const cached = {
+    symbol: cleanSymbol,
+    price,
+    current: price,
+    source: quote.source || "finnhub_ws",
+    updatedAt: new Date().toISOString(),
+    previousPrice: previousPrice || null,
+    liveMoveFromPreviousPercent,
+    raw: quote.raw || null,
+  };
+
+  engineState.liveQuoteCache[cleanSymbol] = cached;
+    pushLiveSignalUpdate({
+    type: "LIVE_QUOTE_TICK",
+    symbol: cleanSymbol,
+    quote: cached,
+    liveSignals: buildLiveSignalPushPayload(),
+  });
+
+  return cached;
+}
+
+function cleanupLiveQuoteCache(maxAgeMinutes = 15) {
+  if (!engineState.liveQuoteCache) {
+    engineState.liveQuoteCache = {};
+    return {
+      removed: 0,
+      remaining: 0,
+    };
+  }
+
+  const cutoffMs = Date.now() - maxAgeMinutes * 60 * 1000;
+  let removed = 0;
+
+  for (const [symbol, quote] of Object.entries(engineState.liveQuoteCache)) {
+    const updatedAtMs = quote?.updatedAt
+      ? new Date(quote.updatedAt).getTime()
+      : 0;
+
+    if (!updatedAtMs || updatedAtMs < cutoffMs) {
+      delete engineState.liveQuoteCache[symbol];
+      removed += 1;
+    }
+  }
+
+  return {
+    removed,
+    remaining: Object.keys(engineState.liveQuoteCache).length,
+  };
+}
+
+function getSymbolsForFinnhubLiveStream(limit = 35) {
+  const signalSymbols = (engineState.lastSignals || [])
+    .map((signal) => normalizeSymbol(signal.symbol))
+    .filter(Boolean)
+    .filter((symbol) => !symbol.includes("/") && !symbol.endsWith("USD"));
+
+  const positionSymbols = (engineState.cachedPositions || [])
+    .map((position) => normalizeSymbol(position.symbol))
+    .filter(Boolean)
+    .filter((symbol) => !symbol.includes("/") && !symbol.endsWith("USD"));
+
+  return [...new Set([...signalSymbols, ...positionSymbols])].slice(0, limit);
+}
+
+function subscribeFinnhubSymbol(symbol) {
+  const cleanSymbol = normalizeSymbol(symbol);
+
+  if (
+    !cleanSymbol ||
+    !finnhubLiveSocket ||
+    finnhubLiveSocket.readyState !== 1 ||
+    finnhubSubscribedSymbols.has(cleanSymbol)
+  ) {
+    return;
+  }
+
+  finnhubLiveSocket.send(
+    JSON.stringify({
+      type: "subscribe",
+      symbol: cleanSymbol,
+    })
+  );
+
+  finnhubSubscribedSymbols.add(cleanSymbol);
+}
+
+function refreshFinnhubLiveSubscriptions() {
+  const symbols = getSymbolsForFinnhubLiveStream();
+
+  for (const symbol of symbols) {
+    subscribeFinnhubSymbol(symbol);
+  }
+
+  return symbols;
+}
+
+function scheduleFinnhubReconnect() {
+  if (finnhubSocketReconnectTimer) return;
+
+  const delayMs = Math.min(
+    60000,
+    3000 + finnhubSocketReconnectAttempts * 5000
+  );
+
+  finnhubSocketReconnectTimer = setTimeout(() => {
+    finnhubSocketReconnectTimer = null;
+    startFinnhubLiveQuoteStream();
+  }, delayMs);
+}
+
+function startFinnhubLiveQuoteStream() {
+  if (!ENABLE_FINNHUB_WEBSOCKET || !FINNHUB_API_KEY) {
+    return {
+      ok: false,
+      reason: "Finnhub websocket disabled or missing API key.",
+    };
+  }
+
+  const WebSocketCtor = globalThis.WebSocket;
+
+  if (!WebSocketCtor) {
+    return {
+      ok: false,
+      reason:
+        "No global WebSocket available in this Node runtime. Install ws package if needed.",
+    };
+  }
+
+  if (
+    finnhubLiveSocket &&
+    [0, 1].includes(finnhubLiveSocket.readyState)
+  ) {
+    return {
+      ok: true,
+      reason: "Finnhub websocket already active.",
+    };
+  }
+
+  try {
+    finnhubLiveSocket = new WebSocketCtor(FINNHUB_WS_URL);
+
+    finnhubLiveSocket.onopen = () => {
+      finnhubSocketReconnectAttempts = 0;
+      finnhubSubscribedSymbols = new Set();
+
+      const symbols = refreshFinnhubLiveSubscriptions();
+
+      engineState.liveQuoteStreamState = {
+        ok: true,
+        provider: "finnhub",
+        connectedAt: new Date().toISOString(),
+        subscribedSymbols: symbols,
+        reason: `Finnhub websocket connected with ${symbols.length} symbols.`,
+      };
+    };
+
+    finnhubLiveSocket.onmessage = (event) => {
+      try {
+        const payload = JSON.parse(event.data);
+
+        if (payload.type !== "trade" || !Array.isArray(payload.data)) {
+          return;
+        }
+
+        for (const trade of payload.data) {
+          updateLiveQuoteCache(trade.s, {
+            price: trade.p,
+            source: "finnhub_ws",
+            raw: trade,
+          });
+        }
+      } catch (err) {
+        console.error("Finnhub websocket message error:", err.message);
+      }
+    };
+
+    finnhubLiveSocket.onerror = (err) => {
+      engineState.liveQuoteStreamState = {
+        ok: false,
+        provider: "finnhub",
+        error: err?.message || "Finnhub websocket error",
+        checkedAt: new Date().toISOString(),
+      };
+    };
+
+    finnhubLiveSocket.onclose = () => {
+      finnhubSocketReconnectAttempts += 1;
+      finnhubSubscribedSymbols = new Set();
+
+      engineState.liveQuoteStreamState = {
+        ok: false,
+        provider: "finnhub",
+        disconnectedAt: new Date().toISOString(),
+        reconnectAttempts: finnhubSocketReconnectAttempts,
+      };
+
+      scheduleFinnhubReconnect();
+    };
+
+    return {
+      ok: true,
+      reason: "Finnhub websocket starting.",
+    };
+  } catch (err) {
+    engineState.liveQuoteStreamState = {
+      ok: false,
+      provider: "finnhub",
+      error: err.message,
+      checkedAt: new Date().toISOString(),
+    };
+
+    scheduleFinnhubReconnect();
+
+    return {
+      ok: false,
+      reason: err.message,
+    };
+  }
+}
+
+function getTopSignals(signals = [], limit = 25) {
+  return (Array.isArray(signals) ? signals : [])
+    .filter(Boolean)
+    .map((signal) => {
+      const symbol = normalizeSymbol(signal.symbol);
+      const liveQuote = engineState.liveQuoteCache?.[symbol] || null;
+
+      const livePrice = Number(
+        liveQuote?.price ||
+          liveQuote?.current ||
+          signal.current ||
+          signal.price ||
+          signal.c ||
+          0
+      );
+
+      return {
+        ...signal,
+        symbol,
+        livePrice,
+        displayPrice: livePrice,
+        staleScanPrice: Number(signal.price || signal.current || signal.c || 0),
+        liveQuoteUpdatedAt: liveQuote?.updatedAt || null,
+        liveQuoteSource: liveQuote?.source || signal.source || "scan_snapshot",
+      };
+    })
+    .sort((a, b) => Number(b.score || 0) - Number(a.score || 0))
+    .slice(0, limit);
+}
+
+app.get("/production-health", (req, res) => {
+  const liveQuoteCount = Object.keys(engineState.liveQuoteCache || {}).length;
+
+  res.json({
+    ok: true,
+    generatedAt: new Date().toISOString(),
+    mode: TRADING_MODE,
+    autoTradingEnabled,
+    marketOpen: engineState.marketOpen,
+    activeBuyLocks: Array.from(activeBuyExecutionLocks),
+    liveSignalClientCount: liveSignalClients.size,
+    liveQuoteCount,
+    liveQuoteStreamState: engineState.liveQuoteStreamState || null,
+    lastScanAt: engineState.lastScanAt,
+    lastSuccessfulCycleAt: engineState.lastSuccessfulCycleAt,
+    lastError: engineState.lastError,
+    hedgeFundLayer: engineState.autonomousHedgeFundLayerState || null,
+    parliament: engineState.aiParliamentVotingState || null,
+    metaReinforcement: engineState.autonomousMetaReinforcementState || null,
+  });
+});
+
+app.get("/live-signals/stream", (req, res) => {
+  res.writeHead(200, {
+    "Content-Type": "text/event-stream",
+    "Cache-Control": "no-cache",
+    Connection: "keep-alive",
+    "Access-Control-Allow-Origin": "*",
+  });
+
+  res.write(
+    `data: ${JSON.stringify(buildLiveSignalPushPayload())}\n\n`
+  );
+
+  liveSignalClients.add(res);
+
+  req.on("close", () => {
+    liveSignalClients.delete(res);
+  });
+});
+
 app.get("/live-signals", async (req, res) => {
   try {
 
@@ -33479,6 +36566,9 @@ app.get("/live-signals", async (req, res) => {
       mode: TRADING_MODE,
       effectiveMode: engineState.effectiveMode,
       autoTradingEnabled,
+
+      liveQuoteStreamState:
+        engineState.liveQuoteStreamState || null,
 
       stockSignals,
       cryptoSignals,
@@ -34541,8 +37631,28 @@ app.get("/polygon-test/:symbol", async (req, res) => {
   }
 });
 
+setInterval(() => {
+  cleanupLiveQuoteCache(15);
+}, 60000);
+
+setInterval(() => {
+  refreshFinnhubLiveSubscriptions();
+}, 30000);
+
+process.on("SIGINT", () => {
+  flushEngineStateSave();
+  process.exit(0);
+});
+
+process.on("SIGTERM", () => {
+  flushEngineStateSave();
+  process.exit(0);
+});
+
   app.listen(PORT, "0.0.0.0", async () => {
     console.log(`SmartMoney Pro backend running on port ${PORT}`);
+  startFinnhubLiveQuoteStream();
+
     console.log(`Auto trading enabled: ${autoTradingEnabled}`);
 
     console.log("Advanced filters config:", {
