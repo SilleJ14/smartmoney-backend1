@@ -29252,6 +29252,7 @@ saveRecentOrder("PHASE_51_MULTI_TIMEFRAME_CRYPTO_UPDATED", "CRYPTO", {
     phase51MultiTimeframeCryptoState.avgParliamentScore,
 });
 
+const signals = [...stockSignals, ...cryptoSignals];
 const phase59InstitutionalOrderFlow =
   calculatePhase59InstitutionalOrderFlowIntelligence(stockSignals, cryptoSignals);
 
@@ -29509,8 +29510,6 @@ saveRecentOrder("PHASE_63_STRATEGY_EVOLUTION_UPDATED", "MARKET", {
   averageStrategyEvolution:
     phase63StrategyEvolution.state.averageStrategyEvolution,
 });
-
-const signals = [...stockSignals, ...cryptoSignals];
 
 const autonomousCryptoStrategySelector =
   calculateAutonomousCryptoStrategySelector(cryptoSignals);
