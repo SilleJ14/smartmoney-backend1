@@ -28882,6 +28882,55 @@ for (const compressed of penaltyCompression.compressedSignals) {
   }
 }
 
+const ENGINE_HISTORY_KEYS = [
+  "marketRegimeHistory",
+  "marketCycleIntelligenceHistory",
+  "institutionalDashboardSnapshots",
+  "signalHistory",
+  "aiDecisionHistory",
+  "sectorRotationHistory",
+  "sectorDominationHistory",
+  "capitalRedistributionHistory",
+  "institutionalRebalanceHistory",
+  "capitalCompoundingHistory",
+  "multiTimeframeHistory",
+  "marketCrashProtectionHistory",
+  "technicalIntelligenceHistory",
+  "institutionalOrchestratorHistory",
+  "dcfValuationHistory",
+  "competitiveAdvantageHistory",
+  "earningsIntelligenceHistory",
+  "portfolioOptimizationHistory",
+  "dividendCompoundingHistory",
+  "macroRiskHistory",
+  "liquidityIntelligenceHistory",
+  "correlationIntelligenceHistory",
+  "portfolioGovernorHistory",
+  "selfOptimizationHistory",
+  "reinforcementWeightHistory",
+  "executionIntelligenceHistory",
+  "autonomousTradingSystemHistory",
+  "phase20AutonomousOrchestrationHistory",
+  "crossEngineMemoryHistory",
+  "adaptiveExecutionTimingHistory",
+  "phase21AutonomousBrainHistory",
+  "liveAiPerformanceHistory",
+  "signalQualityHistory",
+  "marketBreadthHistory",
+  "marketMomentumHistory",
+  "marketVolatilityHistory",
+  "institutionalExposureHistory",
+  "analyticsSnapshots",
+  "selfHealingScanHistory",
+  "finalDashboardSignalSyncHistory",
+];
+
+for (const historyKey of ENGINE_HISTORY_KEYS) {
+  if (!Array.isArray(engineState[historyKey])) {
+    engineState[historyKey] = [];
+  }
+}
+
     engineState.marketRegime = detectMarketRegime(stockSignals);
     const marketRegimeDominance =
       calculateMarketRegimeDominance(
@@ -30127,6 +30176,64 @@ engineState.analyticsSnapshots =
     }
 
 signals = [...stockSignals, ...cryptoSignals];
+
+const finalFullInstitutionalAiBrain =
+  calculateFullInstitutionalAiBrain(signals);
+
+engineState.fullInstitutionalAiBrainState =
+  finalFullInstitutionalAiBrain;
+
+engineState.fullInstitutionalAiBrainHistory.unshift(
+  finalFullInstitutionalAiBrain
+);
+
+engineState.fullInstitutionalAiBrainHistory =
+  engineState.fullInstitutionalAiBrainHistory.slice(0, 200);
+
+const finalAutonomousTradingSystem =
+  calculateFullInstitutionalAutonomousTradingSystem(
+    signals
+  );
+
+engineState.autonomousTradingSystemState =
+  finalAutonomousTradingSystem;
+
+engineState.autonomousTradingSystemHistory.unshift(
+  finalAutonomousTradingSystem
+);
+
+engineState.autonomousTradingSystemHistory =
+  engineState.autonomousTradingSystemHistory.slice(0, 200);
+
+const finalPhase20Orchestration =
+  calculatePhase20AsyncMultiAgentOrchestration(
+    signals
+  );
+
+engineState.phase20AutonomousOrchestrationState =
+  finalPhase20Orchestration;
+
+engineState.phase20AutonomousOrchestrationHistory.unshift(
+  finalPhase20Orchestration
+);
+
+engineState.phase20AutonomousOrchestrationHistory =
+  engineState.phase20AutonomousOrchestrationHistory.slice(0, 200);
+
+const finalPhase21AutonomousBrain =
+  calculatePhase21AutonomousInstitutionalBrain(
+    signals
+  );
+
+engineState.phase21AutonomousBrainState =
+  finalPhase21AutonomousBrain;
+
+engineState.phase21AutonomousBrainHistory.unshift(
+  finalPhase21AutonomousBrain
+);
+
+engineState.phase21AutonomousBrainHistory =
+  engineState.phase21AutonomousBrainHistory.slice(0, 200);
 
 stockSignals = syncSignalObjectsBySymbol(
   stockSignals,
