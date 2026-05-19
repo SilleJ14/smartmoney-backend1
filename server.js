@@ -761,8 +761,8 @@ cryptoReinforcementLearningState:
   engineState.cryptoReinforcementLearningState || null,
 
 cryptoReinforcementLearningHistory:
-  (engineState.ryptoReinforcementLearningHistory || []).slice(0, 200),
-
+  (engineState.cryptoReinforcementLearningHistory || []).slice(0, 200),
+  
 globalRiskOffDefenseState:
   engineState.globalRiskOffDefenseState || null,
 
@@ -7610,12 +7610,6 @@ const gradeEligibleForAllocation =
     Number(rawRecommendedTradeAmount || 0).toFixed(2)
   );
 
-recommendedTradeAmount = Number(
-  (
-    Number(rawRecommendedTradeAmount || recommendedTradeAmount || 0) *
-    Number(gradeAllocation.finalAllocationMultiplier || 0)
-  ).toFixed(2)
-);
 
 signal.gradeAllocation = gradeAllocation;
 
@@ -32237,7 +32231,7 @@ const runnerScore = Number(
         0
     );
 
-    const strategyEvolutionScore = Number(
+const strategyEvolutionDecisionScore = Number(
   signal.strategyEvolutionScore ||
     signal.phase63StrategyEvolution?.strategyEvolutionScore ||
     0
