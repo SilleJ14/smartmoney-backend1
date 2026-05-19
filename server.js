@@ -36100,10 +36100,16 @@ app.get("/frontend/dashboard", async (req, res) => {
       topSignals:
         Array.isArray(engineState.lastStockSignals) &&
           engineState.lastStockSignals.length > 0
-              ? engineState.lastStockSignals
-                 : latestStatus
-                 ?.phase20AutonomousOrchestration
-                 ?.topSignals || [],
+              ? await getTopSignalsWithFreshQuotes(
+                  engineState.lastStockSignals,
+                  25
+                )
+              : await getTopSignalsWithFreshQuotes(
+                  latestStatus
+                    ?.phase20AutonomousOrchestration
+                    ?.topSignals || [],
+                  25
+                ),
 
         topOpportunities:
           latestStatus
@@ -36512,6 +36518,81 @@ function getTopSignals(signals = [], limit = 25) {
     .slice(0, limit);
 }
 
+async function getTopSignalsWithFreshQuotes(signals = [], limit = 25) {
+  const topSignals = getTopSignals(signals, limit);
+
+  const refreshed = await Promise.all(
+    topSignals.map(async (signal) => {
+      const symbol = normalizeSymbol(signal.symbol);
+
+      if (
+        !symbol ||
+        String(symbol).includes("/") ||
+        String(symbol).endsWith("USD")
+      ) {
+        return signal;
+      }
+
+      const liveFreshness = isLiveQuoteFresh(symbol, 120);
+
+      if (liveFreshness.fresh && liveFreshness.quote) {
+        return signal;
+      }
+
+      try {
+        const quote = await finnhubQuote(symbol);
+
+        const freshPrice = Number(
+          quote?.current ||
+            quote?.price ||
+            quote?.c ||
+            0
+        );
+
+        if (!freshPrice || freshPrice <= 0) {
+          return {
+            ...signal,
+            liveQuoteSource: "scan_snapshot",
+            priceIsLive: false,
+            priceStale: true,
+          };
+        }
+
+        const cached = updateLiveQuoteCache(symbol, {
+          price: freshPrice,
+          current: freshPrice,
+          source: "finnhub_rest_refresh",
+          raw: quote,
+        });
+
+        return {
+          ...signal,
+          livePrice: freshPrice,
+          displayPrice: freshPrice,
+          price: freshPrice,
+          current: freshPrice,
+          liveQuoteUpdatedAt: cached?.updatedAt || new Date().toISOString(),
+          liveQuoteSource: "finnhub_rest_refresh",
+          priceIsLive: true,
+          priceStale: false,
+        };
+      } catch (err) {
+        return {
+          ...signal,
+          liveQuoteSource: signal.liveQuoteSource || "scan_snapshot",
+          priceIsLive: false,
+          priceStale: true,
+          liveQuoteError: err.message,
+        };
+      }
+    })
+  );
+
+  return refreshed.sort(
+    (a, b) => Number(b.score || 0) - Number(a.score || 0)
+  );
+}
+
 app.get("/production-health", (req, res) => {
   const liveQuoteCount = Object.keys(engineState.liveQuoteCache || {}).length;
 
@@ -36564,7 +36645,7 @@ app.get("/live-signals", async (req, res) => {
     const aiPositions = positions.filter((position) =>
       aiOwnedSymbols.has(normalizeSymbol(position.symbol))
     );    
-    const stockSignals = getTopSignals(
+    const stockSignals = await getTopSignalsWithFreshQuotes(
       engineState.lastStockSignals || [],
       25
     );
