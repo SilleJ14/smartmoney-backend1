@@ -7660,7 +7660,16 @@ let approved =
 
 const reconciledMaxBotBudget = maxBotBudget;
 
-if (Number(score || 0) < institutionalMinimumScore) {
+const institutionalMinimumScore = Number(CONFIG.minScoreToBuy || 65);
+
+const currentInstitutionalScore = Number(
+  signal.score ||
+    signal.institutionalScore ||
+    signal.aiConfidence ||
+    0
+);
+
+if (currentInstitutionalScore < institutionalMinimumScore) {
   approved = false;
   recommendedTradeAmount = 0;
   rawRecommendedTradeAmount = 0;
@@ -19350,6 +19359,13 @@ const cryptoPercentChange =
     }
   }
 
+console.log("SCAN DEBUG", {
+  totalResults: results.length,
+  stockResults: results.filter((s) => !isCryptoSymbol(s.symbol)).length,
+  cryptoResults: results.filter((s) => isCryptoSymbol(s.symbol)).length,
+  topSymbols: results.slice(0, 10).map((s) => s.symbol),
+});
+
   return results.sort((a, b) => b.score - a.score);
 }
 
@@ -19929,6 +19945,24 @@ qualifiedToBuy:
       saveSkippedSymbol(symbol, err.message);
       return null;
     }
+  });
+
+    const skipReasonCounts = (engineState.skippedSymbols || []).reduce(
+    (acc, item) => {
+      const reason = item.reason || "Unknown";
+      acc[reason] = (acc[reason] || 0) + 1;
+      return acc;
+    },
+    {}
+  );
+
+  console.log("SCAN DEEP DEBUG", {
+    scannedUniverse: limitedSymbols.length,
+    rawResults: rawResults.length,
+    finalResults: results.length,
+    skippedCount: engineState.skippedSymbols.length,
+    skipReasonCounts,
+    topSkipped: engineState.skippedSymbols.slice(0, 10),
   });
 
   const results = rawResults.filter(Boolean);
