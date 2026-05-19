@@ -104,6 +104,38 @@ function getTodayKeyET() {
   });
 }
 
+const VOLATILE_MARKET_SNAPSHOT_KEYS = [
+  "lastSignals",
+  "lastStockSignals",
+  "lastCryptoSignals",
+  "liveQuoteCache",
+  "institutionalDashboardSnapshots",
+  "themeMomentumState",
+  "explosiveRunnerState",
+  "adaptiveRunnerLearningState",
+  "premarketDominanceState",
+  "multiDayAccumulationState",
+  "institutionalExecutionLayerState",
+  "fullInstitutionalAiBrainState",
+  "centralAutonomousDecisionCoreState",
+  "finalDashboardSignalSyncState",
+];
+
+function clearVolatileMarketSnapshots(reason = "CLEAR_VOLATILE_MARKET_SNAPSHOTS") {
+  for (const key of VOLATILE_MARKET_SNAPSHOT_KEYS) {
+    if (Array.isArray(engineState?.[key])) {
+      engineState[key] = [];
+    } else if (key === "liveQuoteCache") {
+      engineState[key] = {};
+    } else {
+      engineState[key] = null;
+    }
+  }
+
+  engineState.staleSnapshotClearedAt = new Date().toISOString();
+  engineState.staleSnapshotClearReason = reason;
+}
+
 function resetDailySafetyStateIfNewDay(account) {
   const todayKey = getTodayKeyET();
   const equity = Number(account?.equity || 0);
@@ -1600,7 +1632,7 @@ engineState = {
   cachedAccount: null,
   lastError: null,
 };
-
+clearVolatileMarketSnapshots("BOOT_CLEAR_STALE_MARKET_SNAPSHOTS");
 const activeBuyExecutionLocks = new Set();
 const activeScanLocks = {
   scanMarket: false,
@@ -14271,6 +14303,15 @@ async function getCombinedStockQuote(symbol) {
       barStats.volumeSpikeRatio || 0
     ),
 
+    quoteFetchedAt: new Date().toISOString(),
+    liveQuoteSource: polygon
+      ? "polygon_rest"
+      : finnhub
+      ? "finnhub_rest"
+      : "alpaca_bars",
+    priceIsLive: Boolean(polygon || finnhub),
+    priceStale: false,    
+
     dataSource: polygon
       ? "Polygon + Alpaca"
       : finnhub
@@ -20229,6 +20270,11 @@ async function scanMarket() {
   activeScanLocks.scanMarket = true;
 
   try {
+  const scanCycleId = `STOCK_SCAN_${Date.now()}`;
+  engineState.currentStockScanCycleId = scanCycleId;
+  engineState.lastStockScanStartedAt = new Date().toISOString();
+  clearVolatileMarketSnapshots("NEW_STOCK_SCAN_STARTED");
+
   const symbols = await getTopMovers();
 
   // PHASE 24 — Smart Universe Narrowing
@@ -20387,7 +20433,9 @@ const portfolioManagerInput = {
 
       return {
         ...quote,
-
+        scanCycleId,
+        scanBuiltAt: new Date().toISOString(),
+        quoteFetchedAt: quote.quoteFetchedAt || new Date().toISOString(),
         score: institutional.institutionalScore,
         legacyMomentumScore: score,
 
@@ -20438,7 +20486,9 @@ qualifiedToBuy:
     }
   });
 
-    const skipReasonCounts = (engineState.skippedSymbols || []).reduce(
+  const results = rawResults.filter(Boolean);
+
+  const skipReasonCounts = (engineState.skippedSymbols || []).reduce(
     (acc, item) => {
       const reason = item.reason || "Unknown";
       acc[reason] = (acc[reason] || 0) + 1;
@@ -20455,8 +20505,6 @@ qualifiedToBuy:
     skipReasonCounts,
     topSkipped: engineState.skippedSymbols.slice(0, 10),
   });
-
-  const results = rawResults.filter(Boolean);
 
   console.log(`Scan finished. Found ${results.length} stocks.`);
 
@@ -36467,9 +36515,32 @@ function startFinnhubLiveQuoteStream() {
   }
 }
 
+function isFreshStockSignalForDisplay(signal = {}, maxAgeMinutes = 20) {
+  const symbol = normalizeSymbol(signal.symbol);
+  const isCrypto =
+    symbol.includes("/") ||
+    symbol.endsWith("USD") ||
+    signal.assetClass === "crypto" ||
+    signal.assetType === "crypto";
+
+  if (isCrypto) return true;
+
+  const timestamp =
+    signal.quoteFetchedAt ||
+    signal.scanBuiltAt ||
+    signal.liveQuoteUpdatedAt ||
+    signal.updatedAt;
+
+  if (!timestamp) return false;
+
+  const ageMs = Date.now() - new Date(timestamp).getTime();
+  return Number.isFinite(ageMs) && ageMs <= maxAgeMinutes * 60 * 1000;
+}
+
 function getTopSignals(signals = [], limit = 25) {
   return (Array.isArray(signals) ? signals : [])
     .filter(Boolean)
+    .filter((signal) => isFreshStockSignalForDisplay(signal))    
     .map((signal) => {
       const symbol = normalizeSymbol(signal.symbol);
       const liveQuote = engineState.liveQuoteCache?.[symbol] || null;
