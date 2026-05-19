@@ -33804,12 +33804,29 @@ statisticalEdgeHistory:
   });
 });
   app.post("/scan-now", async (req, res) => {
-    await engineTick();
+    if (engineState.running) {
+      return res.json({
+        ok: true,
+        message: "Scan already running",
+        running: true,
+        lastScanAt: engineState.lastScanAt,
+        lastTickStartedAt: engineState.lastTickStartedAt,
+      });
+    }
+
+    engineTick().catch((err) => {
+      engineState.lastError = err.message;
+      engineState.running = false;
+      saveEngineState("MANUAL_SCAN_FAILED");
+      console.error("Manual scan failed:", err.message);
+    });
 
     res.json({
-      message: "Scan completed",
+      ok: true,
+      message: "Scan started",
+      running: true,
       autoTradingEnabled,
-      engineState,
+      lastScanAt: engineState.lastScanAt,
     });
   });
 
