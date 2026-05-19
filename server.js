@@ -36468,23 +36468,44 @@ function getTopSignals(signals = [], limit = 25) {
       const symbol = normalizeSymbol(signal.symbol);
       const liveQuote = engineState.liveQuoteCache?.[symbol] || null;
 
-      const livePrice = Number(
+      const cachedLivePrice = Number(
         liveQuote?.price ||
           liveQuote?.current ||
-          signal.current ||
+          0
+      );
+
+      const scanPrice = Number(
+        signal.staleScanPrice ||
+          signal.scanPrice ||
           signal.price ||
+          signal.current ||
           signal.c ||
           0
       );
 
+      const hasFreshLiveQuote =
+        liveQuote?.updatedAt &&
+        Date.now() - new Date(liveQuote.updatedAt).getTime() <= 120000 &&
+        cachedLivePrice > 0;
+
+      const displayPrice = hasFreshLiveQuote
+        ? cachedLivePrice
+        : scanPrice;
+
       return {
         ...signal,
         symbol,
-        livePrice,
-        displayPrice: livePrice,
-        staleScanPrice: Number(signal.price || signal.current || signal.c || 0),
-        liveQuoteUpdatedAt: liveQuote?.updatedAt || null,
-        liveQuoteSource: liveQuote?.source || signal.source || "scan_snapshot",
+        livePrice: hasFreshLiveQuote ? cachedLivePrice : null,
+        displayPrice,
+        staleScanPrice: scanPrice,
+        liveQuoteUpdatedAt: hasFreshLiveQuote
+          ? liveQuote.updatedAt
+          : null,
+        liveQuoteSource: hasFreshLiveQuote
+          ? liveQuote.source || "live_cache"
+          : "scan_snapshot",
+        priceIsLive: hasFreshLiveQuote,
+        priceStale: !hasFreshLiveQuote,
       };
     })
     .sort((a, b) => Number(b.score || 0) - Number(a.score || 0))
