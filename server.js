@@ -5992,7 +5992,12 @@ function calculatePenaltyCompressionAndEliteOverride(signals = []) {
       signal.institutionalExecutionPlan?.executionSizeMultiplier || 1
     );
 
-    const allocationMultiplier = Number(signal.allocationMultiplier || 1);
+    const allocationMultiplier = Number(
+    signal.finalAllocationMultiplier ||
+    signal.gradeAllocation?.finalAllocationMultiplier ||
+    signal.allocationMultiplier ||
+    1
+);
 
     const globalRiskMultiplier = Number(
       signal.globalRiskOffExposureMultiplier ||
@@ -7579,24 +7584,71 @@ function calculateAiPortfolioManagerDecision(
   const effectiveHeatApprovalThreshold =
     dynamicHeatRelaxation.relaxedHeatApprovalThreshold;
 
-  const strongSetupOverride =
-    recommendedTradeAmount > 0 &&
-    Number(signal.score || 0) >= CONFIG.minScoreToBuy &&
-    Number(signal.technicalScore || 0) >= 60 &&
-    runnerScore >= 60 &&
-    executionConfidence >= 55 &&
-    signal.confirmations?.fakeBreakout !== true;
+  const gradeAllocation =
+    calculateGradeRiskAdjustedAllocation(signal, {
+      portfolioHeatScore:
+        dynamicHeatRelaxation.relaxedHeatScore,
+      marketRegimeState:
+        engineState.marketRegime?.state ||
+        signal.marketRegime ||
+        "neutral",
+    });
 
- let approved =
-    recommendedTradeAmount > 0 &&
+const gradeEligibleForAllocation =
+  ["A+", "A", "A-", "B", "C"].includes(
+    gradeAllocation.grade
+  );
+
+  recommendedTradeAmount = Number(
     (
-      dynamicHeatRelaxation.relaxedHeatScore <= effectiveHeatApprovalThreshold ||
-      tacticalEliteRunnerOverride ||
-      strongSetupOverride ||
-      phase57EliteOverride.overrideApproved ||
-      phase572EliteDiscovery.eliteDiscoveryScore >= 85 ||
-      eliteCapital.concentrationTier === "ELITE_CONCENTRATION"
-    );
+      Number(rawRecommendedTradeAmount || recommendedTradeAmount || 0) *
+      Number(gradeAllocation.finalAllocationMultiplier || 0)
+    ).toFixed(2)
+  );
+
+  rawRecommendedTradeAmount = Number(
+    Number(rawRecommendedTradeAmount || 0).toFixed(2)
+  );
+
+recommendedTradeAmount = Number(
+  (
+    Number(rawRecommendedTradeAmount || recommendedTradeAmount || 0) *
+    Number(gradeAllocation.finalAllocationMultiplier || 0)
+  ).toFixed(2)
+);
+
+signal.gradeAllocation = gradeAllocation;
+
+signal.finalInstitutionalGrade =
+  gradeAllocation.grade;
+
+signal.finalInstitutionalGradeMultiplier =
+  gradeAllocation.gradeMultiplier;
+
+signal.riskAdjustmentMultiplier =
+  gradeAllocation.riskAdjustmentMultiplier;
+
+signal.finalAllocationMultiplier =
+  gradeAllocation.finalAllocationMultiplier;
+
+signal.allocationReason =
+  gradeAllocation.reason;
+
+let approved =
+  recommendedTradeAmount > 0 &&
+  gradeEligibleForAllocation &&
+  gradeAllocation.finalAllocationMultiplier > 0 &&
+  (
+    dynamicHeatRelaxation.relaxedHeatScore <=
+      effectiveHeatApprovalThreshold ||
+
+    phase57EliteOverride.overrideApproved ||
+
+    phase572EliteDiscovery.eliteDiscoveryScore >= 85 ||
+
+    eliteCapital.concentrationTier ===
+      "ELITE_CONCENTRATION"
+  );
 
 const reconciledMaxBotBudget = maxBotBudget;
 
@@ -7620,7 +7672,20 @@ return {
         : 0,
     portfolioHeat,
     dynamicHeatRelaxation,
-    marketStress,
+    marketStress, 
+    gradeAllocation,
+    finalInstitutionalGrade:
+      gradeAllocation.grade,
+    finalInstitutionalGradeMultiplier:
+      gradeAllocation.gradeMultiplier,
+    riskAdjustmentMultiplier:
+      gradeAllocation.riskAdjustmentMultiplier,
+    finalAllocationMultiplier:
+      gradeAllocation.finalAllocationMultiplier,   
+      
+      allocationReason:
+  gradeAllocation.reason,
+      
      allocationMultiplier: Number(
       (
         Number(eliteCapital.concentrationMultiplier || 1) *
@@ -14216,6 +14281,204 @@ function clampScore(value) {
   return Math.min(100, Math.max(0, Math.round(Number(value || 0))));
 }
 
+function calculateFinalInstitutionalGrade(signal = {}) {
+  const score = Number(signal.score || 0);
+  const technicalScore = Number(signal.technicalScore || 0);
+  const runnerScore = Number(
+    signal.runnerScore ||
+      signal.explosiveRunnerScore ||
+      signal.adaptiveRunnerScore ||
+      0
+  );
+  const breakoutProbability = Number(signal.breakoutProbability || 0);
+  const continuationProbability = Number(signal.continuationProbability || 0);
+  const executionConfidence = Number(signal.executionConfidence || 0);
+  const volumeRatio = Number(signal.volumeRatio || 0);
+
+  const fakeBreakout =
+    signal.confirmations?.fakeBreakout === true;
+
+  const executionMode =
+    signal.institutionalExecutionPlan?.executionMode || "";
+
+  const weakExecution =
+    executionMode === "AVOID_WEAK_EXECUTION";
+
+  const checks = {
+    score: score >= 85,
+    technicalScore: technicalScore >= 80,
+    runnerScore: runnerScore >= 75,
+    breakoutProbability: breakoutProbability >= 90,
+    continuationProbability: continuationProbability >= 85,
+    executionConfidence: executionConfidence >= 70,
+    volumeRatio: volumeRatio >= 1.5,
+    fakeBreakout: fakeBreakout === false,
+    executionMode: weakExecution === false,
+  };
+
+  const passedChecks = Object.values(checks).filter(Boolean).length;
+
+  const eliteScore = Number(((passedChecks / 9) * 100).toFixed(2));
+
+  let finalInstitutionalGrade = "D";
+  let finalInstitutionalGradeLabel = "Weak / Avoid";
+  let gradeMultiplier = 0;
+
+  if (eliteScore >= 95) {
+    finalInstitutionalGrade = "A+";
+    finalInstitutionalGradeLabel = "Monster Institutional Runner";
+    gradeMultiplier = 1.8;
+  } else if (eliteScore >= 90) {
+    finalInstitutionalGrade = "A";
+    finalInstitutionalGradeLabel = "Elite Institutional Runner";
+    gradeMultiplier = 1.5;
+  } else if (eliteScore >= 85) {
+    finalInstitutionalGrade = "A-";
+    finalInstitutionalGradeLabel = "Strong Institutional Setup";
+    gradeMultiplier = 1.25;
+  } else if (eliteScore >= 75) {
+    finalInstitutionalGrade = "B";
+    finalInstitutionalGradeLabel = "Strong But Incomplete Setup";
+    gradeMultiplier = 0.8;
+  } else if (eliteScore >= 65) {
+    finalInstitutionalGrade = "C";
+    finalInstitutionalGradeLabel = "Developing Watchlist Setup";
+    gradeMultiplier = 0.4;
+  }
+
+  return {
+    finalInstitutionalGrade,
+    finalInstitutionalGradeLabel,
+    eliteScore,
+    passedChecks,
+    failedChecks: 9 - passedChecks,
+    gradeMultiplier,
+    gradeChecks: checks,
+    rawGradeInputs: {
+      score,
+      technicalScore,
+      runnerScore,
+      breakoutProbability,
+      continuationProbability,
+      executionConfidence,
+      volumeRatio,
+      fakeBreakout,
+      executionMode,
+    },
+    reason:
+      `${finalInstitutionalGrade} • ${eliteScore}/100 elite score • ` +
+      `${passedChecks}/9 elite sectors passed • ${finalInstitutionalGradeLabel}`,
+  };
+}
+
+function calculateGradeRiskAdjustedAllocation(signal = {}, context = {}) {
+  const grade =
+    signal.finalInstitutionalGrade ||
+    calculateFinalInstitutionalGrade(signal).finalInstitutionalGrade;
+
+  const gradeMultiplier =
+    Number(
+      signal.finalInstitutionalGradeMultiplier ||
+        calculateFinalInstitutionalGrade(signal).gradeMultiplier ||
+        0
+    );
+
+  const executionConfidence = Number(
+    signal.executionConfidence ||
+      signal.institutionalExecutionPlan?.executionConfidence ||
+      0
+  );
+
+  const liquidityScore = Number(
+    signal.institutionalExecutionPlan?.liquidityScore ||
+      signal.liquidityFitScore ||
+      signal.liquidityQuality ||
+      0
+  );
+
+  const executionMode =
+    signal.institutionalExecutionPlan?.executionMode || "";
+
+  const portfolioHeatScore = Number(
+    context.portfolioHeatScore ??
+      signal.portfolioHeat?.portfolioHeatScore ??
+      50
+  );
+
+  const marketRegimeState =
+    context.marketRegimeState ||
+    signal.marketRegime ||
+    engineState.marketRegime?.state ||
+    "neutral";
+
+  const executionRiskMultiplier =
+    executionMode === "AVOID_WEAK_EXECUTION"
+      ? 0
+      : executionConfidence >= 80
+      ? 1
+      : executionConfidence >= 70
+      ? 0.9
+      : executionConfidence >= 65
+      ? 0.75
+      : 0.45;
+
+  const liquidityRiskMultiplier =
+    liquidityScore >= 75
+      ? 1
+      : liquidityScore >= 60
+      ? 0.85
+      : liquidityScore >= 45
+      ? 0.65
+      : 0.35;
+
+  const portfolioHeatMultiplier =
+    portfolioHeatScore <= 35
+      ? 1
+      : portfolioHeatScore <= 55
+      ? 0.85
+      : portfolioHeatScore <= 75
+      ? 0.65
+      : 0.4;
+
+  const marketRegimeMultiplier =
+    marketRegimeState === "aggressive_bullish"
+      ? 1
+      : marketRegimeState === "cautious_bullish"
+      ? 0.85
+      : marketRegimeState === "defensive"
+      ? 0.65
+      : marketRegimeState === "panic"
+      ? 0.35
+      : 0.75;
+
+  const riskAdjustmentMultiplier = Number(
+    (
+      executionRiskMultiplier *
+      liquidityRiskMultiplier *
+      portfolioHeatMultiplier *
+      marketRegimeMultiplier
+    ).toFixed(3)
+  );
+
+  const finalAllocationMultiplier = Number(
+    (gradeMultiplier * riskAdjustmentMultiplier).toFixed(3)
+  );
+
+  return {
+    grade,
+    gradeMultiplier,
+    executionRiskMultiplier,
+    liquidityRiskMultiplier,
+    portfolioHeatMultiplier,
+    marketRegimeMultiplier,
+    riskAdjustmentMultiplier,
+    finalAllocationMultiplier,
+    reason:
+      `${grade} allocation x${gradeMultiplier} • Risk x${riskAdjustmentMultiplier} • ` +
+      `Final x${finalAllocationMultiplier}`,
+  };
+}
+
 function getRiskLevel(score) {
   if (score >= 80) return "Low";
   if (score >= 60) return "Moderate";
@@ -20370,7 +20633,39 @@ saveRecentOrder("PHASE_14_GOVERNOR_UPDATED", "GOVERNOR", {
     phase14GovernorState.blockedCount,
 });
 
-const finalResults = phasePipelineSignals;
+for (const signal of results) {
+  const finalGrade =
+    calculateFinalInstitutionalGrade(signal);
+
+  signal.finalInstitutionalGrade =
+    finalGrade.finalInstitutionalGrade;
+
+  signal.finalInstitutionalGradeLabel =
+    finalGrade.finalInstitutionalGradeLabel;
+
+  signal.finalInstitutionalEliteScore =
+    finalGrade.eliteScore;
+
+  signal.finalInstitutionalPassedChecks =
+    finalGrade.passedChecks;
+
+  signal.finalInstitutionalFailedChecks =
+    finalGrade.failedChecks;
+
+  signal.finalInstitutionalGradeMultiplier =
+    finalGrade.gradeMultiplier;
+
+  signal.finalInstitutionalGradeChecks =
+    finalGrade.gradeChecks;
+
+  signal.finalInstitutionalRawGradeInputs =
+    finalGrade.rawGradeInputs;
+
+  signal.finalInstitutionalGradeReason =
+    finalGrade.reason;
+}
+
+const finalResults = results;
 
 return finalResults
   .sort((a, b) => {
@@ -29791,6 +30086,22 @@ engineState.analyticsSnapshots =
         });
 
       signal.finalSizingReconciliation = finalSizingReconciliation;
+signal.gradeAllocation = gradeAllocation;
+
+signal.finalInstitutionalGrade =
+  gradeAllocation.grade;
+
+signal.finalInstitutionalGradeMultiplier =
+  gradeAllocation.gradeMultiplier;
+
+signal.riskAdjustmentMultiplier =
+  gradeAllocation.riskAdjustmentMultiplier;
+
+signal.finalAllocationMultiplier =
+  gradeAllocation.finalAllocationMultiplier;
+
+signal.allocationReason =
+  gradeAllocation.reason;      
       signal.recommendedTradeAmount =
         finalSizingReconciliation.finalTradeAmount;
       signal.finalApprovedTradeAmount =
