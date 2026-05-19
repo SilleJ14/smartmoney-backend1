@@ -108,8 +108,20 @@ const VOLATILE_MARKET_SNAPSHOT_KEYS = [
   "lastSignals",
   "lastStockSignals",
   "lastCryptoSignals",
-  "liveQuoteCache",
+  "topSignals",
+  "topStockSignals",
+  "topCryptoSignals",
+  "topAutonomousCandidates",
+  "topBrainOpportunities",
+  "topInstitutionalThemes",
+  "topRunnerCandidates",
+  "topPremarketSnipers",
+  "topAccumulationCandidates",
+  "executionQualityLeaders",
+  "strongestSignals",
+  "reviewedAgents",
   "institutionalDashboardSnapshots",
+  "liveQuoteCache",
   "themeMomentumState",
   "explosiveRunnerState",
   "adaptiveRunnerLearningState",
@@ -119,6 +131,13 @@ const VOLATILE_MARKET_SNAPSHOT_KEYS = [
   "fullInstitutionalAiBrainState",
   "centralAutonomousDecisionCoreState",
   "finalDashboardSignalSyncState",
+  "autonomousTradingSystemState",
+  "phase20AutonomousOrchestrationState",
+  "phase21AutonomousBrainState",
+  "crossEngineMemoryState",
+  "adaptiveExecutionTimingState",
+  "reinforcementWeightState",
+  "reinforcementWeightHistory",
 ];
 
 function clearVolatileMarketSnapshots(reason = "CLEAR_VOLATILE_MARKET_SNAPSHOTS") {
@@ -19782,6 +19801,12 @@ async function scanCryptoMarket() {
   const results = [];
 
   engineState.skippedSymbols = [];
+  engineState.lastSignals = [];
+engineState.lastStockSignals = [];
+engineState.topSignals = [];
+engineState.topAutonomousCandidates = [];
+engineState.topRunnerCandidates = [];
+engineState.strongestSignals = [];
 
   for (const symbol of symbols) {
 
