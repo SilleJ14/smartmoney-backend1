@@ -137,6 +137,12 @@ const VOLATILE_MARKET_SNAPSHOT_KEYS = [
   "crossEngineMemoryState",
   "adaptiveExecutionTimingState",
   "reinforcementWeightState",
+  "autonomousCapitalRotationState",
+  "portfolioGovernorState",
+  "continuationHoldState",
+  "smartExitIntelligenceState",
+  "institutionalExitOrchestratorState",
+  "institutionalReloadState",
   "reinforcementWeightHistory",
 ];
 
@@ -1708,6 +1714,19 @@ function updateAccountPeaks(account) {
   );
 
   return engineState.peaksByMode[mode];
+}
+
+
+function isCryptoSymbol(symbol = "") {
+  const normalized = String(symbol || "")
+    .trim()
+    .toUpperCase();
+
+  return (
+    normalized.includes("/") ||
+    normalized.endsWith("USD") ||
+    normalized.includes("USDT")
+  );
 }
 
 function normalizeSymbol(symbol) {
