@@ -830,16 +830,31 @@ multiTimeframeCryptoMemory:
   engineState.multiTimeframeCryptoMemory || {},
 
 phase52CryptoStrategySelectorState:
-  engineState.phase52CryptoStrategySelectorState || null,
+  engineState.phase52CryptoStrategySelectorState ||
+  engineState.autonomousCryptoStrategySelectorState ||
+  null,
 
 phase52CryptoStrategySelectorHistory:
-  (engineState.phase52CryptoStrategySelectorHistory || []).slice(0, 200),
+  (
+    engineState.phase52CryptoStrategySelectorHistory ||
+    engineState.autonomousCryptoStrategySelectorHistory ||
+    []
+  ).slice(0, 200),
 
 cryptoStrategySelectorMemory:
-  engineState.cryptoStrategySelectorMemory || {},  
+  engineState.cryptoStrategySelectorMemory || {},
 
-phase21AutonomousBrainHistory:
-  (engineState.phase21AutonomousBrainHistory || []).slice(0, 200),
+autonomousCryptoStrategySelectorState:
+  engineState.autonomousCryptoStrategySelectorState ||
+  engineState.phase52CryptoStrategySelectorState ||
+  null,
+
+autonomousCryptoStrategySelectorHistory:
+  (
+    engineState.autonomousCryptoStrategySelectorHistory ||
+    engineState.phase52CryptoStrategySelectorHistory ||
+    []
+  ).slice(0, 200),
 
 cryptoReinforcementLearningState:
   engineState.cryptoReinforcementLearningState || null,
@@ -1072,6 +1087,9 @@ const CONFIG = {
 
   minScoreToBuy: Number(process.env.MIN_SCORE_TO_BUY || 65),
   replaceWeakestMinScoreGap: Number(process.env.REPLACE_SCORE_GAP || 5),
+
+  enableWeakestReplacement:
+    process.env.ENABLE_WEAKEST_REPLACEMENT === "true",
 
   maxBotExposurePercent: Number(
     process.env.MAX_BOT_EXPOSURE_PERCENT || 15
@@ -1477,6 +1495,8 @@ multiTimeframeCryptoMemory: {},
 phase52CryptoStrategySelectorState: null,
 phase52CryptoStrategySelectorHistory: [],
 cryptoStrategySelectorMemory: {},
+autonomousCryptoStrategySelectorState: null,
+autonomousCryptoStrategySelectorHistory: [],
 phase21AutonomousBrainState: null,
 phase21AutonomousBrainHistory: [],
 cryptoReinforcementLearningState: null,
@@ -14044,27 +14064,13 @@ async function polygonQuote(symbol) {
       return null;
     }
 
-    const cacheKey = cleanSymbol;
-
-    if (!global.polygonQuoteCache) {
-      global.polygonQuoteCache = new Map();
-    }
-
-    const cached =
-      global.polygonQuoteCache.get(cacheKey);
+    const cached = getPolygonCachedQuote(cleanSymbol);
 
     if (cached) {
-      const ageMs = Date.now() - cached.savedAt;
-
-      if (ageMs < 60000) {
-        return cached.quote;
-      }
+      return cached;
     }
 
-    if (
-      engineState.apiCooldowns?.polygon &&
-      engineState.apiCooldowns.polygon > Date.now()
-    ) {
+    if (isPolygonInCooldown()) {
       return null;
     }
 
@@ -14077,8 +14083,7 @@ async function polygonQuote(symbol) {
     const snapshotResponse = await fetch(snapshotUrl);
 
     if (snapshotResponse.status === 429) {
-      engineState.apiCooldowns.polygon =
-        Date.now() + 2 * 60 * 1000;
+      putPolygonInCooldown(2);
 
       throw new Error("Polygon rate limit");
     }
@@ -14167,10 +14172,7 @@ async function polygonQuote(symbol) {
       source: "polygon",
     };
 
-    global.polygonQuoteCache.set(cacheKey, {
-      savedAt: Date.now(),
-      quote,
-    });
+    savePolygonCachedQuote(cleanSymbol, quote);
 
     return quote;
   } catch (err) {
@@ -14855,6 +14857,96 @@ const volatilityScore = Number(
 
 function clampScore(value) {
   return Math.min(100, Math.max(0, Math.round(Number(value || 0))));
+}
+
+
+function calculateEliteSetupRecognitionScore(signal = {}) {
+  const score = Number(signal.score || 0);
+
+  const statisticalEdgeScore = Number(
+    signal.statisticalEdgeScore ||
+      signal.statisticalEdge?.statisticalEdgeScore ||
+      0
+  );
+
+  const orderFlowScore = Number(
+    signal.orderFlowConvictionScore ||
+      signal.phase59InstitutionalOrderFlow?.orderFlowConvictionScore ||
+      0
+  );
+
+  const personalityFitScore = Number(
+    signal.personalityFitScore ||
+      signal.phase62MarketPersonality?.personalityFitScore ||
+      0
+  );
+
+  const runnerScore = Number(
+    signal.runnerScore ||
+      signal.explosiveRunnerScore ||
+      signal.adaptiveRunnerScore ||
+      0
+  );
+
+  const continuationProbability = Number(
+    signal.continuationProbability || 0
+  );
+
+  const executionConfidence = Number(
+    signal.executionConfidence ||
+      signal.institutionalExecutionPlan?.executionConfidence ||
+      0
+  );
+
+  const fakeBreakout = signal.confirmations?.fakeBreakout === true;
+  const aboveVwap = signal.confirmations?.aboveVwap === true;
+
+  const eliteRecognitionScore = clampScore(
+    score * 0.18 +
+      statisticalEdgeScore * 0.18 +
+      orderFlowScore * 0.18 +
+      personalityFitScore * 0.14 +
+      runnerScore * 0.14 +
+      continuationProbability * 0.12 +
+      executionConfidence * 0.06 -
+      (fakeBreakout ? 25 : 0) +
+      (aboveVwap ? 4 : 0)
+  );
+
+  const eliteRecognitionTier =
+    eliteRecognitionScore >= 90
+      ? "S_TIER_ELITE"
+      : eliteRecognitionScore >= 82
+      ? "A_TIER_ELITE"
+      : eliteRecognitionScore >= 75
+      ? "HIGH_QUALITY"
+      : eliteRecognitionScore >= 68
+      ? "QUALIFIED"
+      : "NOT_ELITE";
+
+  return {
+    phase: "64_ELITE_SETUP_RECOGNITION",
+    updatedAt: new Date().toISOString(),
+    symbol: normalizeSymbol(signal.symbol),
+    eliteRecognitionScore,
+    eliteRecognitionTier,
+    components: {
+      score,
+      statisticalEdgeScore,
+      orderFlowScore,
+      personalityFitScore,
+      runnerScore,
+      continuationProbability,
+      executionConfidence,
+      fakeBreakout,
+      aboveVwap,
+    },
+    isElite:
+      eliteRecognitionTier === "S_TIER_ELITE" ||
+      eliteRecognitionTier === "A_TIER_ELITE",
+    reason:
+      `${eliteRecognitionTier} • Elite recognition ${eliteRecognitionScore}/100`,
+  };
 }
 
 function calculateFinalInstitutionalGrade(signal = {}) {
@@ -22323,12 +22415,30 @@ function calculateExplosiveRunnerHoldDecision({
 
   const score = Number(signal.score || signal.institutionalScore || 0);
 
-  const shouldHold =
-    CONFIG.enableExplosiveRunnerHold !== false &&
-    unrealizedPercent >= CONFIG.explosiveRunnerHoldMinProfitPercent &&
-    runnerScore >= CONFIG.explosiveRunnerHoldMinRunnerScore &&
-    dropFromHigh <= CONFIG.explosiveRunnerMaxDropFromHighPercent &&
-    score >= CONFIG.minScoreToBuy;
+const eliteRecognition =
+  calculateEliteSetupRecognitionScore(signal);
+
+const continuationStrength = Number(
+  signal.continuationProbability ||
+    signal.explosiveRunnerPrediction?.continuationProbability ||
+    0
+);
+
+const orderFlowScore = Number(
+  signal.orderFlowConvictionScore ||
+    signal.phase59InstitutionalOrderFlow?.orderFlowConvictionScore ||
+    0
+);
+
+const shouldHold =
+  CONFIG.enableExplosiveRunnerHold !== false &&
+  unrealizedPercent >= CONFIG.explosiveRunnerHoldMinProfitPercent &&
+  runnerScore >= CONFIG.explosiveRunnerHoldMinRunnerScore &&
+  continuationStrength >= 70 &&
+  orderFlowScore >= 60 &&
+  eliteRecognition.eliteRecognitionScore >= 75 &&
+  dropFromHigh <= CONFIG.explosiveRunnerMaxDropFromHighPercent &&
+  score >= CONFIG.minScoreToBuy;
 
   const decision = {
     updatedAt: new Date().toISOString(),
@@ -27327,6 +27437,18 @@ async function autoBuySignals(signals = []) {
   );
 
   if (remainingBotBudget <= 0) {
+    if (CONFIG.enableWeakestReplacement) {
+      const rotated = await replaceWeakestIfBetter(
+        signals,
+        positions,
+        aiOwnedSymbols
+      );
+
+      if (rotated) {
+        return;
+      }
+    }
+
     saveRecentOrder("AUTO_STOCK_BUY_SKIPPED_EXPOSURE_FULL", "STOCK", {
       reason: "Max bot exposure reached",
       maxBotExposurePercent: CONFIG.maxBotExposurePercent,
@@ -27657,9 +27779,18 @@ let successfulStockBuysThisCycle = 0;
       institutionalGrade.includes("A") ||
       institutionalGrade.includes("B") ||
       Number(candidate.technicalScore || 0) >= 65;
+const eliteRecognition =
+  calculateEliteSetupRecognitionScore(candidate);
+
+candidate.eliteSetupRecognition = eliteRecognition;
+candidate.eliteRecognitionScore =
+  eliteRecognition.eliteRecognitionScore;
+candidate.eliteRecognitionTier =
+  eliteRecognition.eliteRecognitionTier;
+
 
 const eliteCapitalBoost =
-  Number(candidate.score || 0) >= 90 &&
+  eliteRecognition.eliteRecognitionTier === "S_TIER_ELITE" &&
   hasStrongEnoughGrade &&
   Number(candidate.breakoutProbability || 0) >= 88 &&
   Number(candidate.continuationProbability || 0) >= 85 &&
@@ -27668,7 +27799,7 @@ const eliteCapitalBoost =
   Number(institutionalExecutionPlan.executionConfidence || 0) >= 82 &&
   candidate.confirmations?.fakeBreakout !== true
     ? 3.2
-    : Number(candidate.score || 0) >= 82 &&
+    : eliteRecognition.eliteRecognitionTier === "A_TIER_ELITE" &&
       hasStrongEnoughGrade &&
       Number(candidate.breakoutProbability || 0) >= 80 &&
       Number(candidate.continuationProbability || 0) >= 75 &&
@@ -27677,7 +27808,7 @@ const eliteCapitalBoost =
       Number(institutionalExecutionPlan.executionConfidence || 0) >= 70 &&
       candidate.confirmations?.fakeBreakout !== true
     ? 2.2
-    : Number(candidate.score || 0) >= 72 &&
+    : eliteRecognition.eliteRecognitionTier === "HIGH_QUALITY" &&
       hasStrongEnoughGrade &&
       Number(candidate.breakoutProbability || 0) >= 72 &&
       Number(candidate.continuationProbability || 0) >= 68 &&
@@ -27685,6 +27816,7 @@ const eliteCapitalBoost =
       candidate.confirmations?.fakeBreakout !== true
     ? 1.45
     : 0.85;
+
 
     const executionAdjustedBaseTradeAmount =
       Number(
@@ -28980,6 +29112,8 @@ async function engineTick() {
     }
 
     const account = await getAccount();
+    resetDailySafetyStateIfNewDay(account);
+
     const clock = await getClock();
     const marketOpen = Boolean(clock.is_open);
     let effectiveMode = getEffectiveTradingMode(marketOpen);
@@ -29544,9 +29678,19 @@ const autonomousCryptoStrategySelector =
 engineState.autonomousCryptoStrategySelectorState =
   autonomousCryptoStrategySelector;
 
+engineState.phase52CryptoStrategySelectorState =
+  autonomousCryptoStrategySelector;  
+
 engineState.autonomousCryptoStrategySelectorHistory.unshift(
   autonomousCryptoStrategySelector
 );
+
+engineState.phase52CryptoStrategySelectorHistory.unshift(
+  autonomousCryptoStrategySelector
+);
+
+engineState.phase52CryptoStrategySelectorHistory =
+  engineState.phase52CryptoStrategySelectorHistory.slice(0, 200);
 
 engineState.autonomousCryptoStrategySelectorHistory =
   engineState.autonomousCryptoStrategySelectorHistory.slice(0, 200);
@@ -32084,17 +32228,33 @@ function calculateFullInstitutionalAiBrain(signals = []) {
 
     const liquidityBlock =
       engineState.liquidityIntelligenceState?.shouldBlockWeakLiquidity === true;
+    
+    
+      const eliteRecognition =
+  calculateEliteSetupRecognitionScore(signal);
 
-    const consensusScore = clampScore(
-      score * 0.22 +
-        runnerScore * 0.18 +
-        premarketScore * 0.16 +
-        accumulationScore * 0.14 +
-        themeScore * 0.1 +
-        executionScore * 0.1 +
-        marketReadiness * 0.06 +
-        capitalRotationBoost * 4
-    );
+    const confidenceAccuracyBoost =
+      eliteRecognition.eliteRecognitionTier === "S_TIER_ELITE"
+    ? 7
+    : eliteRecognition.eliteRecognitionTier === "A_TIER_ELITE"
+    ? 4
+    : eliteRecognition.eliteRecognitionTier === "HIGH_QUALITY"
+    ? 2
+    : 0;
+
+
+const consensusScore = clampScore(
+  score * 0.18 +
+    runnerScore * 0.16 +
+    premarketScore * 0.12 +
+    accumulationScore * 0.12 +
+    themeScore * 0.08 +
+    executionScore * 0.12 +
+    eliteRecognition.eliteRecognitionScore * 0.16 +
+    marketReadiness * 0.04 +
+    capitalRotationBoost * 3 +
+    confidenceAccuracyBoost
+);
 
     const riskPenalty =
       (governorBlock ? 18 : 0) +
@@ -36779,6 +36939,8 @@ app.get("/live-signals", async (req, res) => {
   try {
 
     const account = await getAccount();
+    resetDailySafetyStateIfNewDay(account);
+
     const clock = await getClock();
     const positions = await getPositions();
     const aiOwnedSymbols = await getAiOwnedSymbols();
