@@ -127,6 +127,7 @@ const VOLATILE_MARKET_SNAPSHOT_KEYS = [
   "adaptiveRunnerLearningState",
   "premarketDominanceState",
   "multiDayAccumulationState",
+  "executionIntelligenceState",
   "institutionalExecutionLayerState",
   "fullInstitutionalAiBrainState",
   "centralAutonomousDecisionCoreState",
@@ -20164,13 +20165,16 @@ function buildUniverseExpansionState({
 async function getTopMovers() {
   const moverSymbols = await getAlpacaMoverSymbols();
 
-  const minSymbolsNeeded = Number(process.env.MIN_SYMBOLS_NEEDED || 1);
+  const minSymbolsNeeded = Number(process.env.MIN_SYMBOLS_NEEDED || 150);
   const maxAssetsFallback = Number(process.env.MAX_ASSETS_FALLBACK || 300);
 
-  const assetSymbols =
-    moverSymbols.length >= minSymbolsNeeded
-      ? []
-      : await getTradableAssetUniverse(maxAssetsFallback);
+  const shouldExpandAssetUniverse =
+    moverSymbols.length < minSymbolsNeeded ||
+    process.env.EXPAND_STOCK_UNIVERSE === "true";
+
+  const assetSymbols = shouldExpandAssetUniverse
+    ? await getTradableAssetUniverse(maxAssetsFallback)
+    : [];
 
   const hiddenRunnerMemorySymbols = [
     ...new Set([
@@ -20257,7 +20261,7 @@ function calculateScanWeight(symbol) {
 }
 
 function narrowSmartUniverse(symbols = []) {
-  const maxSymbolsToScan = Number(process.env.MAX_SYMBOLS_TO_SCAN || 100);
+  const maxSymbolsToScan = Number(process.env.MAX_SYMBOLS_TO_SCAN || 150);
 
   const reviewed = [...new Set(symbols)]
     .filter(isNormalStockSymbol)
