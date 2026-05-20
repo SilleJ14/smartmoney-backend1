@@ -19362,7 +19362,30 @@ function calculateTechnicals(bars = []) {
       reason: `Dangerously extended: ${q.percentChange.toFixed(2)}%`,
     };
   }
+  const volumeRatio = Number(
+    q.volumeRatio ||
+      q.volumeSpikeRatio ||
+      q.confirmations?.volumeSpikeRatio ||
+      0
+  );
 
+  const pullbackFromHighPercent = Number(
+    q.confirmations?.pullbackFromHighPercent ||
+      q.pullbackFromHighPercent ||
+      0
+  );
+
+  if (
+    Number(q.percentChange || 0) <= -25 &&
+    volumeRatio < 0.8 &&
+    pullbackFromHighPercent >= 20
+  ) {
+    return {
+      ok: false,
+      reason: "Blocked collapsing low-volume dump",
+    };
+  }
+  
   if (CONFIG.enableAdvancedFilters && q.confirmations) {
     if (q.confirmations.fakeBreakout) {
       return {
@@ -20166,7 +20189,7 @@ async function getTopMovers() {
   const moverSymbols = await getAlpacaMoverSymbols();
 
   const minSymbolsNeeded = Number(process.env.MIN_SYMBOLS_NEEDED || 150);
-  const maxAssetsFallback = Number(process.env.MAX_ASSETS_FALLBACK || 300);
+  const maxAssetsFallback = Number(process.env.MAX_ASSETS_FALLBACK || 500);
 
   const shouldExpandAssetUniverse =
     moverSymbols.length < minSymbolsNeeded ||
@@ -20261,7 +20284,7 @@ function calculateScanWeight(symbol) {
 }
 
 function narrowSmartUniverse(symbols = []) {
-  const maxSymbolsToScan = Number(process.env.MAX_SYMBOLS_TO_SCAN || 150);
+  const maxSymbolsToScan = Number(process.env.MAX_SYMBOLS_TO_SCAN || 200);
 
   const reviewed = [...new Set(symbols)]
     .filter(isNormalStockSymbol)
