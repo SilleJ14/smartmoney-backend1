@@ -21604,7 +21604,11 @@ async function scanMarket() {
   const scanCycleId = `STOCK_SCAN_${Date.now()}`;
   engineState.currentStockScanCycleId = scanCycleId;
   engineState.lastStockScanStartedAt = new Date().toISOString();
-  clearVolatileMarketSnapshots("NEW_STOCK_SCAN_STARTED");
+ engineState.staleSnapshotClearReason =
+  "NEW_STOCK_SCAN_STARTED_KEEP_LAST_GOOD_DASHBOARD";
+
+engineState.lastStockScanPreservedDashboardAt =
+  new Date().toISOString();
 
   const symbols = await getTopMovers();
 
@@ -33250,6 +33254,21 @@ const finalDashboardSignalSync =
     cryptoSignals
   );
 
+
+engineState.finalDashboardSignalSyncState =
+  finalDashboardSignalSync;
+
+if (!Array.isArray(engineState.finalDashboardSignalSyncHistory)) {
+  engineState.finalDashboardSignalSyncHistory = [];
+}
+
+engineState.finalDashboardSignalSyncHistory.unshift(
+  finalDashboardSignalSync
+);
+
+engineState.finalDashboardSignalSyncHistory =
+  engineState.finalDashboardSignalSyncHistory.slice(0, 200);  
+
 saveRecentOrder("FINAL_DASHBOARD_SIGNAL_SYNC_UPDATED", "DASHBOARD", {
   reviewedCount: finalDashboardSignalSync.reviewedCount || 0,
   stockSignalCount:
@@ -33275,6 +33294,18 @@ engineState.lastCryptoSignals =
     : Array.isArray(engineState.lastCryptoSignals)
     ? engineState.lastCryptoSignals
     : [];
+
+engineState.topSignals = [...engineState.lastStockSignals, ...engineState.lastCryptoSignals]
+  .sort((a, b) => Number(b.score || 0) - Number(a.score || 0))
+  .slice(0, CONFIG.maxSignalsToReturn || 75);
+
+engineState.topStockSignals = [...engineState.lastStockSignals]
+  .sort((a, b) => Number(b.score || 0) - Number(a.score || 0))
+  .slice(0, 25);
+
+engineState.topCryptoSignals = [...engineState.lastCryptoSignals]
+  .sort((a, b) => Number(b.score || 0) - Number(a.score || 0))
+  .slice(0, 25);    
 
     const approvedStockSignals = stockSignals.filter(
       (signal) =>
