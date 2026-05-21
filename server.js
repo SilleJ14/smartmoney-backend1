@@ -64,7 +64,12 @@ const ENABLE_POLYGON =
 
 const POLYGON_PRIMARY =
   process.env.POLYGON_PRIMARY === "true";
+const ENABLE_POLYGON_MOVERS =
+  process.env.ENABLE_POLYGON_MOVERS !== "false";
 
+const POLYGON_MOVERS_LIMIT = Number(
+  process.env.POLYGON_MOVERS_LIMIT || 100
+);
 function loadRuntimeConfig() {
   try {
     if (!fs.existsSync(CONFIG_FILE)) return {};
@@ -6911,6 +6916,52 @@ function calculateEarlyStrengthProjection(signal = {}) {
       `Pullback ${pullbackFromHighPercent}% • ` +
       `OpenDrive ${openingDriveProbability}/100`,
   };
+}
+
+function applyFastRunnerOverride(signals = []) {
+  for (const signal of signals) {
+    const percentChange = Number(
+      signal.percentChange ||
+        signal.changePercent ||
+        signal.liveMoveFromPreviousPercent ||
+        0
+    );
+
+    const volumeRatio = Number(
+      signal.volumeRatio ||
+        signal.volumeSpikeRatio ||
+        signal.confirmations?.volumeSpikeRatio ||
+        0
+    );
+
+    const closeNearHighPercent = Number(
+      signal.closeNearHighPercent ||
+        signal.confirmations?.closeNearHighPercent ||
+        0
+    );
+
+    const strongFastRunner =
+      percentChange >= 8 &&
+      volumeRatio >= 1.5 &&
+      closeNearHighPercent >= 75;
+
+    if (!strongFastRunner) continue;
+
+    signal.fastRunnerOverride = true;
+    signal.earlyRunner = true;
+    signal.explosiveRunnerLabel = "FAST_RUNNER_OVERRIDE";
+    signal.runnerScore = Math.max(Number(signal.runnerScore || 0), 78);
+    signal.explosiveRunnerScore = Math.max(
+      Number(signal.explosiveRunnerScore || 0),
+      78
+    );
+
+    signal.score = clampScore(Number(signal.score || 0) + 5);
+    signal.fastRunnerReason =
+      `FAST_RUNNER_OVERRIDE • Move ${percentChange.toFixed(2)}% • RVOL ${volumeRatio.toFixed(2)}x • Near high ${closeNearHighPercent.toFixed(1)}%`;
+  }
+
+  return signals;
 }
 
 function updateExplosiveRunnerState(signals = []) {
@@ -21363,34 +21414,6 @@ async function getAiEntryScores() {
   return scoreMap;
 }
 
-async function getAlpacaMoverSymbols() {
-  let moverSymbols = [];
-
-  try {
-    const top = Math.min(Math.max(CONFIG.moversTop, 1), 100);
-
-    const data = await alpacaDataRequest(
-      `/v1beta1/screener/stocks/movers?top=${top}`
-    );
-
-    const gainers = Array.isArray(data.gainers) ? data.gainers : [];
-    const losers = Array.isArray(data.losers) ? data.losers : [];
-
-    moverSymbols = [...gainers, ...losers]
-      .map((item) => item.symbol)
-      .filter(Boolean)
-      .map(normalizeSymbol)
-      .filter(isNormalStockSymbol);
-
-    moverSymbols = [...new Set(moverSymbols)];
-
-    console.log(`Alpaca movers found: ${moverSymbols.length}`);
-  } catch (err) {
-    console.log("Alpaca movers failed:", err.message);
-  }
-
-  return moverSymbols;
-}
 
 async function getPolygonMoverSymbols(limit = 150) {
   const moverSymbols = [];
@@ -21580,15 +21603,39 @@ function buildUniverseExpansionState({
 }
 
 async function getTopMovers() {
-  const alpacaMoverSymbols = await getAlpacaMoverSymbols();
+  let moverSymbols = [];
+
   const polygonMoverSymbols = await getPolygonMoverSymbols();
 
-  const moverSymbols = [
-    ...new Set([
-      ...alpacaMoverSymbols,
-      ...polygonMoverSymbols,
-    ]),
-  ].filter(isNormalStockSymbol);
+  try {
+    const top = Math.min(Math.max(CONFIG.moversTop, 1), 100);
+
+    const data = await alpacaDataRequest(
+      `/v1beta1/screener/stocks/movers?top=${top}`
+    );
+
+    const gainers = Array.isArray(data.gainers) ? data.gainers : [];
+    const losers = Array.isArray(data.losers) ? data.losers : [];
+
+    const alpacaMoverSymbols = [...gainers, ...losers]
+      .map((item) => item.symbol)
+      .filter(Boolean)
+      .map(normalizeSymbol)
+      .filter(isNormalStockSymbol);
+
+    moverSymbols = [
+      ...new Set([
+        ...polygonMoverSymbols,
+        ...alpacaMoverSymbols,
+      ]),
+    ];
+
+    console.log(`Combined Polygon + Alpaca movers found: ${moverSymbols.length}`);
+  } catch (err) {
+    console.log("Alpaca movers failed. Using Polygon/assets fallback:", err.message);
+
+    moverSymbols = [...new Set(polygonMoverSymbols)];
+  }
 
   const minSymbolsNeeded = Number(process.env.MIN_SYMBOLS_NEEDED || 150);
   const maxAssetsFallback = Number(process.env.MAX_ASSETS_FALLBACK || 500);
@@ -22121,16 +22168,6 @@ displayOnlyReason: quote.displayOnlyReason || "",
       err.message
     );
   }
-
-  const explosiveRunnerState =
-    updateExplosiveRunnerState(results);
-
-  saveRecentOrder("EXPLOSIVE_RUNNER_UPDATED", "STOCK", {
-    reviewedCount: explosiveRunnerState.reviewedCount,
-    topEarlyRunnerCount: explosiveRunnerState.topEarlyRunnerCount,
-    topTwoSymbols: explosiveRunnerState.topTwoSymbols,
-  });
-
   const adaptiveRunnerLearningState =
     updateAdaptiveRunnerLearningState(results);
 
@@ -22167,6 +22204,17 @@ displayOnlyReason: quote.displayOnlyReason || "",
       );
     }
   }
+
+  applyFastRunnerOverride(results);
+
+  const explosiveRunnerState =
+    updateExplosiveRunnerState(results);
+
+  saveRecentOrder("EXPLOSIVE_RUNNER_UPDATED", "STOCK", {
+    reviewedCount: explosiveRunnerState.reviewedCount,
+    topEarlyRunnerCount: explosiveRunnerState.topEarlyRunnerCount,
+    topTwoSymbols: explosiveRunnerState.topTwoSymbols,
+  });
 
   const autonomousCapitalRotationState =
     updateAutonomousCapitalRotationState(results);
