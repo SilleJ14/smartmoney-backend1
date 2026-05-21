@@ -21614,23 +21614,25 @@ async function getTopMovers() {
       `/v1beta1/screener/stocks/movers?top=${top}`
     );
 
-    const gainers = Array.isArray(data.gainers) ? data.gainers : [];
-    const losers = Array.isArray(data.losers) ? data.losers : [];
+const gainers = Array.isArray(data.gainers) ? data.gainers : [];
+const losers = Array.isArray(data.losers) ? data.losers : [];
 
-    const alpacaMoverSymbols = [...gainers, ...losers]
-      .map((item) => item.symbol)
-      .filter(Boolean)
-      .map(normalizeSymbol)
-      .filter(isNormalStockSymbol);
+const alpacaMoverSymbols = [...gainers, ...losers]
+  .map((item) => item.symbol)
+  .filter(Boolean)
+  .map(normalizeSymbol)
+  .filter(isNormalStockSymbol);
 
-    moverSymbols = [
-      ...new Set([
-        ...polygonMoverSymbols,
-        ...alpacaMoverSymbols,
-      ]),
-    ];
+moverSymbols = [
+  ...new Set([
+    ...polygonMoverSymbols,
+    ...alpacaMoverSymbols,
+  ]),
+];
 
-    console.log(`Combined Polygon + Alpaca movers found: ${moverSymbols.length}`);
+console.log(
+  `Combined Polygon + Alpaca movers found: ${moverSymbols.length}`
+);
   } catch (err) {
     console.log("Alpaca movers failed. Using Polygon/assets fallback:", err.message);
 
