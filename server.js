@@ -1362,6 +1362,11 @@ engineFreezeCount: 0,
   dailyDateKey: null,
 
   lastSignals: [],
+  lastStockSignals: [],
+  lastCryptoSignals: [],
+  topSignals: [],
+  topStockSignals: [],
+  topCryptoSignals: [],
   liveQuoteCache: {},
 
   recentOrders: [],
@@ -21070,12 +21075,8 @@ async function scanCryptoMarket() {
   const results = [];
 
   engineState.skippedSymbols = [];
-  engineState.lastSignals = [];
-engineState.lastStockSignals = [];
-engineState.topSignals = [];
-engineState.topAutonomousCandidates = [];
-engineState.topRunnerCandidates = [];
-engineState.strongestSignals = [];
+  engineState.lastCryptoScanStartedAt = new Date().toISOString();
+engineState.topCryptoSignals = [];
 
   for (const symbol of symbols) {
 
@@ -33226,8 +33227,21 @@ saveRecentOrder("FINAL_DASHBOARD_SIGNAL_SYNC_UPDATED", "DASHBOARD", {
     finalDashboardSignalSync.topSymbols || [],
 });
 
-    engineState.lastSignals = signals;
-    engineState.lastStockSignals = stockSignals;
+engineState.lastSignals = signals;
+
+engineState.lastStockSignals =
+  Array.isArray(stockSignals) && stockSignals.length > 0
+    ? stockSignals
+    : Array.isArray(engineState.lastStockSignals)
+    ? engineState.lastStockSignals
+    : [];
+
+engineState.lastCryptoSignals =
+  Array.isArray(cryptoSignals) && cryptoSignals.length > 0
+    ? cryptoSignals
+    : Array.isArray(engineState.lastCryptoSignals)
+    ? engineState.lastCryptoSignals
+    : [];
 
     const approvedStockSignals = stockSignals.filter(
       (signal) =>
