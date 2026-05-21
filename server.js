@@ -21392,6 +21392,79 @@ async function getAlpacaMoverSymbols() {
   return moverSymbols;
 }
 
+async function getPolygonMoverSymbols(limit = 150) {
+  const moverSymbols = [];
+
+  try {
+    if (!ENABLE_POLYGON || !POLYGON_API_KEY) {
+      return [];
+    }
+
+    const snapshotUrl =
+      `https://api.polygon.io/v2/snapshot/locale/us/markets/stocks/tickers?apiKey=${POLYGON_API_KEY}`;
+
+    const response = await fetch(snapshotUrl);
+
+    if (response.status === 429) {
+      putPolygonInCooldown(2);
+      console.log("Polygon movers skipped: rate limited");
+      return [];
+    }
+
+    if (!response.ok) {
+      console.log(`Polygon movers failed: HTTP ${response.status}`);
+      return [];
+    }
+
+    const data = await response.json();
+    const tickers = Array.isArray(data?.tickers) ? data.tickers : [];
+
+    const ranked = tickers
+      .map((ticker) => {
+        const symbol = normalizeSymbol(ticker?.ticker);
+        const current = Number(
+          ticker?.lastTrade?.p ||
+            ticker?.day?.c ||
+            0
+        );
+        const previousClose = Number(
+          ticker?.prevDay?.c ||
+            ticker?.todaysChangePerc ||
+            0
+        );
+        const percentChange = Number(
+          ticker?.todaysChangePerc ||
+            (
+              previousClose > 0 && current > 0
+                ? ((current - previousClose) / previousClose) * 100
+                : 0
+            )
+        );
+        const volume = Number(ticker?.day?.v || 0);
+
+        return {
+          symbol,
+          percentChange,
+          volume,
+        };
+      })
+      .filter((item) => isNormalStockSymbol(item.symbol))
+      .filter((item) => Number.isFinite(item.percentChange))
+      .filter((item) => Math.abs(item.percentChange) >= 3)
+      .filter((item) => Number(item.volume || 0) >= CONFIG.minScanVolume)
+      .sort((a, b) => Math.abs(b.percentChange) - Math.abs(a.percentChange))
+      .slice(0, limit);
+
+    moverSymbols.push(...ranked.map((item) => item.symbol));
+
+    console.log(`Polygon movers found: ${moverSymbols.length}`);
+  } catch (err) {
+    console.log("Polygon movers failed:", err.message);
+  }
+
+  return [...new Set(moverSymbols)].filter(isNormalStockSymbol);
+}
+
 async function getTradableAssetUniverse(limit = 300) {
   try {
     const assets = await alpacaTradingRequest(
@@ -21507,7 +21580,15 @@ function buildUniverseExpansionState({
 }
 
 async function getTopMovers() {
-  const moverSymbols = await getAlpacaMoverSymbols();
+  const alpacaMoverSymbols = await getAlpacaMoverSymbols();
+  const polygonMoverSymbols = await getPolygonMoverSymbols();
+
+  const moverSymbols = [
+    ...new Set([
+      ...alpacaMoverSymbols,
+      ...polygonMoverSymbols,
+    ]),
+  ].filter(isNormalStockSymbol);
 
   const minSymbolsNeeded = Number(process.env.MIN_SYMBOLS_NEEDED || 150);
   const maxAssetsFallback = Number(process.env.MAX_ASSETS_FALLBACK || 500);
@@ -21554,6 +21635,8 @@ async function getTopMovers() {
 
   buildUniverseExpansionState({
     moverSymbols,
+    alpacaMoverSymbols,
+    polygonMoverSymbols,
     assetSymbols,
     repeatWatchlistSymbols,
     coolingOffRunnerSymbols,
