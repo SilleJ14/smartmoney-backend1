@@ -21227,7 +21227,7 @@ async function placeCryptoMarketBuy(symbol, dollars) {
     method: "POST",
     body: JSON.stringify({
       symbol: normalizeSymbol(symbol),
-      notional: Math.max(25, Number(dollars.toFixed(2))),
+      notional: Number(dollars.toFixed(2)),
       side: "buy",
       type: "market",
       time_in_force: "gtc",
@@ -30180,6 +30180,89 @@ function calculateAdaptiveCryptoPositionSize(signal = {}, account = {}) {
   };
 }
 
+function getCryptoAvailableBuyingPower(account = {}) {
+  const cash = Number(account?.cash || 0);
+  const cryptoBuyingPower = Number(account?.crypto_buying_power || 0);
+  const nonMarginableBuyingPower = Number(account?.non_marginable_buying_power || 0);
+
+  return Math.max(
+    0,
+    cryptoBuyingPower,
+    nonMarginableBuyingPower,
+    cash
+  );
+}
+
+function calculateAdaptiveCryptoPositionSize(signal = {}, account = {}) {
+  const equity = Number(account?.equity || 0);
+  const availableCryptoBuyingPower = getCryptoAvailableBuyingPower(account);
+
+  const score = Number(signal.score || 0);
+  const technicalScore = Number(
+    signal.technicalScore ||
+      signal.technical?.score ||
+      signal.technicalIntelligence?.institutionalEntryScore ||
+      0
+  );
+  const statisticalScore = Number(
+    signal.statisticalScore ||
+      signal.statisticalEdge?.statisticalEdgeScore ||
+      0
+  );
+  const percentChange = Math.abs(Number(signal.percentChange || 0));
+
+  const baseCryptoBudget =
+    equity * (CONFIG.maxBotExposurePercent / 100);
+
+  const qualityMultiplier =
+    score >= 90 ? 1 :
+    score >= 80 ? 0.75 :
+    score >= 70 ? 0.5 : 0.25;
+
+  const technicalMultiplier =
+    technicalScore >= 80 || statisticalScore >= 75
+      ? 1
+      : technicalScore >= 65
+      ? 0.75
+      : 0.5;
+
+  const volatilityMultiplier =
+    percentChange >= 12 ? 0.35 :
+    percentChange >= 8 ? 0.5 :
+    percentChange >= 5 ? 0.75 : 1;
+
+  const macroMultiplier =
+    engineState.macroRiskState?.shouldBlockNewTrades
+      ? 0
+      : Number(engineState.macroRiskState?.macroExposureMultiplier || 1);
+
+  const rawRecommendedAmount =
+    baseCryptoBudget *
+    qualityMultiplier *
+    technicalMultiplier *
+    volatilityMultiplier *
+    macroMultiplier;
+
+  const recommendedAmount = Math.max(
+    0,
+    Math.min(rawRecommendedAmount, availableCryptoBuyingPower)
+  );
+
+  return {
+    recommendedAmount: Number(recommendedAmount.toFixed(2)),
+    baseCryptoBudget: Number(baseCryptoBudget.toFixed(2)),
+    availableCryptoBuyingPower: Number(availableCryptoBuyingPower.toFixed(2)),
+    qualityMultiplier,
+    technicalMultiplier,
+    volatilityMultiplier,
+    macroMultiplier,
+    reason:
+      `Crypto size adjusted by quality x${qualityMultiplier}, ` +
+      `technical x${technicalMultiplier}, volatility x${volatilityMultiplier}, ` +
+      `macro x${macroMultiplier}`,
+  };
+}
+
 async function autoBuyCryptoSignals(signals) {
   if (!["live_crypto", "smart"].includes(TRADING_MODE)) return;
 
@@ -30423,15 +30506,26 @@ if (finalMasterDecisionProfile.suppressEntry) {
 const finalMasterCryptoSizingMultiplier =
   Number(finalMasterDecisionProfile.finalSizingMultiplier || 1);
 
-const finalTradeAmount =
-  Number(
-    (
-      adaptiveCryptoSizing.recommendedAmount *
-      cryptoConvictionMultiplier *
-      finalMasterCryptoSizingMultiplier
+const availableCryptoBuyingPower =
+  getCryptoAvailableBuyingPower(account);
 
-    ).toFixed(2)
-  );
+const rawFinalTradeAmount =
+  adaptiveCryptoSizing.recommendedAmount *
+  cryptoConvictionMultiplier *
+  finalMasterCryptoSizingMultiplier *
+  Number(cryptoParliamentGate.multiplier || 1);
+
+let finalTradeAmount = Number(
+  Math.min(
+    rawFinalTradeAmount,
+    availableCryptoBuyingPower
+  ).toFixed(2)
+);
+
+if (finalTradeAmount > 0 && finalTradeAmount < 25) {
+  finalTradeAmount =
+    availableCryptoBuyingPower >= 25 ? 25 : 0;
+}
 
 if (!finalTradeAmount || finalTradeAmount <= 0) {
   saveRecentOrder(
@@ -30577,9 +30671,16 @@ if (cryptoModeEnabled) {
   cryptoSignals = await scanCryptoMarket();
 }
 
-if (stockModeEnabled) {
-  stockSignals = await scanMarket();
-}
+stockSignals = await scanMarket();
+
+saveRecentOrder("STOCK_PIPELINE_SCAN_COMPLETED", "STOCK", {
+  tradingMode: TRADING_MODE,
+  effectiveMode,
+  stockModeEnabled,
+  scannedStockSignals: stockSignals.length,
+  cryptoModeEnabled,
+  scannedCryptoSignals: cryptoSignals.length,
+});
     
 const scanStartedAt = Date.now();
 
@@ -33321,15 +33422,17 @@ engineState.topCryptoSignals = [...engineState.lastCryptoSignals]
         Number(signal.score || 0) >= CONFIG.minScoreToBuy
     );
 
-    const shouldRunStockAutoBuy =
-      approvedStockSignals.length > 0 &&
-      !tradingStoppedForDay &&
-      !engineState.stockTradingStoppedForDay;
+const shouldRunStockAutoBuy =
+  stockModeEnabled &&
+  approvedStockSignals.length > 0 &&
+  !tradingStoppedForDay &&
+  !engineState.stockTradingStoppedForDay;
 
-    const shouldRunCryptoAutoBuy =
-      approvedCryptoSignals.length > 0 &&
-      !tradingStoppedForDay &&
-      !engineState.cryptoTradingStoppedForDay;
+const shouldRunCryptoAutoBuy =
+  cryptoModeEnabled &&
+  approvedCryptoSignals.length > 0 &&
+  !tradingStoppedForDay &&
+  !engineState.cryptoTradingStoppedForDay;
 
     const bestStockSignal = stockSignals
       .filter(
