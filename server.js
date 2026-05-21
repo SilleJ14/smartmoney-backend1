@@ -20633,8 +20633,10 @@ function passesQualityFilters(q) {
   // Weak volume should score lower, not disappear from the scanner.
   if (CONFIG.minScanVolume > 0 && q.volume < CONFIG.minScanVolume) {
     return {
-      ok: false,
-      reason: `Extremely low volume (<${CONFIG.minScanVolume})`,
+      ok: true,
+      displayOnly: true,
+      blockBuying: true,
+      reason: `Display only: volume below buy threshold (<${CONFIG.minScanVolume})`,
     };
   }
 
@@ -21706,6 +21708,10 @@ engineState.lastStockScanPreservedDashboardAt =
         return null;
       }
 
+      quote.displayOnly = quality.displayOnly === true;
+      quote.blockBuying = quality.blockBuying === true;
+      quote.displayOnlyReason = quality.reason || "";
+
       const score = scoreStock(quote);
 
 const statisticalEdge = quote.statisticalEdge || null;
@@ -21924,19 +21930,29 @@ const portfolioManagerInput = {
         ...institutional,
         ...portfolioManager,
 qualifiedToBuy:
-  (
-    institutional.autoTradeApproved === true ||
-    portfolioManager.autoTradeApproved === true ||
-    portfolioManager.approved === true ||
-    portfolioManager.aiPortfolioAction === "ALLOW" ||
-    portfolioManager.portfolioAction === "ALLOW"
-  ) &&
-  institutional.decisionLevel !== "Visible Stock" &&
-  quote.phase6ScoringLayers?.hardReject !== true &&
-  quote.phase6ScoringLayers?.finalTradeApproval !== "REJECT_WEAK_TIMING" &&
-  quote.phase6ScoringLayers?.finalTradeApproval !== "BLOCK" &&
-  engineState.phase20AutonomousOrchestrationState?.shouldBlockNewTrades !== true &&
-  engineState.phase21AutonomousBrainState?.shouldBlockNewTrades !== true,
+  quote.blockBuying === true
+    ? false
+    : (
+        institutional.autoTradeApproved === true ||
+        portfolioManager.autoTradeApproved === true ||
+        portfolioManager.approved === true ||
+        portfolioManager.aiPortfolioAction === "ALLOW" ||
+        portfolioManager.portfolioAction === "ALLOW"
+      ) &&
+      institutional.decisionLevel !== "Visible Stock" &&
+      quote.phase6ScoringLayers?.hardReject !== true &&
+      quote.phase6ScoringLayers?.finalTradeApproval !== "REJECT_WEAK_TIMING" &&
+      quote.phase6ScoringLayers?.finalTradeApproval !== "BLOCK" &&
+      engineState.phase20AutonomousOrchestrationState?.shouldBlockNewTrades !== true &&
+      engineState.phase21AutonomousBrainState?.shouldBlockNewTrades !== true,
+
+autoTradeApproved:
+  quote.blockBuying === true
+    ? false
+    : portfolioManager.autoTradeApproved,
+
+displayOnly: quote.displayOnly === true,
+displayOnlyReason: quote.displayOnlyReason || "",
       };
     } catch (err) {
       saveSkippedSymbol(symbol, err.message);
