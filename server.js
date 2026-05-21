@@ -31729,11 +31729,14 @@ for (const decision of centralAutonomousDecisionCore.rankedDecisions) {
   if (
     finalMasterDecisionProfile.suppressEntry &&
     decision.action !== "ALLOW_REDUCED_SIZE"
-  )
-   {
-    Number(matchingSignal.score || 0) * 0.75 +
-      Number(decision.finalDecisionScore || 0) * 0.25
-   }
+  ) {
+    matchingSignal.autoTradeApproved = false;
+    matchingSignal.approved = false;
+    matchingSignal.decisionLevel =
+      finalMasterDecisionProfile.waitForPullback
+        ? "Final Master Decision Waiting For Pullback"
+        : "Blocked By Final Master Decision Profile";
+  }
 
   if (decision.shouldBlock && decision.action !== "ALLOW_REDUCED_SIZE") {
     matchingSignal.autoTradeApproved = false;
@@ -34324,7 +34327,7 @@ const strategyEvolutionValue = Number(
       regimeKey,
       strategyKey,
       memoryKey,
-      strategyEvolutionScore: strategyEvolutionDecisionScore,
+      strategyEvolutionScore,
       strategyAction,
       strategyEvolutionMultiplier,
       evolvedMinScoreOffset,
