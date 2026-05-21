@@ -14828,6 +14828,7 @@ function isPolygonInCooldown() {
   return until > Date.now();
 }
 
+
 function putPolygonInCooldown(minutes = 2) {
   if (!engineState.apiCooldowns) {
     engineState.apiCooldowns = {};
@@ -14837,12 +14838,39 @@ function putPolygonInCooldown(minutes = 2) {
     Date.now() + minutes * 60 * 1000;
 }
 
+function isFinnhubInCooldown() {
+  const until = Number(engineState.apiCooldowns?.finnhubQuote || 0);
+  return until > Date.now();
+}
+
+function putFinnhubInCooldown(minutes = 15) {
+  if (!engineState.apiCooldowns) {
+    engineState.apiCooldowns = {};
+  }
+
+  engineState.apiCooldowns.finnhubQuote =
+    Date.now() + minutes * 60 * 1000;
+
+  if (!engineState.apiFailureCounts) {
+    engineState.apiFailureCounts = {};
+  }
+
+  engineState.apiFailureCounts.finnhubQuote =
+    Number(engineState.apiFailureCounts.finnhubQuote || 0) + 1;
+}
+
+
 async function finnhubQuote(symbol) {
   if (!FINNHUB_API_KEY) {
     return null;
   }
 
+  
+
   const cleanSymbol = normalizeSymbol(symbol);
+  if (isFinnhubInCooldown()) {
+  return null;
+}
 
   const url =
     `https://finnhub.io/api/v1/quote?symbol=${encodeURIComponent(
@@ -14851,9 +14879,14 @@ async function finnhubQuote(symbol) {
 
   const response = await fetch(url);
 
-  if (!response.ok) {
-    throw new Error(`Finnhub HTTP ${response.status}`);
-  }
+if (response.status === 429) {
+  putFinnhubInCooldown(15);
+  return null;
+}
+
+if (!response.ok) {
+  throw new Error(`Finnhub HTTP ${response.status}`);
+}
 
   const data = await response.json();
 
@@ -15034,14 +15067,14 @@ async function getCombinedStockQuote(symbol) {
   let finnhub = null;
   let dataError = "";
 
-  try {
-    if (ENABLE_POLYGON && POLYGON_PRIMARY) {
-      polygon = await polygonQuote(symbol);
-    }
-  } catch (err) {
-    dataError = err.message;
-    console.error("Polygon primary failed:", symbol, err.message);
+try {
+  if (ENABLE_POLYGON) {
+    polygon = await polygonQuote(symbol);
   }
+} catch (err) {
+  dataError = err.message;
+  console.error("Polygon primary failed:", symbol, err.message);
+}
 
   const bars = await getRecentBars(symbol, "5Min", 30);
   const barStats = calculateBarStats(bars);
@@ -15072,14 +15105,14 @@ async function getCombinedStockQuote(symbol) {
     ? alpacaLow
     : 0;
 
-  if (!polygon) {
-    try {
-      finnhub = await finnhubQuote(symbol);
-    } catch (err) {
-      dataError = err.message;
-      console.error("Finnhub fallback failed:", symbol, err.message);
-    }
+if (!polygon && (!alpacaCurrent || alpacaCurrent <= 0)) {
+  try {
+    finnhub = await finnhubQuote(symbol);
+  } catch (err) {
+    dataError = err.message;
+    console.error("Finnhub fallback failed:", symbol, err.message);
   }
+}
 
   const primary = polygon || finnhub;
 
@@ -21583,7 +21616,7 @@ async function scanMarket() {
   console.log(`Scanning ${limitedSymbols.length} of ${symbols.length} symbols...`);
   console.log("Advanced filters enabled:", CONFIG.enableAdvancedFilters);
 
-  const batchSize = 5;
+  const batchSize = 2;
 
   const rawResults = await runInBatches(limitedSymbols, batchSize, async (symbol) => {
     try {
