@@ -1092,7 +1092,7 @@ const CONFIG = {
     process.env.ENABLE_WEAKEST_REPLACEMENT === "true",
 
   maxBotExposurePercent: Number(
-    process.env.MAX_BOT_EXPOSURE_PERCENT || 15
+    process.env.MAX_BOT_EXPOSURE_PERCENT || 50
   ),
 
   enableAutonomousCompounding:
@@ -15078,6 +15078,29 @@ try {
 
   const bars = await getRecentBars(symbol, "5Min", 30);
   const barStats = calculateBarStats(bars);
+    const stockChartBars = Array.isArray(bars)
+    ? bars
+        .map((bar) => {
+          const close = Number(bar.c || bar.close || 0);
+          const open = Number(bar.o || bar.open || close || 0);
+          const high = Number(bar.h || bar.high || close || 0);
+          const low = Number(bar.l || bar.low || close || 0);
+          const volume = Number(bar.v || bar.volume || 0);
+
+          return {
+            time: bar.t || bar.timestamp || bar.time || null,
+            open,
+            high,
+            low,
+            close,
+            price: close,
+            volume,
+          };
+        })
+        .filter((bar) => Number.isFinite(bar.close) && bar.close > 0)
+    : [];
+
+  const stockSparkline = stockChartBars.map((bar) => bar.close);
 
   const latestBar = bars[bars.length - 1] || {};
   const firstBar = bars[0] || {};
@@ -15193,7 +15216,12 @@ if (!polygon && (!alpacaCurrent || alpacaCurrent <= 0)) {
     open,
 
     previousClose,
-
+    chartBars: stockChartBars,
+    historicalBars: stockChartBars,
+    sparkline: stockSparkline,
+    chartSource: "alpaca_stock_bars",
+    chartTimeframe: "5Min",
+    latestChartClose: stockSparkline[stockSparkline.length - 1] || current,
     volume,
 
     dollarVolume,
@@ -20594,7 +20622,9 @@ function calculateTechnicals(bars = []) {
     macd: macdData.macd,
     macdSignal: macdData.signal,
   };
-} function passesQualityFilters(q) {
+}
+
+function passesQualityFilters(q) {
   if (!q.current || q.current <= 0) {
     return { ok: false, reason: "No valid price" };
   }
@@ -21159,6 +21189,30 @@ const cryptoPercentChange =
             100
           : 0;
 
+      const cryptoChartBars = Array.isArray(bars)
+        ? bars
+            .map((bar) => {
+              const close = Number(bar.c || bar.close || 0);
+              const open = Number(bar.o || bar.open || close || 0);
+              const high = Number(bar.h || bar.high || close || 0);
+              const low = Number(bar.l || bar.low || close || 0);
+              const volume = Number(bar.v || bar.volume || 0);
+
+              return {
+                time: bar.t || bar.timestamp || bar.time || null,
+                open,
+                high,
+                low,
+                close,
+                price: close,
+                volume,
+              };
+            })
+            .filter((bar) => Number.isFinite(bar.close) && bar.close > 0)
+        : [];
+
+      const cryptoSparkline = cryptoChartBars.map((bar) => bar.close);          
+
       const cryptoQualification =
         calculateCryptoInstitutionalQualification({
           quote,
@@ -21178,7 +21232,12 @@ const cryptoPercentChange =
         score,
 
         barsFound: bars.length,
-
+        chartBars: cryptoChartBars,
+        historicalBars: cryptoChartBars,
+        sparkline: cryptoSparkline,
+        chartSource: "alpaca_crypto_bars",
+        chartTimeframe: "best_available_live_crypto",
+        latestChartClose: cryptoSparkline[cryptoSparkline.length - 1] || latestPrice,
         volume: liquidityMetrics.volume,
         averageVolume: liquidityMetrics.averageVolume,
         volumeSpikeRatio: liquidityMetrics.volumeSpikeRatio,
