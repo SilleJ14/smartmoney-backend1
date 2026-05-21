@@ -38485,16 +38485,22 @@ function cleanupLiveQuoteCache(maxAgeMinutes = 15) {
   };
 }
 
-function getSymbolsForFinnhubLiveStream(limit = 35) {
-  const signalSymbols = (engineState.lastSignals || [])
-    .map((signal) => normalizeSymbol(signal.symbol))
-    .filter(Boolean)
-    .filter((symbol) => !symbol.includes("/") && !symbol.endsWith("USD"));
+function getSymbolsForFinnhubLiveStream(limit = 75) {
+  const collectStockSymbols = (items = []) =>
+    (Array.isArray(items) ? items : [])
+      .map((item) => normalizeSymbol(item?.symbol || item))
+      .filter(Boolean)
+      .filter((symbol) => !symbol.includes("/") && !symbol.endsWith("USD"));
 
-  const positionSymbols = (engineState.cachedPositions || [])
-    .map((position) => normalizeSymbol(position.symbol))
-    .filter(Boolean)
-    .filter((symbol) => !symbol.includes("/") && !symbol.endsWith("USD"));
+  const signalSymbols = [
+    ...collectStockSymbols(engineState.lastSignals),
+    ...collectStockSymbols(engineState.lastStockSignals),
+    ...collectStockSymbols(engineState.topSignals),
+    ...collectStockSymbols(engineState.topStockSignals),
+    ...collectStockSymbols(engineState.institutionalWatchlist),
+  ];
+
+  const positionSymbols = collectStockSymbols(engineState.cachedPositions);
 
   return [...new Set([...signalSymbols, ...positionSymbols])].slice(0, limit);
 }
