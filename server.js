@@ -31984,7 +31984,29 @@ for (const mutation of liveMomentumMutation.mutatedSignals) {
   matchingSignal.liveMutatedScore = mutation.liveMutatedScore;
   matchingSignal.liveMutationMode = mutation.mutationMode;
   matchingSignal.liveMovePercent = mutation.liveMovePercent;
-  matchingSignal.livePrice = mutation.livePrice;
+  matchingSignal.livePrice = Number(
+  mutation.livePrice ||
+  mutation.price ||
+  matchingSignal.livePrice ||
+  matchingSignal.price ||
+  0
+);
+
+matchingSignal.displayPrice =
+  matchingSignal.livePrice || matchingSignal.price;
+
+matchingSignal.liveQuoteUpdatedAt =
+  mutation.liveQuoteUpdatedAt ||
+  mutation.updatedAt ||
+  new Date().toISOString();
+
+matchingSignal.liveQuoteSource =
+  mutation.liveQuoteSource ||
+  mutation.source ||
+  "polygon_live";
+
+matchingSignal.priceIsLive =
+  matchingSignal.livePrice > 0;
   matchingSignal.displayPrice = matchingSignal.livePrice || matchingSignal.price;
   matchingSignal.liveQuoteUpdatedAt = new Date().toISOString();
   matchingSignal.liveQuoteSource =
