@@ -15351,10 +15351,19 @@ async function polygonQuote(symbol) {
     const prevBar =
       prevData?.results?.[0];
 
+    const quoteBid = Number(ticker?.lastQuote?.bp || 0);
+    const quoteAsk = Number(ticker?.lastQuote?.ap || 0);
+    const quoteMid =
+      quoteBid > 0 && quoteAsk > 0
+        ? Number(((quoteBid + quoteAsk) / 2).toFixed(4))
+        : 0;
+
     const currentPrice = Number(
       ticker?.lastTrade?.p ||
-      ticker?.day?.c ||
-      0
+        ticker?.min?.c ||
+        quoteMid ||
+        ticker?.day?.c ||
+        0
     );
 
     const previousClose = Number(
