@@ -31985,7 +31985,14 @@ for (const mutation of liveMomentumMutation.mutatedSignals) {
   matchingSignal.liveMutationMode = mutation.mutationMode;
   matchingSignal.liveMovePercent = mutation.liveMovePercent;
   matchingSignal.livePrice = mutation.livePrice;
-  matchingSignal.displayPrice = mutation.livePrice;
+  matchingSignal.displayPrice = matchingSignal.livePrice || matchingSignal.price;
+  matchingSignal.liveQuoteUpdatedAt = new Date().toISOString();
+  matchingSignal.liveQuoteSource =
+    mutation.liveQuoteSource ||
+    mutation.source ||
+    matchingSignal.liveQuoteSource ||
+    "live_momentum_mutation";
+  matchingSignal.priceIsLive = true;
 
   matchingSignal.score = clampScore(
     Number(matchingSignal.score || 0) * 0.82 +
@@ -31994,13 +32001,11 @@ for (const mutation of liveMomentumMutation.mutatedSignals) {
 
   if (mutation.liveFade) {
     matchingSignal.autoTradeApproved = false;
-    matchingSignal.decisionLevel =
-      "Live Momentum Fade Warning";
+    matchingSignal.decisionLevel = "Live Momentum Fade Warning";
   }
 
   if (mutation.liveIgnition) {
-    matchingSignal.decisionLevel =
-      "Live Runner Ignition Detected";
+    matchingSignal.decisionLevel = "Live Runner Ignition Detected";
     matchingSignal.allocationMultiplier = Number(
       (
         Number(matchingSignal.allocationMultiplier || 1) * 1.08
