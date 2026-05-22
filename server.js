@@ -70,6 +70,160 @@ const ENABLE_POLYGON_MOVERS =
 const POLYGON_MOVERS_LIMIT = Number(
   process.env.POLYGON_MOVERS_LIMIT || 100
 );
+
+const ENABLE_POLYGON_WEBSOCKET =
+  process.env.ENABLE_POLYGON_WEBSOCKET !== "false";
+
+const POLYGON_WS_URL =
+  process.env.POLYGON_WS_URL || "wss://socket.polygon.io/stocks";
+
+const POLYGON_LIVE_STREAM_LIMIT = Number(
+  process.env.POLYGON_LIVE_STREAM_LIMIT || 75
+);
+
+const LIVE_MARKET_MEMORY_MAX_SECOND_CANDLES = Number(
+  process.env.LIVE_MARKET_MEMORY_MAX_SECOND_CANDLES || 120
+);
+
+const LIVE_MARKET_MEMORY_MAX_SYMBOLS = Number(
+  process.env.LIVE_MARKET_MEMORY_MAX_SYMBOLS || 200
+);
+
+const LIVE_MARKET_MEMORY_MAX_AGE_MINUTES = Number(
+  process.env.LIVE_MARKET_MEMORY_MAX_AGE_MINUTES || 20
+);
+
+const POLYGON_SUBSCRIPTION_ROTATION_LIMIT = Number(
+  process.env.POLYGON_SUBSCRIPTION_ROTATION_LIMIT || 75
+);
+
+const ENABLE_FAST_RUNNER_ENGINE =
+  process.env.ENABLE_FAST_RUNNER_ENGINE !== "false";
+
+const FAST_RUNNER_ENGINE_INTERVAL_MS = Number(
+  process.env.FAST_RUNNER_ENGINE_INTERVAL_MS || 5000
+);
+
+const FAST_RUNNER_MIN_SCORE = Number(
+  process.env.FAST_RUNNER_MIN_SCORE || 78
+);
+
+const FAST_RUNNER_MAX_CANDIDATES = Number(
+  process.env.FAST_RUNNER_MAX_CANDIDATES || 25
+);
+
+const ENABLE_QUICK_INSTITUTIONAL_GATE =
+  process.env.ENABLE_QUICK_INSTITUTIONAL_GATE !== "false";
+
+const QUICK_INSTITUTIONAL_MIN_SCORE = Number(
+  process.env.QUICK_INSTITUTIONAL_MIN_SCORE || 72
+);
+
+const QUICK_GATE_MAX_SPREAD_PERCENT = Number(
+  process.env.QUICK_GATE_MAX_SPREAD_PERCENT || 1
+);
+
+const QUICK_GATE_BLOCK_PANIC =
+  process.env.QUICK_GATE_BLOCK_PANIC !== "false";
+
+const ENABLE_LIVE_STARTER_BUY =
+  process.env.ENABLE_LIVE_STARTER_BUY === "true";
+
+const LIVE_STARTER_BUY_INTERVAL_MS = Number(
+  process.env.LIVE_STARTER_BUY_INTERVAL_MS || 10000
+);
+
+const LIVE_STARTER_BUY_PERCENT = Number(
+  process.env.LIVE_STARTER_BUY_PERCENT || 30
+);
+
+const LIVE_STARTER_MIN_GATE_SCORE = Number(
+  process.env.LIVE_STARTER_MIN_GATE_SCORE || 78
+);
+
+const LIVE_STARTER_MAX_BUYS_PER_CYCLE = Number(
+  process.env.LIVE_STARTER_MAX_BUYS_PER_CYCLE || 1
+);  
+
+const LIVE_ORDER_MAX_QUOTE_AGE_SECONDS = Number(
+  process.env.LIVE_ORDER_MAX_QUOTE_AGE_SECONDS || 8
+);
+
+const LIVE_ORDER_MAX_SPREAD_PERCENT = Number(
+  process.env.LIVE_ORDER_MAX_SPREAD_PERCENT || 1
+);
+
+const LIVE_ORDER_REQUIRE_POLYGON_CONNECTED =
+  process.env.LIVE_ORDER_REQUIRE_POLYGON_CONNECTED !== "false";
+
+const LIVE_ORDER_LOCK_MS = Number(
+  process.env.LIVE_ORDER_LOCK_MS || 15000
+);
+
+const LIVE_DUPLICATE_ORDER_WINDOW_MS = Number(
+  process.env.LIVE_DUPLICATE_ORDER_WINDOW_MS || 60000
+);
+
+const ENABLE_LIVE_POSITION_MANAGEMENT =
+  process.env.ENABLE_LIVE_POSITION_MANAGEMENT !== "false";
+
+const LIVE_POSITION_MANAGEMENT_INTERVAL_MS = Number(
+  process.env.LIVE_POSITION_MANAGEMENT_INTERVAL_MS || 5000
+);
+
+const LIVE_PROFIT_TRIM_TRIGGER_PERCENT = Number(
+  process.env.LIVE_PROFIT_TRIM_TRIGGER_PERCENT || 4
+);
+
+const LIVE_PROFIT_TRIM_QTY_PERCENT = Number(
+  process.env.LIVE_PROFIT_TRIM_QTY_PERCENT || 35
+);
+
+const LIVE_HARD_STOP_PERCENT = Number(
+  process.env.LIVE_HARD_STOP_PERCENT || 2
+);
+
+const LIVE_TRAIL_STOP_FROM_HIGH_PERCENT = Number(
+  process.env.LIVE_TRAIL_STOP_FROM_HIGH_PERCENT || 2
+);
+
+const ENABLE_LIVE_SCALE_IN =
+  process.env.ENABLE_LIVE_SCALE_IN !== "false";
+
+const LIVE_SCALE_IN_INTERVAL_MS = Number(
+  process.env.LIVE_SCALE_IN_INTERVAL_MS || 10000
+);
+
+const LIVE_SCALE_IN_MIN_PROFIT_PERCENT = Number(
+  process.env.LIVE_SCALE_IN_MIN_PROFIT_PERCENT || 2
+);
+
+const LIVE_SCALE_IN_MIN_FAST_SCORE = Number(
+  process.env.LIVE_SCALE_IN_MIN_FAST_SCORE || 82
+);
+
+const LIVE_SCALE_IN_PERCENT_OF_PLAN = Number(
+  process.env.LIVE_SCALE_IN_PERCENT_OF_PLAN || 30
+);
+
+const LIVE_SCALE_IN_MAX_ADDS_PER_SYMBOL = Number(
+  process.env.LIVE_SCALE_IN_MAX_ADDS_PER_SYMBOL || 2
+);
+
+const ENABLE_FULL_BRAIN_FAST_SYNC =
+  process.env.ENABLE_FULL_BRAIN_FAST_SYNC !== "false";
+
+const FULL_BRAIN_FAST_SYNC_INTERVAL_MS = Number(
+  process.env.FULL_BRAIN_FAST_SYNC_INTERVAL_MS || 30000
+);
+
+const ENABLE_DEEP_INTELLIGENCE_SYNC =
+  process.env.ENABLE_DEEP_INTELLIGENCE_SYNC !== "false";
+
+const DEEP_INTELLIGENCE_SYNC_INTERVAL_MS = Number(
+  process.env.DEEP_INTELLIGENCE_SYNC_INTERVAL_MS || 900000
+);
+
 function loadRuntimeConfig() {
   try {
     if (!fs.existsSync(CONFIG_FILE)) return {};
@@ -505,7 +659,57 @@ institutionalDashboardSnapshots:
   (
     engineState.institutionalDashboardSnapshots || []
   ).slice(0, 200),  
-  
+liveMarketMemory:
+  engineState.liveMarketMemory || {},
+
+polygonLiveStreamState:
+  engineState.polygonLiveStreamState || null,
+
+fastRunnerEngineState:
+  engineState.fastRunnerEngineState || null,
+
+fastRunnerCandidates:
+  (engineState.fastRunnerCandidates || []).slice(0, 50),
+
+quickInstitutionalGateState:
+  engineState.quickInstitutionalGateState || null,
+
+quickInstitutionalCandidates:
+  (engineState.quickInstitutionalCandidates || []).slice(0, 50),
+
+liveStarterBuyGateState:
+  engineState.liveStarterBuyGateState || null,
+
+liveStarterBuyHistory:
+  (engineState.liveStarterBuyHistory || []).slice(0, 100),
+
+livePositionManagementState:
+  engineState.livePositionManagementState || null,
+
+livePositionManagementHistory:
+  (engineState.livePositionManagementHistory || []).slice(0, 100),
+
+liveScaleInState:
+  engineState.liveScaleInState || null,
+
+liveScaleInHistory:
+  (engineState.liveScaleInHistory || []).slice(0, 100),
+
+fullBrainFastSyncState:
+  engineState.fullBrainFastSyncState || null,
+
+fullBrainFastSyncHistory:
+  (engineState.fullBrainFastSyncHistory || []).slice(0, 100),
+
+deepIntelligenceSyncState:
+  engineState.deepIntelligenceSyncState || null,
+
+deepIntelligenceSyncHistory:
+  (engineState.deepIntelligenceSyncHistory || []).slice(0, 100),
+
+liveSchedulerState:
+  engineState.liveSchedulerState || null,  
+
 recentOrders: (engineState.recentOrders || []).slice(0, 100),
 failedOrders: (engineState.failedOrders || []).slice(0, 100),
 skippedSymbols: (engineState.skippedSymbols || []).slice(0, 150),
@@ -1373,7 +1577,22 @@ engineFreezeCount: 0,
   topStockSignals: [],
   topCryptoSignals: [],
   liveQuoteCache: {},
-
+  liveMarketMemory: {},
+  polygonLiveStreamState: null,
+  fastRunnerEngineState: null,
+  fastRunnerCandidates: [],
+  quickInstitutionalGateState: null,
+  quickInstitutionalCandidates: [],
+  liveStarterBuyGateState: null,
+  liveStarterBuyHistory: [],
+  livePositionManagementState: null,
+  livePositionManagementHistory: [],
+  liveScaleInState: null,
+  liveScaleInHistory: [],
+  fullBrainFastSyncState: null,
+  fullBrainFastSyncHistory: [],
+  deepIntelligenceSyncState: null,
+  deepIntelligenceSyncHistory: [],
   recentOrders: [],
   failedOrders: [],
   skippedSymbols: [],
@@ -1707,10 +1926,17 @@ let finnhubLiveSocket = null;
 let finnhubSocketReconnectTimer = null;
 let finnhubSubscribedSymbols = new Set();
 let finnhubSocketReconnectAttempts = 0;
-
+let polygonLiveSocket = null;
+let polygonSocketReconnectTimer = null;
+let polygonSubscribedSymbols = new Set();
+let polygonSocketReconnectAttempts = 0;
+let polygonAuthenticated = false;
 const sellingNow = new Set();
 const buyingNow = new Set();
-
+const liveOrderDedupMap = {};
+const liveSchedulerLocks = {};
+const liveSchedulerLastRun = {};
+let liveSchedulerTimer = null;
 const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
 async function runInBatches(items, batchSize, worker) {
   const results = [];
@@ -3599,6 +3825,9 @@ function emitSignalTapeTransitions(signals = []) {
 }
 
 function emitSystemRiskTapeState(extra = {}) {
+  const marketCrashProtection =
+    engineState.marketCrashProtectionState || {};
+
   const blocked =
     marketCrashProtection?.shouldBlockNewTrades === true ||
     engineState.portfolioGovernorState?.shouldBlockNewTrades === true ||
@@ -3752,10 +3981,14 @@ function buildBackendHealthPayload(clock = {}) {
       lastEngineStopReason: engineState.lastEngineStopReason || null,
     },
 
+    liveScheduler: engineState.liveSchedulerState || null,
     quotes: {
       liveQuoteCount,
       lastQuoteUpdateAt: latestLiveQuoteUpdateAt,
       liveQuoteStreamState: engineState.liveQuoteStreamState || null,
+            polygonLiveStreamState: engineState.polygonLiveStreamState || null,
+      liveMemoryCleanupState: engineState.liveMemoryCleanupState || null,
+      liveMarketMemoryCount: Object.keys(engineState.liveMarketMemory || {}).length,
     },
 
     api: {
@@ -3796,22 +4029,46 @@ function buildLiveQuotesPayload(symbols = []) {
     .filter(([symbol]) => {
       return requestedSymbols.length === 0 || requestedSymbols.includes(symbol);
     })
-    .map(([symbol, quote]) => ({
-      symbol,
-      price: Number(quote?.price || quote?.current || 0),
-      current: Number(quote?.current || quote?.price || 0),
-      change: Number(quote?.change || 0),
-      percentChange: Number(
-        quote?.percentChange ||
-          quote?.liveMoveFromPreviousPercent ||
-          0
-      ),
-      source: quote?.source || "live_cache",
-      updatedAt: quote?.updatedAt || null,
-      previousPrice: quote?.previousPrice || null,
-      liveMoveFromPreviousPercent:
-        Number(quote?.liveMoveFromPreviousPercent || 0),
-    }))
+    .map(([symbol, quote]) => {
+      const memory = engineState.liveMarketMemory?.[symbol] || {};
+
+      return {
+        symbol,
+        price: Number(quote?.price || quote?.current || 0),
+        current: Number(quote?.current || quote?.price || 0),
+        bid: Number(quote?.bid || memory.bid || 0),
+        ask: Number(quote?.ask || memory.ask || 0),
+        spread: Number(quote?.spread || memory.spread || 0),
+        spreadPercent: Number(quote?.spreadPercent || memory.spreadPercent || 0),
+        volume: Number(quote?.volume || memory.lastVolume || 0),
+        change: Number(quote?.change || 0),
+        percentChange: Number(
+          quote?.percentChange ||
+            quote?.liveMoveFromPreviousPercent ||
+            0
+        ),
+        source: quote?.source || "live_cache",
+        updatedAt: quote?.updatedAt || null,
+        previousPrice: quote?.previousPrice || null,
+        liveMoveFromPreviousPercent:
+          Number(quote?.liveMoveFromPreviousPercent || 0),
+        fastRunnerScore: Number(
+          quote?.fastRunnerScore || memory.fastRunnerScore || 0
+        ),
+        liveMomentumPercent: Number(
+          quote?.liveMomentumPercent || memory.liveMomentumPercent || 0
+        ),
+        tapeSpeed: Number(quote?.tapeSpeed || memory.tapeSpeed || 0),
+        liquidityPressure: Number(
+          quote?.liquidityPressure || memory.liquidityPressure || 0
+        ),
+        fastRunnerBreakdown: memory.fastRunnerBreakdown || null,
+        oneSecondCandles:
+          memory.secondCandles?.slice(-20) ||
+          quote?.oneSecondCandles ||
+          [],
+      };
+    })
     .filter((quote) => quote.price > 0)
     .sort((a, b) => String(a.symbol).localeCompare(String(b.symbol)));
 
@@ -3820,6 +4077,8 @@ function buildLiveQuotesPayload(symbols = []) {
     marketSession: getMarketSession({
       is_open: Boolean(engineState.marketOpen),
     }),
+    polygonLiveStreamState: engineState.polygonLiveStreamState || null,
+    finnhubLiveStreamState: engineState.liveQuoteStreamState || null,
     count: entries.length,
     quotes: entries,
   };
@@ -14971,7 +15230,7 @@ if (!response.ok) {
 
 async function polygonQuote(symbol) {
   try {
-    if (!ENABLE_POLYGON || !POLYGON_API_KEY) {
+   if (!ENABLE_POLYGON || !POLYGON_API_KEY || !ENABLE_POLYGON_MOVERS) {
       return null;
     }
 
@@ -21415,7 +21674,7 @@ async function getAiEntryScores() {
 }
 
 
-async function getPolygonMoverSymbols(limit = 150) {
+async function getPolygonMoverSymbols(limit = POLYGON_MOVERS_LIMIT) {
   const moverSymbols = [];
 
   try {
@@ -21604,6 +21863,7 @@ function buildUniverseExpansionState({
 
 async function getTopMovers() {
   let moverSymbols = [];
+  let alpacaMoverSymbols = [];  
 
   const polygonMoverSymbols = await getPolygonMoverSymbols();
 
@@ -21617,7 +21877,7 @@ async function getTopMovers() {
 const gainers = Array.isArray(data.gainers) ? data.gainers : [];
 const losers = Array.isArray(data.losers) ? data.losers : [];
 
-const alpacaMoverSymbols = [...gainers, ...losers]
+  alpacaMoverSymbols = [...gainers, ...losers]
   .map((item) => item.symbol)
   .filter(Boolean)
   .map(normalizeSymbol)
@@ -21797,6 +22057,18 @@ async function scanMarket() {
   const scanCycleId = `STOCK_SCAN_${Date.now()}`;
   engineState.currentStockScanCycleId = scanCycleId;
   engineState.lastStockScanStartedAt = new Date().toISOString();
+
+  const account = await getAccount();
+  const positions = await getPositions();
+  const aiOwnedSymbols = await getAiOwnedSymbols();
+
+  const openBotPositions = positions.filter((position) =>
+    aiOwnedSymbols.has(normalizeSymbol(position.symbol)) ||
+    engineState.aiManagedSymbols?.includes(normalizeSymbol(position.symbol))
+  );
+
+  engineState.cachedAccount = account;
+  engineState.cachedPositions = positions;  
  engineState.staleSnapshotClearReason =
   "NEW_STOCK_SCAN_STARTED_KEEP_LAST_GOOD_DASHBOARD";
 
@@ -23207,7 +23479,10 @@ async function placeMarketSell(symbol, qty, reason = "AI_EXIT") {
       body: JSON.stringify(orderPayload),
     });
   } finally {
-    setTimeout(() => sellingNow.delete(normalizedSymbol), 10000);
+    setTimeout(
+      () => sellingNow.delete(normalizedSymbol),
+      LIVE_ORDER_LOCK_MS
+    );
   }
 }
 
@@ -30740,7 +31015,16 @@ async function engineTick() {
 
     const account = await getAccount();
     resetDailySafetyStateIfNewDay(account);
+    const positions = await getPositions();
+    const aiOwnedSymbols = await getAiOwnedSymbols();
 
+    const openBotPositions = positions.filter((position) =>
+      aiOwnedSymbols.has(normalizeSymbol(position.symbol)) ||
+      engineState.aiManagedSymbols?.includes(normalizeSymbol(position.symbol))
+    );
+
+    engineState.cachedAccount = account;
+    engineState.cachedPositions = positions;
     const clock = await getClock();
     const marketOpen = Boolean(clock.is_open);
     let effectiveMode = getEffectiveTradingMode(marketOpen);
@@ -31047,7 +31331,7 @@ saveRecentOrder("PHASE_51_MULTI_TIMEFRAME_CRYPTO_UPDATED", "CRYPTO", {
     phase51MultiTimeframeCryptoState.avgParliamentScore,
 });
 
-const signals = [...stockSignals, ...cryptoSignals];
+let signals = [...stockSignals, ...cryptoSignals];
 const phase59InstitutionalOrderFlow =
   calculatePhase59InstitutionalOrderFlowIntelligence(stockSignals, cryptoSignals);
 
@@ -38516,6 +38800,26 @@ function buildLiveSignalPushPayload() {
     generatedAt: new Date().toISOString(),
     liveQuoteStreamState:
       engineState.liveQuoteStreamState || null,
+    polygonLiveStreamState:
+      engineState.polygonLiveStreamState || null,
+    fastRunnerEngineState:
+      engineState.fastRunnerEngineState || null,
+    quickInstitutionalGateState:
+      engineState.quickInstitutionalGateState || null,
+    liveStarterBuyGateState:
+      engineState.liveStarterBuyGateState || null,
+    livePositionManagementState:
+      engineState.livePositionManagementState || null,
+    liveScaleInState:
+      engineState.liveScaleInState || null,
+    fullBrainFastSyncState:
+      engineState.fullBrainFastSyncState || null,
+    deepIntelligenceSyncState:
+      engineState.deepIntelligenceSyncState || null,      
+    fastRunnerCandidates:
+      engineState.fastRunnerCandidates || [],
+    quickInstitutionalCandidates:
+      engineState.quickInstitutionalCandidates || [],      
     marketOpen: engineState.marketOpen,
     mode: TRADING_MODE,
     effectiveMode: engineState.effectiveMode,
@@ -38544,13 +38848,44 @@ function updateLiveQuoteCache(symbol, quote = {}) {
     engineState.liveQuoteCache = {};
   }
 
+  if (!engineState.liveMarketMemory) {
+    engineState.liveMarketMemory = {};
+  }
+
   const previous = engineState.liveQuoteCache[cleanSymbol] || {};
   const previousPrice = Number(previous.price || 0);
+
+  const bid = Number(quote.bid || quote.bp || previous.bid || 0);
+  const ask = Number(quote.ask || quote.ap || previous.ask || 0);
+  const size = Number(quote.size || quote.s || quote.volume || quote.v || 0);
+  const tradeVolume = Number(quote.volume || quote.v || quote.size || quote.s || 0);
+
+  const spread =
+    bid > 0 && ask > 0
+      ? Number((ask - bid).toFixed(4))
+      : Number(previous.spread || 0);
+
+  const spreadPercent =
+    spread > 0 && price > 0
+      ? Number(((spread / price) * 100).toFixed(4))
+      : Number(previous.spreadPercent || 0);
 
   const liveMoveFromPreviousPercent =
     previousPrice > 0
       ? Number((((price - previousPrice) / previousPrice) * 100).toFixed(4))
       : 0;
+
+  const liveMemory = updateLiveMarketMemory(cleanSymbol, {
+    price,
+    bid,
+    ask,
+    spread,
+    spreadPercent,
+    volume: tradeVolume,
+    size,
+    source: quote.source || "live_stream",
+    raw: quote.raw || quote,
+  });
 
   if (Math.abs(liveMoveFromPreviousPercent) >= 2) {
     broadcastBackendTapeEvent("LIVE_PRICE_JUMP", {
@@ -38558,24 +38893,34 @@ function updateLiveQuoteCache(symbol, quote = {}) {
       previousPrice,
       nextPrice: price,
       movePercent: liveMoveFromPreviousPercent,
-      source: quote.source || "finnhub_ws",
+      source: quote.source || "live_stream",
     });
-  }      
+  }
 
   const cached = {
     symbol: cleanSymbol,
     price,
     current: price,
-    source: quote.source || "finnhub_ws",
+    bid,
+    ask,
+    spread,
+    spreadPercent,
+    volume: tradeVolume,
+    source: quote.source || "live_stream",
     updatedAt: new Date().toISOString(),
     previousPrice: previousPrice || null,
     liveMoveFromPreviousPercent,
+    fastRunnerScore: liveMemory.fastRunnerScore,
+    liveMomentumPercent: liveMemory.liveMomentumPercent,
+    tapeSpeed: liveMemory.tapeSpeed,
+    liquidityPressure: liveMemory.liquidityPressure,
+    oneSecondCandles: liveMemory.secondCandles?.slice(-20) || [],
     raw: quote.raw || null,
   };
 
   engineState.liveQuoteCache[cleanSymbol] = cached;
-    pushLiveSignalUpdate({
-      
+
+  pushLiveSignalUpdate({
     type: "LIVE_QUOTE_TICK",
     symbol: cleanSymbol,
     quote: cached,
@@ -38585,21 +38930,2210 @@ function updateLiveQuoteCache(symbol, quote = {}) {
   pushBackendStreamEvent("PRICE_EVENT", {
     symbol: cleanSymbol,
     quote: cached,
+    liveMemory,
   });
+
   return cached;
 }
 
-function cleanupLiveQuoteCache(maxAgeMinutes = 15) {
-  if (!engineState.liveQuoteCache) {
-    engineState.liveQuoteCache = {};
+
+function clampLiveScore(value, min = 0, max = 100) {
+  return Math.max(min, Math.min(max, Number(value || 0)));
+}
+
+function updateOneSecondCandle(memory, tick = {}) {
+  const price = Number(tick.price || 0);
+  const volume = Number(tick.volume || tick.size || 0);
+  const now = Date.now();
+  const secondKey = Math.floor(now / 1000) * 1000;
+
+  if (!Array.isArray(memory.secondCandles)) {
+    memory.secondCandles = [];
+  }
+
+  let candle = memory.secondCandles[memory.secondCandles.length - 1];
+
+  if (!candle || candle.secondKey !== secondKey) {
+    candle = {
+      secondKey,
+      startedAt: new Date(secondKey).toISOString(),
+      open: price,
+      high: price,
+      low: price,
+      close: price,
+      volume: 0,
+      tickCount: 0,
+    };
+
+    memory.secondCandles.push(candle);
+  }
+
+  candle.high = Math.max(Number(candle.high || price), price);
+  candle.low = Math.min(Number(candle.low || price), price);
+  candle.close = price;
+  candle.volume = Number(candle.volume || 0) + volume;
+  candle.tickCount = Number(candle.tickCount || 0) + 1;
+
+  memory.secondCandles = memory.secondCandles.slice(
+    -LIVE_MARKET_MEMORY_MAX_SECOND_CANDLES
+  );
+
+  return candle;
+}
+
+function calculateFastRunnerScoreFromMemory(memory = {}) {
+  const candles = Array.isArray(memory.secondCandles)
+    ? memory.secondCandles
+    : [];
+
+  const last = candles[candles.length - 1] || null;
+  const prior10 = candles.slice(-10);
+  const prior30 = candles.slice(-30);
+
+  const first10 = prior10[0];
+  const first30 = prior30[0];
+
+  const price = Number(memory.price || 0);
+
+  const momentum10 =
+    first10?.open && price > 0
+      ? ((price - Number(first10.open || 0)) / Number(first10.open || 1)) * 100
+      : 0;
+
+  const momentum30 =
+    first30?.open && price > 0
+      ? ((price - Number(first30.open || 0)) / Number(first30.open || 1)) * 100
+      : 0;
+
+  const recentVolume = prior10.reduce(
+    (sum, candle) => sum + Number(candle.volume || 0),
+    0
+  );
+
+  const longerVolume = prior30.reduce(
+    (sum, candle) => sum + Number(candle.volume || 0),
+    0
+  );
+
+  const avgVolumePerSecond =
+    prior30.length > 0 ? longerVolume / prior30.length : 0;
+
+  const volumeSpikeRatio =
+    avgVolumePerSecond > 0
+      ? recentVolume / Math.max(1, avgVolumePerSecond * Math.max(1, prior10.length))
+      : 0;
+
+  const closeNearHighPercent =
+    last?.high && last?.low && Number(last.high) !== Number(last.low)
+      ? ((Number(last.close || 0) - Number(last.low || 0)) /
+          Math.max(0.0001, Number(last.high || 0) - Number(last.low || 0))) *
+        100
+      : 50;
+
+  const spreadPercent = Number(memory.spreadPercent || 0);
+  const tapeSpeed = Number(memory.tapeSpeed || 0);
+
+  const liquidityScore =
+    spreadPercent <= 0
+      ? 50
+      : spreadPercent <= 0.15
+      ? 95
+      : spreadPercent <= 0.35
+      ? 80
+      : spreadPercent <= 0.75
+      ? 60
+      : 35;
+
+  const momentumScore = clampLiveScore(momentum10 * 12 + momentum30 * 6 + 50);
+  const volumeScore = clampLiveScore(volumeSpikeRatio * 35 + 45);
+  const closeNearHighScore = clampLiveScore(closeNearHighPercent);
+  const tapeSpeedScore = clampLiveScore(tapeSpeed * 8);
+  const fakeBreakoutRisk =
+    momentum10 > 0.35 && closeNearHighPercent < 35
+      ? 25
+      : spreadPercent > 1
+      ? 20
+      : 0;
+
+  const fastRunnerScore = clampLiveScore(
+    momentumScore * 0.3 +
+      volumeScore * 0.25 +
+      liquidityScore * 0.2 +
+      closeNearHighScore * 0.15 +
+      tapeSpeedScore * 0.1 -
+      fakeBreakoutRisk
+  );
+
+  return {
+    fastRunnerScore: Number(fastRunnerScore.toFixed(2)),
+    momentum10: Number(momentum10.toFixed(4)),
+    momentum30: Number(momentum30.toFixed(4)),
+    volumeSpikeRatio: Number(volumeSpikeRatio.toFixed(4)),
+    closeNearHighPercent: Number(closeNearHighPercent.toFixed(2)),
+    liquidityScore,
+    tapeSpeed,
+    fakeBreakoutRisk,
+  };
+}
+
+function updateLiveMarketMemory(symbol, tick = {}) {
+  const cleanSymbol = normalizeSymbol(symbol);
+  const price = Number(tick.price || 0);
+
+  if (!cleanSymbol || !price || price <= 0) {
+    return {};
+  }
+
+  if (!engineState.liveMarketMemory) {
+    engineState.liveMarketMemory = {};
+  }
+
+  const previous =
+    engineState.liveMarketMemory[cleanSymbol] || {
+      symbol: cleanSymbol,
+      price: 0,
+      firstSeenAt: new Date().toISOString(),
+      tickWindow: [],
+      secondCandles: [],
+    };
+
+  const now = Date.now();
+  const previousPrice = Number(previous.price || 0);
+
+  const bid = Number(tick.bid || previous.bid || 0);
+  const ask = Number(tick.ask || previous.ask || 0);
+
+  const spread =
+    Number(tick.spread || 0) ||
+    (bid > 0 && ask > 0 ? Number((ask - bid).toFixed(4)) : Number(previous.spread || 0));
+
+  const spreadPercent =
+    Number(tick.spreadPercent || 0) ||
+    (spread > 0 && price > 0
+      ? Number(((spread / price) * 100).toFixed(4))
+      : Number(previous.spreadPercent || 0));
+
+  const tickWindow = Array.isArray(previous.tickWindow)
+    ? previous.tickWindow
+    : [];
+
+  tickWindow.push({
+    at: now,
+    price,
+    volume: Number(tick.volume || tick.size || 0),
+  });
+
+  const cutoff = now - 10000;
+  const freshTickWindow = tickWindow.filter((item) => Number(item.at || 0) >= cutoff);
+
+  const tapeSpeed = Number((freshTickWindow.length / 10).toFixed(2));
+
+  const nextMemory = {
+    ...previous,
+    symbol: cleanSymbol,
+    price,
+    current: price,
+    previousPrice: previousPrice || null,
+    bid,
+    ask,
+    spread,
+    spreadPercent,
+    lastVolume: Number(tick.volume || 0),
+    lastSize: Number(tick.size || 0),
+    source: tick.source || previous.source || "live_stream",
+    updatedAt: new Date().toISOString(),
+    tickWindow: freshTickWindow,
+    tapeSpeed,
+    liquidityPressure:
+      spreadPercent > 0
+        ? Number((100 / Math.max(0.01, spreadPercent)).toFixed(2))
+        : 0,
+    raw: tick.raw || null,
+  };
+
+  updateOneSecondCandle(nextMemory, tick);
+
+  const fastScore = calculateFastRunnerScoreFromMemory(nextMemory);
+
+  nextMemory.fastRunnerScore = fastScore.fastRunnerScore;
+  nextMemory.fastRunnerBreakdown = fastScore;
+  nextMemory.liveMomentumPercent = fastScore.momentum10;
+
+  engineState.liveMarketMemory[cleanSymbol] = nextMemory;
+
+  return nextMemory;
+}
+
+function getSymbolsForPolygonLiveStream(limit = POLYGON_SUBSCRIPTION_ROTATION_LIMIT) {
+  const liveCandidateSymbols = [
+    ...(engineState.quickInstitutionalCandidates || []),
+    ...(engineState.fastRunnerCandidates || []),
+    ...(engineState.lastStockSignals || []),
+    ...(engineState.topStockSignals || []),
+    ...(engineState.institutionalWatchlist || []),
+    ...(engineState.cachedPositions || []),
+  ]
+    .map((item) => normalizeSymbol(item?.symbol || item))
+    .filter(Boolean)
+    .filter((symbol) => !isCryptoSymbol(symbol));
+
+  const ranked = [...new Set(liveCandidateSymbols)]
+    .map((symbol) => {
+      const memory = engineState.liveMarketMemory?.[symbol] || {};
+      const quote = engineState.liveQuoteCache?.[symbol] || {};
+      const fastScore = Number(memory.fastRunnerScore || 0);
+      const updatedAtMs = new Date(
+        memory.updatedAt || quote.updatedAt || 0
+      ).getTime();
+
+      return {
+        symbol,
+        fastScore,
+        updatedAtMs,
+      };
+    })
+    .sort((a, b) => {
+      const scoreDiff = b.fastScore - a.fastScore;
+      if (scoreDiff !== 0) return scoreDiff;
+      return b.updatedAtMs - a.updatedAtMs;
+    })
+    .map((item) => item.symbol)
+    .slice(0, limit);
+
+  return ranked;
+}
+
+function subscribePolygonSymbol(symbol) {
+  const cleanSymbol = normalizeSymbol(symbol);
+
+  if (
+    !cleanSymbol ||
+    !polygonLiveSocket ||
+    polygonLiveSocket.readyState !== 1 ||
+    !polygonAuthenticated ||
+    polygonSubscribedSymbols.has(cleanSymbol)
+  ) {
+    return;
+  }
+
+  polygonLiveSocket.send(
+    JSON.stringify({
+      action: "subscribe",
+      params: `T.${cleanSymbol},Q.${cleanSymbol},A.${cleanSymbol}`,
+    })
+  );
+
+  polygonSubscribedSymbols.add(cleanSymbol);
+}
+
+function refreshPolygonLiveSubscriptions() {
+  const desiredSymbols = new Set(getSymbolsForPolygonLiveStream());
+
+  if (!polygonLiveSocket || polygonLiveSocket.readyState !== 1 || !polygonAuthenticated) {
+    return [];
+  }
+
+  for (const symbol of [...polygonSubscribedSymbols]) {
+    if (!desiredSymbols.has(symbol)) {
+      try {
+        polygonLiveSocket.send(
+          JSON.stringify({
+            action: "unsubscribe",
+            params: `T.${symbol},Q.${symbol},A.${symbol}`,
+          })
+        );
+      } catch {}
+
+      polygonSubscribedSymbols.delete(symbol);
+    }
+  }
+
+  for (const symbol of desiredSymbols) {
+    subscribePolygonSymbol(symbol);
+  }
+
+  const subscribedSymbols = [...polygonSubscribedSymbols].slice(
+    0,
+    POLYGON_SUBSCRIPTION_ROTATION_LIMIT
+  );
+
+  engineState.polygonLiveStreamState = {
+    ...(engineState.polygonLiveStreamState || {}),
+    ok: true,
+    provider: "polygon",
+    authenticated: polygonAuthenticated,
+    subscribedSymbols,
+    subscribedCount: subscribedSymbols.length,
+    rotationLimit: POLYGON_SUBSCRIPTION_ROTATION_LIMIT,
+    refreshedAt: new Date().toISOString(),
+  };
+
+  return subscribedSymbols;
+}
+
+function schedulePolygonReconnect() {
+  if (polygonSocketReconnectTimer) return;
+
+  const delayMs = Math.min(
+    60000,
+    3000 + polygonSocketReconnectAttempts * 5000
+  );
+
+  polygonSocketReconnectTimer = setTimeout(() => {
+    polygonSocketReconnectTimer = null;
+    startPolygonLiveMarketStream();
+  }, delayMs);
+}
+
+function handlePolygonLiveMessage(message = {}) {
+  const eventType = message.ev;
+  const symbol = normalizeSymbol(message.sym || message.pair || "");
+
+  if (!symbol) return;
+
+  if (eventType === "T") {
+    updateLiveQuoteCache(symbol, {
+      price: message.p,
+      size: message.s,
+      volume: message.s,
+      source: "polygon_ws_trade",
+      raw: message,
+    });
+    return;
+  }
+
+  if (eventType === "Q") {
+    const bid = Number(message.bp || 0);
+    const ask = Number(message.ap || 0);
+    const mid =
+      bid > 0 && ask > 0
+        ? Number(((bid + ask) / 2).toFixed(4))
+        : Number(engineState.liveQuoteCache?.[symbol]?.price || 0);
+
+    if (mid > 0) {
+      updateLiveQuoteCache(symbol, {
+        price: mid,
+        bid,
+        ask,
+        source: "polygon_ws_quote",
+        raw: message,
+      });
+    }
+    return;
+  }
+
+  if (eventType === "A") {
+    updateLiveQuoteCache(symbol, {
+      price: message.c || message.close,
+      volume: message.v,
+      source: "polygon_ws_second_aggregate",
+      raw: message,
+    });
+  }
+}
+
+function startPolygonLiveMarketStream() {
+  if (!ENABLE_POLYGON || !ENABLE_POLYGON_WEBSOCKET || !POLYGON_API_KEY) {
+    engineState.polygonLiveStreamState = {
+      ok: false,
+      provider: "polygon",
+      reason: "Polygon websocket disabled or missing API key.",
+      checkedAt: new Date().toISOString(),
+    };
+
+    return engineState.polygonLiveStreamState;
+  }
+
+  const WebSocketCtor = globalThis.WebSocket;
+
+  if (!WebSocketCtor) {
+    engineState.polygonLiveStreamState = {
+      ok: false,
+      provider: "polygon",
+      reason:
+        "No global WebSocket available in this Node runtime. Install ws package if needed.",
+      checkedAt: new Date().toISOString(),
+    };
+
+    return engineState.polygonLiveStreamState;
+  }
+
+  if (
+    polygonLiveSocket &&
+    [0, 1].includes(polygonLiveSocket.readyState)
+  ) {
     return {
-      removed: 0,
-      remaining: 0,
+      ok: true,
+      provider: "polygon",
+      reason: "Polygon websocket already active.",
     };
   }
 
+  try {
+    polygonLiveSocket = new WebSocketCtor(POLYGON_WS_URL);
+
+    polygonLiveSocket.onopen = () => {
+      polygonAuthenticated = false;
+      polygonSubscribedSymbols = new Set();
+
+      polygonLiveSocket.send(
+        JSON.stringify({
+          action: "auth",
+          params: POLYGON_API_KEY,
+        })
+      );
+
+      engineState.polygonLiveStreamState = {
+        ok: true,
+        provider: "polygon",
+        connectedAt: new Date().toISOString(),
+        reason: "Polygon websocket connected. Authentication sent.",
+      };
+    };
+
+    polygonLiveSocket.onmessage = (event) => {
+      try {
+        const payload = JSON.parse(event.data);
+        const messages = Array.isArray(payload) ? payload : [payload];
+
+        for (const message of messages) {
+          if (message.ev === "status") {
+            const status = String(message.status || "").toLowerCase();
+
+            if (
+              status === "auth_success" ||
+              String(message.message || "").toLowerCase().includes("authenticated")
+            ) {
+              polygonAuthenticated = true;
+              polygonSocketReconnectAttempts = 0;
+
+              const symbols = refreshPolygonLiveSubscriptions();
+
+              engineState.polygonLiveStreamState = {
+                ok: true,
+                provider: "polygon",
+                authenticated: true,
+                connectedAt:
+                  engineState.polygonLiveStreamState?.connectedAt ||
+                  new Date().toISOString(),
+                subscribedSymbols: symbols,
+                subscribedCount: symbols.length,
+                reason: `Polygon websocket authenticated with ${symbols.length} symbols.`,
+              };
+            } else if (status === "error") {
+              engineState.polygonLiveStreamState = {
+                ok: false,
+                provider: "polygon",
+                authenticated: polygonAuthenticated,
+                error: message.message || "Polygon websocket status error",
+                checkedAt: new Date().toISOString(),
+              };
+            }
+
+            continue;
+          }
+
+          handlePolygonLiveMessage(message);
+        }
+      } catch (err) {
+        console.error("Polygon websocket message error:", err.message);
+      }
+    };
+
+    polygonLiveSocket.onerror = (err) => {
+      engineState.polygonLiveStreamState = {
+        ok: false,
+        provider: "polygon",
+        authenticated: polygonAuthenticated,
+        error: err?.message || "Polygon websocket error",
+        checkedAt: new Date().toISOString(),
+      };
+    };
+
+    polygonLiveSocket.onclose = () => {
+      polygonSocketReconnectAttempts += 1;
+      polygonSubscribedSymbols = new Set();
+      polygonAuthenticated = false;
+
+      engineState.polygonLiveStreamState = {
+        ok: false,
+        provider: "polygon",
+        disconnectedAt: new Date().toISOString(),
+        reconnectAttempts: polygonSocketReconnectAttempts,
+      };
+
+      schedulePolygonReconnect();
+    };
+
+    return {
+      ok: true,
+      provider: "polygon",
+      reason: "Polygon websocket starting.",
+    };
+  } catch (err) {
+    engineState.polygonLiveStreamState = {
+      ok: false,
+      provider: "polygon",
+      error: err.message,
+      checkedAt: new Date().toISOString(),
+    };
+
+    schedulePolygonReconnect();
+
+    return engineState.polygonLiveStreamState;
+  }
+}
+
+function buildFastRunnerCandidateFromMemory(symbol, memory = {}) {
+  const cleanSymbol = normalizeSymbol(symbol);
+  const price = Number(memory.price || memory.current || 0);
+
+  if (!cleanSymbol || price <= 0) return null;
+
+  const fastScore = Number(memory.fastRunnerScore || 0);
+  const breakdown = memory.fastRunnerBreakdown || {};
+  const spreadPercent = Number(memory.spreadPercent || 0);
+  const momentum = Number(memory.liveMomentumPercent || breakdown.momentum10 || 0);
+  const fakeBreakoutRisk = Number(breakdown.fakeBreakoutRisk || 0);
+
+  const qualifiedFastRunner =
+    fastScore >= FAST_RUNNER_MIN_SCORE &&
+    spreadPercent <= QUICK_GATE_MAX_SPREAD_PERCENT &&
+    momentum > 0 &&
+    fakeBreakoutRisk < 25;
+
+  return {
+    symbol: cleanSymbol,
+    assetClass: "stock",
+    source: "FAST_RUNNER_ENGINE",
+    price,
+    current: price,
+    fastRunnerScore: fastScore,
+    qualifiedFastRunner,
+    liveMomentumPercent: momentum,
+    volumeSpikeRatio: Number(breakdown.volumeSpikeRatio || 0),
+    tapeSpeed: Number(memory.tapeSpeed || 0),
+    liquidityPressure: Number(memory.liquidityPressure || 0),
+    spreadPercent,
+    closeNearHighPercent: Number(breakdown.closeNearHighPercent || 0),
+    fakeBreakoutRisk,
+    fastRunnerBreakdown: breakdown,
+    updatedAt: memory.updatedAt || new Date().toISOString(),
+    reason: qualifiedFastRunner
+      ? `Fast runner approved • Score ${fastScore}/100`
+      : `Fast runner not ready • Score ${fastScore}/100`,
+  };
+}
+
+function runFastRunnerEngine() {
+  if (!ENABLE_FAST_RUNNER_ENGINE) {
+    engineState.fastRunnerEngineState = {
+      ok: false,
+      enabled: false,
+      reason: "Fast Runner Engine disabled.",
+      updatedAt: new Date().toISOString(),
+    };
+
+    return engineState.fastRunnerEngineState;
+  }
+
+  const memoryEntries = Object.entries(engineState.liveMarketMemory || {});
+
+  const reviewed = memoryEntries
+    .map(([symbol, memory]) => buildFastRunnerCandidateFromMemory(symbol, memory))
+    .filter(Boolean);
+
+  const candidates = reviewed
+    .filter((candidate) => candidate.qualifiedFastRunner)
+    .sort((a, b) => Number(b.fastRunnerScore || 0) - Number(a.fastRunnerScore || 0))
+    .slice(0, FAST_RUNNER_MAX_CANDIDATES);
+
+  engineState.fastRunnerCandidates = candidates;
+
+  engineState.fastRunnerEngineState = {
+    ok: true,
+    enabled: true,
+    phase: "PHASE_2_FAST_RUNNER_ENGINE",
+    updatedAt: new Date().toISOString(),
+    reviewedCount: reviewed.length,
+    candidateCount: candidates.length,
+    minScore: FAST_RUNNER_MIN_SCORE,
+    topCandidates: candidates.slice(0, 10),
+    reason:
+      candidates.length > 0
+        ? `Fast Runner Engine found ${candidates.length} candidates.`
+        : "Fast Runner Engine active, no qualified runners yet.",
+  };
+
+  if (candidates.length > 0) {
+    pushBackendStreamEvent("FAST_RUNNER_EVENT", {
+      candidates: candidates.slice(0, 10),
+      state: engineState.fastRunnerEngineState,
+    });
+
+    pushLiveSignalUpdate({
+      type: "FAST_RUNNER_UPDATE",
+      fastRunnerCandidates: candidates.slice(0, 10),
+      liveSignals: buildLiveSignalPushPayload(),
+    });
+  }
+
+  return engineState.fastRunnerEngineState;
+}
+
+
+function calculateQuickInstitutionalGate(candidate = {}) {
+  const symbol = normalizeSymbol(candidate.symbol);
+  const fastScore = Number(candidate.fastRunnerScore || 0);
+  const spreadPercent = Number(candidate.spreadPercent || 0);
+  const liquidityPressure = Number(candidate.liquidityPressure || 0);
+  const fakeBreakoutRisk = Number(candidate.fakeBreakoutRisk || 0);
+  const momentum = Number(candidate.liveMomentumPercent || 0);
+
+  const regimeState = String(
+    engineState.marketRegime?.state ||
+      engineState.marketRegime?.label ||
+      "unknown"
+  ).toLowerCase();
+
+  const exposureMode = String(
+    engineState.institutionalExposureMode || "NORMAL"
+  ).toUpperCase();
+
+  const marketStress = Number(engineState.marketStressLevel || 0);
+  const marketMomentum = Number(engineState.marketMomentumScore || 0);
+  const volatility = Number(engineState.marketVolatility || 0);
+
+  const portfolioGovernorMode = String(
+    engineState.portfolioGovernorState?.governorMode ||
+      engineState.portfolioGovernorState?.mode ||
+      "NORMAL"
+  ).toUpperCase();
+
+  const statisticalScore = Number(
+    engineState.statisticalEdgeState?.averageStatisticalEdge ||
+      engineState.statisticalEdgeState?.averageProbabilityScore ||
+      engineState.statisticalEdgeState?.statisticalEdgeScore ||
+      50
+  );
+
+  const executionConfidence = Number(
+    engineState.institutionalExecutionLayerState?.averageExecutionConfidence ||
+      50
+  );
+
+  const brainConviction = Number(
+    engineState.fullInstitutionalAiBrainState?.masterOpportunities?.find(
+      (item) => normalizeSymbol(item.symbol) === symbol
+    )?.institutionalBrainScore || 50
+  );
+
+  const panicBlocked =
+    QUICK_GATE_BLOCK_PANIC &&
+    (
+      regimeState.includes("panic") ||
+      exposureMode.includes("PANIC") ||
+      marketStress >= 85 ||
+      portfolioGovernorMode.includes("DEFENSE")
+    );
+
+  const spreadBlocked =
+    spreadPercent > QUICK_GATE_MAX_SPREAD_PERCENT;
+
+  const fakeBreakoutBlocked =
+    fakeBreakoutRisk >= 25 || momentum <= 0;
+
+  const marketRiskPenalty =
+    marketStress >= 75
+      ? 18
+      : marketStress >= 60
+      ? 10
+      : 0;
+
+  const volatilityPenalty =
+    volatility >= 40
+      ? 10
+      : volatility >= 28
+      ? 5
+      : 0;
+
+  const regimeBonus =
+    regimeState.includes("bull")
+      ? 8
+      : regimeState.includes("cautious")
+      ? 3
+      : regimeState.includes("defensive")
+      ? -8
+      : 0;
+
+  const exposurePenalty =
+    exposureMode.includes("DEFENSIVE")
+      ? 8
+      : exposureMode.includes("PANIC")
+      ? 20
+      : 0;
+
+  const quickInstitutionalScore = clampLiveScore(
+    fastScore * 0.38 +
+      statisticalScore * 0.18 +
+      executionConfidence * 0.14 +
+      brainConviction * 0.12 +
+      Math.min(100, liquidityPressure) * 0.1 +
+      Math.max(0, marketMomentum + 50) * 0.08 +
+      regimeBonus -
+      marketRiskPenalty -
+      volatilityPenalty -
+      exposurePenalty -
+      fakeBreakoutRisk
+  );
+
+  const approved =
+    quickInstitutionalScore >= QUICK_INSTITUTIONAL_MIN_SCORE &&
+    fastScore >= FAST_RUNNER_MIN_SCORE &&
+    !panicBlocked &&
+    !spreadBlocked &&
+    !fakeBreakoutBlocked;
+
+  const blockReasons = [];
+
+  if (quickInstitutionalScore < QUICK_INSTITUTIONAL_MIN_SCORE) {
+    blockReasons.push(`Quick institutional score below ${QUICK_INSTITUTIONAL_MIN_SCORE}`);
+  }
+
+  if (fastScore < FAST_RUNNER_MIN_SCORE) {
+    blockReasons.push(`Fast runner score below ${FAST_RUNNER_MIN_SCORE}`);
+  }
+
+  if (panicBlocked) {
+    blockReasons.push("Market panic/defense protection active");
+  }
+
+  if (spreadBlocked) {
+    blockReasons.push(`Spread too wide: ${spreadPercent}%`);
+  }
+
+  if (fakeBreakoutBlocked) {
+    blockReasons.push("Fake breakout or weak live momentum risk");
+  }
+
+  return {
+    ...candidate,
+    symbol,
+    quickInstitutionalScore: Number(quickInstitutionalScore.toFixed(2)),
+    quickInstitutionalApproved: approved,
+    institutionalGateApproved: approved,
+    marketRegime: regimeState,
+    institutionalExposureMode: exposureMode,
+    portfolioGovernorMode,
+    marketStress,
+    marketMomentum,
+    volatility,
+    statisticalScore,
+    executionConfidence,
+    brainConviction,
+    blockReasons,
+    reason: approved
+      ? `Quick Institutional Gate approved • Score ${quickInstitutionalScore.toFixed(2)}/100`
+      : `Quick Institutional Gate blocked • ${blockReasons.join(" • ")}`,
+    reviewedAt: new Date().toISOString(),
+  };
+}
+
+function runQuickInstitutionalGate() {
+  if (!ENABLE_QUICK_INSTITUTIONAL_GATE) {
+    engineState.quickInstitutionalGateState = {
+      ok: false,
+      enabled: false,
+      reason: "Quick Institutional Gate disabled.",
+      updatedAt: new Date().toISOString(),
+    };
+
+    return engineState.quickInstitutionalGateState;
+  }
+
+  const reviewed = (engineState.fastRunnerCandidates || [])
+    .map((candidate) => calculateQuickInstitutionalGate(candidate))
+    .sort(
+      (a, b) =>
+        Number(b.quickInstitutionalScore || 0) -
+        Number(a.quickInstitutionalScore || 0)
+    );
+
+  const approved = reviewed.filter(
+    (candidate) => candidate.quickInstitutionalApproved
+  );
+
+  engineState.quickInstitutionalCandidates = approved;
+
+  engineState.quickInstitutionalGateState = {
+    ok: true,
+    enabled: true,
+    phase: "PHASE_3_QUICK_INSTITUTIONAL_GATE",
+    updatedAt: new Date().toISOString(),
+    reviewedCount: reviewed.length,
+    approvedCount: approved.length,
+    minScore: QUICK_INSTITUTIONAL_MIN_SCORE,
+    maxSpreadPercent: QUICK_GATE_MAX_SPREAD_PERCENT,
+    approvedCandidates: approved.slice(0, 10),
+    blockedCandidates: reviewed
+      .filter((candidate) => !candidate.quickInstitutionalApproved)
+      .slice(0, 10),
+    reason:
+      approved.length > 0
+        ? `Quick Institutional Gate approved ${approved.length} fast runners.`
+        : "Quick Institutional Gate active, no institutionally approved fast runners yet.",
+  };
+
+  pushBackendStreamEvent("QUICK_INSTITUTIONAL_GATE_EVENT", {
+    state: engineState.quickInstitutionalGateState,
+    approvedCandidates: approved.slice(0, 10),
+  });
+
+  pushLiveSignalUpdate({
+    type: "QUICK_INSTITUTIONAL_GATE_UPDATE",
+    quickInstitutionalCandidates: approved.slice(0, 10),
+    liveSignals: buildLiveSignalPushPayload(),
+  });
+
+  return engineState.quickInstitutionalGateState;
+}
+
+function buildLiveStarterBuyDecision(candidate = {}, account = {}, openBotPositions = []) {
+  const symbol = normalizeSymbol(candidate.symbol);
+  const price = Number(candidate.price || candidate.current || 0);
+
+  const fastScore = Number(candidate.fastRunnerScore || 0);
+  const gateScore = Number(candidate.quickInstitutionalScore || 0);
+  const finalLiveScore = Math.max(fastScore, gateScore);
+
+  const cash = Number(account?.cash || 0);
+  const equity = Number(account?.equity || account?.portfolio_value || cash || 0);
+
+  const currentExposure = openBotPositions.reduce((sum, position) => {
+    return sum + Math.abs(Number(position.market_value || 0));
+  }, 0);
+
+  const maxBotBudget =
+    equity > 0
+      ? equity * (Number(CONFIG.maxBotExposurePercent || 0) / 100)
+      : 0;
+
+  const remainingBudget = Math.max(0, maxBotBudget - currentExposure);
+
+  const plannedFullTradeAmount =
+    typeof getDynamicTradeAmount === "function"
+      ? Number(
+          getDynamicTradeAmount(
+            account,
+            openBotPositions,
+            finalLiveScore
+          ) || 0
+        )
+      : Math.min(
+          remainingBudget,
+          cash,
+          equity * 0.02
+        );
+
+  const starterPercent = Math.max(
+    1,
+    Math.min(100, Number(LIVE_STARTER_BUY_PERCENT || 30))
+  );
+
+  const starterAmount = Number(
+    Math.min(
+      cash,
+      remainingBudget,
+      plannedFullTradeAmount * (starterPercent / 100)
+    ).toFixed(2)
+  );
+
+  const alreadyOwned = openBotPositions.some(
+    (position) => normalizeSymbol(position.symbol) === symbol
+  );
+
+  const openTradeCount = openBotPositions.length;
+
+  const blockReasons = [];
+
+  if (!ENABLE_LIVE_STARTER_BUY) {
+    blockReasons.push("Live starter buy disabled by ENABLE_LIVE_STARTER_BUY");
+  }
+
+  if (!autoTradingEnabled) {
+    blockReasons.push("Auto trading disabled");
+  }
+
+  if (!symbol || price <= 0) {
+    blockReasons.push("Invalid live price");
+  }
+
+  if (candidate.quickInstitutionalApproved !== true) {
+    blockReasons.push("Quick Institutional Gate not approved");
+  }
+
+  if (fastScore < FAST_RUNNER_MIN_SCORE) {
+    blockReasons.push(`Fast Runner score below ${FAST_RUNNER_MIN_SCORE}`);
+  }
+
+  if (gateScore < LIVE_STARTER_MIN_GATE_SCORE) {
+    blockReasons.push(`Live starter gate score below ${LIVE_STARTER_MIN_GATE_SCORE}`);
+  }
+
+  if (finalLiveScore < Number(CONFIG.minScoreToBuy || 65)) {
+    blockReasons.push(`Final live score below minScoreToBuy ${CONFIG.minScoreToBuy}`);
+  }
+
+  if (alreadyOwned) {
+    blockReasons.push("Already owned");
+  }
+
+  if (openTradeCount >= Number(CONFIG.maxStockOpenTrades || CONFIG.maxOpenTrades || 1)) {
+    blockReasons.push("Max stock open trades reached");
+  }
+
+  if (cash < 1 || remainingBudget < 1 || starterAmount < 1) {
+    blockReasons.push("Insufficient cash or exposure budget for starter buy");
+  }
+
+  if (engineState.marketCrashProtectionState?.shouldBlockNewTrades === true) {
+    blockReasons.push("Market crash protection blocked new trades");
+  }
+
+  if (engineState.portfolioGovernorState?.shouldBlockNewTrades === true) {
+    blockReasons.push("Portfolio governor blocked new trades");
+  }
+
+  if (
+    engineState.macroRiskState?.shouldBlockNewTrades === true &&
+    engineState.macroProbeOverrideState?.allowed !== true
+  ) {
+    blockReasons.push("Macro risk blocked new trades");
+  }
+
+  const approved = blockReasons.length === 0;
+
+  return {
+    symbol,
+    approved,
+    starterAmount,
+    plannedFullTradeAmount: Number(plannedFullTradeAmount.toFixed(2)),
+    starterPercent,
+    price,
+    fastScore,
+    gateScore,
+    finalLiveScore,
+    cash,
+    equity,
+    currentExposure,
+    maxBotBudget: Number(maxBotBudget.toFixed(2)),
+    remainingBudget: Number(remainingBudget.toFixed(2)),
+    openTradeCount,
+    blockReasons,
+    candidate,
+    reason: approved
+      ? `LIVE STARTER BUY APPROVED • Starter $${starterAmount} • ${starterPercent}% of planned size`
+      : `LIVE STARTER BUY BLOCKED • ${blockReasons.join(" • ")}`,
+    reviewedAt: new Date().toISOString(),
+  };
+}
+
+async function runLiveStarterBuyGate() {
+  const stateStartedAt = new Date().toISOString();
+
+  try {
+
+        if (!ENABLE_LIVE_STARTER_BUY) {
+      engineState.liveStarterBuyGateState = {
+        ok: false,
+        enabled: false,
+        phase: "PHASE_4_LIVE_STARTER_BUY_GATE",
+        reviewedAt: stateStartedAt,
+        reviewedCount: 0,
+        approvedCount: 0,
+        boughtCount: 0,
+        reason: "Live Starter Buy disabled.",
+      };
+
+      return engineState.liveStarterBuyGateState;
+    }
+
+    const candidates = (engineState.quickInstitutionalCandidates || [])
+      .filter((candidate) => candidate.quickInstitutionalApproved === true)
+      .sort(
+        (a, b) =>
+          Number(b.quickInstitutionalScore || 0) -
+          Number(a.quickInstitutionalScore || 0)
+      );
+
+    if (candidates.length === 0) {
+      engineState.liveStarterBuyGateState = {
+        ok: true,
+        enabled: ENABLE_LIVE_STARTER_BUY,
+        phase: "PHASE_4_LIVE_STARTER_BUY_GATE",
+        reviewedAt: stateStartedAt,
+        reviewedCount: 0,
+        approvedCount: 0,
+        boughtCount: 0,
+        reason: "No Quick Institutional candidates ready for starter buy.",
+      };
+
+      return engineState.liveStarterBuyGateState;
+    }
+
+    const account = await getAccount();
+    const positions = await getPositions();
+    const aiOwnedSymbols = await getAiOwnedSymbols();
+
+    const openBotPositions = positions.filter((position) =>
+      aiOwnedSymbols.has(normalizeSymbol(position.symbol))
+    );
+
+    const decisions = candidates.map((candidate) =>
+      buildLiveStarterBuyDecision(candidate, account, openBotPositions)
+    );
+
+    const approved = decisions.filter((decision) => decision.approved);
+
+    const orders = [];
+
+    for (const decision of approved.slice(0, LIVE_STARTER_MAX_BUYS_PER_CYCLE)) {
+      const symbol = normalizeSymbol(decision.symbol);
+
+      if (activeBuyExecutionLocks.has(symbol) || buyingNow.has(symbol)) {
+        continue;
+      }
+
+      const liveSafety = checkLiveOrderSafety(symbol, "BUY");
+
+      if (!liveSafety.approved) {
+        saveFailedOrder(
+          "LIVE_STARTER_BUY_SAFETY_BLOCKED",
+          symbol,
+          liveSafety.blockReasons.join(" • "),
+          {
+            liveSafety,
+            decision,
+          }
+        );
+
+        continue;
+      }
+
+      const duplicateCheck = checkAndMarkLiveDuplicateOrder(
+        symbol,
+        "BUY",
+        "LIVE_STARTER_BUY"
+      );
+
+      if (duplicateCheck.duplicate) {
+        saveFailedOrder(
+          "LIVE_STARTER_BUY_DUPLICATE_BLOCKED",
+          symbol,
+          "Duplicate live starter buy blocked",
+          {
+            duplicateCheck,
+            decision,
+          }
+        );
+
+        continue;
+      }
+
+      activeBuyExecutionLocks.add(symbol);
+      try {
+        const order = await placeMarketBuy(
+          symbol,
+          decision.starterAmount,
+          decision.finalLiveScore
+        );
+
+        markAiManagedSymbol(symbol);
+
+        engineState.aiEntryScores[symbol] = {
+          score: decision.finalLiveScore,
+          fastRunnerScore: decision.fastScore,
+          quickInstitutionalScore: decision.gateScore,
+          entryType: "LIVE_STARTER_BUY",
+          starterAmount: decision.starterAmount,
+          plannedFullTradeAmount: decision.plannedFullTradeAmount,
+          enteredAt: new Date().toISOString(),
+        };
+
+        journalTradeEntry(symbol, {
+          entryType: "LIVE_STARTER_BUY",
+          assetClass: "stock",
+          entryPrice: decision.price,
+          score: decision.finalLiveScore,
+          strategy: "live_fast_runner_institutional_gate",
+          tradeAmount: decision.starterAmount,
+          confirmations: {
+            fastRunnerApproved: true,
+            quickInstitutionalApproved: true,
+            fastRunnerScore: decision.fastScore,
+            quickInstitutionalScore: decision.gateScore,
+          },
+          institutionalExecutionPlan: {
+            starterBuy: true,
+            starterPercent: decision.starterPercent,
+            plannedFullTradeAmount: decision.plannedFullTradeAmount,
+          },
+        });
+
+        const record = {
+          symbol,
+          order,
+          decision,
+          boughtAt: new Date().toISOString(),
+        };
+
+        orders.push(record);
+
+        engineState.liveStarterBuyHistory.unshift(record);
+        engineState.liveStarterBuyHistory =
+          engineState.liveStarterBuyHistory.slice(0, 100);
+
+        saveRecentOrder("LIVE_STARTER_BUY_PLACED", symbol, {
+          starterAmount: decision.starterAmount,
+          plannedFullTradeAmount: decision.plannedFullTradeAmount,
+          starterPercent: decision.starterPercent,
+          fastScore: decision.fastScore,
+          gateScore: decision.gateScore,
+          finalLiveScore: decision.finalLiveScore,
+          order,
+        });
+
+        pushBackendStreamEvent("LIVE_STARTER_BUY_PLACED", {
+          symbol,
+          decision,
+          order,
+        });
+      } catch (err) {
+        saveFailedOrder("LIVE_STARTER_BUY_FAILED", symbol, err.message, {
+          decision,
+        });
+      } finally {
+        activeBuyExecutionLocks.delete(symbol);
+      }
+    }
+
+    engineState.liveStarterBuyGateState = {
+      ok: true,
+      enabled: ENABLE_LIVE_STARTER_BUY,
+      phase: "PHASE_4_LIVE_STARTER_BUY_GATE",
+      reviewedAt: stateStartedAt,
+      reviewedCount: decisions.length,
+      approvedCount: approved.length,
+      boughtCount: orders.length,
+      topApproved: approved.slice(0, 5),
+      blocked: decisions.filter((decision) => !decision.approved).slice(0, 10),
+      orders,
+      reason:
+        orders.length > 0
+          ? `Live Starter Buy placed ${orders.length} starter order(s).`
+          : approved.length > 0
+          ? "Live Starter Buy found approved candidates but no order was placed this cycle."
+          : "Live Starter Buy Gate active, no approved buys.",
+    };
+
+    saveEngineState("LIVE_STARTER_BUY_GATE_UPDATED");
+
+    return engineState.liveStarterBuyGateState;
+  } catch (err) {
+    engineState.liveStarterBuyGateState = {
+      ok: false,
+      enabled: ENABLE_LIVE_STARTER_BUY,
+      phase: "PHASE_4_LIVE_STARTER_BUY_GATE",
+      error: err.message,
+      reviewedAt: stateStartedAt,
+    };
+
+    saveFailedOrder("LIVE_STARTER_BUY_GATE_FAILED", "SYSTEM", err.message);
+
+    return engineState.liveStarterBuyGateState;
+  }
+}
+
+function getLivePositionPrice(symbol, position = {}) {
+  const cleanSymbol = normalizeSymbol(symbol);
+  const live = engineState.liveMarketMemory?.[cleanSymbol];
+  const cached = engineState.liveQuoteCache?.[cleanSymbol];
+
+  return Number(
+    live?.price ||
+      cached?.price ||
+      cached?.current ||
+      position.current_price ||
+      position.market_price ||
+      0
+  );
+}
+
+function updateLivePositionHighWater(symbol, price) {
+  const cleanSymbol = normalizeSymbol(symbol);
+
+  if (!engineState.highWaterMarks) {
+    engineState.highWaterMarks = {};
+  }
+
+  const currentHigh = Number(engineState.highWaterMarks[cleanSymbol] || 0);
+  const nextHigh = Math.max(currentHigh, Number(price || 0));
+
+  engineState.highWaterMarks[cleanSymbol] = nextHigh;
+
+  return nextHigh;
+}
+
+function buildLivePositionDecision(position = {}) {
+  const symbol = normalizeSymbol(position.symbol);
+  const qty = Number(position.qty || 0);
+  const avgEntryPrice = Number(position.avg_entry_price || 0);
+  const livePrice = getLivePositionPrice(symbol, position);
+
+  if (!symbol || qty <= 0 || avgEntryPrice <= 0 || livePrice <= 0) {
+    return null;
+  }
+
+  const unrealizedPercent =
+    ((livePrice - avgEntryPrice) / avgEntryPrice) * 100;
+
+  const highWater = updateLivePositionHighWater(symbol, livePrice);
+  const dropFromHighPercent =
+    highWater > 0
+      ? ((highWater - livePrice) / highWater) * 100
+      : 0;
+
+  const memory = engineState.liveMarketMemory?.[symbol] || {};
+  const fastRunnerScore = Number(memory.fastRunnerScore || 0);
+  const liveMomentumPercent = Number(memory.liveMomentumPercent || 0);
+  const spreadPercent = Number(memory.spreadPercent || 0);
+
+  const isRunner =
+    fastRunnerScore >= FAST_RUNNER_MIN_SCORE ||
+    Number(engineState.aiEntryScores?.[symbol]?.fastRunnerScore || 0) >= FAST_RUNNER_MIN_SCORE;
+
+  let action = "HOLD";
+  let sellQty = 0;
+  let reason = "Live position healthy. Hold.";
+
+  if (unrealizedPercent <= -LIVE_HARD_STOP_PERCENT) {
+    action = "EXIT";
+    sellQty = qty;
+    reason = `Live hard stop hit: ${unrealizedPercent.toFixed(2)}%`;
+  } else if (
+    unrealizedPercent >= Number(CONFIG.runnerTriggerPercent || 6) &&
+    dropFromHighPercent >= LIVE_TRAIL_STOP_FROM_HIGH_PERCENT
+  ) {
+    action = "EXIT";
+    sellQty = qty;
+    reason = `Live runner trail stop: drop ${dropFromHighPercent.toFixed(2)}% from high`;
+  } else if (
+    unrealizedPercent >= LIVE_PROFIT_TRIM_TRIGGER_PERCENT &&
+    dropFromHighPercent >= 1 &&
+    liveMomentumPercent <= 0
+  ) {
+    action = "TRIM";
+    sellQty = Math.max(
+      1,
+      Math.floor(qty * (LIVE_PROFIT_TRIM_QTY_PERCENT / 100))
+    );
+    reason = `Live profit trim: profit ${unrealizedPercent.toFixed(2)}%, momentum fading`;
+  } else if (
+    isRunner &&
+    unrealizedPercent > 0 &&
+    fastRunnerScore >= FAST_RUNNER_MIN_SCORE &&
+    liveMomentumPercent > 0
+  ) {
+    action = "HOLD_RUNNER";
+    sellQty = 0;
+    reason = "Live runner still strong. Hold.";
+  }
+
+  if (spreadPercent > 2 && action !== "EXIT") {
+    action = "PROTECT";
+    sellQty = 0;
+    reason = `Spread too wide for action: ${spreadPercent}%`;
+  }
+
+  return {
+    symbol,
+    qty,
+    sellQty,
+    avgEntryPrice,
+    livePrice,
+    unrealizedPercent: Number(unrealizedPercent.toFixed(2)),
+    highWater,
+    dropFromHighPercent: Number(dropFromHighPercent.toFixed(2)),
+    fastRunnerScore,
+    liveMomentumPercent,
+    spreadPercent,
+    isRunner,
+    action,
+    reason,
+    reviewedAt: new Date().toISOString(),
+  };
+}
+
+async function runLivePositionManagement() {
+  const startedAt = new Date().toISOString();
+
+  try {
+    if (!ENABLE_LIVE_POSITION_MANAGEMENT) {
+      engineState.livePositionManagementState = {
+        ok: false,
+        enabled: false,
+        phase: "PHASE_5_LIVE_POSITION_MANAGEMENT",
+        reason: "Live position management disabled.",
+        reviewedAt: startedAt,
+      };
+
+      return engineState.livePositionManagementState;
+    }
+
+    const positions = await getPositions();
+    const aiOwnedSymbols = await getAiOwnedSymbols();
+
+    const aiPositions = positions.filter((position) =>
+      aiOwnedSymbols.has(normalizeSymbol(position.symbol))
+    );
+
+    const decisions = aiPositions
+      .map((position) => buildLivePositionDecision(position))
+      .filter(Boolean);
+
+    const executed = [];
+
+    for (const decision of decisions) {
+      if (!["TRIM", "EXIT"].includes(decision.action)) continue;
+
+      const symbol = normalizeSymbol(decision.symbol);
+
+      if (sellingNow.has(symbol)) continue;
+
+      const liveSafety = checkLiveOrderSafety(symbol, "SELL");
+
+      if (!liveSafety.approved) {
+        saveFailedOrder(
+          `LIVE_POSITION_${decision.action}_SAFETY_BLOCKED`,
+          symbol,
+          liveSafety.blockReasons.join(" • "),
+          {
+            liveSafety,
+            decision,
+          }
+        );
+
+        continue;
+      }
+
+      const duplicateCheck = checkAndMarkLiveDuplicateOrder(
+        symbol,
+        "SELL",
+        `LIVE_${decision.action}`
+      );
+
+      if (duplicateCheck.duplicate) {
+        saveFailedOrder(
+          `LIVE_POSITION_${decision.action}_DUPLICATE_BLOCKED`,
+          symbol,
+          "Duplicate live sell/trim blocked",
+          {
+            duplicateCheck,
+            decision,
+          }
+        );
+
+        continue;
+      }
+
+      try {
+        const order = await placeMarketSell(
+          symbol,
+          decision.sellQty,
+          `LIVE_${decision.action}`
+        );
+
+        const record = {
+          symbol,
+          action: decision.action,
+          sellQty: decision.sellQty,
+          reason: decision.reason,
+          order,
+          executedAt: new Date().toISOString(),
+          decision,
+        };
+
+        executed.push(record);
+
+        saveRecentOrder(`LIVE_POSITION_${decision.action}`, symbol, record);
+
+        pushBackendStreamEvent(`LIVE_POSITION_${decision.action}`, record);
+      } catch (err) {
+        saveFailedOrder(`LIVE_POSITION_${decision.action}_FAILED`, symbol, err.message, {
+          decision,
+        });
+      } 
+    }
+
+    const snapshot = {
+      ok: true,
+      enabled: true,
+      phase: "PHASE_5_LIVE_POSITION_MANAGEMENT",
+      reviewedAt: startedAt,
+      reviewedCount: decisions.length,
+      executedCount: executed.length,
+      holdCount: decisions.filter((d) => d.action === "HOLD").length,
+      runnerHoldCount: decisions.filter((d) => d.action === "HOLD_RUNNER").length,
+      protectCount: decisions.filter((d) => d.action === "PROTECT").length,
+      trimCount: decisions.filter((d) => d.action === "TRIM").length,
+      exitCount: decisions.filter((d) => d.action === "EXIT").length,
+      decisions: decisions.slice(0, 25),
+      executed,
+      reason:
+        executed.length > 0
+          ? `Live Position Management executed ${executed.length} action(s).`
+          : "Live Position Management reviewed positions; no live exit needed.",
+    };
+
+    engineState.livePositionManagementState = snapshot;
+    engineState.livePositionManagementHistory.unshift(snapshot);
+    engineState.livePositionManagementHistory =
+      engineState.livePositionManagementHistory.slice(0, 100);
+
+    saveEngineState("LIVE_POSITION_MANAGEMENT_UPDATED");
+
+    return snapshot;
+  } catch (err) {
+    engineState.livePositionManagementState = {
+      ok: false,
+      enabled: ENABLE_LIVE_POSITION_MANAGEMENT,
+      phase: "PHASE_5_LIVE_POSITION_MANAGEMENT",
+      error: err.message,
+      reviewedAt: startedAt,
+    };
+
+    return engineState.livePositionManagementState;
+  }
+}
+
+
+function buildLiveScaleInDecision(position = {}, account = {}, openBotPositions = []) {
+  const symbol = normalizeSymbol(position.symbol);
+  const qty = Number(position.qty || 0);
+  const avgEntryPrice = Number(position.avg_entry_price || 0);
+  const livePrice = getLivePositionPrice(symbol, position);
+
+  if (!symbol || qty <= 0 || avgEntryPrice <= 0 || livePrice <= 0) {
+    return null;
+  }
+
+  const memory = engineState.liveMarketMemory?.[symbol] || {};
+  const entry = engineState.aiEntryScores?.[symbol] || {};
+
+  const profitPercent =
+    ((livePrice - avgEntryPrice) / avgEntryPrice) * 100;
+
+  const fastRunnerScore = Number(memory.fastRunnerScore || 0);
+  const liveMomentumPercent = Number(memory.liveMomentumPercent || 0);
+  const spreadPercent = Number(memory.spreadPercent || 0);
+
+  const addsSoFar =
+    Number(engineState.pyramidAddsBySymbol?.[symbol] || 0);
+
+  const plannedFullTradeAmount = Number(
+    entry.plannedFullTradeAmount ||
+      getDynamicTradeAmount(
+        account,
+        openBotPositions,
+        Math.max(
+          Number(entry.score || 0),
+          fastRunnerScore
+        )
+      ) ||
+      0
+  );
+
+  const scaleAmount = Number(
+    (
+      plannedFullTradeAmount *
+      (LIVE_SCALE_IN_PERCENT_OF_PLAN / 100)
+    ).toFixed(2)
+  );
+
+  const blockReasons = [];
+
+  if (!ENABLE_LIVE_SCALE_IN) {
+    blockReasons.push("Live scale-in disabled");
+  }
+
+  if (!autoTradingEnabled) {
+    blockReasons.push("Auto trading disabled");
+  }
+
+  if (profitPercent < LIVE_SCALE_IN_MIN_PROFIT_PERCENT) {
+    blockReasons.push(`Profit below ${LIVE_SCALE_IN_MIN_PROFIT_PERCENT}%`);
+  }
+
+  if (fastRunnerScore < LIVE_SCALE_IN_MIN_FAST_SCORE) {
+    blockReasons.push(`Fast score below ${LIVE_SCALE_IN_MIN_FAST_SCORE}`);
+  }
+
+  if (liveMomentumPercent <= 0) {
+    blockReasons.push("Live momentum not positive");
+  }
+
+  if (spreadPercent > QUICK_GATE_MAX_SPREAD_PERCENT) {
+    blockReasons.push(`Spread too wide: ${spreadPercent}%`);
+  }
+
+  if (addsSoFar >= LIVE_SCALE_IN_MAX_ADDS_PER_SYMBOL) {
+    blockReasons.push("Max live adds reached");
+  }
+
+  if (Number(account?.cash || 0) < scaleAmount || scaleAmount < 1) {
+    blockReasons.push("Not enough cash for scale-in");
+  }
+
+  if (engineState.portfolioGovernorState?.shouldBlockNewTrades === true) {
+    blockReasons.push("Portfolio governor blocked scaling");
+  }
+
+  const approved = blockReasons.length === 0;
+
+  return {
+    symbol,
+    approved,
+    qty,
+    avgEntryPrice,
+    livePrice,
+    profitPercent: Number(profitPercent.toFixed(2)),
+    fastRunnerScore,
+    liveMomentumPercent,
+    spreadPercent,
+    addsSoFar,
+    scaleAmount,
+    plannedFullTradeAmount,
+    blockReasons,
+    reason: approved
+      ? `LIVE SCALE-IN APPROVED • Profit ${profitPercent.toFixed(2)}% • Fast score ${fastRunnerScore}`
+      : `LIVE SCALE-IN BLOCKED • ${blockReasons.join(" • ")}`,
+    reviewedAt: new Date().toISOString(),
+  };
+}
+
+async function runLiveScaleInEngine() {
+  const startedAt = new Date().toISOString();
+
+  try {
+    if (!ENABLE_LIVE_SCALE_IN) {
+      engineState.liveScaleInState = {
+        ok: false,
+        enabled: false,
+        phase: "PHASE_6_LIVE_SCALE_IN_ENGINE",
+        reason: "Live scale-in disabled.",
+        reviewedAt: startedAt,
+      };
+
+      return engineState.liveScaleInState;
+    }
+
+    const account = await getAccount();
+    const positions = await getPositions();
+    const aiOwnedSymbols = await getAiOwnedSymbols();
+
+    const aiPositions = positions.filter((position) =>
+      aiOwnedSymbols.has(normalizeSymbol(position.symbol))
+    );
+
+    const decisions = aiPositions
+      .map((position) => buildLiveScaleInDecision(position, account, aiPositions))
+      .filter(Boolean);
+
+    const approved = decisions.filter((decision) => decision.approved);
+    const executed = [];
+
+    for (const decision of approved.slice(0, 1)) {
+      const symbol = normalizeSymbol(decision.symbol);
+
+      if (activeBuyExecutionLocks.has(symbol) || buyingNow.has(symbol)) {
+        continue;
+      }
+
+      const liveSafety = checkLiveOrderSafety(symbol, "BUY");
+
+      if (!liveSafety.approved) {
+        saveFailedOrder(
+          "LIVE_SCALE_IN_SAFETY_BLOCKED",
+          symbol,
+          liveSafety.blockReasons.join(" • "),
+          {
+            liveSafety,
+            decision,
+          }
+        );
+
+        continue;
+      }
+
+      const duplicateCheck = checkAndMarkLiveDuplicateOrder(
+        symbol,
+        "BUY",
+        "LIVE_SCALE_IN"
+      );
+
+      if (duplicateCheck.duplicate) {
+        saveFailedOrder(
+          "LIVE_SCALE_IN_DUPLICATE_BLOCKED",
+          symbol,
+          "Duplicate live scale-in blocked",
+          {
+            duplicateCheck,
+            decision,
+          }
+        );
+
+        continue;
+      }
+
+      activeBuyExecutionLocks.add(symbol);
+      try {
+        const order = await placeMarketBuy(
+          symbol,
+          decision.scaleAmount,
+          decision.fastRunnerScore
+        );
+
+        engineState.pyramidAddsBySymbol[symbol] =
+          Number(engineState.pyramidAddsBySymbol?.[symbol] || 0) + 1;
+
+        const record = {
+          symbol,
+          action: "LIVE_SCALE_IN",
+          amount: decision.scaleAmount,
+          order,
+          decision,
+          executedAt: new Date().toISOString(),
+        };
+
+        executed.push(record);
+
+        engineState.liveScaleInHistory.unshift(record);
+        engineState.liveScaleInHistory =
+          engineState.liveScaleInHistory.slice(0, 100);
+
+        saveRecentOrder("LIVE_SCALE_IN_PLACED", symbol, record);
+
+        pushBackendStreamEvent("LIVE_SCALE_IN_PLACED", record);
+      } catch (err) {
+        saveFailedOrder("LIVE_SCALE_IN_FAILED", symbol, err.message, {
+          decision,
+        });
+      } finally {
+        activeBuyExecutionLocks.delete(symbol);
+      }
+    }
+
+    engineState.liveScaleInState = {
+      ok: true,
+      enabled: true,
+      phase: "PHASE_6_LIVE_SCALE_IN_ENGINE",
+      reviewedAt: startedAt,
+      reviewedCount: decisions.length,
+      approvedCount: approved.length,
+      executedCount: executed.length,
+      approved: approved.slice(0, 10),
+      blocked: decisions.filter((d) => !d.approved).slice(0, 10),
+      executed,
+      reason:
+        executed.length > 0
+          ? `Live Scale-In executed ${executed.length} add(s).`
+          : "Live Scale-In reviewed positions; no add needed.",
+    };
+
+    saveEngineState("LIVE_SCALE_IN_ENGINE_UPDATED");
+
+    return engineState.liveScaleInState;
+  } catch (err) {
+    engineState.liveScaleInState = {
+      ok: false,
+      enabled: ENABLE_LIVE_SCALE_IN,
+      phase: "PHASE_6_LIVE_SCALE_IN_ENGINE",
+      error: err.message,
+      reviewedAt: startedAt,
+    };
+
+    return engineState.liveScaleInState;
+  }
+}
+
+function buildFullBrainFastSyncSignal(candidate = {}) {
+  const symbol = normalizeSymbol(candidate.symbol);
+  const memory = engineState.liveMarketMemory?.[symbol] || {};
+
+  return {
+    symbol,
+    assetClass: "stock",
+    source: "FULL_BRAIN_FAST_SYNC",
+    price: Number(candidate.price || memory.price || 0),
+    score: Math.max(
+      Number(candidate.quickInstitutionalScore || 0),
+      Number(candidate.fastRunnerScore || 0),
+      Number(CONFIG.minScoreToBuy || 65)
+    ),
+    fastRunnerScore: Number(candidate.fastRunnerScore || 0),
+    quickInstitutionalScore: Number(candidate.quickInstitutionalScore || 0),
+    liveMomentumPercent: Number(candidate.liveMomentumPercent || memory.liveMomentumPercent || 0),
+    spreadPercent: Number(candidate.spreadPercent || memory.spreadPercent || 0),
+    tapeSpeed: Number(candidate.tapeSpeed || memory.tapeSpeed || 0),
+    liquidityPressure: Number(candidate.liquidityPressure || memory.liquidityPressure || 0),
+    fastRunnerBreakdown: memory.fastRunnerBreakdown || candidate.fastRunnerBreakdown || null,
+    institutionalGateApproved: candidate.quickInstitutionalApproved === true,
+    liveFastSynced: true,
+    syncedAt: new Date().toISOString(),
+  };
+}
+
+function runFullBrainFastSync() {
+  if (!ENABLE_FULL_BRAIN_FAST_SYNC) {
+    engineState.fullBrainFastSyncState = {
+      ok: false,
+      enabled: false,
+      phase: "PHASE_7_FULL_BRAIN_FAST_SYNC",
+      reason: "Full Brain Fast Sync disabled.",
+      updatedAt: new Date().toISOString(),
+    };
+
+    return engineState.fullBrainFastSyncState;
+  }
+
+  const liveApproved = engineState.quickInstitutionalCandidates || [];
+  const syncedSignals = liveApproved
+    .map(buildFullBrainFastSyncSignal)
+    .filter((signal) => signal.symbol && Number(signal.price || 0) > 0)
+    .sort((a, b) => Number(b.score || 0) - Number(a.score || 0));
+
+  const existingStockSignals = Array.isArray(engineState.lastStockSignals)
+    ? engineState.lastStockSignals
+    : [];
+
+  const mergedBySymbol = new Map();
+
+  for (const signal of existingStockSignals) {
+    mergedBySymbol.set(normalizeSymbol(signal.symbol), signal);
+  }
+
+  for (const signal of syncedSignals) {
+    const existing = mergedBySymbol.get(signal.symbol) || {};
+
+    mergedBySymbol.set(signal.symbol, {
+      ...existing,
+      ...signal,
+      score: Math.max(Number(existing.score || 0), Number(signal.score || 0)),
+      liveFastSynced: true,
+    });
+  }
+
+  engineState.lastStockSignals = [...mergedBySymbol.values()]
+    .sort((a, b) => Number(b.score || 0) - Number(a.score || 0))
+    .slice(0, Number(CONFIG.maxSignalsToReturn || 75));
+
+  engineState.fullBrainFastSyncState = {
+    ok: true,
+    enabled: true,
+    phase: "PHASE_7_FULL_BRAIN_FAST_SYNC",
+    updatedAt: new Date().toISOString(),
+    syncedCount: syncedSignals.length,
+    topSynced: syncedSignals.slice(0, 10),
+    reason:
+      syncedSignals.length > 0
+        ? `Full Brain Fast Sync injected ${syncedSignals.length} live institutional candidates.`
+        : "Full Brain Fast Sync active; no live institutional candidates to inject.",
+  };
+
+  engineState.fullBrainFastSyncHistory.unshift(engineState.fullBrainFastSyncState);
+  engineState.fullBrainFastSyncHistory =
+    engineState.fullBrainFastSyncHistory.slice(0, 100);
+
+  pushLiveSignalUpdate(buildLiveSignalPushPayload());
+
+  pushBackendStreamEvent("FULL_BRAIN_FAST_SYNC", {
+    state: engineState.fullBrainFastSyncState,
+    syncedSignals: syncedSignals.slice(0, 10),
+  });
+
+  saveEngineState("FULL_BRAIN_FAST_SYNC_UPDATED");
+
+  return engineState.fullBrainFastSyncState;
+}
+
+function buildDeepIntelligenceSnapshotForSymbol(symbol) {
+  const cleanSymbol = normalizeSymbol(symbol);
+
+  return {
+    symbol: cleanSymbol,
+    technicalIntelligence:
+      engineState.technicalIntelligenceState?.symbols?.[cleanSymbol] || null,
+    earningsIntelligence:
+      engineState.earningsIntelligenceState?.symbols?.[cleanSymbol] || null,
+    competitiveAdvantage:
+      engineState.competitiveAdvantageState?.symbols?.[cleanSymbol] || null,
+    dividendCompounding:
+      engineState.dividendCompoundingState?.symbols?.[cleanSymbol] || null,
+    dcfValuation:
+      engineState.dcfValuationState?.symbols?.[cleanSymbol] || null,
+    portfolioOptimization:
+      engineState.portfolioOptimizationState?.symbols?.[cleanSymbol] || null,
+    macroRisk:
+      engineState.macroRiskState || null,
+    marketCycle:
+      engineState.marketCycleIntelligenceState || null,
+    autonomousMarketIntelligence:
+      engineState.autonomousMarketIntelligenceState || null,
+    syncedAt: new Date().toISOString(),
+  };
+}
+
+function calculateDeepIntelligenceScore(snapshot = {}) {
+  let score = 50;
+
+  if (snapshot.dcfValuation?.undervalued === true) score += 10;
+  if (Number(snapshot.dcfValuation?.marginOfSafety || 0) > 20) score += 8;
+
+  if (snapshot.earningsIntelligence?.earningsRisk === "HIGH") score -= 12;
+  if (snapshot.earningsIntelligence?.earningsMomentum === "POSITIVE") score += 8;
+
+  if (snapshot.competitiveAdvantage?.moatStrength === "STRONG") score += 10;
+  if (snapshot.dividendCompounding?.qualityDividend === true) score += 5;
+
+  if (snapshot.macroRisk?.shouldBlockNewTrades === true) score -= 20;
+  if (snapshot.marketCycle?.cycleRisk === "HIGH") score -= 10;
+
+  return clampLiveScore(score);
+}
+
+function runDeepIntelligenceSync() {
+  if (!ENABLE_DEEP_INTELLIGENCE_SYNC) {
+    engineState.deepIntelligenceSyncState = {
+      ok: false,
+      enabled: false,
+      phase: "PHASE_8_DEEP_INTELLIGENCE_SYNC",
+      reason: "Deep Intelligence Sync disabled.",
+      updatedAt: new Date().toISOString(),
+    };
+
+    return engineState.deepIntelligenceSyncState;
+  }
+
+  const symbols = [
+    ...(engineState.quickInstitutionalCandidates || []).map((x) => x.symbol),
+    ...(engineState.fastRunnerCandidates || []).map((x) => x.symbol),
+    ...(engineState.lastStockSignals || []).map((x) => x.symbol),
+  ]
+    .map(normalizeSymbol)
+    .filter(Boolean);
+
+  const uniqueSymbols = [...new Set(symbols)].slice(0, 50);
+
+  const snapshots = uniqueSymbols.map((symbol) => {
+    const snapshot = buildDeepIntelligenceSnapshotForSymbol(symbol);
+    const deepScore = calculateDeepIntelligenceScore(snapshot);
+
+    return {
+      ...snapshot,
+      deepIntelligenceScore: deepScore,
+      deepIntelligenceBias:
+        deepScore >= 70
+          ? "SUPPORTIVE"
+          : deepScore <= 40
+          ? "RISKY"
+          : "NEUTRAL",
+    };
+  });
+
+  const deepBySymbol = Object.fromEntries(
+    snapshots.map((item) => [item.symbol, item])
+  );
+
+  engineState.lastStockSignals = (engineState.lastStockSignals || []).map((signal) => {
+    const symbol = normalizeSymbol(signal.symbol);
+    const deep = deepBySymbol[symbol];
+
+    if (!deep) return signal;
+
+    return {
+      ...signal,
+      deepIntelligence: deep,
+      deepIntelligenceScore: deep.deepIntelligenceScore,
+      deepIntelligenceBias: deep.deepIntelligenceBias,
+    };
+  });
+
+  engineState.deepIntelligenceSyncState = {
+    ok: true,
+    enabled: true,
+    phase: "PHASE_8_DEEP_INTELLIGENCE_SYNC",
+    updatedAt: new Date().toISOString(),
+    reviewedCount: snapshots.length,
+    supportiveCount: snapshots.filter((x) => x.deepIntelligenceBias === "SUPPORTIVE").length,
+    riskyCount: snapshots.filter((x) => x.deepIntelligenceBias === "RISKY").length,
+    topSupportive: snapshots
+      .filter((x) => x.deepIntelligenceBias === "SUPPORTIVE")
+      .sort((a, b) => b.deepIntelligenceScore - a.deepIntelligenceScore)
+      .slice(0, 10),
+    topRisky: snapshots
+      .filter((x) => x.deepIntelligenceBias === "RISKY")
+      .sort((a, b) => a.deepIntelligenceScore - b.deepIntelligenceScore)
+      .slice(0, 10),
+    reason: `Deep Intelligence synced ${snapshots.length} symbols without slowing live trading.`,
+  };
+
+  engineState.deepIntelligenceSyncHistory.unshift(engineState.deepIntelligenceSyncState);
+  engineState.deepIntelligenceSyncHistory =
+    engineState.deepIntelligenceSyncHistory.slice(0, 100);
+
+  pushBackendStreamEvent("DEEP_INTELLIGENCE_SYNC", {
+    state: engineState.deepIntelligenceSyncState,
+  });
+
+  pushLiveSignalUpdate(buildLiveSignalPushPayload());
+
+  saveEngineState("DEEP_INTELLIGENCE_SYNC_UPDATED");
+
+  return engineState.deepIntelligenceSyncState;
+}
+
+async function runLiveScheduledTask(taskName, intervalMs, worker) {
+  const now = Date.now();
+
+  if (liveSchedulerLocks[taskName]) return;
+
+  const lastRun = Number(liveSchedulerLastRun[taskName] || 0);
+
+  if (now - lastRun < intervalMs) return;
+
+  liveSchedulerLocks[taskName] = true;
+  liveSchedulerLastRun[taskName] = now;
+
+  try {
+    await worker();
+  } catch (err) {
+    console.error(`Live scheduler task failed: ${taskName}`, err.message);
+
+    saveFailedOrder("LIVE_SCHEDULER_TASK_FAILED", taskName, err.message, {
+      taskName,
+      intervalMs,
+    });
+  } finally {
+    liveSchedulerLocks[taskName] = false;
+  }
+}
+
+function startManagedLiveScheduler() {
+  if (liveSchedulerTimer) return;
+
+  liveSchedulerTimer = setInterval(() => {
+void runLiveScheduledTask(
+  "cleanupLiveQuoteCache",
+  60000,
+  () => cleanupLiveQuoteCache(LIVE_MARKET_MEMORY_MAX_AGE_MINUTES)
+);
+
+    void runLiveScheduledTask(
+      "cleanupLiveOrderDedupMap",
+      60000,
+      () => cleanupLiveOrderDedupMap()
+    );
+
+    void runLiveScheduledTask(
+      "refreshFinnhubLiveSubscriptions",
+      30000,
+      () => refreshFinnhubLiveSubscriptions()
+    );
+
+    void runLiveScheduledTask(
+      "refreshPolygonLiveSubscriptions",
+      30000,
+      () => refreshPolygonLiveSubscriptions()
+    );
+
+    void runLiveScheduledTask(
+      "runFastRunnerEngine",
+      FAST_RUNNER_ENGINE_INTERVAL_MS,
+      () => runFastRunnerEngine()
+    );
+
+    void runLiveScheduledTask(
+      "runQuickInstitutionalGate",
+      FAST_RUNNER_ENGINE_INTERVAL_MS,
+      () => runQuickInstitutionalGate()
+    );
+
+    void runLiveScheduledTask(
+      "runLiveStarterBuyGate",
+      LIVE_STARTER_BUY_INTERVAL_MS,
+      () => runLiveStarterBuyGate()
+    );
+
+    void runLiveScheduledTask(
+      "runLivePositionManagement",
+      LIVE_POSITION_MANAGEMENT_INTERVAL_MS,
+      () => runLivePositionManagement()
+    );
+
+    void runLiveScheduledTask(
+      "runLiveScaleInEngine",
+      LIVE_SCALE_IN_INTERVAL_MS,
+      () => runLiveScaleInEngine()
+    );
+
+    void runLiveScheduledTask(
+      "runFullBrainFastSync",
+      FULL_BRAIN_FAST_SYNC_INTERVAL_MS,
+      () => runFullBrainFastSync()
+    );
+
+    void runLiveScheduledTask(
+      "runDeepIntelligenceSync",
+      DEEP_INTELLIGENCE_SYNC_INTERVAL_MS,
+      () => runDeepIntelligenceSync()
+    );
+  }, 1000);
+
+  engineState.liveSchedulerState = {
+    ok: true,
+    startedAt: new Date().toISOString(),
+    tasks: Object.keys(liveSchedulerLastRun),
+  };
+
+  return engineState.liveSchedulerState;
+}
+
+function getLiveQuoteAgeSeconds(symbol) {
+  const cleanSymbol = normalizeSymbol(symbol);
+
+  const quote =
+    engineState.liveQuoteCache?.[cleanSymbol] ||
+    engineState.liveMarketMemory?.[cleanSymbol];
+
+  const updatedAt = quote?.updatedAt
+    ? new Date(quote.updatedAt).getTime()
+    : 0;
+
+  if (!updatedAt || !Number.isFinite(updatedAt)) {
+    return Infinity;
+  }
+
+  return Math.floor((Date.now() - updatedAt) / 1000);
+}
+
+function isPolygonLiveConnected() {
+  const state = engineState.polygonLiveStreamState || {};
+
+  return (
+    state.ok === true &&
+    state.authenticated === true &&
+    Number(state.subscribedCount || 0) > 0
+  );
+}
+
+function buildLiveOrderDedupKey(symbol, side, action = "LIVE_ORDER") {
+  return `${normalizeSymbol(symbol)}_${String(side || "").toUpperCase()}_${String(action || "").toUpperCase()}`;
+}
+
+function checkAndMarkLiveDuplicateOrder(symbol, side, action = "LIVE_ORDER") {
+  const key = buildLiveOrderDedupKey(symbol, side, action);
+  const now = Date.now();
+  const lastAt = Number(liveOrderDedupMap[key] || 0);
+
+  if (lastAt && now - lastAt < LIVE_DUPLICATE_ORDER_WINDOW_MS) {
+    return {
+      duplicate: true,
+      key,
+      lastAt,
+      ageMs: now - lastAt,
+      windowMs: LIVE_DUPLICATE_ORDER_WINDOW_MS,
+    };
+  }
+
+  liveOrderDedupMap[key] = now;
+
+  return {
+    duplicate: false,
+    key,
+    markedAt: now,
+    windowMs: LIVE_DUPLICATE_ORDER_WINDOW_MS,
+  };
+}
+
+function cleanupLiveOrderDedupMap() {
+  const cutoff = Date.now() - LIVE_DUPLICATE_ORDER_WINDOW_MS * 3;
+
+  for (const [key, timestamp] of Object.entries(liveOrderDedupMap)) {
+    if (Number(timestamp || 0) < cutoff) {
+      delete liveOrderDedupMap[key];
+    }
+  }
+}
+
+function checkLiveOrderSafety(symbol, side = "BUY") {
+  const cleanSymbol = normalizeSymbol(symbol);
+
+  const quote =
+    engineState.liveQuoteCache?.[cleanSymbol] ||
+    engineState.liveMarketMemory?.[cleanSymbol] ||
+    {};
+
+  const price = Number(quote.price || quote.current || 0);
+  const spreadPercent = Number(quote.spreadPercent || 0);
+  const quoteAgeSeconds = getLiveQuoteAgeSeconds(cleanSymbol);
+
+  const blockReasons = [];
+
+  if (!cleanSymbol) blockReasons.push("Missing symbol");
+  if (!price || price <= 0) blockReasons.push("Missing valid live price");
+
+  if (quoteAgeSeconds > LIVE_ORDER_MAX_QUOTE_AGE_SECONDS) {
+    blockReasons.push(`Live quote stale: ${quoteAgeSeconds}s old`);
+  }
+
+  if (spreadPercent > LIVE_ORDER_MAX_SPREAD_PERCENT) {
+    blockReasons.push(`Spread too wide: ${spreadPercent}%`);
+  }
+
+  if (
+    side === "BUY" &&
+    LIVE_ORDER_REQUIRE_POLYGON_CONNECTED &&
+    !isPolygonLiveConnected()
+  ) {
+    blockReasons.push("Polygon live stream not connected/authenticated");
+  }
+
+  return {
+    approved: blockReasons.length === 0,
+    symbol: cleanSymbol,
+    side,
+    price,
+    spreadPercent,
+    quoteAgeSeconds,
+    polygonConnected: isPolygonLiveConnected(),
+    blockReasons,
+    checkedAt: new Date().toISOString(),
+  };
+}
+
+function cleanupLiveQuoteCache(maxAgeMinutes = LIVE_MARKET_MEMORY_MAX_AGE_MINUTES) {
+  if (!engineState.liveQuoteCache) {
+    engineState.liveQuoteCache = {};
+  }
+
+  if (!engineState.liveMarketMemory) {
+    engineState.liveMarketMemory = {};
+  }
+
   const cutoffMs = Date.now() - maxAgeMinutes * 60 * 1000;
-  let removed = 0;
+
+  let quoteRemoved = 0;
+  let memoryRemoved = 0;
 
   for (const [symbol, quote] of Object.entries(engineState.liveQuoteCache)) {
     const updatedAtMs = quote?.updatedAt
@@ -38608,14 +41142,65 @@ function cleanupLiveQuoteCache(maxAgeMinutes = 15) {
 
     if (!updatedAtMs || updatedAtMs < cutoffMs) {
       delete engineState.liveQuoteCache[symbol];
-      removed += 1;
+      quoteRemoved += 1;
     }
   }
 
-  return {
-    removed,
-    remaining: Object.keys(engineState.liveQuoteCache).length,
+  for (const [symbol, memory] of Object.entries(engineState.liveMarketMemory)) {
+    const updatedAtMs = memory?.updatedAt
+      ? new Date(memory.updatedAt).getTime()
+      : 0;
+
+    if (!updatedAtMs || updatedAtMs < cutoffMs) {
+      delete engineState.liveMarketMemory[symbol];
+      memoryRemoved += 1;
+      continue;
+    }
+
+    if (Array.isArray(memory.secondCandles)) {
+      memory.secondCandles = memory.secondCandles.slice(
+        -LIVE_MARKET_MEMORY_MAX_SECOND_CANDLES
+      );
+    }
+
+    if (Array.isArray(memory.tickWindow)) {
+      memory.tickWindow = memory.tickWindow.slice(-100);
+    }
+  }
+
+  const memoryEntries = Object.entries(engineState.liveMarketMemory);
+
+  if (memoryEntries.length > LIVE_MARKET_MEMORY_MAX_SYMBOLS) {
+    const keep = memoryEntries
+      .sort(([, a], [, b]) => {
+        const scoreDiff =
+          Number(b?.fastRunnerScore || 0) -
+          Number(a?.fastRunnerScore || 0);
+
+        if (scoreDiff !== 0) return scoreDiff;
+
+        return (
+          new Date(b?.updatedAt || 0).getTime() -
+          new Date(a?.updatedAt || 0).getTime()
+        );
+      })
+      .slice(0, LIVE_MARKET_MEMORY_MAX_SYMBOLS);
+
+    engineState.liveMarketMemory = Object.fromEntries(keep);
+    memoryRemoved += Math.max(0, memoryEntries.length - keep.length);
+  }
+
+  engineState.liveMemoryCleanupState = {
+    ok: true,
+    cleanedAt: new Date().toISOString(),
+    maxAgeMinutes,
+    quoteRemoved,
+    memoryRemoved,
+    liveQuoteCount: Object.keys(engineState.liveQuoteCache).length,
+    liveMemoryCount: Object.keys(engineState.liveMarketMemory).length,
   };
+
+  return engineState.liveMemoryCleanupState;
 }
 
 function getSymbolsForFinnhubLiveStream(limit = 75) {
@@ -39336,6 +41921,180 @@ app.get("/live-quotes", (req, res) => {
     res.status(500).json({
       ok: false,
       error: "Failed to load live quotes",
+      details: err.message,
+      generatedAt: new Date().toISOString(),
+    });
+  }
+});
+
+app.get("/deep-intelligence-sync", (req, res) => {
+  try {
+    res.json({
+      ok: true,
+      generatedAt: new Date().toISOString(),
+      enabled: ENABLE_DEEP_INTELLIGENCE_SYNC,
+      state: engineState.deepIntelligenceSyncState || null,
+      history: (engineState.deepIntelligenceSyncHistory || []).slice(0, 25),
+    });
+  } catch (err) {
+    res.status(500).json({
+      ok: false,
+      error: "Failed to load deep intelligence sync",
+      details: err.message,
+    });
+  }
+});
+
+app.get("/full-brain-fast-sync", (req, res) => {
+  try {
+    res.json({
+      ok: true,
+      generatedAt: new Date().toISOString(),
+      enabled: ENABLE_FULL_BRAIN_FAST_SYNC,
+      state: engineState.fullBrainFastSyncState || null,
+      history: (engineState.fullBrainFastSyncHistory || []).slice(0, 25),
+    });
+  } catch (err) {
+    res.status(500).json({
+      ok: false,
+      error: "Failed to load full brain fast sync",
+      details: err.message,
+    });
+  }
+});
+
+
+app.get("/live-scale-in", (req, res) => {
+  try {
+    res.json({
+      ok: true,
+      generatedAt: new Date().toISOString(),
+      enabled: ENABLE_LIVE_SCALE_IN,
+      state: engineState.liveScaleInState || null,
+      history: (engineState.liveScaleInHistory || []).slice(0, 25),
+    });
+  } catch (err) {
+    res.status(500).json({
+      ok: false,
+      error: "Failed to load live scale-in engine",
+      details: err.message,
+    });
+  }
+});
+
+
+app.get("/live-position-management", (req, res) => {
+  try {
+    res.json({
+      ok: true,
+      generatedAt: new Date().toISOString(),
+      enabled: ENABLE_LIVE_POSITION_MANAGEMENT,
+      state: engineState.livePositionManagementState || null,
+      history: (engineState.livePositionManagementHistory || []).slice(0, 25),
+    });
+  } catch (err) {
+    res.status(500).json({
+      ok: false,
+      error: "Failed to load live position management",
+      details: err.message,
+    });
+  }
+});
+
+app.get("/live-starter-buy-gate", (req, res) => {
+  try {
+    res.json({
+      ok: true,
+      generatedAt: new Date().toISOString(),
+      enabled: ENABLE_LIVE_STARTER_BUY,
+      state: engineState.liveStarterBuyGateState || null,
+      history: (engineState.liveStarterBuyHistory || []).slice(0, 25),
+    });
+  } catch (err) {
+    res.status(500).json({
+      ok: false,
+      error: "Failed to load live starter buy gate",
+      details: err.message,
+    });
+  }
+});
+
+app.get("/quick-institutional-gate", (req, res) => {
+  try {
+    res.json({
+      ok: true,
+      generatedAt: new Date().toISOString(),
+      state: engineState.quickInstitutionalGateState || null,
+      count: engineState.quickInstitutionalCandidates?.length || 0,
+      candidates: engineState.quickInstitutionalCandidates || [],
+    });
+  } catch (err) {
+    res.status(500).json({
+      ok: false,
+      error: "Failed to load quick institutional gate",
+      details: err.message,
+    });
+  }
+});
+
+app.get("/fast-runners", (req, res) => {
+  try {
+    res.json({
+      ok: true,
+      generatedAt: new Date().toISOString(),
+      state: engineState.fastRunnerEngineState || null,
+      count: engineState.fastRunnerCandidates?.length || 0,
+      candidates: engineState.fastRunnerCandidates || [],
+    });
+  } catch (err) {
+    res.status(500).json({
+      ok: false,
+      error: "Failed to load fast runners",
+      details: err.message,
+    });
+  }
+});
+
+app.get("/live-market-memory", (req, res) => {
+  try {
+    const rawSymbols = String(req.query.symbols || "")
+      .split(",")
+      .map((symbol) => symbol.trim())
+      .filter(Boolean)
+      .map(normalizeSymbol);
+
+    const memory = Object.entries(engineState.liveMarketMemory || {})
+      .filter(([symbol]) => {
+        return rawSymbols.length === 0 || rawSymbols.includes(symbol);
+      })
+      .map(([symbol, item]) => ({
+        symbol,
+        price: Number(item.price || 0),
+        bid: Number(item.bid || 0),
+        ask: Number(item.ask || 0),
+        spread: Number(item.spread || 0),
+        spreadPercent: Number(item.spreadPercent || 0),
+        fastRunnerScore: Number(item.fastRunnerScore || 0),
+        liveMomentumPercent: Number(item.liveMomentumPercent || 0),
+        tapeSpeed: Number(item.tapeSpeed || 0),
+        liquidityPressure: Number(item.liquidityPressure || 0),
+        fastRunnerBreakdown: item.fastRunnerBreakdown || null,
+        updatedAt: item.updatedAt || null,
+        secondCandles: item.secondCandles?.slice(-60) || [],
+      }))
+      .sort((a, b) => Number(b.fastRunnerScore || 0) - Number(a.fastRunnerScore || 0));
+
+    res.json({
+      ok: true,
+      generatedAt: new Date().toISOString(),
+      polygonLiveStreamState: engineState.polygonLiveStreamState || null,
+      count: memory.length,
+      memory,
+    });
+  } catch (err) {
+    res.status(500).json({
+      ok: false,
+      error: "Failed to load live market memory",
       details: err.message,
       generatedAt: new Date().toISOString(),
     });
@@ -40472,13 +43231,6 @@ app.get("/polygon-test/:symbol", async (req, res) => {
   }
 });
 
-setInterval(() => {
-  cleanupLiveQuoteCache(15);
-}, 60000);
-
-setInterval(() => {
-  refreshFinnhubLiveSubscriptions();
-}, 30000);
 
 process.on("SIGINT", () => {
   flushEngineStateSave();
@@ -40493,6 +43245,8 @@ process.on("SIGTERM", () => {
   app.listen(PORT, "0.0.0.0", async () => {
     console.log(`SmartMoney Pro backend running on port ${PORT}`);
   startFinnhubLiveQuoteStream();
+  startManagedLiveScheduler();
+  startPolygonLiveMarketStream();  
 
     console.log(`Auto trading enabled: ${autoTradingEnabled}`);
 
