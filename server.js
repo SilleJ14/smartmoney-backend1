@@ -380,7 +380,21 @@ function saveEngineState(reason = "STATE_UPDATE") {
       dailyPeakEquity: engineState.dailyPeakEquity,
       profitLockFloorEquity: engineState.profitLockFloorEquity,
       dailyDateKey: engineState.dailyDateKey,
-
+      lastScanDurationMs: engineState.lastScanDurationMs || null,
+      effectiveMode: engineState.effectiveMode || getEffectiveTradingMode(false),
+      liveQuoteStreamState: engineState.liveQuoteStreamState || null,
+      stockTradingStoppedForDay:
+        engineState.stockTradingStoppedForDay || false,
+      cryptoTradingStoppedForDay:
+        engineState.cryptoTradingStoppedForDay || false,
+      lastTradingDayKey: engineState.lastTradingDayKey || null,
+      lastMarketOpen:
+        engineState.lastMarketOpen === true || engineState.lastMarketOpen === false
+          ? engineState.lastMarketOpen
+          : null,
+      marketClosedAt: engineState.marketClosedAt || null,      
+      topAutonomousCandidates:
+        (engineState.topAutonomousCandidates || []).slice(0, 50),
       dailyLossLocked: engineState.dailyLossLocked,
       profitLocked: engineState.profitLocked,
       highWaterMarks: engineState.highWaterMarks || {},
@@ -418,10 +432,28 @@ sectorRotationHistory:
   (engineState.sectorRotationHistory || []).slice(0, 200),
 
 sectorDominationState:
-  engineState.sectorDominationState || null,
+  engineState.sectorDominationState ||
+  engineState.sectorDominanceState ||
+  null,
 
 sectorDominationHistory:
-  (engineState.sectorDominationHistory || []).slice(0, 200),
+  (
+    engineState.sectorDominationHistory ||
+    engineState.sectorDominanceHistory ||
+    []
+  ).slice(0, 200),
+
+sectorDominanceState:
+  engineState.sectorDominanceState ||
+  engineState.sectorDominationState ||
+  null,
+
+sectorDominanceHistory:
+  (
+    engineState.sectorDominanceHistory ||
+    engineState.sectorDominationHistory ||
+    []
+  ).slice(0, 200),
 
   capitalRedistributionState:
   engineState.capitalRedistributionState || null,
@@ -1576,6 +1608,10 @@ engineFreezeCount: 0,
   topSignals: [],
   topStockSignals: [],
   topCryptoSignals: [],
+  topAutonomousCandidates: [],
+  effectiveMode: getEffectiveTradingMode(false),
+  marketRegime: null,
+  liveQuoteStreamState: null,
   liveQuoteCache: {},
   liveMarketMemory: {},
   polygonLiveStreamState: null,
@@ -1642,8 +1678,13 @@ marketRegimeDominanceHistory: [],
 sectorStrengthHistory: [],
 sectorRotationState: null,
 sectorRotationHistory: [],
-sectorDominationState: null,
-sectorDominationHistory: [],
+sectorDominanceState: null,
+sectorDominanceHistory: [],
+stockTradingStoppedForDay: false,
+cryptoTradingStoppedForDay: false,
+lastTradingDayKey: null,
+lastMarketOpen: null,
+marketClosedAt: null,
 capitalRedistributionState: null,
 capitalRedistributionHistory: [],
 institutionalRebalanceState: null,
@@ -1931,6 +1972,18 @@ let polygonSocketReconnectTimer = null;
 let polygonSubscribedSymbols = new Set();
 let polygonSocketReconnectAttempts = 0;
 let polygonAuthenticated = false;
+let WebSocketImpl = globalThis.WebSocket || null;
+
+if (!WebSocketImpl) {
+  try {
+    WebSocketImpl = (await import("ws")).default;
+  } catch (err) {
+    console.error(
+      "WebSocket unavailable. Install ws package or use a Node runtime with native WebSocket:",
+      err.message
+    );
+  }
+}
 const sellingNow = new Set();
 const buyingNow = new Set();
 const liveOrderDedupMap = {};
@@ -7962,7 +8015,9 @@ function calculateInstitutionalSectorDominanceEngine(stockSignals = []) {
 }
 
 function applyInstitutionalSectorDominance(signal = {}) {
-  const sectorState = engineState.sectorDominanceState;
+  const sectorState =
+    engineState.sectorDominanceState ||
+    engineState.sectorDominationState;
 
   if (!sectorState?.sectors?.length) return signal;
 
@@ -15230,7 +15285,7 @@ if (!response.ok) {
 
 async function polygonQuote(symbol) {
   try {
-   if (!ENABLE_POLYGON || !POLYGON_API_KEY || !ENABLE_POLYGON_MOVERS) {
+   if (!ENABLE_POLYGON || !POLYGON_API_KEY) {
       return null;
     }
 
@@ -15386,7 +15441,15 @@ try {
   console.error("Polygon primary failed:", symbol, err.message);
 }
 
-  const bars = await getRecentBars(symbol, "5Min", 30);
+  let bars = [];
+
+  try {
+    bars = await getRecentBars(symbol, "5Min", 30);
+  } catch (err) {
+    dataError = err.message;
+    bars = [];
+  }
+
   const barStats = calculateBarStats(bars);
     const stockChartBars = Array.isArray(bars)
     ? bars
@@ -19332,7 +19395,10 @@ function calculateUnifiedInstitutionalAIOrchestrator(stockSignals = [], cryptoSi
   const cryptoSelector = engineState.autonomousCryptoStrategySelectorState || {};
   const brain = engineState.phase21AutonomousBrainState || {};
   const parliament = engineState.autonomousTradingSystemState || {};
-  const capitalRotation = engineState.cryptoCapitalRotationState || {};
+  const capitalRotation =
+  engineState.phase43CryptoCapitalRotationState ||
+  engineState.cryptoCapitalRotationState ||
+  {};
   const exposure = engineState.institutionalExposureMode || "UNKNOWN";
 
   const globalRiskOffScore = Number(riskOff.globalRiskOffScore || 0);
@@ -31088,13 +31154,17 @@ if (cryptoModeEnabled) {
 let stockSignals = [];
 let cryptoSignals = [];
 
+const scanStartedAt = Date.now();
+
 if (cryptoModeEnabled) {
   cryptoSignals = await scanCryptoMarket();
 }
 
-stockSignals = await scanMarket();
+if (stockModeEnabled) {
+  stockSignals = await scanMarket();
+}
 
-saveRecentOrder("STOCK_PIPELINE_SCAN_COMPLETED", "STOCK", {
+saveRecentOrder("PIPELINE_SCAN_COMPLETED", "ALL", {
   tradingMode: TRADING_MODE,
   effectiveMode,
   stockModeEnabled,
@@ -31102,8 +31172,6 @@ saveRecentOrder("STOCK_PIPELINE_SCAN_COMPLETED", "STOCK", {
   cryptoModeEnabled,
   scannedCryptoSignals: cryptoSignals.length,
 });
-    
-const scanStartedAt = Date.now();
 
 engineState.marketBreadth = {
   advancing: stockSignals.filter(
@@ -32486,7 +32554,6 @@ engineState.marketCycleIntelligenceHistory =
     }
 
     engineState.lastSignals = signals;
-    pushLiveSignalUpdate(buildLiveSignalPushPayload());
     refreshFinnhubLiveSubscriptions();    
 
     engineState.institutionalDashboardSnapshots.unshift({
@@ -32558,6 +32625,7 @@ const sectorDominance =
   calculateInstitutionalSectorDominanceEngine(stockSignals);
 
 engineState.sectorDominanceState = sectorDominance;
+engineState.sectorDominationState = sectorDominance;
 
 if (!Array.isArray(engineState.sectorDominanceHistory)) {
   engineState.sectorDominanceHistory = [];
@@ -32566,6 +32634,9 @@ if (!Array.isArray(engineState.sectorDominanceHistory)) {
 engineState.sectorDominanceHistory.unshift(sectorDominance);
 engineState.sectorDominanceHistory =
   engineState.sectorDominanceHistory.slice(0, 200);
+
+engineState.sectorDominationHistory =
+  engineState.sectorDominanceHistory;  
 
 stockSignals = stockSignals.map((signal) =>
   applyInstitutionalSectorDominance(signal)
@@ -33829,6 +33900,19 @@ engineState.topCryptoSignals = [...engineState.lastCryptoSignals]
   .sort((a, b) => Number(b.score || 0) - Number(a.score || 0))
   .slice(0, 25);    
 
+pushLiveSignalUpdate(
+  buildLiveSignalPushPayload()
+);
+
+refreshFinnhubLiveSubscriptions();
+
+if (
+  ENABLE_POLYGON_WEBSOCKET &&
+  typeof refreshPolygonLiveSubscriptions === "function"
+) {
+  refreshPolygonLiveSubscriptions();
+}  
+
     const approvedStockSignals = stockSignals.filter(
       (signal) =>
         signal.qualifiedToBuy === true &&
@@ -33842,18 +33926,6 @@ engineState.topCryptoSignals = [...engineState.lastCryptoSignals]
         signal.autoTradeApproved !== false &&
         Number(signal.score || 0) >= CONFIG.minScoreToBuy
     );
-
-const shouldRunStockAutoBuy =
-  stockModeEnabled &&
-  approvedStockSignals.length > 0 &&
-  !tradingStoppedForDay &&
-  !engineState.stockTradingStoppedForDay;
-
-const shouldRunCryptoAutoBuy =
-  cryptoModeEnabled &&
-  approvedCryptoSignals.length > 0 &&
-  !tradingStoppedForDay &&
-  !engineState.cryptoTradingStoppedForDay;
 
     const bestStockSignal = stockSignals
       .filter(
@@ -33885,6 +33957,20 @@ const shouldRunCryptoAutoBuy =
           : "live_crypto";
     }
         engineState.effectiveMode = effectiveMode;
+    const effectiveStockModeEnabled = effectiveMode === "live_stock";
+    const effectiveCryptoModeEnabled = effectiveMode === "live_crypto";
+
+    const shouldRunStockAutoBuy =
+      effectiveStockModeEnabled &&
+      approvedStockSignals.length > 0 &&
+      !tradingStoppedForDay &&
+      !engineState.stockTradingStoppedForDay;
+
+    const shouldRunCryptoAutoBuy =
+      effectiveCryptoModeEnabled &&
+      approvedCryptoSignals.length > 0 &&
+      !tradingStoppedForDay &&
+      !engineState.cryptoTradingStoppedForDay;      
 
     if (
       autoTradingEnabled &&
@@ -34067,6 +34153,8 @@ app.get("/infra-status", (req, res) => {
       const limitedSymbols = symbols.slice(0, maxSymbolsToScan);
 
       const positions = await getPositions();
+      engineState.cachedAccount = account;
+      engineState.cachedPositions = positions;
       const aiOwnedSymbols = await getAiOwnedSymbols();
 
       const aiPositions = positions.filter((p) =>
@@ -38464,12 +38552,36 @@ app.get("/frontend/portfolio", async (req, res) => {
 
 app.get("/frontend/signals", async (req, res) => {
   try {
+
+    const latestStatus = getLatestFrontendStatusSnapshot();
     const orchestration =
       latestStatus?.phase20AutonomousOrchestration || {};
 
-    const signals = Array.isArray(orchestration.topSignals)
-      ? orchestration.topSignals
-      : [];
+    const signals = [
+      ...(Array.isArray(engineState.topStockSignals)
+        ? engineState.topStockSignals
+        : []),
+      ...(Array.isArray(engineState.lastStockSignals)
+        ? engineState.lastStockSignals
+        : []),
+      ...(Array.isArray(engineState.topCryptoSignals)
+        ? engineState.topCryptoSignals
+        : []),
+      ...(Array.isArray(engineState.lastCryptoSignals)
+        ? engineState.lastCryptoSignals
+        : []),
+      ...(Array.isArray(orchestration.topSignals)
+        ? orchestration.topSignals
+        : []),
+    ]
+      .filter(Boolean)
+      .filter(
+        (signal, index, arr) =>
+          arr.findIndex(
+            (item) => normalizeSymbol(item.symbol) === normalizeSymbol(signal.symbol)
+          ) === index
+      )
+      .map(mergeLiveQuoteIntoSignal);
 
     const approvedSignals = signals
       .filter(
@@ -38497,6 +38609,7 @@ app.get("/frontend/signals", async (req, res) => {
 
 app.get("/frontend/ai", async (req, res) => {
   try {
+    const latestStatus = getLatestFrontendStatusSnapshot();
     const brain =
       latestStatus?.phase21AutonomousBrain || {};
 
@@ -38563,12 +38676,34 @@ app.get("/frontend/ai", async (req, res) => {
 
 app.get("/frontend/alerts", async (req, res) => {
   try {
+    const latestStatus = getLatestFrontendStatusSnapshot(); 
     const orchestration =
       latestStatus?.phase20AutonomousOrchestration || {};
-
-    const topSignals =
-      orchestration.topSignals || [];
-
+    const topSignals = [
+      ...(Array.isArray(engineState.topStockSignals)
+        ? engineState.topStockSignals
+        : []),
+      ...(Array.isArray(engineState.lastStockSignals)
+        ? engineState.lastStockSignals
+        : []),
+      ...(Array.isArray(engineState.topCryptoSignals)
+        ? engineState.topCryptoSignals
+        : []),
+      ...(Array.isArray(engineState.lastCryptoSignals)
+        ? engineState.lastCryptoSignals
+        : []),
+      ...(Array.isArray(orchestration.topSignals)
+        ? orchestration.topSignals
+        : []),
+    ]
+      .filter(Boolean)
+      .filter(
+        (signal, index, arr) =>
+          arr.findIndex(
+            (item) => normalizeSymbol(item.symbol) === normalizeSymbol(signal.symbol)
+          ) === index
+      )
+      .map(mergeLiveQuoteIntoSignal);
     const alerts = topSignals
       .filter((s) => s.score >= 65)
       .slice(0, 25)
@@ -38608,6 +38743,8 @@ app.get("/frontend/alerts", async (req, res) => {
 
 app.get("/frontend/dashboard", async (req, res) => {
   try {
+
+    const latestStatus = getLatestFrontendStatusSnapshot();
     res.json({
       success: true,
 
@@ -38624,18 +38761,36 @@ app.get("/frontend/dashboard", async (req, res) => {
             ?.portfolioGovernor || {},
 
       topSignals:
-        Array.isArray(engineState.lastStockSignals) &&
-          engineState.lastStockSignals.length > 0
-              ? await getTopSignalsWithFreshQuotes(
-                  engineState.lastStockSignals,
-                  25
-                )
-              : await getTopSignalsWithFreshQuotes(
-                  latestStatus
-                    ?.phase20AutonomousOrchestration
-                    ?.topSignals || [],
-                  25
-                ),
+        await getTopSignalsWithFreshQuotes(
+          [
+            ...(Array.isArray(engineState.topStockSignals)
+              ? engineState.topStockSignals
+              : []),
+            ...(Array.isArray(engineState.lastStockSignals)
+              ? engineState.lastStockSignals
+              : []),
+            ...(Array.isArray(engineState.topCryptoSignals)
+              ? engineState.topCryptoSignals
+              : []),
+            ...(Array.isArray(engineState.lastCryptoSignals)
+              ? engineState.lastCryptoSignals
+              : []),
+            ...(Array.isArray(
+              latestStatus?.phase20AutonomousOrchestration?.topSignals
+            )
+              ? latestStatus.phase20AutonomousOrchestration.topSignals
+              : []),
+          ]
+            .filter(Boolean)
+            .filter(
+              (signal, index, arr) =>
+                arr.findIndex(
+                  (item) =>
+                    normalizeSymbol(item.symbol) === normalizeSymbol(signal.symbol)
+                ) === index
+            ),
+          25
+        ),
 
         topOpportunities:
           latestStatus
@@ -38645,9 +38800,40 @@ app.get("/frontend/dashboard", async (req, res) => {
     });
   } catch (err) {
 
-    res.status(500).json({
-      success: false,
-      error: err.message,
+    console.error("/status route failed:", err.message);
+
+    res.json({
+      success: true,
+      degradedMode: true,
+      dashboard: {
+        statusWarnings: [err.message],
+
+        marketRegime:
+          engineState.marketRegime || {},
+
+        autonomousTradingSystem:
+          engineState.autonomousTradingSystemState || {},
+
+        portfolioGovernor:
+          engineState.portfolioGovernorState || {},
+
+      topSignals: [
+        ...(Array.isArray(engineState.topStockSignals)
+          ? engineState.topStockSignals
+          : []),
+        ...(Array.isArray(engineState.lastStockSignals)
+          ? engineState.lastStockSignals
+          : []),
+        ...(Array.isArray(engineState.topCryptoSignals)
+          ? engineState.topCryptoSignals
+          : []),
+        ...(Array.isArray(engineState.lastCryptoSignals)
+          ? engineState.lastCryptoSignals
+          : []),
+      ].slice(0, 10),
+        topOpportunities:
+          engineState.topAutonomousCandidates || [],
+      },
     });
   }
 });
@@ -38704,15 +38890,18 @@ function pushLiveSignalUpdate(payload = {}) {
 
   lastLiveSignalPushAt = now;
 
+  const finalPayload =
+    pendingLiveSignalPushPayload || payload;
+
   const message = `data: ${JSON.stringify({
-    ...(pendingLiveSignalPushPayload || payload),
+    ...finalPayload,
     pushedAt: new Date().toISOString(),
   })}\n\n`;
 
   pendingLiveSignalPushPayload = null;
 
   pushBackendStreamEvent("SIGNAL_EVENT", {
-    ...(pendingLiveSignalPushPayload || payload),
+    ...finalPayload,
   });
 
   for (const client of liveSignalClients) {
@@ -38782,18 +38971,51 @@ function replayBackendStreamEvents(res, since = "") {
   }
 }
 
+function mergeLiveQuoteIntoSignal(signal = {}) {
+  const symbol = normalizeSymbol(signal.symbol);
+  const liveQuote = engineState.liveQuoteCache?.[symbol];
+
+  if (!symbol || !liveQuote?.price) {
+    return signal;
+  }
+
+  return {
+    ...signal,
+    livePrice: liveQuote.price,
+    displayPrice: liveQuote.price,
+    price: liveQuote.price,
+    current: liveQuote.price,
+    bid: liveQuote.bid,
+    ask: liveQuote.ask,
+    spread: liveQuote.spread,
+    spreadPercent: liveQuote.spreadPercent,
+    liveMoveFromPreviousPercent:
+      liveQuote.liveMoveFromPreviousPercent,
+    liveQuoteUpdatedAt: liveQuote.updatedAt,
+    liveQuoteSource: liveQuote.source,
+    fastRunnerScore:
+      liveQuote.fastRunnerScore ?? signal.fastRunnerScore,
+    tapeSpeed:
+      liveQuote.tapeSpeed ?? signal.tapeSpeed,
+    liquidityPressure:
+      liveQuote.liquidityPressure ?? signal.liquidityPressure,
+    priceIsLive: true,
+    priceStale: false,
+  };
+}
+
 function buildLiveSignalPushPayload() {
   const stockSignals = getTopSignals(
     engineState.lastStockSignals || [],
     25
-  );
+  ).map(mergeLiveQuoteIntoSignal);
 
   
 
   const cryptoSignals = getTopSignals(
     engineState.lastCryptoSignals || [],
     25
-  );
+  ).map(mergeLiveQuoteIntoSignal);
 
   return {
     type: "LIVE_SIGNAL_UPDATE",
@@ -38921,10 +39143,10 @@ function updateLiveQuoteCache(symbol, quote = {}) {
   engineState.liveQuoteCache[cleanSymbol] = cached;
 
   pushLiveSignalUpdate({
+    ...buildLiveSignalPushPayload(),
     type: "LIVE_QUOTE_TICK",
     symbol: cleanSymbol,
     quote: cached,
-    liveSignals: buildLiveSignalPushPayload(),
   });
 
   pushBackendStreamEvent("PRICE_EVENT", {
@@ -39344,14 +39566,12 @@ function startPolygonLiveMarketStream() {
     return engineState.polygonLiveStreamState;
   }
 
-  const WebSocketCtor = globalThis.WebSocket;
-
-  if (!WebSocketCtor) {
+  if (!WebSocketImpl) {
     engineState.polygonLiveStreamState = {
       ok: false,
       provider: "polygon",
       reason:
-        "No global WebSocket available in this Node runtime. Install ws package if needed.",
+        "No WebSocket available. Install ws package or use a Node runtime with native WebSocket.",
       checkedAt: new Date().toISOString(),
     };
 
@@ -39370,7 +39590,7 @@ function startPolygonLiveMarketStream() {
   }
 
   try {
-    polygonLiveSocket = new WebSocketCtor(POLYGON_WS_URL);
+    polygonLiveSocket = new WebSocketImpl(POLYGON_WS_URL);
 
     polygonLiveSocket.onopen = () => {
       polygonAuthenticated = false;
@@ -41277,13 +41497,11 @@ function startFinnhubLiveQuoteStream() {
     };
   }
 
-  const WebSocketCtor = globalThis.WebSocket;
-
-  if (!WebSocketCtor) {
+  if (!WebSocketImpl) {
     return {
       ok: false,
       reason:
-        "No global WebSocket available in this Node runtime. Install ws package if needed.",
+        "No WebSocket available. Install ws package or use a Node runtime with native WebSocket.",
     };
   }
 
@@ -41298,7 +41516,7 @@ function startFinnhubLiveQuoteStream() {
   }
 
   try {
-    finnhubLiveSocket = new WebSocketCtor(FINNHUB_WS_URL);
+    finnhubLiveSocket = new WebSocketImpl(FINNHUB_WS_URL);
 
     finnhubLiveSocket.onopen = () => {
       finnhubSocketReconnectAttempts = 0;
@@ -41734,17 +41952,17 @@ async function getTopSignalsWithFreshQuotes(signals = [], limit = 25) {
         String(symbol).includes("/") ||
         String(symbol).endsWith("USD")
       ) {
-        return signal;
+        return mergeLiveQuoteIntoSignal(signal);
       }
 
       const liveFreshness = isLiveQuoteFresh(symbol, 120);
 
       if (liveFreshness.fresh && liveFreshness.quote) {
-        return signal;
+        return mergeLiveQuoteIntoSignal(signal);
       }
 
       try {
-        const quote = await finnhubQuote(symbol);
+        const quote = await getCombinedStockQuote(symbol);
 
         const freshPrice = Number(
           quote?.current ||
@@ -41765,7 +41983,7 @@ async function getTopSignalsWithFreshQuotes(signals = [], limit = 25) {
         const cached = updateLiveQuoteCache(symbol, {
           price: freshPrice,
           current: freshPrice,
-          source: "finnhub_rest_refresh",
+          source: quote?.source || "polygon_first_rest_refresh",
           raw: quote,
         });
 
@@ -41776,7 +41994,7 @@ async function getTopSignalsWithFreshQuotes(signals = [], limit = 25) {
           price: freshPrice,
           current: freshPrice,
           liveQuoteUpdatedAt: cached?.updatedAt || new Date().toISOString(),
-          liveQuoteSource: "finnhub_rest_refresh",
+          liveQuoteSource: quote?.source || "polygon_first_rest_refresh",
           priceIsLive: true,
           priceStale: false,
         };
@@ -42106,12 +42324,12 @@ app.get("/live-signals", async (req, res) => {
     const stockSignals = getTopSignals(
       engineState.lastStockSignals || [],
       25
-    );
+    ).map(mergeLiveQuoteIntoSignal);
 
-    const cryptoSignals = getTopSignals(
-      engineState.lastCryptoSignals || [],
-      25
-    );
+        const cryptoSignals = getTopSignals(
+          engineState.lastCryptoSignals || [],
+          25
+        ).map(mergeLiveQuoteIntoSignal);
 
     return res.json({
       generatedAt: new Date().toISOString(),
@@ -42212,6 +42430,39 @@ app.get("/pending-exits", async (req, res) => {
         tradingModeLocked,
         autoTradingEnabled,
         config: CONFIG,
+        signals:
+          (
+            engineState.topSignals?.length
+              ? engineState.topSignals
+              : engineState.lastSignals || []
+          ).map(mergeLiveQuoteIntoSignal),
+
+        stockSignals:
+          (
+            engineState.topStockSignals?.length
+              ? engineState.topStockSignals
+              : engineState.lastStockSignals || []
+          ).map(mergeLiveQuoteIntoSignal),
+
+        cryptoSignals:
+          (
+            engineState.topCryptoSignals?.length
+              ? engineState.topCryptoSignals
+              : engineState.lastCryptoSignals || []
+          ).map(mergeLiveQuoteIntoSignal),
+
+        liveStreamState: {
+          polygon:
+            engineState.polygonLiveStreamState || null,
+          finnhub:
+            engineState.liveQuoteStreamState || null,
+          fastRunner:
+            engineState.fastRunnerEngineState || null,
+          quickGate:
+            engineState.quickInstitutionalGateState || null,
+          starterBuy:
+            engineState.liveStarterBuyGateState || null,
+        },        
         account: {
           ...account,
           peakEquity: peaks.peakEquity,
@@ -42265,13 +42516,75 @@ app.get("/pending-exits", async (req, res) => {
         engineState.correlationIntelligenceState || null,
         portfolioGovernor:
         engineState.portfolioGovernorState || null,
-        engineState,
+        engineState: {
+          ...engineState,
+          lastSignals:
+            (engineState.lastSignals || []).map(mergeLiveQuoteIntoSignal),
+          lastStockSignals:
+            (engineState.lastStockSignals || []).map(mergeLiveQuoteIntoSignal),
+          lastCryptoSignals:
+            (engineState.lastCryptoSignals || []).map(mergeLiveQuoteIntoSignal),
+          topSignals:
+            (engineState.topSignals || []).map(mergeLiveQuoteIntoSignal),
+          topStockSignals:
+            (engineState.topStockSignals || []).map(mergeLiveQuoteIntoSignal),
+          topCryptoSignals:
+            (engineState.topCryptoSignals || []).map(mergeLiveQuoteIntoSignal),
+        },
       });
     } catch (err) {
-      res.status(500).json({
-        online: false,
-        error: err.message,
-        engineState,
+      console.error("/status route failed:", err.message);
+
+      res.json({
+        online: true,
+        degradedMode: true,
+        statusWarnings: [err.message],
+
+        mode: TRADING_MODE,
+        effectiveMode: engineState.effectiveMode,
+        tradingModeLocked,
+        autoTradingEnabled,
+        config: CONFIG,
+
+        institutionalDashboard:
+          buildInstitutionalDashboardPayload(),
+
+        signals:
+          (
+            engineState.topSignals?.length
+              ? engineState.topSignals
+              : engineState.lastSignals || []
+          ).map(mergeLiveQuoteIntoSignal),
+
+        stockSignals:
+          (
+            engineState.topStockSignals?.length
+              ? engineState.topStockSignals
+              : engineState.lastStockSignals || []
+          ).map(mergeLiveQuoteIntoSignal),
+
+        cryptoSignals:
+          (
+            engineState.topCryptoSignals?.length
+              ? engineState.topCryptoSignals
+              : engineState.lastCryptoSignals || []
+          ).map(mergeLiveQuoteIntoSignal),
+
+        liveStreamState: {
+          polygon:
+            engineState.polygonLiveStreamState || null,
+          fastRunner:
+            engineState.fastRunnerEngineState || null,
+          quickGate:
+            engineState.quickInstitutionalGateState || null,
+          starterBuy:
+            engineState.liveStarterBuyGateState || null,
+        },
+
+        engineState: {
+          ...engineState,
+          lastError: err.message,
+        },
       });
     }
   });
@@ -42279,7 +42592,7 @@ app.get("/pending-exits", async (req, res) => {
   app.get("/stock-quote/:symbol", async (req, res) => {
     try {
       const symbol = normalizeSymbol(req.params.symbol);
-      const q = await finnhubQuote(symbol);
+      const q = await getCombinedStockQuote(symbol);
       const asset = await getAsset(symbol).catch(() => null);
 
       if (!q || !q.current) {
@@ -42301,7 +42614,7 @@ app.get("/pending-exits", async (req, res) => {
             ? ((q.current - q.previousClose) / q.previousClose) * 100
             : 0,
           percentChange: q.percentChange,
-          source: "manual_search",
+          source: q.source || "polygon_first_manual_search",
           autoTradeAllowed: false,
           manuallyBuyable: true,
           fractionable: asset?.fractionable === true,
@@ -42334,7 +42647,7 @@ app.get("/pending-exits", async (req, res) => {
   app.get("/signals", (req, res) => {
     res.json({
       lastScanAt: engineState.lastScanAt,
-      signals: engineState.lastSignals,
+      signals: (engineState.lastSignals || []).map(mergeLiveQuoteIntoSignal),
       skippedSymbols: engineState.skippedSymbols,
     });
   });
@@ -42350,11 +42663,12 @@ app.get("/pending-exits", async (req, res) => {
       }
 
       const signals = await scanCryptoMarket();
-
+      const liveMergedSignals =
+        (signals || []).map(mergeLiveQuoteIntoSignal);
       res.json({
         mode: TRADING_MODE,
         liveOnly: true,
-        signals,
+        signals: liveMergedSignals,
       });
     } catch (err) {
       res.status(500).json({ error: err.message });
@@ -42487,15 +42801,7 @@ app.get("/pending-exits", async (req, res) => {
   engineState.marketVolatility,
   institutionalExposureMode:
   engineState.institutionalExposureMode,
-  statisticalMemoryState:
-  engineState.statisticalMemoryState || {
-    updatedAt: null,
-    setupHistory: [],
-    setupPerformance: {},
-    expectancyHistory: [],
-    probabilityHistory: [],
-  },
-institutionalWatchlist:
+  institutionalWatchlist:
   engineState.institutionalWatchlist,
   analyticsSnapshots:
   engineState.analyticsSnapshots?.slice(0, 20) || [],
@@ -42777,7 +43083,9 @@ app.post("/mode-lock/off", (req, res) => {
       const fractionable = asset?.fractionable === true;
 
       if (!cleanSymbol) throw new Error("Missing symbol");
-      if (!amount || amount < 1) throw new Error("Invalid dollar amount");
+      if (mode !== "shares" && (!amount || amount < 1)) {
+        throw new Error("Invalid dollar amount");
+      }
 
       const orderBody = {
         symbol: cleanSymbol,
@@ -42792,6 +43100,12 @@ app.post("/mode-lock/off", (req, res) => {
           throw new Error("Invalid share amount");
         }
 
+        if (!fractionable && Math.floor(shareAmount) < 1) {
+          throw new Error(
+            `${cleanSymbol} is not fractionable. Enter at least 1 whole share.`
+          );
+        }
+
         orderBody.qty = fractionable
           ? String(shareAmount)
           : String(Math.floor(shareAmount));
@@ -42803,7 +43117,7 @@ app.post("/mode-lock/off", (req, res) => {
         if (fractionable) {
           orderBody.notional = Number(amount.toFixed(2));
         } else {
-          const q = await finnhubQuote(cleanSymbol);
+          const q = await getCombinedStockQuote(cleanSymbol);
           const estimatedShares = Math.floor(amount / Number(q.current || 0));
 
           if (!estimatedShares || estimatedShares < 1) {
