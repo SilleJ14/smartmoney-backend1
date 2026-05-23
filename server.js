@@ -224,6 +224,17 @@ const DEEP_INTELLIGENCE_SYNC_INTERVAL_MS = Number(
   process.env.DEEP_INTELLIGENCE_SYNC_INTERVAL_MS || 900000
 );
 
+const ENABLE_LIVE_EARLY_MOVER_REFRESH =
+  process.env.ENABLE_LIVE_EARLY_MOVER_REFRESH !== "false";
+
+const LIVE_EARLY_MOVER_REFRESH_INTERVAL_MS = Number(
+  process.env.LIVE_EARLY_MOVER_REFRESH_INTERVAL_MS || 30000
+);
+
+const LIVE_EARLY_MOVER_LIMIT = Number(
+  process.env.LIVE_EARLY_MOVER_LIMIT || 50
+);
+
 function loadRuntimeConfig() {
   try {
     if (!fs.existsSync(CONFIG_FILE)) return {};
@@ -693,6 +704,12 @@ institutionalDashboardSnapshots:
   ).slice(0, 200),  
 liveMarketMemory:
   engineState.liveMarketMemory || {},
+
+liveEarlyMoverSymbols:
+  engineState.liveEarlyMoverSymbols || [],
+
+liveEarlyMoverRefreshState:
+  engineState.liveEarlyMoverRefreshState || null,  
 
 polygonLiveStreamState:
   engineState.polygonLiveStreamState || null,
@@ -1614,6 +1631,8 @@ engineFreezeCount: 0,
   liveQuoteStreamState: null,
   liveQuoteCache: {},
   liveMarketMemory: {},
+  liveEarlyMoverSymbols: [],
+  liveEarlyMoverRefreshState: null,
   polygonLiveStreamState: null,
   fastRunnerEngineState: null,
   fastRunnerCandidates: [],
@@ -4039,7 +4058,9 @@ function buildBackendHealthPayload(clock = {}) {
       liveQuoteCount,
       lastQuoteUpdateAt: latestLiveQuoteUpdateAt,
       liveQuoteStreamState: engineState.liveQuoteStreamState || null,
-            polygonLiveStreamState: engineState.polygonLiveStreamState || null,
+      polygonLiveStreamState: engineState.polygonLiveStreamState || null,
+      liveEarlyMoverSymbols: engineState.liveEarlyMoverSymbols || [],
+      liveEarlyMoverRefreshState: engineState.liveEarlyMoverRefreshState || null,
       liveMemoryCleanupState: engineState.liveMemoryCleanupState || null,
       liveMarketMemoryCount: Object.keys(engineState.liveMarketMemory || {}).length,
     },
@@ -21812,7 +21833,24 @@ async function getPolygonMoverSymbols(limit = POLYGON_MOVERS_LIMIT) {
       .sort((a, b) => Math.abs(b.percentChange) - Math.abs(a.percentChange))
       .slice(0, limit);
 
-    moverSymbols.push(...ranked.map((item) => item.symbol));
+    const rankedSymbols = ranked.map((item) => item.symbol);
+
+    moverSymbols.push(...rankedSymbols);
+
+    engineState.liveEarlyMoverSymbols = rankedSymbols
+      .filter(Boolean)
+      .map(normalizeSymbol)
+      .filter(isNormalStockSymbol)
+      .slice(0, LIVE_EARLY_MOVER_LIMIT);
+
+    engineState.liveEarlyMoverRefreshState = {
+      ok: true,
+      provider: "polygon",
+      updatedAt: new Date().toISOString(),
+      symbolCount: engineState.liveEarlyMoverSymbols.length,
+      symbols: engineState.liveEarlyMoverSymbols.slice(0, 25),
+      reason: "Live early movers refreshed from Polygon snapshot before full scan.",
+    };
 
     console.log(`Polygon movers found: ${moverSymbols.length}`);
   } catch (err) {
@@ -33946,7 +33984,7 @@ if (
   ENABLE_POLYGON_WEBSOCKET &&
   typeof refreshPolygonLiveSubscriptions === "function"
 ) {
-  refreshPolygonLiveSubscriptions();
+    refreshEarlyMoversThenPolygonSubscriptions();
 }  
 
     const approvedStockSignals = stockSignals.filter(
@@ -39060,6 +39098,10 @@ function buildLiveSignalPushPayload() {
       engineState.liveQuoteStreamState || null,
     polygonLiveStreamState:
       engineState.polygonLiveStreamState || null,
+    liveEarlyMoverSymbols:
+      engineState.liveEarlyMoverSymbols || [],
+    liveEarlyMoverRefreshState:
+      engineState.liveEarlyMoverRefreshState || null,      
     fastRunnerEngineState:
       engineState.fastRunnerEngineState || null,
     quickInstitutionalGateState:
@@ -39422,8 +39464,11 @@ function updateLiveMarketMemory(symbol, tick = {}) {
   return nextMemory;
 }
 
-function getSymbolsForPolygonLiveStream(limit = POLYGON_SUBSCRIPTION_ROTATION_LIMIT) {
+function getSymbolsForPolygonLiveStream(
+  limit = POLYGON_SUBSCRIPTION_ROTATION_LIMIT
+) {
   const liveCandidateSymbols = [
+    ...(engineState.liveEarlyMoverSymbols || []),
     ...(engineState.quickInstitutionalCandidates || []),
     ...(engineState.fastRunnerCandidates || []),
     ...(engineState.lastStockSignals || []),
@@ -39433,26 +39478,54 @@ function getSymbolsForPolygonLiveStream(limit = POLYGON_SUBSCRIPTION_ROTATION_LI
   ]
     .map((item) => normalizeSymbol(item?.symbol || item))
     .filter(Boolean)
+    .filter(isNormalStockSymbol)
     .filter((symbol) => !isCryptoSymbol(symbol));
 
   const ranked = [...new Set(liveCandidateSymbols)]
     .map((symbol) => {
-      const memory = engineState.liveMarketMemory?.[symbol] || {};
-      const quote = engineState.liveQuoteCache?.[symbol] || {};
-      const fastScore = Number(memory.fastRunnerScore || 0);
+      const memory =
+        engineState.liveMarketMemory?.[symbol] || {};
+
+      const quote =
+        engineState.liveQuoteCache?.[symbol] || {};
+
+      const fastScore = Number(
+        memory.fastRunnerScore || 0
+      );
+
       const updatedAtMs = new Date(
-        memory.updatedAt || quote.updatedAt || 0
+        memory.updatedAt ||
+          quote.updatedAt ||
+          0
       ).getTime();
+
+      const earlyMoverBonus =
+        (engineState.liveEarlyMoverSymbols || []).includes(symbol)
+          ? 1000
+          : 0;
 
       return {
         symbol,
         fastScore,
         updatedAtMs,
+        earlyMoverBonus,
       };
     })
     .sort((a, b) => {
-      const scoreDiff = b.fastScore - a.fastScore;
-      if (scoreDiff !== 0) return scoreDiff;
+      const earlyDiff =
+        b.earlyMoverBonus - a.earlyMoverBonus;
+
+      if (earlyDiff !== 0) {
+        return earlyDiff;
+      }
+
+      const scoreDiff =
+        b.fastScore - a.fastScore;
+
+      if (scoreDiff !== 0) {
+        return scoreDiff;
+      }
+
       return b.updatedAtMs - a.updatedAtMs;
     })
     .map((item) => item.symbol)
@@ -39647,7 +39720,7 @@ function startPolygonLiveMarketStream() {
       };
     };
 
-    polygonLiveSocket.onmessage = (event) => {
+    polygonLiveSocket.onmessage = async (event) => {
       try {
         const payload = JSON.parse(event.data);
         const messages = Array.isArray(payload) ? payload : [payload];
@@ -39663,7 +39736,11 @@ function startPolygonLiveMarketStream() {
               polygonAuthenticated = true;
               polygonSocketReconnectAttempts = 0;
 
-              const symbols = refreshPolygonLiveSubscriptions();
+              const result = await refreshEarlyMoversThenPolygonSubscriptions();
+              const symbols =
+                engineState.polygonLiveStreamState?.subscribedSymbols ||
+                result?.polygonState ||
+                [];
 
               engineState.polygonLiveStreamState = {
                 ok: true,
@@ -39740,6 +39817,40 @@ function startPolygonLiveMarketStream() {
   }
 }
 
+function classifyLiveRunnerStage({
+  fastScore = 0,
+  momentum = 0,
+  fakeBreakoutRisk = 0,
+  spreadPercent = 0,
+  tapeSpeed = 0,
+  volumeSpikeRatio = 0,
+}) {
+  if (
+    fakeBreakoutRisk >= 25 ||
+    spreadPercent > QUICK_GATE_MAX_SPREAD_PERCENT ||
+    momentum >= 18
+  ) {
+    return "TOO_LATE";
+  }
+
+  if (
+    fastScore >= FAST_RUNNER_MIN_SCORE &&
+    momentum > 0 &&
+    tapeSpeed > 0
+  ) {
+    return "RUNNER_CONFIRMED";
+  }
+
+  if (
+    fastScore >= Math.max(60, FAST_RUNNER_MIN_SCORE - 18) &&
+    momentum > 0
+  ) {
+    return "HEATING_UP";
+  }
+
+  return "WATCHING";
+}
+
 function buildFastRunnerCandidateFromMemory(symbol, memory = {}) {
   const cleanSymbol = normalizeSymbol(symbol);
   const price = Number(memory.price || memory.current || 0);
@@ -39751,6 +39862,17 @@ function buildFastRunnerCandidateFromMemory(symbol, memory = {}) {
   const spreadPercent = Number(memory.spreadPercent || 0);
   const momentum = Number(memory.liveMomentumPercent || breakdown.momentum10 || 0);
   const fakeBreakoutRisk = Number(breakdown.fakeBreakoutRisk || 0);
+  const tapeSpeed = Number(memory.tapeSpeed || 0);
+  const volumeSpikeRatio = Number(breakdown.volumeSpikeRatio || 0);
+
+  const runnerStage = classifyLiveRunnerStage({
+    fastScore,
+    momentum,
+    fakeBreakoutRisk,
+    spreadPercent,
+    tapeSpeed,
+    volumeSpikeRatio,
+  });  
 
   const qualifiedFastRunner =
     fastScore >= FAST_RUNNER_MIN_SCORE &&
@@ -39767,8 +39889,9 @@ function buildFastRunnerCandidateFromMemory(symbol, memory = {}) {
     fastRunnerScore: fastScore,
     qualifiedFastRunner,
     liveMomentumPercent: momentum,
-    volumeSpikeRatio: Number(breakdown.volumeSpikeRatio || 0),
-    tapeSpeed: Number(memory.tapeSpeed || 0),
+    volumeSpikeRatio, 
+    runnerStage,
+    tapeSpeed,
     liquidityPressure: Number(memory.liquidityPressure || 0),
     spreadPercent,
     closeNearHighPercent: Number(breakdown.closeNearHighPercent || 0),
@@ -40126,6 +40249,10 @@ function buildLiveStarterBuyDecision(candidate = {}, account = {}, openBotPositi
 
   if (candidate.quickInstitutionalApproved !== true) {
     blockReasons.push("Quick Institutional Gate not approved");
+  }
+
+  if (candidate.runnerStage === "TOO_LATE") {
+    blockReasons.push("Runner already too extended / chase risk");
   }
 
   if (fastScore < FAST_RUNNER_MIN_SCORE) {
@@ -41158,6 +41285,35 @@ function runDeepIntelligenceSync() {
   return engineState.deepIntelligenceSyncState;
 }
 
+async function refreshEarlyMoversThenPolygonSubscriptions() {
+  if (!ENABLE_LIVE_EARLY_MOVER_REFRESH) {
+    return refreshPolygonLiveSubscriptions();
+  }
+
+  const earlyMoverSymbols = await getPolygonMoverSymbols(
+    LIVE_EARLY_MOVER_LIMIT
+  );
+
+  const polygonState = await refreshPolygonLiveSubscriptions();
+
+  pushLiveSignalUpdate({
+    type: "LIVE_EARLY_MOVER_REFRESH",
+    polygonLiveStreamState: engineState.polygonLiveStreamState || null,
+    liveEarlyMoverSymbols: engineState.liveEarlyMoverSymbols || [],
+    liveEarlyMoverRefreshState: engineState.liveEarlyMoverRefreshState || null,    
+    liveSignals: buildLiveSignalPushPayload(),
+  });
+
+  saveEngineState("LIVE_EARLY_MOVERS_THEN_POLYGON_SUBSCRIPTIONS");
+
+  return {
+    ok: true,
+    updatedAt: new Date().toISOString(),
+    earlyMoverCount: earlyMoverSymbols?.length || 0,
+    polygonState,
+  };
+}
+
 async function runLiveScheduledTask(taskName, intervalMs, worker) {
   const now = Date.now();
 
@@ -41207,9 +41363,9 @@ void runLiveScheduledTask(
     );
 
     void runLiveScheduledTask(
-      "refreshPolygonLiveSubscriptions",
-      30000,
-      () => refreshPolygonLiveSubscriptions()
+      "refreshEarlyMoversThenPolygonSubscriptions",
+      LIVE_EARLY_MOVER_REFRESH_INTERVAL_MS,
+      () => refreshEarlyMoversThenPolygonSubscriptions()
     );
 
     void runLiveScheduledTask(
@@ -42342,6 +42498,8 @@ app.get("/live-market-memory", (req, res) => {
       ok: true,
       generatedAt: new Date().toISOString(),
       polygonLiveStreamState: engineState.polygonLiveStreamState || null,
+      liveEarlyMoverSymbols: engineState.liveEarlyMoverSymbols || [],
+    liveEarlyMoverRefreshState: engineState.liveEarlyMoverRefreshState || null,
       count: memory.length,
       memory,
     });
