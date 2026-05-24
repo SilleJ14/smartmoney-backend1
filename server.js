@@ -409,6 +409,8 @@ function saveEngineState(reason = "STATE_UPDATE") {
           ? engineState.lastMarketOpen
           : null,
       marketClosedAt: engineState.marketClosedAt || null,      
+      openingBellTriggeredAt:
+        engineState.openingBellTriggeredAt || null,    
       topAutonomousCandidates:
         (engineState.topAutonomousCandidates || []).slice(0, 50),
       dailyLossLocked: engineState.dailyLossLocked,
@@ -1711,6 +1713,7 @@ stockTradingStoppedForDay: false,
 cryptoTradingStoppedForDay: false,
 lastTradingDayKey: null,
 lastMarketOpen: null,
+openingBellTriggeredAt: null,
 marketClosedAt: null,
 capitalRedistributionState: null,
 capitalRedistributionHistory: [],
@@ -23294,10 +23297,16 @@ async function placeMarketBuy(symbol, dollars, score = 0) {
 
     const asset = assetCheck.asset || {};
     const fractionable = asset.fractionable === true;
+const clock = await getClock();
+const marketOpen = Boolean(clock?.is_open);
 
-    const clock = await getClock();
-    const marketOpen = Boolean(clock?.is_open);
-    const cleanNotional = Math.max(1, Number(Number(dollars).toFixed(2)));
+if (!marketOpen) {
+  throw new Error(
+    `${normalizedSymbol} stock auto-buy blocked because market is closed`
+  );
+}
+
+const cleanNotional = Math.max(1, Number(Number(dollars).toFixed(2)));
 
     const quote = await getCombinedStockQuote(normalizedSymbol);
     const referencePrice = Number(
@@ -31140,9 +31149,6 @@ async function engineTick() {
   (engineState.totalEngineTicks || 0) + 1;
   engineState.lastTickStartedAt = Date.now();
   engineState.lastError = null;
-  engineState.cachedPositions = await getPositions();
-  engineState.cachedAccount = await getAccount();
-  engineState.lastSuccessfulCycleAt = new Date().toISOString();
 
   try {
     const { key, secret } = getAlpacaKeys();
@@ -31179,6 +31185,30 @@ async function engineTick() {
     }
     engineState.effectiveMode = effectiveMode;
     engineState.marketOpen = marketOpen;
+    const openingBellJustTriggered =
+      engineState.lastMarketOpen === false && marketOpen === true;
+
+    if (openingBellJustTriggered) {
+      engineState.openingBellTriggeredAt = Date.now();
+
+      saveRecentOrder("OPENING_BELL_TRIGGER_DETECTED", "MARKET", {
+        openingBellTriggeredAt: new Date(
+          engineState.openingBellTriggeredAt
+        ).toISOString(),
+        preparedFastRunnerCount:
+          engineState.fastRunnerCandidates?.length || 0,
+        preparedQuickGateCount:
+          engineState.quickInstitutionalCandidates?.length || 0,
+      });
+
+      await runFastRunnerEngine();
+      await runQuickInstitutionalGate();
+      await runFullBrainFastSync();
+      await runLiveStarterBuyGate();
+
+      saveEngineState("OPENING_BELL_FAST_BUY_TRIGGER");
+    }
+
     if (engineState.lastMarketOpen === true && marketOpen === false) {
       engineState.marketClosedAt = Date.now();
 
@@ -34062,11 +34092,12 @@ const effectiveStockModeEnabled =
 const effectiveCryptoModeEnabled =
   effectiveMode === "live_crypto" || TRADING_MODE === "smart";
 
-    const shouldRunStockAutoBuy =
-      effectiveStockModeEnabled &&
-      approvedStockSignals.length > 0 &&
-      !tradingStoppedForDay &&
-      !engineState.stockTradingStoppedForDay;
+const shouldRunStockAutoBuy =
+  marketOpen &&
+  effectiveStockModeEnabled &&
+  approvedStockSignals.length > 0 &&
+  !tradingStoppedForDay &&
+  !engineState.stockTradingStoppedForDay;
 
     const shouldRunCryptoAutoBuy =
       effectiveCryptoModeEnabled &&
@@ -40353,6 +40384,23 @@ async function runLiveStarterBuyGate() {
   const stateStartedAt = new Date().toISOString();
 
   try {
+    const clock = await getClock();
+    const marketOpen = Boolean(clock?.is_open);
+
+    if (!marketOpen) {
+      engineState.liveStarterBuyGateState = {
+        ok: true,
+        enabled: ENABLE_LIVE_STARTER_BUY,
+        phase: "PHASE_4_LIVE_STARTER_BUY_GATE",
+        reviewedAt: stateStartedAt,
+        reviewedCount: 0,
+        approvedCount: 0,
+        boughtCount: 0,
+        reason: "Stock market closed. Live starter buy skipped until open.",
+      };
+
+      return engineState.liveStarterBuyGateState;
+    }
 
         if (!ENABLE_LIVE_STARTER_BUY) {
       engineState.liveStarterBuyGateState = {
@@ -40396,9 +40444,14 @@ async function runLiveStarterBuyGate() {
     const positions = await getPositions();
     const aiOwnedSymbols = await getAiOwnedSymbols();
 
-    const openBotPositions = positions.filter((position) =>
-      aiOwnedSymbols.has(normalizeSymbol(position.symbol))
-    );
+    const openBotPositions = positions.filter((position) => {
+      const symbol = normalizeSymbol(position.symbol);
+
+      return (
+        aiOwnedSymbols.has(symbol) ||
+        engineState.aiManagedSymbols?.includes(symbol)
+      );
+    });
 
     const decisions = candidates.map((candidate) =>
       buildLiveStarterBuyDecision(candidate, account, openBotPositions)
@@ -40704,9 +40757,14 @@ async function runLivePositionManagement() {
     const positions = await getPositions();
     const aiOwnedSymbols = await getAiOwnedSymbols();
 
-    const aiPositions = positions.filter((position) =>
-      aiOwnedSymbols.has(normalizeSymbol(position.symbol))
-    );
+    const aiPositions = positions.filter((position) => {
+      const symbol = normalizeSymbol(position.symbol);
+
+      return (
+        aiOwnedSymbols.has(symbol) ||
+        engineState.aiManagedSymbols?.includes(symbol)
+      );
+    });
 
     const decisions = aiPositions
       .map((position) => buildLivePositionDecision(position))
@@ -40951,6 +41009,24 @@ async function runLiveScaleInEngine() {
   const startedAt = new Date().toISOString();
 
   try {
+    const clock = await getClock();
+    const marketOpen = Boolean(clock?.is_open);
+
+    if (!marketOpen) {
+      engineState.liveScaleInState = {
+        ok: true,
+        enabled: ENABLE_LIVE_SCALE_IN,
+        phase: "PHASE_6_LIVE_SCALE_IN_ENGINE",
+        reviewedAt: startedAt,
+        reviewedCount: 0,
+        approvedCount: 0,
+        executedCount: 0,
+        reason: "Stock market closed. Live scale-in skipped until open.",
+      };
+
+      return engineState.liveScaleInState;
+    }
+
     if (!ENABLE_LIVE_SCALE_IN) {
       engineState.liveScaleInState = {
         ok: false,
@@ -40967,10 +41043,15 @@ async function runLiveScaleInEngine() {
     const positions = await getPositions();
     const aiOwnedSymbols = await getAiOwnedSymbols();
 
-    const aiPositions = positions.filter((position) =>
-      aiOwnedSymbols.has(normalizeSymbol(position.symbol))
-    );
+    const aiPositions = positions.filter((position) => {
+      const symbol = normalizeSymbol(position.symbol);
 
+      return (
+        aiOwnedSymbols.has(symbol) ||
+        engineState.aiManagedSymbols?.includes(symbol)
+      );
+    });
+    
     const decisions = aiPositions
       .map((position) => buildLiveScaleInDecision(position, account, aiPositions))
       .filter(Boolean);
