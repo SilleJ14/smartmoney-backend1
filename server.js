@@ -21372,14 +21372,14 @@ async function getCryptoRecentBars(symbol, timeframe = "5Min", limit = 30) {
 function scoreCrypto(quote, bars = []) {
   const cleanBars = Array.isArray(bars)
     ? bars
-        .map((bar) => ({
-          o: Number(bar.o || bar.open || 0),
-          h: Number(bar.h || bar.high || 0),
-          l: Number(bar.l || bar.low || 0),
-          c: Number(bar.c || bar.close || 0),
-          v: Number(bar.v || bar.volume || 0),
-        }))
-        .filter((bar) => bar.c > 0)
+      .map((bar) => ({
+        o: Number(bar.o || bar.open || 0),
+        h: Number(bar.h || bar.high || 0),
+        l: Number(bar.l || bar.low || 0),
+        c: Number(bar.c || bar.close || 0),
+        v: Number(bar.v || bar.volume || 0),
+      }))
+      .filter((bar) => bar.c > 0)
     : [];
 
   const current = Number(
@@ -21835,6 +21835,9 @@ async function scanCryptoMarket() {
         bid: quote.bid,
         ask: quote.ask,
         source: quote.liveQuoteSource || "polygon_crypto_snapshot",
+        liveQuoteSource: quote.liveQuoteSource || "polygon_crypto_snapshot",
+        quoteFetchedAt: quote.quoteFetchedAt,
+        priceIsLive: quote.priceIsLive === true,
         raw: quote,
       });
 
@@ -39550,7 +39553,7 @@ function updateLiveQuoteCache(symbol, quote = {}) {
 
   const liveMemory = updateLiveMarketMemory(cleanSymbol, {
     price,
-        previousClose:
+    previousClose:
       quote.previousClose ||
       quote.pc ||
       quote.regularMarketPreviousClose ||
@@ -39596,6 +39599,15 @@ function updateLiveQuoteCache(symbol, quote = {}) {
     spreadPercent,
     volume: tradeVolume,
     source: quote.source || "live_stream",
+    liveQuoteSource:
+      quote?.liveQuoteSource ||
+      quote?.source ||
+      "live_cache",
+    liveQuoteUpdatedAt:
+      quote?.liveQuoteUpdatedAt ||
+      quote?.updatedAt ||
+      null,
+    priceIsLive: quote?.priceIsLive === true,
     updatedAt: new Date().toISOString(),
     previousPrice: previousPrice || null,
     liveMoveFromPreviousPercent,
