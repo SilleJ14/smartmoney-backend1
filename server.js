@@ -127,14 +127,14 @@ const QUICK_GATE_BLOCK_PANIC =
   process.env.QUICK_GATE_BLOCK_PANIC !== "false";
 
 const ENABLE_LIVE_STARTER_BUY =
-  process.env.ENABLE_LIVE_STARTER_BUY === "true";
+  process.env.ENABLE_LIVE_STARTER_BUY !== "false";
 
 const LIVE_STARTER_BUY_INTERVAL_MS = Number(
   process.env.LIVE_STARTER_BUY_INTERVAL_MS || 10000
 );
 
 const LIVE_STARTER_BUY_PERCENT = Number(
-  process.env.LIVE_STARTER_BUY_PERCENT || 30
+  process.env.LIVE_STARTER_BUY_PERCENT || 60
 );
 
 const LIVE_STARTER_MIN_GATE_SCORE = Number(
@@ -142,7 +142,7 @@ const LIVE_STARTER_MIN_GATE_SCORE = Number(
 );
 
 const LIVE_STARTER_MAX_BUYS_PER_CYCLE = Number(
-  process.env.LIVE_STARTER_MAX_BUYS_PER_CYCLE || 1
+  process.env.LIVE_STARTER_MAX_BUYS_PER_CYCLE || 5
 );  
 
 const LIVE_ORDER_MAX_QUOTE_AGE_SECONDS = Number(
@@ -154,7 +154,7 @@ const LIVE_ORDER_MAX_SPREAD_PERCENT = Number(
 );
 
 const LIVE_ORDER_REQUIRE_POLYGON_CONNECTED =
-  process.env.LIVE_ORDER_REQUIRE_POLYGON_CONNECTED !== "false";
+  process.env.LIVE_ORDER_REQUIRE_POLYGON_CONNECTED === "true";
 
 const LIVE_ORDER_LOCK_MS = Number(
   process.env.LIVE_ORDER_LOCK_MS || 15000
@@ -195,19 +195,23 @@ const LIVE_SCALE_IN_INTERVAL_MS = Number(
 );
 
 const LIVE_SCALE_IN_MIN_PROFIT_PERCENT = Number(
-  process.env.LIVE_SCALE_IN_MIN_PROFIT_PERCENT || 2
+  process.env.LIVE_SCALE_IN_MIN_PROFIT_PERCENT || 1.5
 );
 
 const LIVE_SCALE_IN_MIN_FAST_SCORE = Number(
-  process.env.LIVE_SCALE_IN_MIN_FAST_SCORE || 82
+  process.env.LIVE_SCALE_IN_MIN_FAST_SCORE || 80
 );
 
 const LIVE_SCALE_IN_PERCENT_OF_PLAN = Number(
-  process.env.LIVE_SCALE_IN_PERCENT_OF_PLAN || 30
+  process.env.LIVE_SCALE_IN_PERCENT_OF_PLAN || 20
 );
 
 const LIVE_SCALE_IN_MAX_ADDS_PER_SYMBOL = Number(
   process.env.LIVE_SCALE_IN_MAX_ADDS_PER_SYMBOL || 2
+);
+
+const LIVE_SCALE_IN_MAX_ADDS_PER_CYCLE = Number(
+  process.env.LIVE_SCALE_IN_MAX_ADDS_PER_CYCLE || 3
 );
 
 const ENABLE_FULL_BRAIN_FAST_SYNC =
@@ -292,6 +296,7 @@ const VOLATILE_MARKET_SNAPSHOT_KEYS = [
   "reviewedAgents",
   "institutionalDashboardSnapshots",
   "liveQuoteCache",
+  "liveMarketMemory",
   "themeMomentumState",
   "explosiveRunnerState",
   "adaptiveRunnerLearningState",
@@ -321,7 +326,7 @@ function clearVolatileMarketSnapshots(reason = "CLEAR_VOLATILE_MARKET_SNAPSHOTS"
   for (const key of VOLATILE_MARKET_SNAPSHOT_KEYS) {
     if (Array.isArray(engineState?.[key])) {
       engineState[key] = [];
-    } else if (key === "liveQuoteCache") {
+    } else if (key === "liveQuoteCache" || key === "liveMarketMemory") {
       engineState[key] = {};
     } else {
       engineState[key] = null;
@@ -1336,9 +1341,12 @@ let autoTradingEnabled =
 const AI_ORDER_PREFIX = "SM_AI";
 
 const CONFIG = {
-  maxOpenTrades: Number(process.env.MAX_OPEN_TRADES || 8),
-  maxStockOpenTrades: Number(process.env.MAX_STOCK_OPEN_TRADES || 5),
-  maxCryptoOpenTrades: Number(process.env.MAX_CRYPTO_OPEN_TRADES || 3),
+  maxOpenTrades: Number(process.env.MAX_OPEN_TRADES || 999),
+  maxStockOpenTrades: Number(process.env.MAX_STOCK_OPEN_TRADES || 999),
+  maxCryptoOpenTrades: Number(process.env.MAX_CRYPTO_OPEN_TRADES || 999),
+
+  targetCapitalSlots: Number(process.env.TARGET_CAPITAL_SLOTS || 10),
+  minAutonomousTradeAmount: Number(process.env.MIN_AUTONOMOUS_TRADE_AMOUNT || 25),
 
   minStockPrice: Number(process.env.MIN_STOCK_PRICE || 1),
   maxStockPrice: Number(process.env.MAX_STOCK_PRICE || 1000),
@@ -1350,7 +1358,7 @@ const CONFIG = {
     process.env.ENABLE_WEAKEST_REPLACEMENT === "true",
 
   maxBotExposurePercent: Number(
-    process.env.MAX_BOT_EXPOSURE_PERCENT || 50
+    process.env.MAX_BOT_EXPOSURE_PERCENT || 80
   ),
 
   enableAutonomousCompounding:
@@ -1484,7 +1492,7 @@ const CONFIG = {
   ),
 
   eliteConcentrationMinTradeAmount: Number(
-    process.env.ELITE_CONCENTRATION_MIN_TRADE_AMOUNT || 5
+    process.env.ELITE_CONCENTRATION_MIN_TRADE_AMOUNT || 25
   ),  
 
   continuationHoldStartHourET: Number(
@@ -9320,9 +9328,9 @@ const gradeRemainingBotBudget = Math.max(
 );
 
 const perTradeMax = Math.max(
-  Number(CONFIG.eliteConcentrationMinTradeAmount || 5),
+  Number(CONFIG.minAutonomousTradeAmount || CONFIG.eliteConcentrationMinTradeAmount || 25),
   Number(maxBotBudget || 0) /
-    Math.max(1, Number(CONFIG.maxOpenTrades || 8))
+    Math.max(1, Number(CONFIG.targetCapitalSlots || 10))
 );
 
 rawRecommendedTradeAmount = Number(
@@ -12555,8 +12563,8 @@ function calculateFinalPositionSizingReconciliation({
   const remainingBotBudget = Math.max(0, maxBotBudget - currentBotExposure);
 
   const perTradeMax = Math.max(
-    Number(CONFIG.eliteConcentrationMinTradeAmount || 5),
-    maxBotBudget / Math.max(1, Number(CONFIG.maxOpenTrades || 8))
+    Number(CONFIG.minAutonomousTradeAmount || CONFIG.eliteConcentrationMinTradeAmount || 25),
+    maxBotBudget / Math.max(1, Number(CONFIG.targetCapitalSlots || 10))
   );
 
   const governorMultiplier = Number(
@@ -14688,9 +14696,20 @@ function passesAutonomousParliamentGate(signal = {}) {
 function getDynamicTradeAmount(account, openBotPositions = [], signalScore = 80) {
   const cash = Number(account?.cash || 0);
   const equity = Number(account?.equity || 0);
-  const buyingPower = Number(account?.buying_power || 0);
+  const buyingPower = Number(account?.buying_power || cash || 0);
 
   if (!cash || cash <= 0 || !equity || equity <= 0) return 0;
+
+  const minTradeAmount = Number(
+    CONFIG.minAutonomousTradeAmount ||
+      CONFIG.eliteConcentrationMinTradeAmount ||
+      25
+  );
+
+  const targetCapitalSlots = Math.max(
+    1,
+    Number(CONFIG.targetCapitalSlots || 10)
+  );
 
   const compoundingState =
     engineState.capitalCompoundingState || {};
@@ -14699,47 +14718,53 @@ function getDynamicTradeAmount(account, openBotPositions = [], signalScore = 80)
     compoundingState.compoundedBotBudget ||
       equity * (CONFIG.maxBotExposurePercent / 100)
   );
+
   const currentBotExposure = getBotExposure(openBotPositions);
-  const remainingBotBudget = maxBotBudget - currentBotExposure;
-  const compoundingBudget =
-  Number(
-    engineState.capitalCompoundingState
-      ?.remainingCompoundedBudget || 0
+  const remainingBotBudget = Math.max(0, maxBotBudget - currentBotExposure);
+
+  const compoundingBudget = Number(
+    engineState.capitalCompoundingState?.remainingCompoundedBudget || 0
   );
 
-const effectiveRemainingBotBudget =
-  compoundingBudget > 0
-    ? Math.min(remainingBotBudget, compoundingBudget)
-    : remainingBotBudget;
+  const effectiveRemainingBotBudget =
+    compoundingBudget > 0
+      ? Math.min(remainingBotBudget, compoundingBudget)
+      : remainingBotBudget;
 
-if (effectiveRemainingBotBudget <= 0) return 0;
+  const availableNow = Math.min(
+    effectiveRemainingBotBudget,
+    cash,
+    buyingPower || cash
+  );
 
-  const perTradeMax =
-    maxBotBudget / Math.max(1, CONFIG.maxStockOpenTrades || CONFIG.maxOpenTrades);
+  if (availableNow < minTradeAmount) return 0;
+
+  const baseSlotAmount = maxBotBudget / targetCapitalSlots;
 
   const scoreMultiplier =
-    signalScore >= 85
-      ? 1
+    signalScore >= 90
+      ? 1.35
+      : signalScore >= 85
+      ? 1.15
       : signalScore >= 78
-      ? 0.85
+      ? 1
       : signalScore >= 72
-      ? 0.75
+      ? 0.85
       : signalScore >= 65
-      ? 0.60
-      : 0.35;
+      ? 0.7
+      : 0;
 
-  const scoreAdjustedTradeMax = perTradeMax * scoreMultiplier;
-  return Math.max(
-    1,
-   Math.min(
-  scoreAdjustedTradeMax,
-  effectiveRemainingBotBudget,
-  cash,
-  buyingPower || cash
-)
+  if (scoreMultiplier <= 0) return 0;
+
+  const desiredTradeAmount = baseSlotAmount * scoreMultiplier;
+
+  return Number(
+    Math.min(
+      Math.max(minTradeAmount, desiredTradeAmount),
+      availableNow
+    ).toFixed(2)
   );
 }
-
 
 function calculateSectorDominationAllocation(signal = {}) {
   const symbol = normalizeSymbol(signal.symbol);
@@ -30849,12 +30874,12 @@ async function autoBuyCryptoSignals(signals) {
   const openSlots = maxCryptoPositions - cryptoPositions.length;
   const baseTradeAmount = getDynamicTradeAmount(account, cryptoPositions);
 
-  const bestCandidateScore = Math.max(
-       signals
-      .filter((s) => s.qualifiedToBuy === true)
-      .map((s) => Number(s.score || 0)),
-    0
-  );
+const bestCandidateScore = Math.max(
+  0,
+  ...signals
+    .filter((s) => s.qualifiedToBuy === true)
+    .map((s) => Number(s.score || 0))
+);
 
   let scoreMultiplier = 0.5;
 
@@ -34031,8 +34056,11 @@ if (
           : "live_crypto";
     }
         engineState.effectiveMode = effectiveMode;
-    const effectiveStockModeEnabled = effectiveMode === "live_stock";
-    const effectiveCryptoModeEnabled = effectiveMode === "live_crypto";
+const effectiveStockModeEnabled =
+  effectiveMode === "live_stock" || TRADING_MODE === "smart";
+
+const effectiveCryptoModeEnabled =
+  effectiveMode === "live_crypto" || TRADING_MODE === "smart";
 
     const shouldRunStockAutoBuy =
       effectiveStockModeEnabled &&
@@ -40836,11 +40864,21 @@ function buildLiveScaleInDecision(position = {}, account = {}, openBotPositions 
       0
   );
 
+  const currentPositionValue = Number(
+    Math.abs(Number(position.market_value || qty * livePrice || 0))
+  );
+
+  const remainingPlannedAmount = Math.max(
+    0,
+    plannedFullTradeAmount - currentPositionValue
+  );
+
+  const rawScaleAmount =
+    plannedFullTradeAmount *
+    (LIVE_SCALE_IN_PERCENT_OF_PLAN / 100);
+
   const scaleAmount = Number(
-    (
-      plannedFullTradeAmount *
-      (LIVE_SCALE_IN_PERCENT_OF_PLAN / 100)
-    ).toFixed(2)
+    Math.min(rawScaleAmount, remainingPlannedAmount).toFixed(2)
   );
 
   const blockReasons = [];
@@ -40873,8 +40911,11 @@ function buildLiveScaleInDecision(position = {}, account = {}, openBotPositions 
     blockReasons.push("Max live adds reached");
   }
 
-  if (Number(account?.cash || 0) < scaleAmount || scaleAmount < 1) {
-    blockReasons.push("Not enough cash for scale-in");
+  if (
+    Number(account?.cash || 0) < scaleAmount ||
+    scaleAmount < Number(CONFIG.minAutonomousTradeAmount || 25)
+  ) {
+    blockReasons.push("Not enough cash or scale-in below minimum trade amount");
   }
 
   if (engineState.portfolioGovernorState?.shouldBlockNewTrades === true) {
@@ -40895,6 +40936,8 @@ function buildLiveScaleInDecision(position = {}, account = {}, openBotPositions 
     spreadPercent,
     addsSoFar,
     scaleAmount,
+    currentPositionValue,
+    remainingPlannedAmount,
     plannedFullTradeAmount,
     blockReasons,
     reason: approved
@@ -40935,7 +40978,7 @@ async function runLiveScaleInEngine() {
     const approved = decisions.filter((decision) => decision.approved);
     const executed = [];
 
-    for (const decision of approved.slice(0, 1)) {
+    for (const decision of approved.slice(0, LIVE_SCALE_IN_MAX_ADDS_PER_CYCLE)) {
       const symbol = normalizeSymbol(decision.symbol);
 
       if (activeBuyExecutionLocks.has(symbol) || buyingNow.has(symbol)) {
@@ -43119,6 +43162,12 @@ statisticalEdgeHistory:
       "maxOpenTrades",
       "maxStockOpenTrades",
       "maxCryptoOpenTrades",
+      "targetCapitalSlots",
+      "minAutonomousTradeAmount",
+      "pyramidMinProfitPercent",
+      "pyramidMinScore",
+      "pyramidMaxAddsPerSymbol",
+      "pyramidAddSizePercent",      
       "runnerTriggerPercent",
       "runnerTrailingStopPercent",
       "dailyLossLimitPercent",
