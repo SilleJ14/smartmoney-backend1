@@ -21668,13 +21668,12 @@ async function scanCryptoMarket() {
   engineState.topCryptoSignals = [];
 
   for (const symbol of symbols) {
-
-    const institutionalUsdPair =
-      String(symbol || "").endsWith("/USD");
+    const institutionalUsdPair = String(symbol || "").endsWith("/USD");
 
     if (!institutionalUsdPair) {
       continue;
     }
+
     try {
       const quote = await getCryptoLatestQuote(symbol);
       const bars = await getBestCryptoBars(symbol);
@@ -21682,13 +21681,40 @@ async function scanCryptoMarket() {
 
       const firstBarClose = Number(
         bars?.[0]?.c ||
-        bars?.[0]?.close ||
-        0
+          bars?.[0]?.close ||
+          0
       );
 
       const latestPrice = Number(
-        quote.current || 0
+        quote.current ||
+          quote.price ||
+          quote.last ||
+          quote.close ||
+          0
       );
+
+      const cryptoPercentChange =
+        firstBarClose > 0 && latestPrice > 0
+          ? ((latestPrice - firstBarClose) / firstBarClose) * 100
+          : Number(
+              quote.changePercent ||
+                quote.percentChange ||
+                quote.change_percent ||
+                quote.dp ||
+                0
+            );
+
+      const cryptoDollarChange =
+        firstBarClose > 0 && latestPrice > 0
+          ? latestPrice - firstBarClose
+          : cryptoPercentChange !== 0 && latestPrice > 0
+          ? latestPrice * (cryptoPercentChange / 100)
+          : Number(
+              quote.change ||
+                quote.changeDollars ||
+                quote.dollarChange ||
+                0
+            );
 
       const cachedCryptoQuote = updateLiveQuoteCache(symbol, {
         price: latestPrice,
@@ -21699,51 +21725,40 @@ async function scanCryptoMarket() {
         raw: quote,
       });
 
-      const cryptoPercentChange =
-        firstBarClose > 0 &&
-          latestPrice > 0
-          ? (
-            (
-              latestPrice -
-              firstBarClose
-            ) / firstBarClose
-          ) * 100
-          : 0;
-
       const liquidityMetrics =
         calculateCryptoLiquidityFromBars(
           bars,
-          Number(quote.current || 0)
+          latestPrice
         );
 
       const spreadPercent =
         Number(quote.bid || 0) > 0 &&
-          Number(quote.ask || 0) > 0
+        Number(quote.ask || 0) > 0
           ? ((Number(quote.ask) - Number(quote.bid)) /
-            Number(quote.ask)) *
-          100
+              Number(quote.ask)) *
+            100
           : 0;
 
       const cryptoChartBars = Array.isArray(bars)
         ? bars
-          .map((bar) => {
-            const close = Number(bar.c || bar.close || 0);
-            const open = Number(bar.o || bar.open || close || 0);
-            const high = Number(bar.h || bar.high || close || 0);
-            const low = Number(bar.l || bar.low || close || 0);
-            const volume = Number(bar.v || bar.volume || 0);
+            .map((bar) => {
+              const close = Number(bar.c || bar.close || 0);
+              const open = Number(bar.o || bar.open || close || 0);
+              const high = Number(bar.h || bar.high || close || 0);
+              const low = Number(bar.l || bar.low || close || 0);
+              const volume = Number(bar.v || bar.volume || 0);
 
-            return {
-              time: bar.t || bar.timestamp || bar.time || null,
-              open,
-              high,
-              low,
-              close,
-              price: close,
-              volume,
-            };
-          })
-          .filter((bar) => Number.isFinite(bar.close) && bar.close > 0)
+              return {
+                time: bar.t || bar.timestamp || bar.time || null,
+                open,
+                high,
+                low,
+                close,
+                price: close,
+                volume,
+              };
+            })
+            .filter((bar) => Number.isFinite(bar.close) && bar.close > 0)
         : [];
 
       const cryptoSparkline = cryptoChartBars.map((bar) => bar.close);
@@ -21759,21 +21774,26 @@ async function scanCryptoMarket() {
 
       results.push({
         ...quote,
-
         assetClass: "crypto",
         asset_class: "crypto",
+
         livePrice: latestPrice,
         displayPrice: latestPrice,
         price: latestPrice,
         current: latestPrice,
+
         liveQuoteUpdatedAt:
           cachedCryptoQuote?.updatedAt || new Date().toISOString(),
         liveQuoteSource:
           cachedCryptoQuote?.source || "alpaca_crypto_live_quote",
         priceIsLive: true,
         priceStale: false,
+
+        dayChangePercent: Number(cryptoPercentChange.toFixed(2)),
+        dayChangeDollars: Number(cryptoDollarChange.toFixed(2)),
         percentChange: Number(cryptoPercentChange.toFixed(2)),
         changePercent: Number(cryptoPercentChange.toFixed(2)),
+
         score,
 
         barsFound: bars.length,
@@ -21782,7 +21802,9 @@ async function scanCryptoMarket() {
         sparkline: cryptoSparkline,
         chartSource: "alpaca_crypto_bars",
         chartTimeframe: "best_available_live_crypto",
-        latestChartClose: cryptoSparkline[cryptoSparkline.length - 1] || latestPrice,
+        latestChartClose:
+          cryptoSparkline[cryptoSparkline.length - 1] || latestPrice,
+
         volume: liquidityMetrics.volume,
         averageVolume: liquidityMetrics.averageVolume,
         volumeSpikeRatio: liquidityMetrics.volumeSpikeRatio,
@@ -21791,8 +21813,7 @@ async function scanCryptoMarket() {
         spreadPercent: Number(spreadPercent.toFixed(3)),
 
         confirmations: {
-          volumeSpikeRatio:
-            liquidityMetrics.volumeSpikeRatio,
+          volumeSpikeRatio: liquidityMetrics.volumeSpikeRatio,
         },
 
         autoTradeApproved:
@@ -21805,6 +21826,7 @@ async function scanCryptoMarket() {
           cryptoQualification.qualifiedToBuy === true
             ? "Auto-Trade Approved"
             : "Watchlist",
+
         ...cryptoQualification,
       });
     } catch (err) {
@@ -42619,47 +42641,47 @@ async function getTopSignalsWithFreshQuotes(signals = [], limit = 25) {
     topSignals.map(async (signal) => {
       const symbol = normalizeSymbol(signal.symbol);
 
-if (
-  !symbol ||
-  String(symbol).includes("/") ||
-  String(symbol).endsWith("USD")
-) {
-  const merged = mergeLiveQuoteIntoSignal(signal);
+      if (
+        !symbol ||
+        String(symbol).includes("/") ||
+        String(symbol).endsWith("USD")
+      ) {
+        const merged = mergeLiveQuoteIntoSignal(signal);
 
-  const cryptoPrice = Number(
-    merged.livePrice ||
-      merged.displayPrice ||
-      merged.price ||
-      merged.current ||
-      signal.livePrice ||
-      signal.displayPrice ||
-      signal.price ||
-      signal.current ||
-      0
-  );
+        const cryptoPrice = Number(
+          merged.livePrice ||
+          merged.displayPrice ||
+          merged.price ||
+          merged.current ||
+          signal.livePrice ||
+          signal.displayPrice ||
+          signal.price ||
+          signal.current ||
+          0
+        );
 
-  if (cryptoPrice > 0) {
-    return {
-      ...merged,
-      livePrice: cryptoPrice,
-      displayPrice: cryptoPrice,
-      price: cryptoPrice,
-      current: cryptoPrice,
-      priceIsLive: true,
-      priceStale: false,
-      liveQuoteSource:
-        merged.liveQuoteSource ||
-        signal.liveQuoteSource ||
-        "alpaca_crypto_live_quote",
-      liveQuoteUpdatedAt:
-        merged.liveQuoteUpdatedAt ||
-        signal.liveQuoteUpdatedAt ||
-        new Date().toISOString(),
-    };
-  }
+        if (cryptoPrice > 0) {
+          return {
+            ...merged,
+            livePrice: cryptoPrice,
+            displayPrice: cryptoPrice,
+            price: cryptoPrice,
+            current: cryptoPrice,
+            priceIsLive: true,
+            priceStale: false,
+            liveQuoteSource:
+              merged.liveQuoteSource ||
+              signal.liveQuoteSource ||
+              "alpaca_crypto_live_quote",
+            liveQuoteUpdatedAt:
+              merged.liveQuoteUpdatedAt ||
+              signal.liveQuoteUpdatedAt ||
+              new Date().toISOString(),
+          };
+        }
 
-  return merged;
-}
+        return merged;
+      }
 
       const liveFreshness = isLiveQuoteFresh(symbol, 120);
 
