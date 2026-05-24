@@ -15,7 +15,7 @@ console.log("ENV CHECK:", {
   FINNHUB_API_KEY: process.env.FINNHUB_API_KEY ? "FOUND" : "MISSING",
   POLYGON_API_KEY: process.env.POLYGON_API_KEY ? "FOUND" : "MISSING",
   ENABLE_POLYGON: process.env.ENABLE_POLYGON !== "false",
-  POLYGON_PRIMARY: process.env.POLYGON_PRIMARY === "true",
+  POLYGON_PRIMARY: process.env.POLYGON_PRIMARY !== "false",
 });
 
 const app = express();
@@ -63,7 +63,7 @@ const ENABLE_POLYGON =
   process.env.ENABLE_POLYGON !== "false";
 
 const POLYGON_PRIMARY =
-  process.env.POLYGON_PRIMARY === "true";
+  process.env.POLYGON_PRIMARY !== "false";
 const ENABLE_POLYGON_MOVERS =
   process.env.ENABLE_POLYGON_MOVERS !== "false";
 
@@ -1312,7 +1312,9 @@ const persistedEngineState = loadPersistedEngineState();
 
 // 🔥 Trading Mode (PERSISTED)
 let TRADING_MODE =
-  runtimeConfig.tradingMode || "live_stock";
+  runtimeConfig.tradingMode ||
+  process.env.TRADING_MODE ||
+  "live_stock";
 
 let tradingModeLocked =
   runtimeConfig.tradingModeLocked ?? false;
@@ -1356,11 +1358,15 @@ const CONFIG = {
   minStockPrice: Number(process.env.MIN_STOCK_PRICE || 1),
   maxStockPrice: Number(process.env.MAX_STOCK_PRICE || 1000),
 
-  minScoreToBuy: Number(process.env.MIN_SCORE_TO_BUY || 65),
+  minScoreToBuy: Number(process.env.MIN_SCORE_TO_BUY || 70),
   replaceWeakestMinScoreGap: Number(process.env.REPLACE_SCORE_GAP || 5),
 
   enableWeakestReplacement:
     process.env.ENABLE_WEAKEST_REPLACEMENT === "true",
+
+  cryptoMaxExposureShareOfBotExposure: Number(
+    process.env.CRYPTO_MAX_EXPOSURE_SHARE_OF_BOT_EXPOSURE || 20
+  ),    
 
   maxBotExposurePercent: Number(
     process.env.MAX_BOT_EXPOSURE_PERCENT || 80
@@ -12017,6 +12023,73 @@ function updateAutonomousMarketIntelligenceState(
   return state;
 }
 
+function updateThemeMomentumState(signals = []) {
+  const analyzedSignals = Array.isArray(signals)
+    ? signals
+    : [];
+
+  const bullishSignals = analyzedSignals.filter(
+    (signal) =>
+      Number(signal.score || 0) >= 70
+  );
+
+  const sectors = {};
+
+  for (const signal of bullishSignals) {
+    const sector =
+      signal.estimatedSector ||
+      signal.sector ||
+      "General Market";
+
+    if (!sectors[sector]) {
+      sectors[sector] = {
+        sector,
+        totalScore: 0,
+        count: 0,
+        symbols: [],
+      };
+    }
+
+    sectors[sector].totalScore += Number(signal.score || 0);
+    sectors[sector].count += 1;
+    sectors[sector].symbols.push(signal.symbol);
+  }
+
+  const rankedThemes = Object.values(sectors)
+    .map((sector) => ({
+      ...sector,
+      averageScore:
+        sector.count > 0
+          ? sector.totalScore / sector.count
+          : 0,
+    }))
+    .sort(
+      (a, b) =>
+        Number(b.averageScore || 0) -
+        Number(a.averageScore || 0)
+    );
+
+  const state = {
+    updatedAt: new Date().toISOString(),
+    reviewedCount: analyzedSignals.length,
+    leadingThemeCount: rankedThemes.length,
+    leadingThemes: rankedThemes.slice(0, 10),
+  };
+
+  engineState.themeMomentumState = state;
+
+  if (!engineState.themeMomentumHistory) {
+    engineState.themeMomentumHistory = [];
+  }
+
+  engineState.themeMomentumHistory.unshift(state);
+
+  engineState.themeMomentumHistory =
+    engineState.themeMomentumHistory.slice(0, 200);
+
+  return state;
+}
+
 
 function calculateCorrelationIntelligenceEngine(
   openPositions = [],
@@ -12057,7 +12130,14 @@ const filteredPositions =
 
   const sectorBuckets = {};
   const cryptoPositions = [];
-  const overlapWarnings = [];
+const overlapWarnings = [];
+
+
+const totalExposure = filteredPositions.reduce(
+  (sum, position) =>
+    sum + Math.abs(Number(position.market_value || 0)),
+  0
+);
 
 for (const position of filteredPositions) {
     const symbol = normalizeSymbol(position.symbol);
@@ -15383,25 +15463,8 @@ async function polygonQuote(symbol) {
     const ticker =
       snapshotData?.ticker || {};
 
-    // PREVIOUS CLOSE
-    const prevUrl =
-      `https://api.polygon.io/v2/aggs/ticker/${encodeURIComponent(
-        cleanSymbol
-      )}/prev?adjusted=true&apiKey=${POLYGON_API_KEY}`;
-
-    const prevResponse = await fetch(prevUrl);
-
-    if (!prevResponse.ok) {
-      throw new Error(
-        `Polygon prev HTTP ${prevResponse.status}`
-      );
-    }
-
-    const prevData =
-      await prevResponse.json();
-
-    const prevBar =
-      prevData?.results?.[0];
+    // PREVIOUS CLOSE FROM SNAPSHOT ONLY
+    const prevBar = ticker?.prevDay || {};
 
     const quoteBid = Number(ticker?.lastQuote?.bp || 0);
     const quoteAsk = Number(ticker?.lastQuote?.ap || 0);
@@ -15421,6 +15484,22 @@ async function polygonQuote(symbol) {
     const previousClose = Number(
       prevBar?.c || 0
     );
+
+    if (!engineState.liveMarketMemory) {
+      engineState.liveMarketMemory = {};
+    }
+
+    engineState.liveMarketMemory[cleanSymbol] = {
+      ...(engineState.liveMarketMemory[cleanSymbol] || {}),
+      symbol: cleanSymbol,
+      previousClose,
+      dayOpen: Number(ticker?.day?.o || currentPrice || 0),
+      dayHigh: Number(ticker?.day?.h || currentPrice || 0),
+      dayLow: Number(ticker?.day?.l || currentPrice || 0),
+      dayVolume: Number(ticker?.day?.v || 0),
+      baselineSource: "polygon_snapshot",
+      baselineUpdatedAt: new Date().toISOString(),
+    };    
 
     if (!currentPrice || currentPrice <= 0) {
       return null;
@@ -15494,7 +15573,7 @@ async function getCombinedStockQuote(symbol) {
   let dataError = "";
 
 try {
-  if (ENABLE_POLYGON) {
+  if (ENABLE_POLYGON && POLYGON_PRIMARY) {
     polygon = await polygonQuote(symbol);
   }
 } catch (err) {
@@ -15562,12 +15641,21 @@ try {
     ? alpacaLow
     : 0;
 
-if (!polygon && (!alpacaCurrent || alpacaCurrent <= 0)) {
+if (!polygon) {
   try {
     finnhub = await finnhubQuote(symbol);
   } catch (err) {
     dataError = err.message;
     console.error("Finnhub fallback failed:", symbol, err.message);
+  }
+}
+
+if (!polygon && !finnhub && ENABLE_POLYGON && !POLYGON_PRIMARY) {
+  try {
+    polygon = await polygonQuote(symbol);
+  } catch (err) {
+    dataError = err.message;
+    console.error("Polygon secondary failed:", symbol, err.message);
   }
 }
 
@@ -21836,19 +21924,19 @@ async function getPolygonMoverSymbols(limit = POLYGON_MOVERS_LIMIT) {
             ticker?.day?.c ||
             0
         );
-        const previousClose = Number(
-          ticker?.prevDay?.c ||
-            ticker?.todaysChangePerc ||
-            0
-        );
-        const percentChange = Number(
-          ticker?.todaysChangePerc ||
-            (
-              previousClose > 0 && current > 0
-                ? ((current - previousClose) / previousClose) * 100
-                : 0
-            )
-        );
+const rawPercentChange = Number(ticker?.todaysChangePerc || 0);
+const previousClose = Number(
+  ticker?.prevDay?.c ||
+    (current > 0 && rawPercentChange !== 0
+      ? current / (1 + rawPercentChange / 100)
+      : 0)
+);
+
+const percentChange = Number.isFinite(rawPercentChange) && rawPercentChange !== 0
+  ? rawPercentChange
+  : previousClose > 0 && current > 0
+  ? ((current - previousClose) / previousClose) * 100
+  : 0;
         const volume = Number(ticker?.day?.v || 0);
 
         return {
@@ -21859,7 +21947,7 @@ async function getPolygonMoverSymbols(limit = POLYGON_MOVERS_LIMIT) {
       })
       .filter((item) => isNormalStockSymbol(item.symbol))
       .filter((item) => Number.isFinite(item.percentChange))
-      .filter((item) => Math.abs(item.percentChange) >= 3)
+      .filter((item) => Math.abs(item.percentChange) >= 2)
       .filter((item) => Number(item.volume || 0) >= CONFIG.minScanVolume)
       .sort((a, b) => Math.abs(b.percentChange) - Math.abs(a.percentChange))
       .slice(0, limit);
@@ -23456,10 +23544,13 @@ if (phase15ExecutionDominance.blockExecution) {
       1
   );
 
+ const maxExecutionMultiplier =
+  assetClass === "crypto" ? 1 : 1.25;  
+
   const effectiveAmount = Number(
     Math.max(
       0,
-      amount * Math.min(1.25, Math.max(0, centralCoreExecutionMultiplier))
+      amount * Math.min(maxExecutionMultiplier, Math.max(0, centralCoreExecutionMultiplier))
     ).toFixed(2)
   );
 
@@ -29356,7 +29447,7 @@ async function autoBuySignals(signals = []) {
   }  
 
   const clock = await getClock();
-  const allowClosedMarketStockBuying = true;
+  const allowClosedMarketStockBuying = false;
 
   if (!clock.is_open && !allowClosedMarketStockBuying) {
     saveRecentOrder("AUTO_STOCK_BUY_SKIPPED", "STOCK", {
@@ -29379,10 +29470,16 @@ async function autoBuySignals(signals = []) {
     aiOwnedSymbols.has(normalizeSymbol(position.symbol))
   );
 
-    const aiStockPositions = aiPositions.filter((position) => {
-    const symbol = normalizeSymbol(position.symbol);
-    return !symbol.includes("/") && position.asset_class !== "crypto";
-  });
+const aiStockPositions = aiPositions.filter((position) => {
+  const symbol = normalizeSymbol(position.symbol);
+
+  return (
+    !symbol.includes("/") &&
+    position.asset_class !== "crypto"
+  );
+});
+
+const openBotPositions = aiPositions;
 
   const maxBotBudget =
     Number(account.equity || 0) *
@@ -29419,7 +29516,21 @@ async function autoBuySignals(signals = []) {
     return;
   }
 
-  const openSlots = Number.MAX_SAFE_INTEGER;
+const openSlots = Math.min(
+  CONFIG.maxOpenTrades - aiPositions.length,
+  CONFIG.maxStockOpenTrades - aiStockPositions.length
+);
+
+if (openSlots <= 0) {
+  saveRecentOrder("AUTO_STOCK_BUY_SKIPPED", "STOCK", {
+    reason: "Max stock or total AI positions reached",
+    stockOpen: aiStockPositions.length,
+    totalOpen: aiPositions.length,
+    maxStockOpenTrades: CONFIG.maxStockOpenTrades,
+    maxOpenTrades: CONFIG.maxOpenTrades,
+  });
+  return;
+}
 
 const frozenOpenSlots = openSlots;
 
@@ -30586,11 +30697,17 @@ if (successfulStockBuysThisCycle >= openSlots) {
 async function rotateWeakCryptoIfBetter(signals, positions) {
   if (!["live_crypto", "smart"].includes(TRADING_MODE)) return false;
 
-  const cryptoPositions = positions.filter((p) =>
-    normalizeSymbol(p.symbol).endsWith("USD")
-  );
+const cryptoPositions = positions.filter((p) => {
+  const symbol = normalizeSymbol(p.symbol);
 
-  if (cryptoPositions.length < CONFIG.maxOpenTrades) return false;
+  return (
+    symbol.includes("/") ||
+    symbol.endsWith("USD") ||
+    String(p.asset_class || "").toLowerCase() === "crypto"
+  );
+});
+
+  if (cryptoPositions.length < CONFIG.maxCryptoOpenTrades) return false;
 
   const openSymbols = new Set(
     cryptoPositions.map((p) => normalizeSymbol(p.symbol))
@@ -30604,11 +30721,15 @@ async function rotateWeakCryptoIfBetter(signals, positions) {
 
   if (!topCandidate) return false;
 
-  const weakest = cryptoPositions.reduce((weak, pos) => {
-    const weakProfit = Number(weak.unrealized_plpc || 0);
-    const posProfit = Number(pos.unrealized_plpc || 0);
-    return posProfit < weakProfit ? pos : weak;
-  });
+const weakest = cryptoPositions.reduce((weak, pos) => {
+  const weakProfit = Number(weak.unrealized_plpc || 0);
+  const posProfit = Number(pos.unrealized_plpc || 0);
+  return posProfit < weakProfit ? pos : weak;
+});
+
+
+const clock = await getClock();
+const marketOpen = clock?.is_open === true;
     if (!marketOpen && TRADING_MODE !== "live_crypto") {
     saveRecentOrder(
       "ROTATION_SKIPPED_MARKET_CLOSED",
@@ -30773,9 +30894,10 @@ function calculateAdaptiveCryptoPositionSize(signal = {}, account = {}) {
   );
   const percentChange = Math.abs(Number(signal.percentChange || 0));
 
-  const baseCryptoBudget =
-    equity * (CONFIG.maxBotExposurePercent / 100);
-
+const baseCryptoBudget =
+  equity *
+  (CONFIG.maxBotExposurePercent / 100) *
+  (CONFIG.cryptoMaxExposureShareOfBotExposure / 100);
   const qualityMultiplier =
     score >= 90 ? 1 :
     score >= 80 ? 0.75 :
@@ -30857,21 +30979,14 @@ async function autoBuyCryptoSignals(signals) {
     return;
   }
 
-  const openCryptoSlots = Math.min(
-    CONFIG.maxOpenTrades - aiPositions.length,
-    CONFIG.maxCryptoOpenTrades - aiCryptoPositions.length
-  );
-
   const openSymbols = new Set(positions.map((p) => normalizeSymbol(p.symbol)));
   const cash = Number(account.cash || 0);
   const maxCryptoPositions = CONFIG.maxCryptoOpenTrades;
 
-  const cryptoPositions = positions.filter((p) =>
-    normalizeSymbol(p.symbol).endsWith("USD")
-  );
+ const cryptoPositions = aiCryptoPositions;
 
   if (cryptoPositions.length >= maxCryptoPositions) {
-    const rotated = await rotateWeakCryptoIfBetter(signals, positions);
+    const rotated = await rotateWeakCryptoIfBetter(signals, cryptoPositions);
 
     if (!rotated) {
       saveRecentOrder("AUTO_CRYPTO_BUY_SKIPPED", "CRYPTO", {
@@ -30883,7 +30998,21 @@ async function autoBuyCryptoSignals(signals) {
     return;
   }
 
-  const openSlots = maxCryptoPositions - cryptoPositions.length;
+  const openSlots = Math.min(
+  CONFIG.maxOpenTrades - aiPositions.length,
+  CONFIG.maxCryptoOpenTrades - aiCryptoPositions.length
+);
+
+if (openSlots <= 0) {
+  saveRecentOrder("AUTO_CRYPTO_BUY_SKIPPED", "CRYPTO", {
+    reason: "Max crypto or total AI positions reached",
+    cryptoOpen: aiCryptoPositions.length,
+    totalOpen: aiPositions.length,
+    maxCryptoOpenTrades: CONFIG.maxCryptoOpenTrades,
+    maxOpenTrades: CONFIG.maxOpenTrades,
+  });
+  return;
+}
   const baseTradeAmount = getDynamicTradeAmount(account, cryptoPositions);
 
 const bestCandidateScore = Math.max(
@@ -30932,7 +31061,7 @@ const bestCandidateScore = Math.max(
       return !openSymbols.has(sym) && Date.now() - lastSold > 120000;
     })
     .slice(0, openSlots);
-
+  let cryptoBudgetReservedThisCycle = 0;
   for (const crypto of buyCandidates) {
     const symbol = normalizeSymbol(crypto.symbol);
 
@@ -31071,6 +31200,24 @@ const finalMasterCryptoSizingMultiplier =
 const availableCryptoBuyingPower =
   getCryptoAvailableBuyingPower(account);
 
+const cryptoExposure = openBotPositions.reduce((sum, position) => {
+  const positionSymbol = normalizeSymbol(position.symbol);
+
+  return isCryptoSymbol(positionSymbol)
+    ? sum + Math.abs(Number(position.market_value || 0))
+    : sum;
+}, 0);
+
+const cryptoMaxBudget =
+  Number(account?.equity || 0) *
+  (Number(CONFIG.maxBotExposurePercent || 0) / 100) *
+  (Number(CONFIG.cryptoMaxExposureShareOfBotExposure || 20) / 100);
+
+const remainingCryptoBudget = Math.max(
+  0,
+  cryptoMaxBudget - cryptoExposure - cryptoBudgetReservedThisCycle
+);  
+
 const rawFinalTradeAmount =
   adaptiveCryptoSizing.recommendedAmount *
   cryptoConvictionMultiplier *
@@ -31080,13 +31227,14 @@ const rawFinalTradeAmount =
 let finalTradeAmount = Number(
   Math.min(
     rawFinalTradeAmount,
-    availableCryptoBuyingPower
+    availableCryptoBuyingPower,
+    remainingCryptoBudget
   ).toFixed(2)
 );
 
 if (finalTradeAmount > 0 && finalTradeAmount < 25) {
   finalTradeAmount =
-    availableCryptoBuyingPower >= 25 ? 25 : 0;
+    availableCryptoBuyingPower >= 25 && remainingCryptoBudget >= 25 ? 25 : 0;
 }
 
 if (!finalTradeAmount || finalTradeAmount <= 0) {
@@ -31105,12 +31253,10 @@ if (!finalTradeAmount || finalTradeAmount <= 0) {
 const adaptiveExecution =
   await executeAdaptiveBuyOrder({
     signal: crypto,
-    totalAmount:
-      finalTradeAmount *
-      Number(cryptoParliamentGate.multiplier || 1),
+    totalAmount: finalTradeAmount,
     assetClass: "crypto",
   });
-
+cryptoBudgetReservedThisCycle += finalTradeAmount;
 markAiManagedSymbol(symbol);
 
 journalTradeEntry(symbol, {
@@ -31154,11 +31300,15 @@ async function engineTick() {
   engineState.lastError = null;
 
   try {
-    const { key, secret } = getAlpacaKeys();
+const { key, secret } = getAlpacaKeys();
 
-    if (!key || !secret || !FINNHUB_API_KEY) {
-      throw new Error("Missing API keys in environment variables");
-    }
+if (!key || !secret) {
+  throw new Error("Missing Alpaca API keys in environment variables");
+}
+
+if (!POLYGON_API_KEY && !FINNHUB_API_KEY) {
+  throw new Error("Missing market data API key: set POLYGON_API_KEY or FINNHUB_API_KEY");
+}
 
     const account = await getAccount();
     resetDailySafetyStateIfNewDay(account);
@@ -39127,6 +39277,14 @@ function mergeLiveQuoteIntoSignal(signal = {}) {
     spreadPercent: liveQuote.spreadPercent,
     liveMoveFromPreviousPercent:
       liveQuote.liveMoveFromPreviousPercent,
+    percentChange:
+      liveQuote.livePercentChange ?? liveQuote.percentChange ?? signal.percentChange,
+    livePercentChange:
+      liveQuote.livePercentChange ?? signal.livePercentChange,
+    premarketPercent:
+      liveQuote.premarketPercent ?? signal.premarketPercent,
+    intradayPercent:
+      liveQuote.intradayPercent ?? signal.intradayPercent,      
     liveQuoteUpdatedAt: liveQuote.updatedAt,
     liveQuoteSource: liveQuote.source,
     fastRunnerScore:
@@ -39272,6 +39430,12 @@ function updateLiveQuoteCache(symbol, quote = {}) {
     updatedAt: new Date().toISOString(),
     previousPrice: previousPrice || null,
     liveMoveFromPreviousPercent,
+    previousClose: liveMemory.previousClose || null,
+    dayOpen: liveMemory.dayOpen || null,
+    percentChange: liveMemory.livePercentChange || 0,
+    livePercentChange: liveMemory.livePercentChange || 0,
+    premarketPercent: liveMemory.premarketPercent || 0,
+    intradayPercent: liveMemory.intradayPercent || 0,    
     fastRunnerScore: liveMemory.fastRunnerScore,
     liveMomentumPercent: liveMemory.liveMomentumPercent,
     tapeSpeed: liveMemory.tapeSpeed,
@@ -39461,6 +39625,20 @@ function updateLiveMarketMemory(symbol, tick = {}) {
 
   const now = Date.now();
   const previousPrice = Number(previous.price || 0);
+  const previousClose = Number(previous.previousClose || 0);
+  const dayOpen = Number(previous.dayOpen || 0);
+
+  const livePercentChange =
+    previousClose > 0
+      ? Number((((price - previousClose) / previousClose) * 100).toFixed(4))
+      : 0;
+
+  const premarketPercent = livePercentChange;
+
+  const intradayPercent =
+    dayOpen > 0
+      ? Number((((price - dayOpen) / dayOpen) * 100).toFixed(4))
+      : 0;  
 
   const bid = Number(tick.bid || previous.bid || 0);
   const ask = Number(tick.ask || previous.ask || 0);
@@ -39495,6 +39673,11 @@ function updateLiveMarketMemory(symbol, tick = {}) {
     symbol: cleanSymbol,
     price,
     current: price,
+    previousClose,
+    dayOpen,
+    livePercentChange,
+    premarketPercent,
+    intradayPercent,    
     previousPrice: previousPrice || null,
     bid,
     ask,
@@ -39926,6 +40109,9 @@ function buildFastRunnerCandidateFromMemory(symbol, memory = {}) {
   const fakeBreakoutRisk = Number(breakdown.fakeBreakoutRisk || 0);
   const tapeSpeed = Number(memory.tapeSpeed || 0);
   const volumeSpikeRatio = Number(breakdown.volumeSpikeRatio || 0);
+  const isCrypto = isCryptoSymbol(cleanSymbol);
+  const minFastScoreForRunnerAsset =
+    isCrypto ? 72 : FAST_RUNNER_MIN_SCORE;  
 
   const runnerStage = classifyLiveRunnerStage({
     fastScore,
@@ -39937,14 +40123,14 @@ function buildFastRunnerCandidateFromMemory(symbol, memory = {}) {
   });  
 
   const qualifiedFastRunner =
-    fastScore >= FAST_RUNNER_MIN_SCORE &&
+    fastScore >= minFastScoreForRunnerAsset &&
     spreadPercent <= QUICK_GATE_MAX_SPREAD_PERCENT &&
     momentum > 0 &&
     fakeBreakoutRisk < 25;
 
   return {
     symbol: cleanSymbol,
-    assetClass: "stock",
+    assetClass: isCrypto ? "crypto" : "stock",
     source: "FAST_RUNNER_ENGINE",
     price,
     current: price,
@@ -40026,6 +40212,7 @@ function runFastRunnerEngine() {
 function calculateQuickInstitutionalGate(candidate = {}) {
   const symbol = normalizeSymbol(candidate.symbol);
   const fastScore = Number(candidate.fastRunnerScore || 0);
+  const isCrypto = isCryptoSymbol(symbol);
   const spreadPercent = Number(candidate.spreadPercent || 0);
   const liquidityPressure = Number(candidate.liquidityPressure || 0);
   const fakeBreakoutRisk = Number(candidate.fakeBreakoutRisk || 0);
@@ -40128,21 +40315,24 @@ function calculateQuickInstitutionalGate(candidate = {}) {
       fakeBreakoutRisk
   );
 
+  const minQuickScoreForAsset = isCrypto ? 60 : QUICK_INSTITUTIONAL_MIN_SCORE;
+  const minFastScoreForAsset = isCrypto ? 72 : FAST_RUNNER_MIN_SCORE;
+
   const approved =
-    quickInstitutionalScore >= QUICK_INSTITUTIONAL_MIN_SCORE &&
-    fastScore >= FAST_RUNNER_MIN_SCORE &&
+    quickInstitutionalScore >= minQuickScoreForAsset &&
+    fastScore >= minFastScoreForAsset &&
     !panicBlocked &&
     !spreadBlocked &&
     !fakeBreakoutBlocked;
 
   const blockReasons = [];
 
-  if (quickInstitutionalScore < QUICK_INSTITUTIONAL_MIN_SCORE) {
-    blockReasons.push(`Quick institutional score below ${QUICK_INSTITUTIONAL_MIN_SCORE}`);
+  if (quickInstitutionalScore < minQuickScoreForAsset) {
+    blockReasons.push(`Quick institutional score below ${minQuickScoreForAsset}`);
   }
 
-  if (fastScore < FAST_RUNNER_MIN_SCORE) {
-    blockReasons.push(`Fast runner score below ${FAST_RUNNER_MIN_SCORE}`);
+  if (fastScore < minFastScoreForAsset) {
+    blockReasons.push(`Fast runner score below ${minFastScoreForAsset}`);
   }
 
   if (panicBlocked) {
@@ -40245,27 +40435,51 @@ function buildLiveStarterBuyDecision(candidate = {}, account = {}, openBotPositi
 
   const fastScore = Number(candidate.fastRunnerScore || 0);
   const gateScore = Number(candidate.quickInstitutionalScore || 0);
-const finalLiveScore = Number(
-  (
-    Math.min(fastScore, gateScore) * 0.60 +
-    Math.max(fastScore, gateScore) * 0.40
-  ).toFixed(2)
-);
+  const isCrypto = isCryptoSymbol(symbol);
+
+  const finalLiveScore = Number(
+    (
+      Math.min(fastScore, gateScore) *
+        (isCrypto ? 0.45 : 0.60) +
+      Math.max(fastScore, gateScore) *
+        (isCrypto ? 0.55 : 0.40)
+    ).toFixed(2)
+  );
 
   const cash = Number(account?.cash || 0);
   const equity = Number(account?.equity || account?.portfolio_value || cash || 0);
 
-  const currentExposure = openBotPositions.reduce((sum, position) => {
-    return sum + Math.abs(Number(position.market_value || 0));
-  }, 0);
+const totalExposure = openBotPositions.reduce((sum, position) => {
+  return sum + Math.abs(Number(position.market_value || 0));
+}, 0);
 
-  const maxBotBudget =
-    equity > 0
-      ? equity * (Number(CONFIG.maxBotExposurePercent || 0) / 100)
-      : 0;
+const assetExposure = openBotPositions.reduce((sum, position) => {
+  const positionSymbol = normalizeSymbol(position.symbol);
+  const sameAssetClass = isCryptoSymbol(positionSymbol) === isCrypto;
 
-  const remainingBudget = Math.max(0, maxBotBudget - currentExposure);
+  return sameAssetClass
+    ? sum + Math.abs(Number(position.market_value || 0))
+    : sum;
+}, 0);
 
+const totalMaxBotBudget =
+  equity > 0
+    ? equity * (Number(CONFIG.maxBotExposurePercent || 0) / 100)
+    : 0;
+
+const assetMaxBotBudget =
+  isCrypto
+    ? totalMaxBotBudget *
+      (Number(CONFIG.cryptoMaxExposureShareOfBotExposure || 20) / 100)
+    : totalMaxBotBudget;
+
+const remainingBudget = Math.max(
+  0,
+  Math.min(
+    totalMaxBotBudget - totalExposure,
+    assetMaxBotBudget - assetExposure
+  )
+);
   const plannedFullTradeAmount =
     typeof getDynamicTradeAmount === "function"
       ? Number(
@@ -40298,7 +40512,12 @@ const finalLiveScore = Number(
     (position) => normalizeSymbol(position.symbol) === symbol
   );
 
-  const openTradeCount = openBotPositions.length;
+  const sameAssetOpenPositions = openBotPositions.filter((position) => {
+  const positionSymbol = normalizeSymbol(position.symbol);
+  return isCryptoSymbol(positionSymbol) === isCrypto;
+});
+
+const openTradeCount = sameAssetOpenPositions.length;
 
   const blockReasons = [];
 
@@ -40322,15 +40541,22 @@ const finalLiveScore = Number(
     blockReasons.push("Runner already too extended / chase risk");
   }
 
-  if (fastScore < FAST_RUNNER_MIN_SCORE) {
-    blockReasons.push(`Fast Runner score below ${FAST_RUNNER_MIN_SCORE}`);
+  const minFastScoreForStarterAsset =
+    isCrypto ? 72 : FAST_RUNNER_MIN_SCORE;
+
+  if (fastScore < minFastScoreForStarterAsset) {
+    blockReasons.push(
+      `Fast Runner score below ${minFastScoreForStarterAsset}`
+    );
   }
 
-  if (gateScore < LIVE_STARTER_MIN_GATE_SCORE) {
-    blockReasons.push(`Live starter gate score below ${LIVE_STARTER_MIN_GATE_SCORE}`);
+  const minGateScoreForAsset = isCrypto ? 72 : LIVE_STARTER_MIN_GATE_SCORE;
+
+  if (gateScore < minGateScoreForAsset) {
+    blockReasons.push(`Live starter gate score below ${minGateScoreForAsset}`);
   }
 
-  if (finalLiveScore < Number(CONFIG.minScoreToBuy || 65)) {
+  if (finalLiveScore < Number(CONFIG.minScoreToBuy || 70)) {
     blockReasons.push(`Final live score below minScoreToBuy ${CONFIG.minScoreToBuy}`);
   }
 
@@ -40338,8 +40564,15 @@ const finalLiveScore = Number(
     blockReasons.push("Already owned");
   }
 
-  if (openTradeCount >= Number(CONFIG.maxStockOpenTrades || CONFIG.maxOpenTrades || 1)) {
-    blockReasons.push("Max stock open trades reached");
+  const maxOpenTradesForAsset = isCrypto
+    ? Number(CONFIG.maxCryptoOpenTrades || CONFIG.maxOpenTrades || 1)
+    : Number(CONFIG.maxStockOpenTrades || CONFIG.maxOpenTrades || 1);
+
+
+  if (openTradeCount >= maxOpenTradesForAsset) {
+    blockReasons.push(
+      `Max ${isCrypto ? "crypto" : "stock"} open trades reached`
+    );
   }
 
   if (cash < 1 || remainingBudget < 1 || starterAmount < 1) {
@@ -40375,9 +40608,11 @@ const finalLiveScore = Number(
     finalLiveScore,
     cash,
     equity,
-    currentExposure,
-    maxBotBudget: Number(maxBotBudget.toFixed(2)),
-    remainingBudget: Number(remainingBudget.toFixed(2)),
+currentExposure: Number(totalExposure.toFixed(2)),
+assetExposure: Number(assetExposure.toFixed(2)),
+maxBotBudget: Number(totalMaxBotBudget.toFixed(2)),
+assetMaxBotBudget: Number(assetMaxBotBudget.toFixed(2)),
+remainingBudget: Number(remainingBudget.toFixed(2)),
     openTradeCount,
     blockReasons,
     candidate,
@@ -40394,44 +40629,33 @@ async function runLiveStarterBuyGate() {
   try {
     const clock = await getClock();
     const marketOpen = Boolean(clock?.is_open);
-
-    if (!marketOpen) {
-      engineState.liveStarterBuyGateState = {
-        ok: true,
-        enabled: ENABLE_LIVE_STARTER_BUY,
-        phase: "PHASE_4_LIVE_STARTER_BUY_GATE",
-        reviewedAt: stateStartedAt,
-        reviewedCount: 0,
-        approvedCount: 0,
-        boughtCount: 0,
-        reason: "Stock market closed. Live starter buy skipped until open.",
-      };
-
-      return engineState.liveStarterBuyGateState;
-    }
-
-        if (!ENABLE_LIVE_STARTER_BUY) {
-      engineState.liveStarterBuyGateState = {
-        ok: false,
-        enabled: false,
-        phase: "PHASE_4_LIVE_STARTER_BUY_GATE",
-        reviewedAt: stateStartedAt,
-        reviewedCount: 0,
-        approvedCount: 0,
-        boughtCount: 0,
-        reason: "Live Starter Buy disabled.",
-      };
-
-      return engineState.liveStarterBuyGateState;
-    }
-
     const candidates = (engineState.quickInstitutionalCandidates || [])
+  .filter((candidate) => marketOpen || isCryptoSymbol(candidate.symbol))
       .filter((candidate) => candidate.quickInstitutionalApproved === true)
       .sort(
         (a, b) =>
           Number(b.quickInstitutionalScore || 0) -
           Number(a.quickInstitutionalScore || 0)
-      );
+      );  
+
+    const hasCryptoCandidates = candidates.some((candidate) =>
+      isCryptoSymbol(candidate.symbol)
+    );
+
+if (!ENABLE_LIVE_STARTER_BUY) {
+  engineState.liveStarterBuyGateState = {
+    ok: false,
+    enabled: false,
+    phase: "PHASE_4_LIVE_STARTER_BUY_GATE",
+    reviewedAt: stateStartedAt,
+    reviewedCount: 0,
+    approvedCount: 0,
+    boughtCount: 0,
+    reason: "Live Starter Buy disabled.",
+  };
+
+  return engineState.liveStarterBuyGateState;
+}
 
     if (candidates.length === 0) {
       engineState.liveStarterBuyGateState = {
@@ -40468,6 +40692,7 @@ async function runLiveStarterBuyGate() {
     const approved = decisions.filter((decision) => decision.approved);
 
     const orders = [];
+    let liveStarterBudgetReservedThisCycle = 0;
 
     for (const decision of approved.slice(0, LIVE_STARTER_MAX_BUYS_PER_CYCLE)) {
       const symbol = normalizeSymbol(decision.symbol);
@@ -40475,6 +40700,14 @@ async function runLiveStarterBuyGate() {
       if (activeBuyExecutionLocks.has(symbol) || buyingNow.has(symbol)) {
         continue;
       }
+
+  if (
+  isCryptoSymbol(symbol) &&
+  decision.starterAmount >
+    Math.max(0, decision.remainingBudget - liveStarterBudgetReservedThisCycle)
+) {
+  continue;
+}    
 
       const liveSafety = checkLiveOrderSafety(symbol, "BUY");
 
@@ -40514,11 +40747,17 @@ async function runLiveStarterBuyGate() {
 
       activeBuyExecutionLocks.add(symbol);
       try {
-        const order = await placeMarketBuy(
-          symbol,
-          decision.starterAmount,
-          decision.finalLiveScore
-        );
+         const order = isCryptoSymbol(symbol)
+          ? await placeCryptoMarketBuy(symbol, decision.starterAmount)
+          : await placeMarketBuy(
+              symbol,
+              decision.starterAmount,
+              decision.finalLiveScore
+            );
+
+        if (isCryptoSymbol(symbol)) {
+  liveStarterBudgetReservedThisCycle += decision.starterAmount;
+}    
 
         markAiManagedSymbol(symbol);
 
@@ -40534,7 +40773,7 @@ async function runLiveStarterBuyGate() {
 
         journalTradeEntry(symbol, {
           entryType: "LIVE_STARTER_BUY",
-          assetClass: "stock",
+          assetClass: isCryptoSymbol(symbol) ? "crypto" : "stock",
           entryPrice: decision.price,
           score: decision.finalLiveScore,
           strategy: "live_fast_runner_institutional_gate",
@@ -40824,11 +41063,17 @@ async function runLivePositionManagement() {
       }
 
       try {
-        const order = await placeMarketSell(
-          symbol,
-          decision.sellQty,
-          `LIVE_${decision.action}`
-        );
+        const order = isCryptoSymbol(symbol)
+          ? await placeCryptoMarketSell(
+              symbol,
+              decision.sellQty,
+              `LIVE_${decision.action}`
+            )
+          : await placeMarketSell(
+              symbol,
+              decision.sellQty,
+              `LIVE_${decision.action}`
+            );
 
         const record = {
           symbol,
@@ -40916,7 +41161,7 @@ function buildLiveScaleInDecision(position = {}, account = {}, openBotPositions 
 
   const addsSoFar =
     Number(engineState.pyramidAddsBySymbol?.[symbol] || 0);
-
+  const isCrypto = isCryptoSymbol(symbol);
   const plannedFullTradeAmount = Number(
     entry.plannedFullTradeAmount ||
       getDynamicTradeAmount(
@@ -40939,12 +41184,35 @@ function buildLiveScaleInDecision(position = {}, account = {}, openBotPositions 
     plannedFullTradeAmount - currentPositionValue
   );
 
-  const rawScaleAmount =
-    plannedFullTradeAmount *
-    (LIVE_SCALE_IN_PERCENT_OF_PLAN / 100);
+const cryptoScaleCapMultiplier = isCrypto
+  ? Number(CONFIG.cryptoMaxExposureShareOfBotExposure || 20) / 100
+  : 1;
+
+const rawScaleAmount =
+  plannedFullTradeAmount *
+  cryptoScaleCapMultiplier *
+  (LIVE_SCALE_IN_PERCENT_OF_PLAN / 100);
+
+const cryptoExposure = openBotPositions.reduce((sum, position) => {
+  const positionSymbol = normalizeSymbol(position.symbol);
+
+  return isCryptoSymbol(positionSymbol)
+    ? sum + Math.abs(Number(position.market_value || 0))
+    : sum;
+}, 0);
+
+const cryptoMaxBudget =
+  Number(account?.equity || account?.portfolio_value || 0) *
+  (Number(CONFIG.maxBotExposurePercent || 0) / 100) *
+  (Number(CONFIG.cryptoMaxExposureShareOfBotExposure || 20) / 100);
+
+const remainingCryptoBudget = isCrypto
+  ? Math.max(0, cryptoMaxBudget - cryptoExposure)
+  : Infinity;  
+
 
   const scaleAmount = Number(
-    Math.min(rawScaleAmount, remainingPlannedAmount).toFixed(2)
+    Math.min(rawScaleAmount, remainingPlannedAmount, remainingCryptoBudget).toFixed(2)
   );
 
   const blockReasons = [];
@@ -41019,8 +41287,14 @@ async function runLiveScaleInEngine() {
   try {
     const clock = await getClock();
     const marketOpen = Boolean(clock?.is_open);
+    const candidates =
+      engineState.quickInstitutionalCandidates || [];
 
-    if (!marketOpen) {
+    const hasCryptoCandidates = candidates.some((candidate) =>
+      isCryptoSymbol(candidate.symbol)
+    );
+
+    if (!marketOpen && !hasCryptoCandidates) {
       engineState.liveScaleInState = {
         ok: true,
         enabled: ENABLE_LIVE_SCALE_IN,
@@ -41060,9 +41334,10 @@ async function runLiveScaleInEngine() {
       );
     });
     
-    const decisions = aiPositions
-      .map((position) => buildLiveScaleInDecision(position, account, aiPositions))
-      .filter(Boolean);
+  decisions = aiPositions
+  .filter((position) => marketOpen || isCryptoSymbol(position.symbol))
+  .map((position) => buildLiveScaleInDecision(position, account, aiPositions))
+  .filter(Boolean);
 
     const approved = decisions.filter((decision) => decision.approved);
     const executed = [];
@@ -41112,11 +41387,13 @@ async function runLiveScaleInEngine() {
 
       activeBuyExecutionLocks.add(symbol);
       try {
-        const order = await placeMarketBuy(
-          symbol,
-          decision.scaleAmount,
-          decision.fastRunnerScore
-        );
+        const order = isCryptoSymbol(symbol)
+          ? await placeCryptoMarketBuy(symbol, decision.scaleAmount)
+          : await placeMarketBuy(
+              symbol,
+              decision.scaleAmount,
+              decision.fastRunnerScore
+            );
 
         engineState.pyramidAddsBySymbol[symbol] =
           Number(engineState.pyramidAddsBySymbol?.[symbol] || 0) + 1;
@@ -41473,7 +41750,7 @@ async function runLiveScheduledTask(taskName, intervalMs, worker) {
 }
 
 function startManagedLiveScheduler() {
-  if (liveSchedulerTimer) return;
+  if (liveSchedulerTimer) return engineState.liveSchedulerState;
 
   liveSchedulerTimer = setInterval(() => {
 void runLiveScheduledTask(
@@ -41546,7 +41823,19 @@ void runLiveScheduledTask(
   engineState.liveSchedulerState = {
     ok: true,
     startedAt: new Date().toISOString(),
-    tasks: Object.keys(liveSchedulerLastRun),
+    tasks: [
+  "cleanupLiveQuoteCache",
+  "cleanupLiveOrderDedupMap",
+  "refreshFinnhubLiveSubscriptions",
+  "refreshEarlyMoversThenPolygonSubscriptions",
+  "runFastRunnerEngine",
+  "runQuickInstitutionalGate",
+  "runLiveStarterBuyGate",
+  "runLivePositionManagement",
+  "runLiveScaleInEngine",
+  "runFullBrainFastSync",
+  "runDeepIntelligenceSync",
+],
   };
 
   return engineState.liveSchedulerState;
@@ -41621,6 +41910,7 @@ function cleanupLiveOrderDedupMap() {
 
 function checkLiveOrderSafety(symbol, side = "BUY") {
   const cleanSymbol = normalizeSymbol(symbol);
+  const isCrypto = isCryptoSymbol(cleanSymbol);
 
   const quote =
     engineState.liveQuoteCache?.[cleanSymbol] ||
@@ -41634,18 +41924,20 @@ function checkLiveOrderSafety(symbol, side = "BUY") {
   const blockReasons = [];
 
   if (!cleanSymbol) blockReasons.push("Missing symbol");
-  if (!price || price <= 0) blockReasons.push("Missing valid live price");
+  if (side === "BUY" && (!price || price <= 0)) {
+  blockReasons.push("Missing valid live price");
+}
 
-  if (quoteAgeSeconds > LIVE_ORDER_MAX_QUOTE_AGE_SECONDS) {
-    blockReasons.push(`Live quote stale: ${quoteAgeSeconds}s old`);
-  }
+if (side === "BUY" && quoteAgeSeconds > LIVE_ORDER_MAX_QUOTE_AGE_SECONDS) {
+  blockReasons.push(`Live quote stale: ${quoteAgeSeconds}s old`);
+}
 
-  if (spreadPercent > LIVE_ORDER_MAX_SPREAD_PERCENT) {
-    blockReasons.push(`Spread too wide: ${spreadPercent}%`);
-  }
-
+if (side === "BUY" && spreadPercent > LIVE_ORDER_MAX_SPREAD_PERCENT) {
+  blockReasons.push(`Spread too wide: ${spreadPercent}%`);
+}
   if (
     side === "BUY" &&
+    !isCrypto &&
     LIVE_ORDER_REQUIRE_POLYGON_CONNECTED &&
     !isPolygonLiveConnected()
   ) {
