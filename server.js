@@ -4142,6 +4142,17 @@ function buildLiveQuotesPayload(symbols = []) {
           0
         ),
         source: quote?.source || "live_cache",
+        livePrice: Number(quote?.price || quote?.current || 0),
+        displayPrice: Number(quote?.price || quote?.current || 0),
+        liveQuoteSource:
+          quote?.liveQuoteSource ||
+          quote?.source ||
+          "live_cache",
+        liveQuoteUpdatedAt:
+          quote?.liveQuoteUpdatedAt ||
+          quote?.updatedAt ||
+          null,
+        priceIsLive: quote?.priceIsLive === true,
         updatedAt: quote?.updatedAt || null,
         previousPrice: quote?.previousPrice || null,
         liveMoveFromPreviousPercent:
@@ -39441,8 +39452,11 @@ function mergeLiveQuoteIntoSignal(signal = {}) {
       liveQuote.premarketPercent ?? signal.premarketPercent,
     intradayPercent:
       liveQuote.intradayPercent ?? signal.intradayPercent,
-    liveQuoteUpdatedAt: liveQuote.updatedAt,
-    liveQuoteSource: liveQuote.source,
+    liveQuoteUpdatedAt:
+      liveQuote.liveQuoteUpdatedAt || liveQuote.updatedAt || null,
+    liveQuoteSource:
+      liveQuote.liveQuoteSource || liveQuote.source || "live_cache",
+    priceIsLive: liveQuote.priceIsLive === true,
     fastRunnerScore:
       liveQuote.fastRunnerScore ?? signal.fastRunnerScore,
     tapeSpeed:
@@ -39551,6 +39565,24 @@ function updateLiveQuoteCache(symbol, quote = {}) {
       ? Number((((price - previousPrice) / previousPrice) * 100).toFixed(4))
       : 0;
 
+  const quoteUpdatedAt =
+    quote.liveQuoteUpdatedAt ||
+    quote.quoteFetchedAt ||
+    quote.updatedAt ||
+    new Date().toISOString();
+
+  const quoteSource =
+    quote.liveQuoteSource ||
+    quote.source ||
+    "live_stream";
+
+  const quoteIsActuallyLive =
+    quote.priceIsLive === true &&
+    !!quoteUpdatedAt &&
+    !["scan_snapshot", "snapshot", "alpaca_fallback", ""].includes(
+      String(quoteSource || "").toLowerCase()
+    );
+
   const liveMemory = updateLiveMarketMemory(cleanSymbol, {
     price,
     previousClose:
@@ -39603,12 +39635,9 @@ function updateLiveQuoteCache(symbol, quote = {}) {
       quote?.liveQuoteSource ||
       quote?.source ||
       "live_cache",
-    liveQuoteUpdatedAt:
-      quote?.liveQuoteUpdatedAt ||
-      quote?.updatedAt ||
-      null,
-    priceIsLive: quote?.priceIsLive === true,
-    updatedAt: new Date().toISOString(),
+    liveQuoteUpdatedAt: quoteUpdatedAt,
+    priceIsLive: quoteIsActuallyLive,
+    updatedAt: quoteUpdatedAt,
     previousPrice: previousPrice || null,
     liveMoveFromPreviousPercent,
     previousClose: liveMemory.previousClose || null,
@@ -42830,7 +42859,7 @@ async function getTopSignalsWithFreshQuotes(signals = [], limit = 25) {
             displayPrice: cryptoPrice,
             price: cryptoPrice,
             current: cryptoPrice,
-            priceIsLive: true,
+            priceIsLive: quote.priceIsLive === true,
             priceStale: false,
             liveQuoteSource:
               merged.liveQuoteSource ||
