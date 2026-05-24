@@ -21679,41 +21679,64 @@ async function scanCryptoMarket() {
       const bars = await getBestCryptoBars(symbol);
       const score = scoreCrypto(quote, bars);
 
+      const validBars = Array.isArray(bars)
+        ? bars.filter((bar) => Number(bar.c || bar.close || 0) > 0)
+        : [];
+
       const firstBarClose = Number(
-        bars?.[0]?.c ||
-          bars?.[0]?.close ||
-          0
+        validBars[0]?.c ||
+        validBars[0]?.close ||
+        0
+      );
+
+      const lastBarClose = Number(
+        validBars[validBars.length - 1]?.c ||
+        validBars[validBars.length - 1]?.close ||
+        0
       );
 
       const latestPrice = Number(
         quote.current ||
-          quote.price ||
-          quote.last ||
-          quote.close ||
-          0
+        quote.price ||
+        quote.last ||
+        quote.close ||
+        0
       );
 
-      const cryptoPercentChange =
-        firstBarClose > 0 && latestPrice > 0
-          ? ((latestPrice - firstBarClose) / firstBarClose) * 100
-          : Number(
-              quote.changePercent ||
-                quote.percentChange ||
-                quote.change_percent ||
-                quote.dp ||
-                0
+      const changeBasePrice =
+        firstBarClose > 0 && firstBarClose !== latestPrice
+          ? firstBarClose
+          : lastBarClose > 0 && lastBarClose !== latestPrice
+            ? lastBarClose
+            : Number(
+              quote.previousClose ||
+              quote.prevClose ||
+              quote.open ||
+              quote.o ||
+              0
             );
 
-      const cryptoDollarChange =
-        firstBarClose > 0 && latestPrice > 0
-          ? latestPrice - firstBarClose
-          : cryptoPercentChange !== 0 && latestPrice > 0
-          ? latestPrice * (cryptoPercentChange / 100)
+      const cryptoPercentChange =
+        changeBasePrice > 0 && latestPrice > 0
+          ? ((latestPrice - changeBasePrice) / changeBasePrice) * 100
           : Number(
+            quote.changePercent ||
+            quote.percentChange ||
+            quote.change_percent ||
+            quote.dp ||
+            0
+          );
+
+      const cryptoDollarChange =
+        changeBasePrice > 0 && latestPrice > 0
+          ? latestPrice - changeBasePrice
+          : cryptoPercentChange !== 0 && latestPrice > 0
+            ? latestPrice * (cryptoPercentChange / 100)
+            : Number(
               quote.change ||
-                quote.changeDollars ||
-                quote.dollarChange ||
-                0
+              quote.changeDollars ||
+              quote.dollarChange ||
+              0
             );
 
       const cachedCryptoQuote = updateLiveQuoteCache(symbol, {
@@ -21733,32 +21756,32 @@ async function scanCryptoMarket() {
 
       const spreadPercent =
         Number(quote.bid || 0) > 0 &&
-        Number(quote.ask || 0) > 0
+          Number(quote.ask || 0) > 0
           ? ((Number(quote.ask) - Number(quote.bid)) /
-              Number(quote.ask)) *
-            100
+            Number(quote.ask)) *
+          100
           : 0;
 
       const cryptoChartBars = Array.isArray(bars)
         ? bars
-            .map((bar) => {
-              const close = Number(bar.c || bar.close || 0);
-              const open = Number(bar.o || bar.open || close || 0);
-              const high = Number(bar.h || bar.high || close || 0);
-              const low = Number(bar.l || bar.low || close || 0);
-              const volume = Number(bar.v || bar.volume || 0);
+          .map((bar) => {
+            const close = Number(bar.c || bar.close || 0);
+            const open = Number(bar.o || bar.open || close || 0);
+            const high = Number(bar.h || bar.high || close || 0);
+            const low = Number(bar.l || bar.low || close || 0);
+            const volume = Number(bar.v || bar.volume || 0);
 
-              return {
-                time: bar.t || bar.timestamp || bar.time || null,
-                open,
-                high,
-                low,
-                close,
-                price: close,
-                volume,
-              };
-            })
-            .filter((bar) => Number.isFinite(bar.close) && bar.close > 0)
+            return {
+              time: bar.t || bar.timestamp || bar.time || null,
+              open,
+              high,
+              low,
+              close,
+              price: close,
+              volume,
+            };
+          })
+          .filter((bar) => Number.isFinite(bar.close) && bar.close > 0)
         : [];
 
       const cryptoSparkline = cryptoChartBars.map((bar) => bar.close);
