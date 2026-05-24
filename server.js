@@ -101,11 +101,10 @@ const ENABLE_FAST_RUNNER_ENGINE =
   process.env.ENABLE_FAST_RUNNER_ENGINE !== "false";
 
 const FAST_RUNNER_ENGINE_INTERVAL_MS = Number(
-  process.env.FAST_RUNNER_ENGINE_INTERVAL_MS || 5000
+  process.env.FAST_RUNNER_ENGINE_INTERVAL_MS || 1500
 );
-
 const FAST_RUNNER_MIN_SCORE = Number(
-  process.env.FAST_RUNNER_MIN_SCORE || 78
+  process.env.FAST_RUNNER_MIN_SCORE || 82
 );
 
 const FAST_RUNNER_MAX_CANDIDATES = Number(
@@ -114,6 +113,10 @@ const FAST_RUNNER_MAX_CANDIDATES = Number(
 
 const ENABLE_QUICK_INSTITUTIONAL_GATE =
   process.env.ENABLE_QUICK_INSTITUTIONAL_GATE !== "false";
+
+const QUICK_INSTITUTIONAL_GATE_INTERVAL_MS = Number(
+  process.env.QUICK_INSTITUTIONAL_GATE_INTERVAL_MS || 2500
+);  
 
 const QUICK_INSTITUTIONAL_MIN_SCORE = Number(
   process.env.QUICK_INSTITUTIONAL_MIN_SCORE || 72
@@ -130,15 +133,15 @@ const ENABLE_LIVE_STARTER_BUY =
   process.env.ENABLE_LIVE_STARTER_BUY !== "false";
 
 const LIVE_STARTER_BUY_INTERVAL_MS = Number(
-  process.env.LIVE_STARTER_BUY_INTERVAL_MS || 10000
+  process.env.LIVE_STARTER_BUY_INTERVAL_MS || 3500
 );
 
 const LIVE_STARTER_BUY_PERCENT = Number(
-  process.env.LIVE_STARTER_BUY_PERCENT || 60
+  process.env.LIVE_STARTER_BUY_PERCENT || 70
 );
 
 const LIVE_STARTER_MIN_GATE_SCORE = Number(
-  process.env.LIVE_STARTER_MIN_GATE_SCORE || 78
+  process.env.LIVE_STARTER_MIN_GATE_SCORE || 82
 );
 
 const LIVE_STARTER_MAX_BUYS_PER_CYCLE = Number(
@@ -40242,7 +40245,12 @@ function buildLiveStarterBuyDecision(candidate = {}, account = {}, openBotPositi
 
   const fastScore = Number(candidate.fastRunnerScore || 0);
   const gateScore = Number(candidate.quickInstitutionalScore || 0);
-  const finalLiveScore = Math.max(fastScore, gateScore);
+const finalLiveScore = Number(
+  (
+    Math.min(fastScore, gateScore) * 0.60 +
+    Math.max(fastScore, gateScore) * 0.40
+  ).toFixed(2)
+);
 
   const cash = Number(account?.cash || 0);
   const equity = Number(account?.equity || account?.portfolio_value || cash || 0);
@@ -41498,11 +41506,11 @@ void runLiveScheduledTask(
       () => runFastRunnerEngine()
     );
 
-    void runLiveScheduledTask(
-      "runQuickInstitutionalGate",
-      FAST_RUNNER_ENGINE_INTERVAL_MS,
-      () => runQuickInstitutionalGate()
-    );
+void runLiveScheduledTask(
+  "runQuickInstitutionalGate",
+  QUICK_INSTITUTIONAL_GATE_INTERVAL_MS,
+  () => runQuickInstitutionalGate()
+);
 
     void runLiveScheduledTask(
       "runLiveStarterBuyGate",
