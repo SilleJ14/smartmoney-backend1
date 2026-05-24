@@ -21251,71 +21251,158 @@ async function getCryptoAssets() {
 }
 
 async function getCryptoLatestQuote(symbol) {
-  const data = await alpacaDataRequest(
-    `/v1beta3/crypto/us/latest/quotes?symbols=${encodeURIComponent(symbol)}`
+  if (!POLYGON_API_KEY || ENABLE_POLYGON === false) {
+    throw new Error("Polygon crypto quote disabled or missing POLYGON_API_KEY");
+  }
+
+  const cleanSymbol = normalizeSymbol(symbol).replace("/", "").replace("-", "");
+  const polygonTicker = cleanSymbol.startsWith("X:")
+    ? cleanSymbol
+    : `X:${cleanSymbol}`;
+
+  const url =
+    `https://api.polygon.io/v2/snapshot/locale/global/markets/crypto/tickers/${encodeURIComponent(
+      polygonTicker
+    )}?apiKey=${POLYGON_API_KEY}`;
+
+  const response = await fetch(url);
+
+  if (!response.ok) {
+    throw new Error(`Polygon crypto quote failed for ${symbol}: ${response.status}`);
+  }
+
+  const data = await response.json();
+  const ticker = data?.ticker || {};
+
+  const lastTradePrice = Number(
+    ticker?.lastTrade?.p ||
+    ticker?.day?.c ||
+    ticker?.prevDay?.c ||
+    0
   );
 
-  const quote = data?.quotes?.[symbol];
+  const bid = Number(ticker?.lastQuote?.b || ticker?.lastQuote?.bp || 0);
+  const ask = Number(ticker?.lastQuote?.a || ticker?.lastQuote?.ap || 0);
 
-  if (!quote) {
-    throw new Error(`No crypto quote found for ${symbol}`);
-  }
-
-  const price = Number(quote.ap || quote.bp || 0);
+  const price =
+    lastTradePrice > 0
+      ? lastTradePrice
+      : bid > 0 && ask > 0
+        ? (bid + ask) / 2
+        : 0;
 
   if (!price || price <= 0) {
-    throw new Error(`Invalid crypto price for ${symbol}`);
+    throw new Error(`Invalid Polygon crypto price for ${symbol}`);
   }
+
+  const previousClose = Number(ticker?.prevDay?.c || 0);
+  const changePercent =
+    previousClose > 0
+      ? ((price - previousClose) / previousClose) * 100
+      : 0;
 
   return {
     symbol,
     current: price,
-    bid: Number(quote.bp || 0),
-    ask: Number(quote.ap || 0),
+    price,
+    bid,
+    ask,
+    previousClose,
+    changePercent,
+    percentChange: changePercent,
     assetClass: "crypto",
+    liveQuoteSource: "polygon_crypto_snapshot",
+    source: "polygon_crypto_snapshot",
+    quoteFetchedAt: new Date().toISOString(),
+    priceIsLive: true,
+    priceStale: false,
+    raw: ticker,
   };
 }
 
 async function getCryptoRecentBars(symbol, timeframe = "5Min", limit = 30) {
-  const data = await alpacaDataRequest(
-    `/v1beta3/crypto/us/bars?symbols=${encodeURIComponent(
-      symbol
-    )}&timeframe=${encodeURIComponent(timeframe)}&limit=${limit}`
-  );
-
-  const bars = data?.bars?.[symbol];
-
-  return Array.isArray(bars) ? bars : [];
-}
-
-function scoreCrypto(quote, bars = []) {
-  if (!Array.isArray(bars) || bars.length < 3) {
-    return 0;
+  if (!POLYGON_API_KEY || ENABLE_POLYGON === false) {
+    return [];
   }
 
-  const cleanBars = bars
+  const cleanSymbol = normalizeSymbol(symbol).replace("/", "").replace("-", "");
+  const polygonTicker = cleanSymbol.startsWith("X:")
+    ? cleanSymbol
+    : `X:${cleanSymbol}`;
+
+  const multiplier = timeframe === "1Min" ? 1 : 5;
+  const timespan = "minute";
+
+  const to = new Date();
+  const from = new Date(Date.now() - 24 * 60 * 60 * 1000);
+
+  const fromText = from.toISOString().slice(0, 10);
+  const toText = to.toISOString().slice(0, 10);
+
+  const url =
+    `https://api.polygon.io/v2/aggs/ticker/${encodeURIComponent(
+      polygonTicker
+    )}/range/${multiplier}/${timespan}/${fromText}/${toText}` +
+    `?adjusted=true&sort=desc&limit=${limit}&apiKey=${POLYGON_API_KEY}`;
+
+  const response = await fetch(url);
+
+  if (!response.ok) {
+    return [];
+  }
+
+  const data = await response.json();
+  const bars = Array.isArray(data?.results) ? data.results : [];
+
+  return bars
+    .slice()
+    .reverse()
     .map((bar) => ({
+      t: bar.t,
       o: Number(bar.o || 0),
       h: Number(bar.h || 0),
       l: Number(bar.l || 0),
       c: Number(bar.c || 0),
       v: Number(bar.v || 0),
+      source: "polygon_crypto_aggs",
     }))
     .filter((bar) => bar.c > 0);
+}
+
+function scoreCrypto(quote, bars = []) {
+  const cleanBars = Array.isArray(bars)
+    ? bars
+        .map((bar) => ({
+          o: Number(bar.o || bar.open || 0),
+          h: Number(bar.h || bar.high || 0),
+          l: Number(bar.l || bar.low || 0),
+          c: Number(bar.c || bar.close || 0),
+          v: Number(bar.v || bar.volume || 0),
+        }))
+        .filter((bar) => bar.c > 0)
+    : [];
+
+  const current = Number(
+    quote?.current ||
+    quote?.price ||
+    quote?.last ||
+    cleanBars[cleanBars.length - 1]?.c ||
+    0
+  );
+
+  if (!current || current <= 0) return 0;
 
   if (cleanBars.length < 3) {
-    return 0;
+    return clampScore(Number(quote?.changePercent || quote?.percentChange || 35));
   }
 
   const first = cleanBars[0];
   const latest = cleanBars[cleanBars.length - 1];
   const previous = cleanBars[cleanBars.length - 2];
 
-  const current = Number(latest.c || quote.current || 0);
-  const open = Number(first.o || first.c || 0);
-
-  const high = Math.max(...cleanBars.map((bar) => bar.h || bar.c));
-  const low = Math.min(...cleanBars.map((bar) => bar.l || bar.c));
+  const open = Number(first.o || first.c || current);
+  const high = Math.max(...cleanBars.map((bar) => Number(bar.h || bar.c || 0)));
+  const low = Math.min(...cleanBars.map((bar) => Number(bar.l || bar.c || 0)));
 
   const momentumPercent =
     open > 0 ? ((current - open) / open) * 100 : 0;
@@ -21327,6 +21414,10 @@ function scoreCrypto(quote, bars = []) {
       ? ((current - shortFirst.c) / shortFirst.c) * 100
       : 0;
 
+  const previousClose = Number(previous.c || current);
+  const lastBarMomentum =
+    previousClose > 0 ? ((current - previousClose) / previousClose) * 100 : 0;
+
   const closeNearHigh =
     high > low ? ((current - low) / (high - low)) * 100 : 50;
 
@@ -21336,48 +21427,47 @@ function scoreCrypto(quote, bars = []) {
 
   const greenRatio = greenBars / cleanBars.length;
 
-  const previousClose = Number(previous.c || current);
-  const lastBarMomentum =
-    previousClose > 0 ? ((current - previousClose) / previousClose) * 100 : 0;
-
   const avgVolume =
     cleanBars.reduce((sum, bar) => sum + Number(bar.v || 0), 0) /
     Math.max(1, cleanBars.length);
 
   const latestVolume = Number(latest.v || 0);
+  const volumeRatio = avgVolume > 0 ? latestVolume / avgVolume : 1;
 
-  const volumeRatio =
-    avgVolume > 0 ? latestVolume / avgVolume : 1;
+  let score = 50;
 
-  let score = 35;
-
-  if (cleanBars.length >= 10) score += 8;
-  if (cleanBars.length >= 15) score += 5;
+  if (cleanBars.length >= 5) score += 5;
+  if (cleanBars.length >= 10) score += 5;
   if (cleanBars.length >= 20) score += 5;
 
-  if (momentumPercent > 0) score += 12;
-  if (momentumPercent >= 0.2) score += 10;
-  if (momentumPercent >= 0.5) score += 10;
-  if (momentumPercent >= 1) score += 8;
+  if (momentumPercent > 0) score += 8;
+  if (momentumPercent >= 0.15) score += 6;
+  if (momentumPercent >= 0.35) score += 6;
+  if (momentumPercent >= 0.75) score += 6;
+  if (momentumPercent >= 1.5) score += 5;
 
-  if (shortMomentumPercent > 0) score += 8;
-  if (shortMomentumPercent >= 0.25) score += 7;
+  if (shortMomentumPercent > 0) score += 7;
+  if (shortMomentumPercent >= 0.15) score += 5;
+  if (shortMomentumPercent >= 0.35) score += 5;
 
-  if (greenRatio >= 0.55) score += 8;
-  if (greenRatio >= 0.65) score += 7;
+  if (lastBarMomentum > 0) score += 4;
 
-  if (closeNearHigh >= 55) score += 6;
-  if (closeNearHigh >= 70) score += 8;
-  if (closeNearHigh >= 85) score += 6;
+  if (greenRatio >= 0.5) score += 5;
+  if (greenRatio >= 0.6) score += 5;
 
+  if (closeNearHigh >= 45) score += 5;
+  if (closeNearHigh >= 65) score += 5;
+
+  if (volumeRatio >= 0.8) score += 4;
   if (volumeRatio >= 1.1) score += 5;
-  if (volumeRatio >= 1.5) score += 6;
+  if (volumeRatio >= 1.5) score += 5;
 
-  if (lastBarMomentum < -0.6) score -= 10;
-  if (momentumPercent < -0.5) score -= 12;
-  if (closeNearHigh < 30) score -= 8;
+  if (momentumPercent < -0.25) score -= 8;
+  if (momentumPercent < -0.75) score -= 10;
+  if (shortMomentumPercent < -0.35) score -= 8;
+  if (closeNearHigh < 25) score -= 8;
 
-  return clampScore(Math.round(score));
+  return clampScore(score);
 }
 
 async function getBestCryptoBars(symbol) {
@@ -21744,7 +21834,7 @@ async function scanCryptoMarket() {
         current: latestPrice,
         bid: quote.bid,
         ask: quote.ask,
-        source: "alpaca_crypto_live_quote",
+        source: quote.liveQuoteSource || "polygon_crypto_snapshot",
         raw: quote,
       });
 
@@ -21806,9 +21896,9 @@ async function scanCryptoMarket() {
         current: latestPrice,
 
         liveQuoteUpdatedAt:
-          cachedCryptoQuote?.updatedAt || new Date().toISOString(),
+          quote.quoteFetchedAt || cachedCryptoQuote?.updatedAt || new Date().toISOString(),
         liveQuoteSource:
-          cachedCryptoQuote?.source || "alpaca_crypto_live_quote",
+          quote.liveQuoteSource || cachedCryptoQuote?.source || "polygon_crypto_snapshot",
         priceIsLive: true,
         priceStale: false,
 
@@ -21823,7 +21913,7 @@ async function scanCryptoMarket() {
         chartBars: cryptoChartBars,
         historicalBars: cryptoChartBars,
         sparkline: cryptoSparkline,
-        chartSource: "alpaca_crypto_bars",
+        chartSource: "polygon_crypto_aggs",
         chartTimeframe: "best_available_live_crypto",
         latestChartClose:
           cryptoSparkline[cryptoSparkline.length - 1] || latestPrice,
@@ -39460,8 +39550,24 @@ function updateLiveQuoteCache(symbol, quote = {}) {
 
   const liveMemory = updateLiveMarketMemory(cleanSymbol, {
     price,
-    bid,
-    ask,
+        previousClose:
+      quote.previousClose ||
+      quote.pc ||
+      quote.regularMarketPreviousClose ||
+      previous.previousClose ||
+      0,
+    dayOpen:
+      quote.dayOpen ||
+      quote.open ||
+      quote.o ||
+      previous.dayOpen ||
+      0,
+    percentChange:
+      quote.percentChange ||
+      quote.changePercent ||
+      quote.livePercentChange ||
+      previous.percentChange ||
+      0,
     spread,
     spreadPercent,
     volume: tradeVolume,
@@ -39688,13 +39794,35 @@ function updateLiveMarketMemory(symbol, tick = {}) {
 
   const now = Date.now();
   const previousPrice = Number(previous.price || 0);
-  const previousClose = Number(previous.previousClose || 0);
-  const dayOpen = Number(previous.dayOpen || 0);
+  const previousClose = Number(
+    tick.previousClose ||
+    tick.pc ||
+    tick.regularMarketPreviousClose ||
+    previous.previousClose ||
+    0
+  );
+
+  const dayOpen = Number(
+    tick.dayOpen ||
+    tick.open ||
+    tick.o ||
+    previous.dayOpen ||
+    0
+  );
+
+  const fallbackPercent = Number(
+    tick.livePercentChange ??
+    tick.percentChange ??
+    tick.changePercent ??
+    0
+  );
 
   const livePercentChange =
     previousClose > 0
       ? Number((((price - previousClose) / previousClose) * 100).toFixed(4))
-      : 0;
+      : Number.isFinite(fallbackPercent)
+        ? fallbackPercent
+        : 0;
 
   const premarketPercent = livePercentChange;
 
@@ -43367,6 +43495,14 @@ app.get("/stock-quote/:symbol", async (req, res) => {
           ? ((q.current - q.previousClose) / q.previousClose) * 100
           : 0,
         percentChange: q.percentChange,
+        open: q.open,
+        dayOpen: q.open,
+        liveQuoteUpdatedAt: q.quoteFetchedAt,
+        liveQuoteSource: q.liveQuoteSource,
+        priceIsLive: q.priceIsLive === true,
+        chartBars: q.chartBars || [],
+        historicalBars: q.historicalBars || [],
+        sparkline: q.sparkline || [],
         source: q.source || "polygon_first_manual_search",
         autoTradeAllowed: false,
         manuallyBuyable: true,
