@@ -77,6 +77,12 @@ const ENABLE_POLYGON_WEBSOCKET =
 const POLYGON_WS_URL =
   process.env.POLYGON_WS_URL || "wss://socket.polygon.io/stocks";
 
+const POLYGON_CRYPTO_WS_URL =
+  process.env.POLYGON_CRYPTO_WS_URL || "wss://socket.polygon.io/crypto";
+
+const ENABLE_POLYGON_CRYPTO_WEBSOCKET =
+  process.env.ENABLE_POLYGON_CRYPTO_WEBSOCKET !== "false";
+
 const POLYGON_LIVE_STREAM_LIMIT = Number(
   process.env.POLYGON_LIVE_STREAM_LIMIT || 75
 );
@@ -268,9 +274,23 @@ function saveRuntimeConfig(updates = {}) {
 function loadPersistedEngineState() {
   try {
     if (!fs.existsSync(ENGINE_STATE_FILE)) return {};
-    return JSON.parse(fs.readFileSync(ENGINE_STATE_FILE, "utf8"));
+
+    const raw = fs.readFileSync(ENGINE_STATE_FILE, "utf8").trim();
+
+    if (!raw) {
+      return {};
+    }
+
+    return JSON.parse(raw);
   } catch (err) {
     console.error("Could not load engine-state.json:", err.message);
+
+    try {
+      const backupFile = `${ENGINE_STATE_FILE}.bad-${Date.now()}`;
+      fs.renameSync(ENGINE_STATE_FILE, backupFile);
+      console.error("Corrupt engine-state.json moved to:", backupFile);
+    } catch { }
+
     return {};
   }
 }
@@ -2011,6 +2031,12 @@ let polygonSocketReconnectTimer = null;
 let polygonSubscribedSymbols = new Set();
 let polygonSocketReconnectAttempts = 0;
 let polygonAuthenticated = false;
+let polygonCryptoLiveSocket = null;
+let polygonCryptoSocketReconnectTimer = null;
+let polygonCryptoSubscribedSymbols = new Set();
+let polygonCryptoSocketReconnectAttempts = 0;
+let polygonCryptoAuthenticated = false;
+
 let WebSocketImpl = globalThis.WebSocket || null;
 
 if (!WebSocketImpl) {
@@ -2018,11 +2044,12 @@ if (!WebSocketImpl) {
     WebSocketImpl = (await import("ws")).default;
   } catch (err) {
     console.error(
-      "WebSocket unavailable. Install ws package or use a Node runtime with native WebSocket:",
+      "WebSocket unavailable. Install ws package or use Node with native WebSocket:",
       err.message
     );
   }
 }
+
 const sellingNow = new Set();
 const buyingNow = new Set();
 const liveOrderDedupMap = {};
@@ -2042,7 +2069,7 @@ async function runInBatches(items, batchSize, worker) {
 
     results.push(...batchResults.filter(Boolean));
 
-    await sleep(1200);
+    await sleep(2000);
   }
 
   return results;
@@ -2087,6 +2114,51 @@ function isCryptoSymbol(symbol = "") {
 
 function normalizeSymbol(symbol) {
   return String(symbol || "").trim().toUpperCase();
+}
+
+
+function normalizeCryptoSymbolForPolygon(symbol = "") {
+  const clean = normalizeSymbol(symbol)
+    .replace(/^X:/, "")
+    .replace("/", "-")
+    .replace("_", "-");
+
+  if (!clean) return "";
+
+  if (clean.includes("-")) return clean;
+
+  if (clean.endsWith("USDT") && clean.length > 4) {
+    return `${clean.slice(0, -4)}-USDT`;
+  }
+
+  if (clean.endsWith("USD") && clean.length > 3) {
+    return `${clean.slice(0, -3)}-USD`;
+  }
+
+  return clean;
+}
+
+function normalizePolygonCryptoPairToAppSymbol(pair = "") {
+  const clean = normalizeSymbol(pair)
+    .replace(/^X:/, "")
+    .replace("_", "-");
+
+  if (!clean) return "";
+
+  if (clean.includes("-")) {
+    const [base, quote] = clean.split("-");
+    return base && quote ? `${base}/${quote}` : clean;
+  }
+
+  if (clean.endsWith("USDT") && clean.length > 4) {
+    return `${clean.slice(0, -4)}/USDT`;
+  }
+
+  if (clean.endsWith("USD") && clean.length > 3) {
+    return `${clean.slice(0, -3)}/USD`;
+  }
+
+  return clean;
 }
 
 function markAiManagedSymbol(symbol) {
@@ -15331,6 +15403,56 @@ function savePolygonCachedQuote(symbol, quote) {
   });
 }
 
+const combinedStockQuoteCache = new Map();
+
+function getCombinedStockQuoteCacheKey(symbol) {
+  return normalizeSymbol(symbol);
+}
+
+function getCachedCombinedStockQuote(symbol, maxAgeMs = 15000) {
+  const key = getCombinedStockQuoteCacheKey(symbol);
+  const cached = combinedStockQuoteCache.get(key);
+
+  if (!cached) return null;
+
+  const ageMs = Date.now() - Number(cached.savedAt || 0);
+
+  if (ageMs > maxAgeMs) {
+    combinedStockQuoteCache.delete(key);
+    return null;
+  }
+
+  return cached.quote || null;
+}
+
+function saveCachedCombinedStockQuote(symbol, quote) {
+  const key = getCombinedStockQuoteCacheKey(symbol);
+
+  combinedStockQuoteCache.set(key, {
+    savedAt: Date.now(),
+    quote,
+  });
+}
+
+function getLiveCachedQuote(symbol, maxAgeMs = 15000) {
+  const cleanSymbol = normalizeSymbol(symbol);
+  const quote = engineState.liveQuoteCache?.[cleanSymbol];
+
+  if (!quote) return null;
+
+  const updatedAtMs = new Date(
+    quote.liveQuoteUpdatedAt ||
+    quote.updatedAt ||
+    0
+  ).getTime();
+
+  if (!updatedAtMs || Date.now() - updatedAtMs > maxAgeMs) {
+    return null;
+  }
+
+  return quote;
+}
+
 function isPolygonInCooldown() {
   const until = Number(engineState.apiCooldowns?.polygon || 0);
   return until > Date.now();
@@ -15556,6 +15678,8 @@ async function polygonQuote(symbol) {
 
     savePolygonCachedQuote(cleanSymbol, quote);
 
+    saveCachedCombinedStockQuote(cleanSymbol, quote);
+
     return quote;
   } catch (err) {
     console.error(
@@ -15578,8 +15702,80 @@ async function polygonQuote(symbol) {
   }
 }
 
+async function getAlpacaLatestStockPrice(symbol) {
+  const cleanSymbol = normalizeSymbol(symbol);
+
+  try {
+    const tradeData = await alpacaDataRequest(
+      `/v2/stocks/${encodeURIComponent(cleanSymbol)}/trades/latest`
+    );
+
+    const trade = tradeData?.trade || null;
+    const price = Number(trade?.p || trade?.price || 0);
+
+    if (price > 0) {
+      return {
+        price,
+        source: "alpaca_latest_trade",
+        raw: trade,
+      };
+    }
+  } catch (err) {
+    console.warn(
+      `Alpaca latest trade failed for ${cleanSymbol}:`,
+      err.message
+    );
+  }
+
+  try {
+    const quoteData = await alpacaDataRequest(
+      `/v2/stocks/${encodeURIComponent(cleanSymbol)}/quotes/latest`
+    );
+
+    const quote = quoteData?.quote || null;
+    const bid = Number(quote?.bp || quote?.bid_price || 0);
+    const ask = Number(quote?.ap || quote?.ask_price || 0);
+
+    const price =
+      bid > 0 && ask > 0
+        ? (bid + ask) / 2
+        : bid > 0
+          ? bid
+          : ask > 0
+            ? ask
+            : 0;
+
+    if (price > 0) {
+      return {
+        price,
+        bid,
+        ask,
+        source: "alpaca_latest_quote",
+        raw: quote,
+      };
+    }
+  } catch (err) {
+    console.warn(
+      `Alpaca latest quote failed for ${cleanSymbol}:`,
+      err.message
+    );
+  }
+
+  return null;
+}
+
 async function getCombinedStockQuote(symbol) {
-  let polygon = null;
+  const cleanSymbol = normalizeSymbol(symbol);
+
+  const cachedCombined = getCachedCombinedStockQuote(cleanSymbol);
+
+  if (cachedCombined) {
+    return cachedCombined;
+  }
+
+  const liveCachedQuote = getLiveCachedQuote(cleanSymbol);
+
+  let polygon = liveCachedQuote || null;
   let finnhub = null;
   let dataError = "";
 
@@ -15672,7 +15868,7 @@ async function getCombinedStockQuote(symbol) {
 
   const primary = polygon || finnhub;
 
-  const current = Number(
+  let current = Number(
     primary?.current ||
     primary?.c ||
     alpacaCurrent ||
@@ -15715,6 +15911,16 @@ async function getCombinedStockQuote(symbol) {
     Number(barStats.avgVolume || 0)
   );
 
+  let alpacaLatestFallback = null;
+
+  if (!current || current <= 0) {
+    alpacaLatestFallback = await getAlpacaLatestStockPrice(cleanSymbol);
+
+    if (alpacaLatestFallback?.price > 0) {
+      current = Number(alpacaLatestFallback.price);
+    }
+  }
+
   if (!current || current <= 0) {
     throw new Error(
       dataError ||
@@ -15722,7 +15928,7 @@ async function getCombinedStockQuote(symbol) {
     );
   }
 
-  return {
+  const combinedQuote = {
     symbol,
 
     current,
@@ -15772,11 +15978,11 @@ async function getCombinedStockQuote(symbol) {
     ),
 
     quoteFetchedAt: new Date().toISOString(),
-    liveQuoteSource: polygon
-      ? "polygon_rest"
-      : finnhub
-        ? "finnhub_rest"
-        : "alpaca_bars",
+      liveQuoteSource: polygon
+        ? "polygon_rest"
+        : finnhub
+          ? "finnhub_rest"
+          : alpacaLatestFallback?.source || "alpaca_bars",
     priceIsLive: Boolean(polygon || finnhub),
     priceStale: false,
 
@@ -15785,7 +15991,13 @@ async function getCombinedStockQuote(symbol) {
       : finnhub
         ? "Finnhub + Alpaca"
         : "Alpaca fallback",
+
+    stockChartBars,
   };
+
+  saveCachedCombinedStockQuote(cleanSymbol, combinedQuote);
+
+  return combinedQuote;
 }
 
 async function getRecentBars(symbol, timeframe = "5Min", limit = 30) {
@@ -21230,18 +21442,66 @@ function passesQualityFilters(q) {
 
   return { ok: true };
 }
+
 async function getAccount() {
-  return alpacaTradingRequest("/v2/account");
+  try {
+    const account = await alpacaTradingRequest("/v2/account");
+    engineState.cachedAccount = account;
+    markApiHealth("alpacaAccount", true);
+    return account;
+  } catch (err) {
+    markApiHealth("alpacaAccount", false, err.message);
+
+    if (engineState.cachedAccount) {
+      return {
+        ...engineState.cachedAccount,
+        stale: true,
+        staleReason: err.message,
+      };
+    }
+
+    return {
+      equity: 0,
+      cash: 0,
+      buying_power: 0,
+      status: "alpaca_account_unavailable",
+      stale: true,
+      staleReason: err.message,
+    };
+  }
 }
 
 async function getPositions() {
-  return alpacaTradingRequest("/v2/positions");
+  try {
+    const positions = await alpacaTradingRequest("/v2/positions");
+    engineState.cachedPositions = Array.isArray(positions) ? positions : [];
+    markApiHealth("alpacaPositions", true);
+    return engineState.cachedPositions;
+  } catch (err) {
+    markApiHealth("alpacaPositions", false, err.message);
+
+    return Array.isArray(engineState.cachedPositions)
+      ? engineState.cachedPositions
+      : [];
+  }
 }
 
 async function getOrders() {
-  return alpacaTradingRequest(
-    "/v2/orders?status=all&limit=100&direction=desc"
-  );
+  try {
+    const orders = await alpacaTradingRequest(
+      "/v2/orders?status=all&limit=100&direction=desc"
+    );
+
+    engineState.cachedOrders = Array.isArray(orders) ? orders : [];
+    markApiHealth("alpacaOrders", true);
+    return engineState.cachedOrders;
+  } catch (err) {
+    markApiHealth("alpacaOrders", false, err.message);
+
+    return Array.isArray(engineState.cachedOrders)
+      ? engineState.cachedOrders
+      : [];
+  }
 }
 async function getOpenOrders() {
   return alpacaTradingRequest(
@@ -21262,122 +21522,105 @@ async function getCryptoAssets() {
 }
 
 async function getCryptoLatestQuote(symbol) {
-  if (!POLYGON_API_KEY || ENABLE_POLYGON === false) {
-    throw new Error("Polygon crypto quote disabled or missing POLYGON_API_KEY");
-  }
+  const cleanSymbol = normalizeSymbol(symbol);
 
-  const cleanSymbol = normalizeSymbol(symbol).replace("/", "").replace("-", "");
-  const polygonTicker = cleanSymbol.startsWith("X:")
-    ? cleanSymbol
-    : `X:${cleanSymbol}`;
+  try {
+    const data = await alpacaDataRequest(
+      `/v1beta3/crypto/us/latest/quotes?symbols=${encodeURIComponent(cleanSymbol)}`
+    );
 
-  const url =
-    `https://api.polygon.io/v2/snapshot/locale/global/markets/crypto/tickers/${encodeURIComponent(
-      polygonTicker
-    )}?apiKey=${POLYGON_API_KEY}`;
+    const quote =
+      data?.quotes?.[cleanSymbol] ||
+      data?.quotes?.[cleanSymbol.replace("/", "")] ||
+      null;
 
-  const response = await fetch(url);
+    const bid = Number(quote?.bp || quote?.bid_price || quote?.bid || 0);
+    const ask = Number(quote?.ap || quote?.ask_price || quote?.ask || 0);
 
-  if (!response.ok) {
-    throw new Error(`Polygon crypto quote failed for ${symbol}: ${response.status}`);
-  }
-
-  const data = await response.json();
-  const ticker = data?.ticker || {};
-
-  const lastTradePrice = Number(
-    ticker?.lastTrade?.p ||
-    ticker?.day?.c ||
-    ticker?.prevDay?.c ||
-    0
-  );
-
-  const bid = Number(ticker?.lastQuote?.b || ticker?.lastQuote?.bp || 0);
-  const ask = Number(ticker?.lastQuote?.a || ticker?.lastQuote?.ap || 0);
-
-  const price =
-    lastTradePrice > 0
-      ? lastTradePrice
-      : bid > 0 && ask > 0
+    let price =
+      bid > 0 && ask > 0
         ? (bid + ask) / 2
-        : 0;
+        : bid > 0
+          ? bid
+          : ask > 0
+            ? ask
+            : 0;
 
-  if (!price || price <= 0) {
-    throw new Error(`Invalid Polygon crypto price for ${symbol}`);
+    if (!price || price <= 0) {
+      const tradeData = await alpacaDataRequest(
+        `/v1beta3/crypto/us/latest/trades?symbols=${encodeURIComponent(cleanSymbol)}`
+      );
+
+      const trade =
+        tradeData?.trades?.[cleanSymbol] ||
+        tradeData?.trades?.[cleanSymbol.replace("/", "")] ||
+        null;
+
+      price = Number(trade?.p || trade?.price || 0);
+    }
+
+    if (!price || price <= 0) {
+      throw new Error(`Invalid Alpaca crypto price for ${symbol}`);
+    }
+
+    return {
+      symbol,
+      current: price,
+      price,
+      bid,
+      ask,
+      previousClose: 0,
+      changePercent: 0,
+      percentChange: 0,
+      assetClass: "crypto",
+      liveQuoteSource: "alpaca_crypto_latest",
+      source: "alpaca_crypto_latest",
+      quoteFetchedAt: new Date().toISOString(),
+      priceIsLive: true,
+      priceStale: false,
+      raw: quote,
+    };
+  } catch (alpacaErr) {
+    throw new Error(
+      `Alpaca crypto quote failed for ${symbol}: ${alpacaErr.message}`
+    );
   }
-
-  const previousClose = Number(ticker?.prevDay?.c || 0);
-  const changePercent =
-    previousClose > 0
-      ? ((price - previousClose) / previousClose) * 100
-      : 0;
-
-  return {
-    symbol,
-    current: price,
-    price,
-    bid,
-    ask,
-    previousClose,
-    changePercent,
-    percentChange: changePercent,
-    assetClass: "crypto",
-    liveQuoteSource: "polygon_crypto_snapshot",
-    source: "polygon_crypto_snapshot",
-    quoteFetchedAt: new Date().toISOString(),
-    priceIsLive: true,
-    priceStale: false,
-    raw: ticker,
-  };
 }
 
+
+
 async function getCryptoRecentBars(symbol, timeframe = "5Min", limit = 30) {
-  if (!POLYGON_API_KEY || ENABLE_POLYGON === false) {
+  const cleanSymbol = normalizeSymbol(symbol);
+
+  try {
+    const data = await alpacaDataRequest(
+      `/v1beta3/crypto/us/bars?symbols=${encodeURIComponent(
+        cleanSymbol
+      )}&timeframe=${encodeURIComponent(timeframe)}&limit=${limit}`
+    );
+
+    const bars =
+      data?.bars?.[cleanSymbol] ||
+      data?.bars?.[cleanSymbol.replace("/", "")] ||
+      [];
+
+    return Array.isArray(bars)
+      ? bars
+          .map((bar) => ({
+            t: bar.t,
+            o: Number(bar.o || 0),
+            h: Number(bar.h || 0),
+            l: Number(bar.l || 0),
+            c: Number(bar.c || 0),
+            v: Number(bar.v || 0),
+            source: "alpaca_crypto_bars",
+          }))
+          .filter((bar) => bar.c > 0)
+      : [];
+  } catch (err) {
+    console.warn(`Alpaca crypto bars failed for ${symbol}:`, err.message);
     return [];
   }
-
-  const cleanSymbol = normalizeSymbol(symbol).replace("/", "").replace("-", "");
-  const polygonTicker = cleanSymbol.startsWith("X:")
-    ? cleanSymbol
-    : `X:${cleanSymbol}`;
-
-  const multiplier = timeframe === "1Min" ? 1 : 5;
-  const timespan = "minute";
-
-  const to = new Date();
-  const from = new Date(Date.now() - 24 * 60 * 60 * 1000);
-
-  const fromText = from.toISOString().slice(0, 10);
-  const toText = to.toISOString().slice(0, 10);
-
-  const url =
-    `https://api.polygon.io/v2/aggs/ticker/${encodeURIComponent(
-      polygonTicker
-    )}/range/${multiplier}/${timespan}/${fromText}/${toText}` +
-    `?adjusted=true&sort=desc&limit=${limit}&apiKey=${POLYGON_API_KEY}`;
-
-  const response = await fetch(url);
-
-  if (!response.ok) {
-    return [];
-  }
-
-  const data = await response.json();
-  const bars = Array.isArray(data?.results) ? data.results : [];
-
-  return bars
-    .slice()
-    .reverse()
-    .map((bar) => ({
-      t: bar.t,
-      o: Number(bar.o || 0),
-      h: Number(bar.h || 0),
-      l: Number(bar.l || 0),
-      c: Number(bar.c || 0),
-      v: Number(bar.v || 0),
-      source: "polygon_crypto_aggs",
-    }))
-    .filter((bar) => bar.c > 0);
 }
 
 function scoreCrypto(quote, bars = []) {
@@ -21762,7 +22005,14 @@ async function scanCryptoMarket() {
   }
 
   const symbols = await getCryptoAssets();
+  const cryptoSkipped = [];
   const results = [];
+
+  console.log("CRYPTO SCAN START", {
+    totalCryptoAssets: symbols.length,
+    sampleAssets: symbols.slice(0, 10),
+    usdPairs: symbols.filter((s) => String(s || "").endsWith("/USD")).length,
+  });
 
   engineState.skippedSymbols = [];
   engineState.lastCryptoScanStartedAt = new Date().toISOString();
@@ -21957,9 +22207,21 @@ async function scanCryptoMarket() {
         ...cryptoQualification,
       });
     } catch (err) {
+      cryptoSkipped.push({
+        symbol,
+        reason: err.message,
+      });
+
       saveSkippedSymbol(symbol, err.message);
     }
   }
+
+  console.log("CRYPTO SCAN DEBUG", {
+    totalCryptoAssets: symbols.length,
+    usdPairs: symbols.filter((s) => String(s || "").endsWith("/USD")).length,
+    results: results.length,
+    skipped: cryptoSkipped.slice(0, 20),
+  });
 
   console.log("SCAN DEBUG", {
     totalResults: results.length,
@@ -22014,7 +22276,33 @@ async function placeCryptoMarketSell(symbol, qty, reason = "CRYPTO_EXIT") {
 // ===== CRYPTO FUNCTIONS END =====
 
 async function getClock() {
-  return alpacaTradingRequest("/v2/clock");
+  try {
+    const clock = await alpacaTradingRequest("/v2/clock");
+
+    engineState.cachedClock = clock;
+    markApiHealth("alpacaClock", true);
+
+    return clock;
+  } catch (err) {
+    markApiHealth("alpacaClock", false, err.message);
+
+    if (engineState.cachedClock) {
+      return {
+        ...engineState.cachedClock,
+        stale: true,
+        staleReason: err.message,
+      };
+    }
+
+    return {
+      is_open: false,
+      next_open: null,
+      next_close: null,
+      timestamp: new Date().toISOString(),
+      stale: true,
+      staleReason: err.message,
+    };
+  }
 }
 
 function isAiOrder(order) {
@@ -22267,7 +22555,7 @@ async function getTopMovers() {
   const polygonMoverSymbols = await getPolygonMoverSymbols();
 
   try {
-    const top = Math.min(Math.max(CONFIG.moversTop, 1), 100);
+    const top = Math.min(Math.max(Number(CONFIG.moversTop || 50), 1), 50);
 
     const data = await alpacaDataRequest(
       `/v1beta1/screener/stocks/movers?top=${top}`
@@ -22497,7 +22785,28 @@ async function scanMarket() {
 
         const quote = await getCombinedStockQuote(symbol);
 
-        const technicalBars = await getRecentBars(symbol, "5Min", 60);
+        if (!quote || typeof quote !== "object") {
+          saveSkippedSymbol(
+            symbol,
+            `No valid quote object returned for ${symbol}`
+          );
+
+          return null;
+        }
+
+        const technicalBars =
+          Array.isArray(quote.stockChartBars) &&
+            quote.stockChartBars.length > 0
+            ? quote.stockChartBars.map((bar) => ({
+              c: Number(bar.close || 0),
+              h: Number(bar.high || 0),
+              l: Number(bar.low || 0),
+              o: Number(bar.open || 0),
+              v: Number(bar.volume || 0),
+              t: bar.time,
+            }))
+            : [];
+
         quote.technicals = calculateTechnicals(technicalBars);
 
         if (CONFIG.enableAdvancedFilters) {
@@ -40079,6 +40388,229 @@ function refreshPolygonLiveSubscriptions() {
   return subscribedSymbols;
 }
 
+function schedulePolygonCryptoReconnect() {
+  if (polygonCryptoSocketReconnectTimer) return;
+
+  const delayMs = Math.min(
+    60000,
+    3000 + polygonCryptoSocketReconnectAttempts * 5000
+  );
+
+  polygonCryptoSocketReconnectTimer = setTimeout(() => {
+    polygonCryptoSocketReconnectTimer = null;
+    startPolygonCryptoLiveMarketStream();
+  }, delayMs);
+}
+
+function handlePolygonCryptoLiveMessage(message = {}) {
+  const eventType = message.ev;
+  const pair = normalizeSymbol(message.pair || message.sym || "");
+  const appSymbol = normalizePolygonCryptoPairToAppSymbol(pair);
+
+  if (!appSymbol) return;
+
+  if (eventType === "XT") {
+    updateLiveQuoteCache(appSymbol, {
+      price: message.p,
+      size: message.s,
+      volume: message.s,
+      source: "polygon_crypto_ws_trade",
+      liveQuoteSource: "polygon_crypto_ws_trade",
+      liveQuoteUpdatedAt: message.t
+        ? new Date(Number(message.t)).toISOString()
+        : new Date().toISOString(),
+      priceIsLive: true,
+      raw: message,
+    });
+  }
+
+  if (eventType === "XQ") {
+    const bid = Number(message.bp || message.b || 0);
+    const ask = Number(message.ap || message.a || 0);
+    const mid = bid > 0 && ask > 0 ? (bid + ask) / 2 : 0;
+
+    if (mid > 0) {
+      updateLiveQuoteCache(appSymbol, {
+        price: mid,
+        bid,
+        ask,
+        source: "polygon_crypto_ws_quote",
+        liveQuoteSource: "polygon_crypto_ws_quote",
+        liveQuoteUpdatedAt: message.t
+          ? new Date(Number(message.t)).toISOString()
+          : new Date().toISOString(),
+        priceIsLive: true,
+        raw: message,
+      });
+    }
+  }
+
+  if (eventType === "XA") {
+    updateLiveQuoteCache(appSymbol, {
+      price: message.c || message.close,
+      volume: message.v,
+      source: "polygon_crypto_ws_minute_aggregate",
+      liveQuoteSource: "polygon_crypto_ws_minute_aggregate",
+      liveQuoteUpdatedAt: message.e
+        ? new Date(Number(message.e)).toISOString()
+        : new Date().toISOString(),
+      priceIsLive: true,
+      raw: message,
+    });
+  }
+}
+
+function startPolygonCryptoLiveMarketStream() {
+  if (
+    !ENABLE_POLYGON ||
+    !ENABLE_POLYGON_CRYPTO_WEBSOCKET ||
+    !POLYGON_API_KEY ||
+    !WebSocketImpl
+  ) {
+    engineState.polygonCryptoLiveStreamState = {
+      ok: false,
+      provider: "polygon_crypto",
+      reason: "Polygon crypto websocket disabled, missing key, or WebSocket unavailable.",
+      checkedAt: new Date().toISOString(),
+    };
+
+    return engineState.polygonCryptoLiveStreamState;
+  }
+
+  if (
+    polygonCryptoLiveSocket &&
+    [0, 1].includes(polygonCryptoLiveSocket.readyState)
+  ) {
+    return engineState.polygonCryptoLiveStreamState;
+  }
+
+  polygonCryptoLiveSocket = new WebSocketImpl(POLYGON_CRYPTO_WS_URL);
+
+  polygonCryptoLiveSocket.onopen = () => {
+    polygonCryptoAuthenticated = false;
+    polygonCryptoSubscribedSymbols = new Set();
+
+    polygonCryptoLiveSocket.send(
+      JSON.stringify({
+        action: "auth",
+        params: POLYGON_API_KEY,
+      })
+    );
+  };
+
+  polygonCryptoLiveSocket.onmessage = async (event) => {
+    try {
+      const payload = JSON.parse(event.data);
+      const messages = Array.isArray(payload) ? payload : [payload];
+
+      for (const message of messages) {
+        if (message.ev === "status") {
+          const status = String(message.status || "").toLowerCase();
+
+          if (
+            status === "auth_success" ||
+            String(message.message || "").toLowerCase().includes("authenticated")
+          ) {
+            polygonCryptoAuthenticated = true;
+            polygonCryptoSocketReconnectAttempts = 0;
+
+            const symbols = refreshPolygonCryptoLiveSubscriptions();
+
+            engineState.polygonCryptoLiveStreamState = {
+              ok: true,
+              provider: "polygon_crypto",
+              authenticated: true,
+              subscribedSymbols: symbols,
+              subscribedCount: symbols.length,
+              connectedAt: new Date().toISOString(),
+            };
+          }
+
+          continue;
+        }
+
+        handlePolygonCryptoLiveMessage(message);
+      }
+    } catch (err) {
+      console.error("Polygon crypto websocket message error:", err.message);
+    }
+  };
+
+  polygonCryptoLiveSocket.onclose = () => {
+    polygonCryptoSocketReconnectAttempts += 1;
+    polygonCryptoSubscribedSymbols = new Set();
+    polygonCryptoAuthenticated = false;
+
+    engineState.polygonCryptoLiveStreamState = {
+      ok: false,
+      provider: "polygon_crypto",
+      disconnectedAt: new Date().toISOString(),
+      reconnectAttempts: polygonCryptoSocketReconnectAttempts,
+    };
+
+    schedulePolygonCryptoReconnect();
+  };
+
+  polygonCryptoLiveSocket.onerror = (err) => {
+    engineState.polygonCryptoLiveStreamState = {
+      ok: false,
+      provider: "polygon_crypto",
+      error: err?.message || "Polygon crypto websocket error",
+      checkedAt: new Date().toISOString(),
+    };
+  };
+
+  return {
+    ok: true,
+    provider: "polygon_crypto",
+    reason: "Polygon crypto websocket starting.",
+  };
+}
+
+function getSymbolsForPolygonCryptoLiveStream(limit = POLYGON_SUBSCRIPTION_ROTATION_LIMIT) {
+  const cryptoCandidateSymbols = [
+    ...(engineState.lastCryptoSignals || []),
+    ...(engineState.topCryptoSignals || []),
+    ...(engineState.quickInstitutionalCandidates || []),
+    ...(engineState.fastRunnerCandidates || []),
+    ...(engineState.cachedPositions || []),
+  ]
+    .map((item) => normalizeSymbol(item?.symbol || item))
+    .filter(Boolean)
+    .filter(isCryptoSymbol)
+    .map(normalizeCryptoSymbolForPolygon)
+    .filter(Boolean);
+
+  return [...new Set(cryptoCandidateSymbols)].slice(0, limit);
+}
+
+function refreshPolygonCryptoLiveSubscriptions() {
+  const desiredSymbols = new Set(getSymbolsForPolygonCryptoLiveStream());
+
+  if (
+    !polygonCryptoLiveSocket ||
+    polygonCryptoLiveSocket.readyState !== 1 ||
+    !polygonCryptoAuthenticated
+  ) {
+    return [];
+  }
+
+  for (const symbol of desiredSymbols) {
+    if (polygonCryptoSubscribedSymbols.has(symbol)) continue;
+
+    polygonCryptoLiveSocket.send(
+      JSON.stringify({
+        action: "subscribe",
+        params: `XT.${symbol},XQ.${symbol},XA.${symbol}`,
+      })
+    );
+
+    polygonCryptoSubscribedSymbols.add(symbol);
+  }
+
+  return [...polygonCryptoSubscribedSymbols];
+}
+
 function schedulePolygonReconnect() {
   if (polygonSocketReconnectTimer) return;
 
@@ -40089,7 +40621,11 @@ function schedulePolygonReconnect() {
 
   polygonSocketReconnectTimer = setTimeout(() => {
     polygonSocketReconnectTimer = null;
+    // STOCKS
     startPolygonLiveMarketStream();
+
+    // CRYPTO
+    startPolygonCryptoLiveMarketStream();
   }, delayMs);
 }
 
@@ -40105,6 +40641,9 @@ function handlePolygonLiveMessage(message = {}) {
       size: message.s,
       volume: message.s,
       source: "polygon_ws_trade",
+      liveQuoteSource: "polygon_ws_trade",
+      liveQuoteUpdatedAt: new Date().toISOString(),
+      priceIsLive: true,
       raw: message,
     });
     return;
@@ -40124,6 +40663,9 @@ function handlePolygonLiveMessage(message = {}) {
         bid,
         ask,
         source: "polygon_ws_quote",
+        liveQuoteSource: "polygon_ws_quote",
+        liveQuoteUpdatedAt: new Date().toISOString(),
+        priceIsLive: true,
         raw: message,
       });
     }
@@ -40135,6 +40677,9 @@ function handlePolygonLiveMessage(message = {}) {
       price: message.c || message.close,
       volume: message.v,
       source: "polygon_ws_second_aggregate",
+      liveQuoteSource: "polygon_ws_second_aggregate",
+      liveQuoteUpdatedAt: new Date().toISOString(),
+      priceIsLive: true,
       raw: message,
     });
   }
@@ -40500,8 +41045,14 @@ function calculateQuickInstitutionalGate(candidate = {}) {
   const spreadBlocked =
     spreadPercent > QUICK_GATE_MAX_SPREAD_PERCENT;
 
+  const hasLiveMomentum =
+    candidate.liveMomentumPercent !== undefined &&
+    candidate.liveMomentumPercent !== null &&
+    Number.isFinite(Number(candidate.liveMomentumPercent));
+
   const fakeBreakoutBlocked =
-    fakeBreakoutRisk >= 25 || momentum <= 0;
+    fakeBreakoutRisk >= 25 ||
+    (hasLiveMomentum && momentum < 0);
 
   const marketRiskPenalty =
     marketStress >= 75
@@ -40576,7 +41127,11 @@ function calculateQuickInstitutionalGate(candidate = {}) {
   }
 
   if (fakeBreakoutBlocked) {
-    blockReasons.push("Fake breakout or weak live momentum risk");
+    blockReasons.push(
+      fakeBreakoutRisk >= 25
+        ? "Fake breakout risk too high"
+        : "Live momentum turned negative"
+    );
   }
 
   return {
@@ -41937,9 +42492,17 @@ async function refreshEarlyMoversThenPolygonSubscriptions() {
 
   const polygonState = await refreshPolygonLiveSubscriptions();
 
+  // CRYPTO LIVE SUBSCRIPTIONS
+  const polygonCryptoState =
+    refreshPolygonCryptoLiveSubscriptions();
+
   pushLiveSignalUpdate({
     type: "LIVE_EARLY_MOVER_REFRESH",
     polygonLiveStreamState: engineState.polygonLiveStreamState || null,
+
+    polygonCryptoLiveStreamState:
+      engineState.polygonCryptoLiveStreamState || null,
+
     liveEarlyMoverSymbols: engineState.liveEarlyMoverSymbols || [],
     liveEarlyMoverRefreshState: engineState.liveEarlyMoverRefreshState || null,
     liveSignals: buildLiveSignalPushPayload(),
@@ -42864,7 +43427,7 @@ async function getTopSignalsWithFreshQuotes(signals = [], limit = 25) {
             liveQuoteSource:
               merged.liveQuoteSource ||
               signal.liveQuoteSource ||
-              "alpaca_crypto_live_quote",
+              "polygon_crypto_snapshot",
             liveQuoteUpdatedAt:
               merged.liveQuoteUpdatedAt ||
               signal.liveQuoteUpdatedAt ||
@@ -44496,7 +45059,12 @@ app.listen(PORT, "0.0.0.0", async () => {
   console.log(`SmartMoney Pro backend running on port ${PORT}`);
   startFinnhubLiveQuoteStream();
   startManagedLiveScheduler();
+
+  // STOCKS
   startPolygonLiveMarketStream();
+
+  // CRYPTO
+  startPolygonCryptoLiveMarketStream();
 
   console.log(`Auto trading enabled: ${autoTradingEnabled}`);
 
@@ -44516,12 +45084,40 @@ app.listen(PORT, "0.0.0.0", async () => {
     trailingStopPercent: CONFIG.trailingStopPercent,
   });
 
-  console.log("Running first SmartMoney Pro scan on startup...");
+  console.log("Running first SmartMoney Pro scan on startup.");
+
   if (
     engineState.running ||
     engineState.engineFreezeDetected
   ) {
+    console.warn("Startup scan skipped because engine is already running or frozen.");
     return;
   }
-  await engineTick();
+
+  setTimeout(() => {
+    engineTick()
+      .then(() => {
+        engineState.startupScanState = {
+          ok: true,
+          completedAt: new Date().toISOString(),
+        };
+
+        saveEngineState("STARTUP_SCAN_COMPLETED");
+      })
+      .catch((err) => {
+        engineState.running = false;
+        engineState.lastError = err.message;
+        engineState.lastEngineStopReason = "STARTUP_ENGINE_TICK_FAILED";
+
+        engineState.startupScanState = {
+          ok: false,
+          failedAt: new Date().toISOString(),
+          error: err.message,
+        };
+
+        saveEngineState("STARTUP_SCAN_FAILED");
+
+        console.error("Startup engineTick failed:", err.message);
+      });
+  }, 3000);
 });
