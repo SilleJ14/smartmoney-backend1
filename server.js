@@ -42734,11 +42734,13 @@ function startManagedLiveScheduler() {
     );
   }, 1000);
 
-  void refreshFinnhubLiveSubscriptions().catch((err) => {
+  try {
+    refreshFinnhubLiveSubscriptions();
+  } catch (err) {
     console.error("Initial Finnhub live subscription refresh failed:", err.message);
-  });
+  }
 
-  void refreshEarlyMoversThenPolygonSubscriptions().catch((err) => {
+  Promise.resolve(refreshEarlyMoversThenPolygonSubscriptions()).catch((err) => {
     console.error("Initial Polygon live subscription refresh failed:", err.message);
   });
 
