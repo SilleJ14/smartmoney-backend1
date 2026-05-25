@@ -727,11 +727,29 @@ function saveEngineState(reason = "STATE_UPDATE") {
         engineState.lastScanRecoveryAt || null,
       aiDecisionHistory:
         (engineState.aiDecisionHistory || []).slice(0, 500),
-
       institutionalDashboardSnapshots:
         (
           engineState.institutionalDashboardSnapshots || []
         ).slice(0, 200),
+
+      lastSignals:
+        (engineState.lastSignals || []).slice(0, 100),
+
+      topSignals:
+        (engineState.topSignals || []).slice(0, 100),
+
+      lastStockSignals:
+        (engineState.lastStockSignals || []).slice(0, 100),
+
+      topStockSignals:
+        (engineState.topStockSignals || []).slice(0, 100),
+
+      lastCryptoSignals:
+        (engineState.lastCryptoSignals || []).slice(0, 100),
+
+      topCryptoSignals:
+        (engineState.topCryptoSignals || []).slice(0, 100),
+
       liveMarketMemory:
         engineState.liveMarketMemory || {},
 
@@ -2007,7 +2025,9 @@ engineState = {
   cachedAccount: null,
   lastError: null,
 };
-clearVolatileMarketSnapshots("BOOT_CLEAR_STALE_MARKET_SNAPSHOTS");
+
+cleanupLiveQuoteCache(LIVE_MARKET_MEMORY_MAX_AGE_MINUTES);
+
 const activeBuyExecutionLocks = new Set();
 const activeScanLocks = {
   scanMarket: false,
@@ -15973,18 +15993,19 @@ async function getCombinedStockQuote(symbol) {
       Number(barStats.avgVolume || 0)
     ),
 
+  
     volumeRatio: Number(
       barStats.volumeSpikeRatio || 0
     ),
 
     quoteFetchedAt: new Date().toISOString(),
-      liveQuoteSource: polygon
-        ? "polygon_rest"
-        : finnhub
-          ? "finnhub_rest"
-          : alpacaLatestFallback?.source || "alpaca_bars",
+    liveQuoteSource: polygon
+      ? "polygon_rest"
+      : finnhub
+        ? "finnhub_rest"
+        : alpacaLatestFallback?.source || "alpaca_bars",
     priceIsLive: Boolean(polygon || finnhub),
-    priceStale: false,
+    priceStale: !Boolean(polygon || finnhub),
 
     dataSource: polygon
       ? "Polygon + Alpaca"
@@ -21204,7 +21225,6 @@ function calculateInstitutionalScores(q) {
     statisticalScore,
     ...edge,
     fundamentalScore,
-    fundamentalScore,
     dcfValuation: institutionalDcf,
     dcfValuationScore,
     valuationRiskScore:
@@ -21606,16 +21626,16 @@ async function getCryptoRecentBars(symbol, timeframe = "5Min", limit = 30) {
 
     return Array.isArray(bars)
       ? bars
-          .map((bar) => ({
-            t: bar.t,
-            o: Number(bar.o || 0),
-            h: Number(bar.h || 0),
-            l: Number(bar.l || 0),
-            c: Number(bar.c || 0),
-            v: Number(bar.v || 0),
-            source: "alpaca_crypto_bars",
-          }))
-          .filter((bar) => bar.c > 0)
+        .map((bar) => ({
+          t: bar.t,
+          o: Number(bar.o || 0),
+          h: Number(bar.h || 0),
+          l: Number(bar.l || 0),
+          c: Number(bar.c || 0),
+          v: Number(bar.v || 0),
+          source: "alpaca_crypto_bars",
+        }))
+        .filter((bar) => bar.c > 0)
       : [];
   } catch (err) {
     console.warn(`Alpaca crypto bars failed for ${symbol}:`, err.message);
@@ -22163,8 +22183,12 @@ async function scanCryptoMarket() {
           quote.quoteFetchedAt || cachedCryptoQuote?.updatedAt || new Date().toISOString(),
         liveQuoteSource:
           quote.liveQuoteSource || cachedCryptoQuote?.source || "polygon_crypto_snapshot",
-        priceIsLive: true,
-        priceStale: false,
+        priceIsLive:
+          cachedCryptoQuote?.priceIsLive === true ||
+          quote.priceIsLive === true,
+        priceStale:
+          cachedCryptoQuote?.priceIsLive !== true &&
+          quote.priceIsLive !== true,
 
         dayChangePercent: Number(cryptoPercentChange.toFixed(2)),
         dayChangeDollars: Number(cryptoDollarChange.toFixed(2)),
@@ -34825,6 +34849,9 @@ async function engineTick() {
 
     engineState.lastEngineStopReason = "ENGINE_TICK_COMPLETED";
     engineState.engineFreezeDetected = false;
+
+    saveEngineState("ENGINE_TICK_COMPLETED");
+
     engineState.running = false;
   }
 }
@@ -39312,6 +39339,92 @@ app.get("/frontend/portfolio", async (req, res) => {
   }
 });
 
+function collectFrontendSignalSnapshot() {
+  const latestStatus = getLatestFrontendStatusSnapshot();
+  const orchestration =
+    latestStatus?.phase20AutonomousOrchestration || {};
+
+  return [
+    ...(Array.isArray(engineState.topStockSignals) ? engineState.topStockSignals : []),
+    ...(Array.isArray(engineState.lastStockSignals) ? engineState.lastStockSignals : []),
+    ...(Array.isArray(engineState.topCryptoSignals) ? engineState.topCryptoSignals : []),
+    ...(Array.isArray(engineState.lastCryptoSignals) ? engineState.lastCryptoSignals : []),
+    ...(Array.isArray(orchestration.topSignals) ? orchestration.topSignals : []),
+  ]
+    .filter(Boolean)
+    .filter(
+      (signal, index, arr) =>
+        arr.findIndex(
+          (item) => normalizeSymbol(item.symbol) === normalizeSymbol(signal.symbol)
+        ) === index
+    )
+    .map((signal) => {
+      const merged = mergeLiveQuoteIntoSignal(signal);
+
+      return {
+        ...merged,
+        startupSnapshot: true,
+        priceStale: merged.priceIsLive === true ? false : true,
+      };
+    })
+    .sort((a, b) => Number(b.score || 0) - Number(a.score || 0));
+}
+
+function buildFrontendStartupSnapshot(limit = 50) {
+  const allSignals = collectFrontendSignalSnapshot();
+
+  const approvedSignals = allSignals.filter(
+    (s) =>
+      s &&
+      s.qualifiedToBuy &&
+      (s.autoTradeApproved || s.approved)
+  );
+
+  const displaySignals = (approvedSignals.length ? approvedSignals : allSignals)
+    .slice(0, limit);
+
+  return {
+    generatedAt: new Date().toISOString(),
+    source: "memory_snapshot",
+    marketOpen: engineState.marketOpen,
+    mode: TRADING_MODE,
+    effectiveMode:
+      engineState.effectiveMode || getEffectiveTradingMode(engineState.marketOpen),
+    liveQuoteStreamState: engineState.liveQuoteStreamState || null,
+    polygonLiveStreamState: engineState.polygonLiveStreamState || null,
+    liveEarlyMoverSymbols: engineState.liveEarlyMoverSymbols || [],
+    lastScanAt: engineState.lastScanAt || null,
+    lastSuccessfulCycleAt: engineState.lastSuccessfulCycleAt || null,
+    allSignalCount: allSignals.length,
+    approvedSignalCount: approvedSignals.length,
+    count: displaySignals.length,
+    signals: displaySignals,
+    stockSignals: displaySignals.filter((s) => !isCryptoSymbol(s.symbol)),
+    cryptoSignals: displaySignals.filter((s) => isCryptoSymbol(s.symbol)),
+  };
+}
+
+app.get("/frontend/snapshot", (req, res) => {
+  try {
+    const limit = Math.min(
+      100,
+      Math.max(10, Number(req.query.limit || 50))
+    );
+
+    res.json({
+      success: true,
+      ...buildFrontendStartupSnapshot(limit),
+    });
+  } catch (err) {
+    console.error("frontend snapshot error", err);
+
+    res.status(500).json({
+      success: false,
+      error: err.message,
+    });
+  }
+});
+
 app.get("/frontend/signals", async (req, res) => {
   try {
 
@@ -39354,10 +39467,16 @@ app.get("/frontend/signals", async (req, res) => {
       )
       .sort((a, b) => (b.score || 0) - (a.score || 0));
 
+    const displaySignals = approvedSignals.length
+      ? approvedSignals
+      : signals.sort((a, b) => Number(b.score || 0) - Number(a.score || 0));
+
     res.json({
       success: true,
-      count: approvedSignals.length,
-      signals: approvedSignals,
+      count: displaySignals.length,
+      approvedCount: approvedSignals.length,
+      source: approvedSignals.length ? "approved_signals" : "memory_snapshot_fallback",
+      signals: displaySignals,
     });
   } catch (err) {
     console.error("frontend signals error", err);
@@ -39523,7 +39642,7 @@ app.get("/frontend/dashboard", async (req, res) => {
             ?.portfolioGovernor || {},
 
         topSignals:
-          await getTopSignalsWithFreshQuotes(
+          getTopSignals(
             [
               ...(Array.isArray(engineState.topStockSignals)
                 ? engineState.topStockSignals
@@ -39552,7 +39671,7 @@ app.get("/frontend/dashboard", async (req, res) => {
                   ) === index
               ),
             25
-          ),
+          ).map(mergeLiveQuoteIntoSignal),
 
         topOpportunities:
           latestStatus
@@ -39592,7 +39711,7 @@ app.get("/frontend/dashboard", async (req, res) => {
           ...(Array.isArray(engineState.lastCryptoSignals)
             ? engineState.lastCryptoSignals
             : []),
-        ].slice(0, 10),
+        ].slice(0, 10).map(mergeLiveQuoteIntoSignal),
         topOpportunities:
           engineState.topAutonomousCandidates || [],
       },
@@ -39772,8 +39891,8 @@ function mergeLiveQuoteIntoSignal(signal = {}) {
       liveQuote.tapeSpeed ?? signal.tapeSpeed,
     liquidityPressure:
       liveQuote.liquidityPressure ?? signal.liquidityPressure,
-    priceIsLive: true,
-    priceStale: false,
+    priceStale:
+      liveQuote.priceIsLive !== true,
   };
 }
 
@@ -42615,6 +42734,14 @@ function startManagedLiveScheduler() {
     );
   }, 1000);
 
+  void refreshFinnhubLiveSubscriptions().catch((err) => {
+    console.error("Initial Finnhub live subscription refresh failed:", err.message);
+  });
+
+  void refreshEarlyMoversThenPolygonSubscriptions().catch((err) => {
+    console.error("Initial Polygon live subscription refresh failed:", err.message);
+  });
+
   engineState.liveSchedulerState = {
     ok: true,
     startedAt: new Date().toISOString(),
@@ -43418,12 +43545,14 @@ async function getTopSignalsWithFreshQuotes(signals = [], limit = 25) {
         if (cryptoPrice > 0) {
           return {
             ...merged,
-            livePrice: cryptoPrice,
-            displayPrice: cryptoPrice,
             price: cryptoPrice,
             current: cryptoPrice,
-            priceIsLive: quote.priceIsLive === true,
-            priceStale: false,
+            priceIsLive:
+              merged.priceIsLive === true ||
+              signal.priceIsLive === true,
+            priceStale:
+              merged.priceIsLive !== true &&
+              signal.priceIsLive !== true,
             liveQuoteSource:
               merged.liveQuoteSource ||
               signal.liveQuoteSource ||
@@ -43478,8 +43607,8 @@ async function getTopSignalsWithFreshQuotes(signals = [], limit = 25) {
           current: freshPrice,
           liveQuoteUpdatedAt: cached?.updatedAt || new Date().toISOString(),
           liveQuoteSource: quote?.source || "polygon_first_rest_refresh",
-          priceIsLive: true,
-          priceStale: false,
+          priceIsLive: cached?.priceIsLive === true,
+          priceStale: cached?.priceIsLive !== true,
         };
       } catch (err) {
         return {
