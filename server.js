@@ -301,6 +301,111 @@ function getTodayKeyET() {
   });
 }
 
+function getQuoteTimestampMs(quote = {}) {
+  const raw =
+    quote.liveQuoteUpdatedAt ||
+    quote.quoteFetchedAt ||
+    quote.updatedAt ||
+    quote.timestamp ||
+    null;
+
+  const ms = raw ? new Date(raw).getTime() : 0;
+  return Number.isFinite(ms) ? ms : 0;
+}
+
+function isLiveQuoteSource(source = "") {
+  const clean = String(source || "").toLowerCase();
+
+  return [
+    "polygon_ws_trade",
+    "polygon_ws_quote",
+    "polygon_ws_second_aggregate",
+    "polygon_crypto_ws_trade",
+    "polygon_crypto_ws_quote",
+    "polygon_crypto_ws_aggregate",
+    "finnhub_ws_trade",
+  ].includes(clean);
+}
+
+function compactPersistedEngineStateSnapshot(snapshot = {}) {
+  const compact = { ...snapshot };
+
+  compact.liveMarketMemory = {};
+  compact.liveQuoteCache = {};
+
+  compact.analyticsSnapshots = (compact.analyticsSnapshots || []).slice(0, 50);
+  compact.institutionalDashboardSnapshots = (compact.institutionalDashboardSnapshots || []).slice(0, 50);
+  compact.aiDecisionHistory = (compact.aiDecisionHistory || []).slice(0, 150);
+
+  for (const key of Object.keys(compact)) {
+    if (key.endsWith("History") && Array.isArray(compact[key])) {
+      compact[key] = compact[key].slice(0, 75);
+    }
+  }
+
+  compact.sectorDominanceState =
+    compact.sectorDominanceState || compact.sectorDominationState || null;
+  compact.sectorDominanceHistory =
+    compact.sectorDominanceHistory || compact.sectorDominationHistory || [];
+
+  delete compact.sectorDominationState;
+  delete compact.sectorDominationHistory;
+
+  compact.autonomousCryptoStrategySelectorState =
+    compact.autonomousCryptoStrategySelectorState ||
+    compact.phase52CryptoStrategySelectorState ||
+    null;
+
+  compact.autonomousCryptoStrategySelectorHistory =
+    compact.autonomousCryptoStrategySelectorHistory ||
+    compact.phase52CryptoStrategySelectorHistory ||
+    [];
+
+  delete compact.phase52CryptoStrategySelectorState;
+  delete compact.phase52CryptoStrategySelectorHistory;
+
+  return compact;
+}
+
+function canonicalizeEngineStateAliases() {
+  engineState.sectorDominanceState =
+    engineState.sectorDominanceState || engineState.sectorDominationState || null;
+
+  engineState.sectorDominanceHistory =
+    engineState.sectorDominanceHistory || engineState.sectorDominationHistory || [];
+
+  engineState.autonomousCryptoStrategySelectorState =
+    engineState.autonomousCryptoStrategySelectorState ||
+    engineState.phase52CryptoStrategySelectorState ||
+    null;
+
+  engineState.autonomousCryptoStrategySelectorHistory =
+    engineState.autonomousCryptoStrategySelectorHistory ||
+    engineState.phase52CryptoStrategySelectorHistory ||
+    [];
+
+  engineState.lastStockSignals = Array.isArray(engineState.lastStockSignals)
+    ? engineState.lastStockSignals
+    : [];
+
+  engineState.lastCryptoSignals = Array.isArray(engineState.lastCryptoSignals)
+    ? engineState.lastCryptoSignals
+    : [];
+
+  engineState.topStockSignals = [...engineState.lastStockSignals]
+    .sort((a, b) => Number(b.score || 0) - Number(a.score || 0))
+    .slice(0, 25);
+
+  engineState.topCryptoSignals = [...engineState.lastCryptoSignals]
+    .sort((a, b) => Number(b.score || 0) - Number(a.score || 0))
+    .slice(0, 25);
+
+  engineState.topSignals = [...engineState.topStockSignals, ...engineState.topCryptoSignals]
+    .sort((a, b) => Number(b.score || 0) - Number(a.score || 0))
+    .slice(0, CONFIG.maxSignalsToReturn || 75);
+}
+
+
 const VOLATILE_MARKET_SNAPSHOT_KEYS = [
   "lastSignals",
   "lastStockSignals",
@@ -1327,7 +1432,9 @@ function saveEngineState(reason = "STATE_UPDATE") {
       pendingExits: engineState.pendingExits || [],
     };
 
-    pendingEngineStateSnapshot = safeState;
+    const compactSafeState = compactPersistedEngineStateSnapshot(safeState);
+
+    pendingEngineStateSnapshot = compactSafeState;
     pendingEngineStateReason = reason;
 
     if (!engineStateSaveTimer) {
@@ -1337,7 +1444,7 @@ function saveEngineState(reason = "STATE_UPDATE") {
       }, 1000);
     }
 
-    return safeState;
+    return compactSafeState;
   } catch (err) {
     console.error("Could not save engine-state.json:", err.message);
     return null;
@@ -1345,8 +1452,20 @@ function saveEngineState(reason = "STATE_UPDATE") {
 }
 
 let runtimeConfig = loadRuntimeConfig();
-const persistedEngineState = loadPersistedEngineState();
 
+function sanitizeRuntimeConfig(config = {}) {
+  const safe = { ...config };
+
+  if (safe.minScoreToBuy !== undefined) {
+    safe.minScoreToBuy = Math.max(70, Number(safe.minScoreToBuy || 70));
+  }
+
+  return safe;
+}
+
+runtimeConfig = sanitizeRuntimeConfig(runtimeConfig);
+
+const persistedEngineState = loadPersistedEngineState();
 
 // 🔥 Trading Mode (PERSISTED)
 let TRADING_MODE =
@@ -1645,6 +1764,11 @@ const CONFIG = {
   ),
 
   ...runtimeConfig,
+
+  minScoreToBuy: Math.max(
+    70,
+    Number(runtimeConfig.minScoreToBuy || process.env.MIN_SCORE_TO_BUY || 70)
+  ),
 };
 // LINE BEFORE
 let engineState = {
@@ -2025,6 +2149,8 @@ engineState = {
   cachedAccount: null,
   lastError: null,
 };
+
+canonicalizeEngineStateAliases();
 
 cleanupLiveQuoteCache(LIVE_MARKET_MEMORY_MAX_AGE_MINUTES);
 
@@ -4298,11 +4424,13 @@ function buildQuoteFreshnessEngine(quote = {}) {
     is_open: Boolean(engineState.marketOpen),
   });
 
+  const session = String(marketSession || "closed");
+
   const maxFreshAgeSeconds =
-    marketSession.session === "regular"
+    session === "regular"
       ? 20
-      : marketSession.session === "premarket" ||
-        marketSession.session === "afterhours"
+      : session === "premarket" ||
+        session === "afterhours"
         ? 45
         : 180;
 
@@ -4322,7 +4450,7 @@ function buildQuoteFreshnessEngine(quote = {}) {
     freshnessLabel,
     isFresh: freshnessLabel === "FRESH",
     isStale: freshnessLabel === "STALE",
-    marketSession: marketSession.session,
+    marketSession: session,
   };
 }
 
@@ -15999,19 +16127,33 @@ async function getCombinedStockQuote(symbol) {
     ),
 
     quoteFetchedAt: new Date().toISOString(),
-    liveQuoteSource: polygon
-      ? "polygon_rest"
-      : finnhub
-        ? "finnhub_rest"
-        : alpacaLatestFallback?.source || "alpaca_bars",
-    priceIsLive: Boolean(polygon || finnhub),
-    priceStale: !Boolean(polygon || finnhub),
+    liveQuoteSource:
+      primary?.liveQuoteSource ||
+      primary?.source ||
+      (polygon
+        ? "polygon_rest"
+        : finnhub
+          ? "finnhub_rest"
+          : alpacaLatestFallback?.source || "alpaca_bars"),
 
-    dataSource: polygon
-      ? "Polygon + Alpaca"
-      : finnhub
-        ? "Finnhub + Alpaca"
-        : "Alpaca fallback",
+    priceIsLive:
+      primary?.priceIsLive === true ||
+      isLiveQuoteSource(primary?.liveQuoteSource || primary?.source || ""),
+
+    priceStale:
+      !(
+        primary?.priceIsLive === true ||
+        isLiveQuoteSource(primary?.liveQuoteSource || primary?.source || "")
+      ),
+
+    dataSource:
+      isLiveQuoteSource(primary?.liveQuoteSource || primary?.source || "")
+        ? "Live websocket + Alpaca"
+        : polygon
+          ? "Polygon + Alpaca"
+          : finnhub
+            ? "Finnhub + Alpaca"
+            : "Alpaca fallback",
 
     stockChartBars,
   };
@@ -21541,6 +21683,41 @@ async function getCryptoAssets() {
     .filter(Boolean);
 }
 
+function getFreshLiveCryptoQuote(symbol, maxAgeSeconds = 8) {
+  const cleanSymbol = normalizeSymbol(symbol);
+  const cached = engineState.liveQuoteCache?.[cleanSymbol];
+
+  if (!cached?.price) return null;
+
+  const updatedAt = cached.liveQuoteUpdatedAt || cached.updatedAt;
+  const ageSeconds = updatedAt
+    ? (Date.now() - new Date(updatedAt).getTime()) / 1000
+    : Infinity;
+
+  const source = String(cached.liveQuoteSource || cached.source || "").toLowerCase();
+
+  if (
+    ageSeconds <= maxAgeSeconds &&
+    source.includes("polygon_crypto_ws") &&
+    cached.priceIsLive === true
+  ) {
+    return {
+      ...cached,
+      symbol: cleanSymbol,
+      current: Number(cached.price),
+      price: Number(cached.price),
+      assetClass: "crypto",
+      liveQuoteSource: cached.liveQuoteSource || "polygon_crypto_ws",
+      source: cached.source || "polygon_crypto_ws",
+      quoteFetchedAt: updatedAt,
+      priceIsLive: true,
+      priceStale: false,
+    };
+  }
+
+  return null;
+}
+
 async function getCryptoLatestQuote(symbol) {
   const cleanSymbol = normalizeSymbol(symbol);
 
@@ -21909,10 +22086,10 @@ function calculateCryptoInstitutionalQualification({
   const smallCryptoProbePass =
     cleanExecutionPass &&
     Number(score || 0) >= 75 &&
+    dollarVolume >= 25 &&
     (
       volumeConfidenceScore >= 35 ||
-      volumeSpikeRatio >= 0 ||
-      dollarVolume >= 0
+      volumeSpikeRatio >= 0.1
     );
 
   const liquidityPass =
@@ -22046,7 +22223,12 @@ async function scanCryptoMarket() {
     }
 
     try {
-      const quote = await getCryptoLatestQuote(symbol);
+      const liveCryptoQuote = getFreshLiveCryptoQuote(
+        symbol,
+        LIVE_ORDER_MAX_QUOTE_AGE_SECONDS
+      );
+
+      const quote = liveCryptoQuote || await getCryptoLatestQuote(symbol);
       const bars = await getBestCryptoBars(symbol);
       const score = scoreCrypto(quote, bars);
 
@@ -24477,7 +24659,7 @@ async function autoCloseCryptoBeforeMarketOpen(clock) {
 
   const minsUntilOpen = minutesUntil(nextOpen);
 
-  if (minsUntilOpen > 60 || minsUntilOpen <= 0) return;
+  if (minsUntilOpen > 5 || minsUntilOpen <= 0) return;
 
   const todayKey = new Date().toISOString().slice(0, 10);
 
@@ -39916,6 +40098,8 @@ function buildLiveSignalPushPayload() {
       engineState.liveQuoteStreamState || null,
     polygonLiveStreamState:
       engineState.polygonLiveStreamState || null,
+          polygonCryptoLiveStreamState:
+      engineState.polygonCryptoLiveStreamState || null,
     liveEarlyMoverSymbols:
       engineState.liveEarlyMoverSymbols || [],
     liveEarlyMoverRefreshState:
@@ -40007,9 +40191,7 @@ function updateLiveQuoteCache(symbol, quote = {}) {
   const quoteIsActuallyLive =
     quote.priceIsLive === true &&
     !!quoteUpdatedAt &&
-    !["scan_snapshot", "snapshot", "alpaca_fallback", ""].includes(
-      String(quoteSource || "").toLowerCase()
-    );
+    isLiveQuoteSource(quoteSource);
 
   const liveMemory = updateLiveMarketMemory(cleanSymbol, {
     price,
@@ -40740,11 +40922,7 @@ function schedulePolygonReconnect() {
 
   polygonSocketReconnectTimer = setTimeout(() => {
     polygonSocketReconnectTimer = null;
-    // STOCKS
     startPolygonLiveMarketStream();
-
-    // CRYPTO
-    startPolygonCryptoLiveMarketStream();
   }, delayMs);
 }
 
@@ -42240,7 +42418,7 @@ async function runLiveScaleInEngine() {
       );
     });
 
-    decisions = aiPositions
+    const decisions = aiPositions
       .filter((position) => marketOpen || isCryptoSymbol(position.symbol))
       .map((position) => buildLiveScaleInDecision(position, account, aiPositions))
       .filter(Boolean);
@@ -42772,9 +42950,7 @@ function getLiveQuoteAgeSeconds(symbol) {
     engineState.liveQuoteCache?.[cleanSymbol] ||
     engineState.liveMarketMemory?.[cleanSymbol];
 
-  const updatedAt = quote?.updatedAt
-    ? new Date(quote.updatedAt).getTime()
-    : 0;
+  const updatedAt = getQuoteTimestampMs(quote);
 
   if (!updatedAt || !Number.isFinite(updatedAt)) {
     return Infinity;
@@ -42844,12 +43020,18 @@ function checkLiveOrderSafety(symbol, side = "BUY") {
   const price = Number(quote.price || quote.current || 0);
   const spreadPercent = Number(quote.spreadPercent || 0);
   const quoteAgeSeconds = getLiveQuoteAgeSeconds(cleanSymbol);
+  const quoteSource = quote.liveQuoteSource || quote.source || "";
+  const quoteIsLive = quote.priceIsLive === true && isLiveQuoteSource(quoteSource);
 
   const blockReasons = [];
 
   if (!cleanSymbol) blockReasons.push("Missing symbol");
   if (side === "BUY" && (!price || price <= 0)) {
     blockReasons.push("Missing valid live price");
+  }
+
+  if (side === "BUY" && !quoteIsLive) {
+    blockReasons.push(`Quote is not live websocket source: ${quoteSource || "unknown"}`);
   }
 
   if (side === "BUY" && quoteAgeSeconds > LIVE_ORDER_MAX_QUOTE_AGE_SECONDS) {
@@ -42875,6 +43057,8 @@ function checkLiveOrderSafety(symbol, side = "BUY") {
     price,
     spreadPercent,
     quoteAgeSeconds,
+    quoteSource,
+    quoteIsLive,
     polygonConnected: isPolygonLiveConnected(),
     blockReasons,
     checkedAt: new Date().toISOString(),
@@ -44070,6 +44254,8 @@ app.get("/status", async (req, res) => {
       liveStreamState: {
         polygon:
           engineState.polygonLiveStreamState || null,
+        polygonCrypto:
+          engineState.polygonCryptoLiveStreamState || null,
         finnhub:
           engineState.liveQuoteStreamState || null,
         fastRunner:
@@ -44609,8 +44795,11 @@ app.post("/config", (req, res) => {
       });
     }
 
-    updates[key] = value;
-    CONFIG[key] = value;
+    const protectedValue =
+      key === "minScoreToBuy" ? Math.max(70, value) : value;
+
+    updates[key] = protectedValue;
+    CONFIG[key] = protectedValue;
   }
 
   for (const key of booleanConfigKeys) {
@@ -44653,7 +44842,10 @@ app.post("/config", (req, res) => {
     autoTradingEnabled,
   });
 
+  runtimeConfig = sanitizeRuntimeConfig(runtimeConfig);
   Object.assign(CONFIG, runtimeConfig);
+
+  CONFIG.minScoreToBuy = Math.max(70, Number(CONFIG.minScoreToBuy || 70));
 
   saveEngineState("MANUAL_CONFIG_UPDATED");
 
