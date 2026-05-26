@@ -40356,6 +40356,22 @@ function updateLiveQuoteCache(symbol, quote = {}) {
     quote: cached,
   });
 
+  pushBackendStreamEvent("LIVE_QUOTE_TICK", {
+  type: "LIVE_QUOTE_TICK",
+  symbol: cleanSymbol,
+  quote: cached,
+  price: cached.price,
+  current: cached.current,
+  livePrice: cached.price,
+  displayPrice: cached.price,
+  percentChange: cached.percentChange ?? 0,
+  livePercentChange: cached.livePercentChange ?? 0,
+  updatedAt: cached.updatedAt,
+  liveQuoteUpdatedAt: cached.liveQuoteUpdatedAt,
+  priceIsLive: cached.priceIsLive,
+  liveQuoteSource: cached.liveQuoteSource,
+});
+
   pushBackendStreamEvent("PRICE_EVENT", {
     symbol: cleanSymbol,
     quote: cached,
