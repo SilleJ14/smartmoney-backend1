@@ -71,6 +71,16 @@ const POLYGON_MOVERS_LIMIT = Number(
   process.env.POLYGON_MOVERS_LIMIT || 100
 );
 
+const POLYGON_MOVERS_CACHE_MS = Number(
+  process.env.POLYGON_MOVERS_CACHE_MS || 60000
+);
+
+let polygonMoversCache = {
+  at: 0,
+  symbols: [],
+  reason: "",
+};
+
 const ENABLE_POLYGON_WEBSOCKET =
   process.env.ENABLE_POLYGON_WEBSOCKET !== "false";
 
@@ -2260,6 +2270,20 @@ function isCryptoSymbol(symbol = "") {
 
 function normalizeSymbol(symbol) {
   return String(symbol || "").trim().toUpperCase();
+}
+
+function isValidStockTicker(symbol = "") {
+  const clean = normalizeSymbol(symbol);
+
+  if (!clean) return false;
+  if (isCryptoSymbol(clean)) return false;
+  if (clean.includes("/")) return false;
+  if (clean.includes("-")) return false;
+  if (clean.includes(".")) return false;
+  if (clean.length < 1 || clean.length > 5) return false;
+  if (clean.length === 5 && /[YF]$/.test(clean)) return false;
+
+  return /^[A-Z]+$/.test(clean);
 }
 
 
@@ -15468,6 +15492,7 @@ function isNormalStockSymbol(symbol) {
   if (s.includes(".") || s.includes("-") || s.includes("/") || s.includes("^"))
     return false;
   if (s.length > 5) return false;
+  if (s.length === 5 && /[YF]$/.test(s)) return false;
   const badEndings = ["W", "WS", "WT", "R", "RT", "U", "UN", "P", "PR", "Z"];
 
   for (const ending of badEndings) {
@@ -15853,63 +15878,14 @@ async function polygonQuote(symbol) {
 async function getAlpacaLatestStockPrice(symbol) {
   const cleanSymbol = normalizeSymbol(symbol);
 
-  try {
-    const tradeData = await alpacaDataRequest(
-      `/v2/stocks/${encodeURIComponent(cleanSymbol)}/trades/latest`
-    );
-
-    const trade = tradeData?.trade || null;
-    const price = Number(trade?.p || trade?.price || 0);
-
-    if (price > 0) {
-      return {
-        price,
-        source: "alpaca_latest_trade",
-        raw: trade,
-      };
-    }
-  } catch (err) {
-    console.warn(
-      `Alpaca latest trade failed for ${cleanSymbol}:`,
-      err.message
-    );
-  }
-
-  try {
-    const quoteData = await alpacaDataRequest(
-      `/v2/stocks/${encodeURIComponent(cleanSymbol)}/quotes/latest`
-    );
-
-    const quote = quoteData?.quote || null;
-    const bid = Number(quote?.bp || quote?.bid_price || 0);
-    const ask = Number(quote?.ap || quote?.ask_price || 0);
-
-    const price =
-      bid > 0 && ask > 0
-        ? (bid + ask) / 2
-        : bid > 0
-          ? bid
-          : ask > 0
-            ? ask
-            : 0;
-
-    if (price > 0) {
-      return {
-        price,
-        bid,
-        ask,
-        source: "alpaca_latest_quote",
-        raw: quote,
-      };
-    }
-  } catch (err) {
-    console.warn(
-      `Alpaca latest quote failed for ${cleanSymbol}:`,
-      err.message
-    );
-  }
-
-  return null;
+  return {
+    price: 0,
+    bid: 0,
+    ask: 0,
+    source: "alpaca_latest_disabled",
+    disabled: true,
+    symbol: cleanSymbol,
+  };
 }
 
 async function getCombinedStockQuote(symbol) {
@@ -15921,14 +15897,14 @@ async function getCombinedStockQuote(symbol) {
     return cachedCombined;
   }
 
-  const liveCachedQuote = getLiveCachedQuote(cleanSymbol);
+  const liveCachedQuote = getAuthoritativeLiveQuote(cleanSymbol);
 
   let polygon = liveCachedQuote || null;
   let finnhub = null;
   let dataError = "";
 
   try {
-    if (ENABLE_POLYGON && POLYGON_PRIMARY) {
+    if (!polygon && ENABLE_POLYGON && POLYGON_PRIMARY) {
       polygon = await polygonQuote(symbol);
     }
   } catch (err) {
@@ -16059,20 +16035,10 @@ async function getCombinedStockQuote(symbol) {
     Number(barStats.avgVolume || 0)
   );
 
-  let alpacaLatestFallback = null;
-
-  if (!current || current <= 0) {
-    alpacaLatestFallback = await getAlpacaLatestStockPrice(cleanSymbol);
-
-    if (alpacaLatestFallback?.price > 0) {
-      current = Number(alpacaLatestFallback.price);
-    }
-  }
-
   if (!current || current <= 0) {
     throw new Error(
       dataError ||
-      `No valid price from Polygon, Finnhub, or Alpaca for ${symbol}`
+      `No valid Polygon/Finnhub price for ${symbol}`
     );
   }
 
@@ -16121,20 +16087,28 @@ async function getCombinedStockQuote(symbol) {
       Number(barStats.avgVolume || 0)
     ),
 
-  
+
     volumeRatio: Number(
       barStats.volumeSpikeRatio || 0
     ),
 
     quoteFetchedAt: new Date().toISOString(),
+
+    quoteAuthority:
+      primary?.quoteAuthorityRank === 1
+        ? "polygon_websocket"
+        : primary?.quoteAuthorityRank === 2
+          ? "polygon_live_cache"
+          : polygon
+            ? "polygon_rest"
+            : finnhub
+              ? "finnhub_fallback"
+              : "none",
+
     liveQuoteSource:
       primary?.liveQuoteSource ||
       primary?.source ||
-      (polygon
-        ? "polygon_rest"
-        : finnhub
-          ? "finnhub_rest"
-          : alpacaLatestFallback?.source || "alpaca_bars"),
+      (polygon ? "polygon_rest" : finnhub ? "finnhub_rest" : "none"),
 
     priceIsLive:
       primary?.priceIsLive === true ||
@@ -16148,12 +16122,12 @@ async function getCombinedStockQuote(symbol) {
 
     dataSource:
       isLiveQuoteSource(primary?.liveQuoteSource || primary?.source || "")
-        ? "Live websocket + Alpaca"
+        ? "Live websocket + Alpaca bars"
         : polygon
-          ? "Polygon + Alpaca"
+          ? "Polygon price/quote + Alpaca bars"
           : finnhub
-            ? "Finnhub + Alpaca"
-            : "Alpaca fallback",
+            ? "Finnhub price/quote + Alpaca bars"
+            : "No valid price/quote",
 
     stockChartBars,
   };
@@ -22511,50 +22485,29 @@ async function getClock() {
   }
 }
 
-function isAiOrder(order) {
-  return String(order.client_order_id || "").startsWith(AI_ORDER_PREFIX);
-}
+async function getPolygonMoverSymbols(limit = POLYGON_MOVERS_LIMIT, forceRefresh = false) {
+  const now = Date.now();
 
-async function getAiOwnedSymbols() {
-  const orders = await getOrders();
+  if (
+    !forceRefresh &&
+    now - Number(polygonMoversCache.at || 0) < POLYGON_MOVERS_CACHE_MS
+  ) {
+    console.log("Polygon movers cache:", {
+      count: polygonMoversCache.symbols.length,
+      reason: polygonMoversCache.reason,
+    });
 
-  const aiFilledBuys = orders.filter((order) => {
-    const side = String(order.side || "").toLowerCase();
-    const status = String(order.status || "").toLowerCase();
-
-    return side === "buy" && status === "filled" && isAiOrder(order);
-  });
-
-  return new Set(aiFilledBuys.map((order) => normalizeSymbol(order.symbol)));
-}
-
-async function getAiEntryScores() {
-  const orders = await getOrders();
-  const scoreMap = {};
-
-  for (const order of orders) {
-    const symbol = normalizeSymbol(order.symbol);
-    const side = String(order.side || "").toLowerCase();
-    const status = String(order.status || "").toLowerCase();
-
-    if (side !== "buy") continue;
-    if (status !== "filled") continue;
-    if (!isAiOrder(order)) continue;
-
-    if (!scoreMap[symbol]) {
-      scoreMap[symbol] = engineState.aiEntryScores[symbol] || 0;
-    }
+    return polygonMoversCache.symbols.slice(0, limit);
   }
-
-  return scoreMap;
-}
-
-
-async function getPolygonMoverSymbols(limit = POLYGON_MOVERS_LIMIT) {
-  const moverSymbols = [];
 
   try {
     if (!ENABLE_POLYGON || !POLYGON_API_KEY) {
+      polygonMoversCache = {
+        at: Date.now(),
+        symbols: [],
+        reason: "polygon_disabled_or_missing_key",
+      };
+
       return [];
     }
 
@@ -22565,12 +22518,25 @@ async function getPolygonMoverSymbols(limit = POLYGON_MOVERS_LIMIT) {
 
     if (response.status === 429) {
       putPolygonInCooldown(2);
-      console.log("Polygon movers skipped: rate limited");
+
+      polygonMoversCache = {
+        at: Date.now(),
+        symbols: [],
+        reason: "polygon_rate_limited",
+      };
+
+      console.log("Polygon movers skipped:", polygonMoversCache.reason);
       return [];
     }
 
     if (!response.ok) {
-      console.log(`Polygon movers failed: HTTP ${response.status}`);
+      polygonMoversCache = {
+        at: Date.now(),
+        symbols: [],
+        reason: `polygon_http_${response.status}`,
+      };
+
+      console.log("Polygon movers failed:", polygonMoversCache.reason);
       return [];
     }
 
@@ -22580,24 +22546,31 @@ async function getPolygonMoverSymbols(limit = POLYGON_MOVERS_LIMIT) {
     const ranked = tickers
       .map((ticker) => {
         const symbol = normalizeSymbol(ticker?.ticker);
+
         const current = Number(
           ticker?.lastTrade?.p ||
           ticker?.day?.c ||
           0
         );
+
         const rawPercentChange = Number(ticker?.todaysChangePerc || 0);
+
         const previousClose = Number(
           ticker?.prevDay?.c ||
-          (current > 0 && rawPercentChange !== 0
-            ? current / (1 + rawPercentChange / 100)
-            : 0)
+          (
+            current > 0 && rawPercentChange !== 0
+              ? current / (1 + rawPercentChange / 100)
+              : 0
+          )
         );
 
-        const percentChange = Number.isFinite(rawPercentChange) && rawPercentChange !== 0
-          ? rawPercentChange
-          : previousClose > 0 && current > 0
-            ? ((current - previousClose) / previousClose) * 100
-            : 0;
+        const percentChange =
+          Number.isFinite(rawPercentChange) && rawPercentChange !== 0
+            ? rawPercentChange
+            : previousClose > 0 && current > 0
+              ? ((current - previousClose) / previousClose) * 100
+              : 0;
+
         const volume = Number(ticker?.day?.v || 0);
 
         return {
@@ -22608,16 +22581,53 @@ async function getPolygonMoverSymbols(limit = POLYGON_MOVERS_LIMIT) {
       })
       .filter((item) => isNormalStockSymbol(item.symbol))
       .filter((item) => Number.isFinite(item.percentChange))
-      .filter((item) => Math.abs(item.percentChange) >= 2)
-      .filter((item) => Number(item.volume || 0) >= CONFIG.minScanVolume)
+      .filter((item) => {
+        const regularMarket = engineState.marketOpen === true;
+
+        if (regularMarket) {
+          return (
+            Math.abs(item.percentChange) >= 2 &&
+            Number(item.volume || 0) >= CONFIG.minScanVolume
+          );
+        }
+
+        return (
+          Math.abs(item.percentChange) >= 0.3 ||
+          Number(item.volume || 0) >= 500
+        );
+      })
       .sort((a, b) => Math.abs(b.percentChange) - Math.abs(a.percentChange))
       .slice(0, limit);
 
-    const rankedSymbols = ranked.map((item) => item.symbol);
+    const rankedSymbols = ranked
+      .map((item) => item.symbol)
+      .filter(Boolean)
+      .map(normalizeSymbol)
+      .filter(isNormalStockSymbol);
 
-    moverSymbols.push(...rankedSymbols);
+    const fallbackSymbols = [
+      ...(engineState.lastStockSignals || []).map((s) => s.symbol),
+      ...(engineState.topStockSignals || []).map((s) => s.symbol),
+      ...(engineState.fastRunnerCandidates || []).map((s) => s.symbol),
+      ...(engineState.quickInstitutionalCandidates || []).map((s) => s.symbol),
+      ...(engineState.institutionalWatchlist || []).map((s) => s.symbol || s),
+    ]
+      .filter(Boolean)
+      .map(normalizeSymbol)
+      .filter(isNormalStockSymbol);
 
-    engineState.liveEarlyMoverSymbols = rankedSymbols
+    const cleanSymbols = [
+      ...new Set([
+        ...rankedSymbols,
+        ...fallbackSymbols,
+      ]),
+    ]
+      .filter(
+        (symbol) =>
+          !(symbol.length === 5 && /[YF]$/.test(symbol))
+      ).slice(0, limit);
+
+    engineState.liveEarlyMoverSymbols = cleanSymbols
       .filter(Boolean)
       .map(normalizeSymbol)
       .filter(isNormalStockSymbol)
@@ -22629,17 +22639,39 @@ async function getPolygonMoverSymbols(limit = POLYGON_MOVERS_LIMIT) {
       updatedAt: new Date().toISOString(),
       symbolCount: engineState.liveEarlyMoverSymbols.length,
       symbols: engineState.liveEarlyMoverSymbols.slice(0, 25),
-      reason: "Live early movers refreshed from Polygon snapshot before full scan.",
+      reason: rankedSymbols.length
+        ? "Live early movers refreshed from Polygon snapshot."
+        : "Polygon movers empty. Using fallback symbols.",
     };
 
-    console.log(`Polygon movers found: ${moverSymbols.length}`);
+    polygonMoversCache = {
+      at: Date.now(),
+      symbols: cleanSymbols,
+      reason: cleanSymbols.length
+        ? rankedSymbols.length
+          ? "polygon_movers_success"
+          : "polygon_movers_fallback"
+        : "polygon_movers_empty",
+    };
+
+    console.log("Polygon movers refreshed:", {
+      count: cleanSymbols.length,
+      reason: polygonMoversCache.reason,
+      cacheMs: POLYGON_MOVERS_CACHE_MS,
+    });
+
+    return cleanSymbols;
   } catch (err) {
+    polygonMoversCache = {
+      at: Date.now(),
+      symbols: [],
+      reason: `polygon_exception_${err.message}`,
+    };
+
     console.log("Polygon movers failed:", err.message);
+    return [];
   }
-
-  return [...new Set(moverSymbols)].filter(isNormalStockSymbol);
 }
-
 async function getTradableAssetUniverse(limit = 300) {
   try {
     const assets = await alpacaTradingRequest(
@@ -22783,9 +22815,12 @@ async function getTopMovers() {
       ]),
     ];
 
-    console.log(
-      `Combined Polygon + Alpaca movers found: ${moverSymbols.length}`
-    );
+    console.log("Combined Polygon + Alpaca movers found:", {
+      total: moverSymbols.length,
+      polygon: polygonMoverSymbols.length,
+      alpaca: alpacaMoverSymbols.length,
+      polygonReason: polygonMoversCache.reason,
+    });
   } catch (err) {
     console.log("Alpaca movers failed. Using Polygon/assets fallback:", err.message);
 
@@ -22933,6 +22968,25 @@ function narrowSmartUniverse(symbols = []) {
   saveEngineState("SMART_UNIVERSE_NARROWING_UPDATED");
 
   return elite.map((item) => item.symbol);
+}
+
+function isAiOrder(order = {}) {
+  return String(order.client_order_id || "").startsWith(AI_ORDER_PREFIX);
+}
+
+async function getAiOwnedSymbols() {
+  const orders = await getOrders();
+
+  const aiFilledBuys = orders.filter((order) => {
+    const side = String(order.side || "").toLowerCase();
+    const status = String(order.status || "").toLowerCase();
+
+    return side === "buy" && status === "filled" && isAiOrder(order);
+  });
+
+  return new Set(
+    aiFilledBuys.map((order) => normalizeSymbol(order.symbol))
+  );
 }
 
 async function scanMarket() {
@@ -23298,7 +23352,14 @@ async function scanMarket() {
       topSkipped: engineState.skippedSymbols.slice(0, 10),
     });
 
-    console.log(`Scan finished. Found ${results.length} stocks.`);
+    console.log(`Scan finished. Found ${results.length} stocks.`);   
+
+    console.log(
+  "APPROVED COUNT:",
+  results.filter(
+    (s) => s.approved === true || s.autoTradeApproved === true
+  ).length
+);
 
     const multiDayAccumulationState =
       updateMultiDayAccumulationState(results);
@@ -40098,7 +40159,7 @@ function buildLiveSignalPushPayload() {
       engineState.liveQuoteStreamState || null,
     polygonLiveStreamState:
       engineState.polygonLiveStreamState || null,
-          polygonCryptoLiveStreamState:
+    polygonCryptoLiveStreamState:
       engineState.polygonCryptoLiveStreamState || null,
     liveEarlyMoverSymbols:
       engineState.liveEarlyMoverSymbols || [],
@@ -40130,6 +40191,28 @@ function buildLiveSignalPushPayload() {
     cryptoSignals,
     signalCount:
       stockSignals.length + cryptoSignals.length,
+  };
+}
+
+function getAuthoritativeLiveQuote(symbol) {
+  const cleanSymbol = normalizeSymbol(symbol);
+  const cached = engineState.liveQuoteCache?.[cleanSymbol] || null;
+
+  if (!cached) return null;
+
+  const price = Number(cached.price || cached.current || 0);
+  if (!price || price <= 0) return null;
+
+  return {
+    ...cached,
+    symbol: cleanSymbol,
+    current: price,
+    price,
+    source: cached.liveQuoteSource || cached.source || "live_cache",
+    liveQuoteSource: cached.liveQuoteSource || cached.source || "live_cache",
+    priceIsLive: cached.priceIsLive === true,
+    priceStale: cached.priceIsLive !== true,
+    quoteAuthorityRank: cached.priceIsLive === true ? 1 : 2,
   };
 }
 
