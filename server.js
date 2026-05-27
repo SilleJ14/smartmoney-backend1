@@ -44227,6 +44227,46 @@ app.get("/live-movers", (req, res) => {
             0
           );
 
+          const liveStarterCandidate =
+  (engineState.liveStarterBuyHistory || []).find(
+    (x) => normalizeSymbol(x?.symbol) === symbol
+  ) ||
+  (engineState.quickInstitutionalCandidates || []).find(
+    (x) => normalizeSymbol(x?.symbol) === symbol
+  ) ||
+  (engineState.fastRunnerCandidates || []).find(
+    (x) => normalizeSymbol(x?.symbol) === symbol
+  ) ||
+  (engineState.topAutonomousCandidates || []).find(
+    (x) => normalizeSymbol(x?.symbol) === symbol
+  ) ||
+  {};
+
+const resolvedRecommendedTradeAmount = Number(
+  merged.recommendedTradeAmount ||
+    merged.rawRecommendedTradeAmount ||
+    merged.recommendedSize ||
+    merged.tradeAmount ||
+    merged.positionSize ||
+    merged.dollarAmount ||
+    merged.notional ||
+
+    merged.positionSizing?.recommendedTradeAmount ||
+    merged.positionSizing?.recommendedSize ||
+
+    merged.portfolioManager?.recommendedTradeAmount ||
+    merged.portfolioManager?.aiRecommendedTradeAmount ||
+
+    liveStarterCandidate.recommendedTradeAmount ||
+    liveStarterCandidate.rawRecommendedTradeAmount ||
+    liveStarterCandidate.recommendedSize ||
+    liveStarterCandidate.tradeAmount ||
+    liveStarterCandidate.positionSize ||
+    liveStarterCandidate.dollarAmount ||
+
+    0
+);
+
       const current = map.get(symbol);
 
       const isCrypto = isCryptoSymbol(symbol);
@@ -44360,24 +44400,7 @@ app.get("/live-movers", (req, res) => {
 
         autoTradeApproved: merged.autoTradeApproved === true,
 
-        recommendedTradeAmount: Number(
-          merged.recommendedTradeAmount ||
-          merged.recommendedSize ||
-          merged.tradeAmount ||
-          merged.positionSize ||
-          merged.dollarAmount ||
-          merged.notional ||
-          merged.positionSizing?.recommendedTradeAmount ||
-          merged.positionSizing?.recommendedSize ||
-          merged.positionSizing?.dollarAmount ||
-          merged.positionSizing?.notional ||
-          merged.portfolioManager?.recommendedTradeAmount ||
-          merged.portfolioManager?.recommendedSize ||
-          merged.portfolioManager?.aiRecommendedTradeAmount ||
-          merged.liveStarterBuyGate?.recommendedTradeAmount ||
-          merged.liveStarterBuyGate?.starterBuyAmount ||
-          0
-        ),
+        recommendedTradeAmount: resolvedRecommendedTradeAmount,
 
         aiAllocationPercentOfBotBudget: Number(
           merged.aiAllocationPercentOfBotBudget ||
