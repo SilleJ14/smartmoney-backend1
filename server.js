@@ -41,6 +41,87 @@ app.post("/alpaca-keys", (req, res) => {
   });
 });
 app.get("/alpaca-keys-test", (req, res) => {
+  app.get("/positions", async (req, res) => {
+  try {
+    const { key, secret } = getAlpacaKeys();
+
+    if (!key || !secret) {
+      return res.status(400).json({
+        error: "Missing Alpaca keys",
+      });
+    }
+
+    const response = await fetch(
+      `${getTradingBaseUrl()}/v2/positions`,
+      {
+        headers: {
+          "APCA-API-KEY-ID": key,
+          "APCA-API-SECRET-KEY": secret,
+        },
+      }
+    );
+
+    const text = await response.text();
+
+    try {
+      const data = text ? JSON.parse(text) : [];
+
+      return res.json({
+        positions: Array.isArray(data) ? data : [],
+      });
+    } catch {
+      return res.status(500).json({
+        error: "Alpaca returned invalid JSON",
+        raw: text.slice(0, 300),
+      });
+    }
+  } catch (err) {
+    return res.status(500).json({
+      error: err.message,
+    });
+  }
+});
+
+app.get("/orders", async (req, res) => {
+  try {
+    const { key, secret } = getAlpacaKeys();
+
+    if (!key || !secret) {
+      return res.status(400).json({
+        error: "Missing Alpaca keys",
+      });
+    }
+
+    const response = await fetch(
+      `${getTradingBaseUrl()}/v2/orders?status=all&limit=50`,
+      {
+        headers: {
+          "APCA-API-KEY-ID": key,
+          "APCA-API-SECRET-KEY": secret,
+        },
+      }
+    );
+
+    const text = await response.text();
+
+    try {
+      const data = text ? JSON.parse(text) : [];
+
+      return res.json({
+        orders: Array.isArray(data) ? data : [],
+      });
+    } catch {
+      return res.status(500).json({
+        error: "Alpaca returned invalid JSON",
+        raw: text.slice(0, 300),
+      });
+    }
+  } catch (err) {
+    return res.status(500).json({
+      error: err.message,
+    });
+  }
+});
   res.json({
     ok: true,
     message: "Alpaca keys route is live",
@@ -2205,6 +2286,7 @@ if (!WebSocketImpl) {
     );
   }
 }
+
 
 const sellingNow = new Set();
 const buyingNow = new Set();
