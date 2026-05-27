@@ -42,86 +42,86 @@ app.post("/alpaca-keys", (req, res) => {
 });
 app.get("/alpaca-keys-test", (req, res) => {
   app.get("/positions", async (req, res) => {
-  try {
-    const { key, secret } = getAlpacaKeys();
-
-    if (!key || !secret) {
-      return res.status(400).json({
-        error: "Missing Alpaca keys",
-      });
-    }
-
-    const response = await fetch(
-      `${getTradingBaseUrl()}/v2/positions`,
-      {
-        headers: {
-          "APCA-API-KEY-ID": key,
-          "APCA-API-SECRET-KEY": secret,
-        },
-      }
-    );
-
-    const text = await response.text();
-
     try {
-      const data = text ? JSON.parse(text) : [];
+      const { key, secret } = getAlpacaKeys();
 
-      return res.json({
-        positions: Array.isArray(data) ? data : [],
-      });
-    } catch {
-      return res.status(500).json({
-        error: "Alpaca returned invalid JSON",
-        raw: text.slice(0, 300),
-      });
-    }
-  } catch (err) {
-    return res.status(500).json({
-      error: err.message,
-    });
-  }
-});
-
-app.get("/orders", async (req, res) => {
-  try {
-    const { key, secret } = getAlpacaKeys();
-
-    if (!key || !secret) {
-      return res.status(400).json({
-        error: "Missing Alpaca keys",
-      });
-    }
-
-    const response = await fetch(
-      `${getTradingBaseUrl()}/v2/orders?status=all&limit=50`,
-      {
-        headers: {
-          "APCA-API-KEY-ID": key,
-          "APCA-API-SECRET-KEY": secret,
-        },
+      if (!key || !secret) {
+        return res.status(400).json({
+          error: "Missing Alpaca keys",
+        });
       }
-    );
 
-    const text = await response.text();
+      const response = await fetch(
+        `${getTradingBaseUrl()}/v2/positions`,
+        {
+          headers: {
+            "APCA-API-KEY-ID": key,
+            "APCA-API-SECRET-KEY": secret,
+          },
+        }
+      );
 
-    try {
-      const data = text ? JSON.parse(text) : [];
+      const text = await response.text();
 
-      return res.json({
-        orders: Array.isArray(data) ? data : [],
-      });
-    } catch {
+      try {
+        const data = text ? JSON.parse(text) : [];
+
+        return res.json({
+          positions: Array.isArray(data) ? data : [],
+        });
+      } catch {
+        return res.status(500).json({
+          error: "Alpaca returned invalid JSON",
+          raw: text.slice(0, 300),
+        });
+      }
+    } catch (err) {
       return res.status(500).json({
-        error: "Alpaca returned invalid JSON",
-        raw: text.slice(0, 300),
+        error: err.message,
       });
     }
-  } catch (err) {
-    return res.status(500).json({
-      error: err.message,
-    });
-  }
-});
+  });
+
+  app.get("/orders", async (req, res) => {
+    try {
+      const { key, secret } = getAlpacaKeys();
+
+      if (!key || !secret) {
+        return res.status(400).json({
+          error: "Missing Alpaca keys",
+        });
+      }
+
+      const response = await fetch(
+        `${getTradingBaseUrl()}/v2/orders?status=all&limit=50`,
+        {
+          headers: {
+            "APCA-API-KEY-ID": key,
+            "APCA-API-SECRET-KEY": secret,
+          },
+        }
+      );
+
+      const text = await response.text();
+
+      try {
+        const data = text ? JSON.parse(text) : [];
+
+        return res.json({
+          orders: Array.isArray(data) ? data : [],
+        });
+      } catch {
+        return res.status(500).json({
+          error: "Alpaca returned invalid JSON",
+          raw: text.slice(0, 300),
+        });
+      }
+    } catch (err) {
+      return res.status(500).json({
+        error: err.message,
+      });
+    }
+  });
   res.json({
     ok: true,
     message: "Alpaca keys route is live",
@@ -23434,14 +23434,14 @@ async function scanMarket() {
       topSkipped: engineState.skippedSymbols.slice(0, 10),
     });
 
-    console.log(`Scan finished. Found ${results.length} stocks.`);   
+    console.log(`Scan finished. Found ${results.length} stocks.`);
 
     console.log(
-  "APPROVED COUNT:",
-  results.filter(
-    (s) => s.approved === true || s.autoTradeApproved === true
-  ).length
-);
+      "APPROVED COUNT:",
+      results.filter(
+        (s) => s.approved === true || s.autoTradeApproved === true
+      ).length
+    );
 
     const multiDayAccumulationState =
       updateMultiDayAccumulationState(results);
@@ -40439,20 +40439,20 @@ function updateLiveQuoteCache(symbol, quote = {}) {
   });
 
   pushBackendStreamEvent("LIVE_QUOTE_TICK", {
-  type: "LIVE_QUOTE_TICK",
-  symbol: cleanSymbol,
-  quote: cached,
-  price: cached.price,
-  current: cached.current,
-  livePrice: cached.price,
-  displayPrice: cached.price,
-  percentChange: cached.percentChange ?? 0,
-  livePercentChange: cached.livePercentChange ?? 0,
-  updatedAt: cached.updatedAt,
-  liveQuoteUpdatedAt: cached.liveQuoteUpdatedAt,
-  priceIsLive: cached.priceIsLive,
-  liveQuoteSource: cached.liveQuoteSource,
-});
+    type: "LIVE_QUOTE_TICK",
+    symbol: cleanSymbol,
+    quote: cached,
+    price: cached.price,
+    current: cached.current,
+    livePrice: cached.price,
+    displayPrice: cached.price,
+    percentChange: cached.percentChange ?? 0,
+    livePercentChange: cached.livePercentChange ?? 0,
+    updatedAt: cached.updatedAt,
+    liveQuoteUpdatedAt: cached.liveQuoteUpdatedAt,
+    priceIsLive: cached.priceIsLive,
+    liveQuoteSource: cached.liveQuoteSource,
+  });
 
   pushBackendStreamEvent("PRICE_EVENT", {
     symbol: cleanSymbol,
@@ -44167,45 +44167,45 @@ app.get("/live-movers", (req, res) => {
 
       const livePrice = Number(
         liveQuote.price ||
-          liveQuote.livePrice ||
-          merged.livePrice ||
-          merged.currentPrice ||
-          merged.price ||
-          merged.current ||
-          0
+        liveQuote.livePrice ||
+        merged.livePrice ||
+        merged.currentPrice ||
+        merged.price ||
+        merged.current ||
+        0
       );
 
       if (!Number.isFinite(livePrice) || livePrice <= 0) continue;
 
       const previousClose = Number(
         liveQuote.previousClose ||
-          liveQuote.prevClose ||
-          merged.previousClose ||
-          merged.prevClose ||
-          merged.pc ||
-          0
+        liveQuote.prevClose ||
+        merged.previousClose ||
+        merged.prevClose ||
+        merged.pc ||
+        0
       );
 
       const open = Number(
         liveQuote.open ||
-          liveQuote.dayOpen ||
-          merged.open ||
-          merged.dayOpen ||
-          merged.o ||
-          0
+        liveQuote.dayOpen ||
+        merged.open ||
+        merged.dayOpen ||
+        merged.o ||
+        0
       );
 
       const changePercent =
         previousClose > 0
           ? ((livePrice - previousClose) / previousClose) * 100
           : Number(
-              merged.dayChangePercent ||
-                merged.percentChange ||
-                merged.changePercent ||
-                liveQuote.percentChange ||
-                liveQuote.livePercentChange ||
-                0
-            );
+            merged.dayChangePercent ||
+            merged.percentChange ||
+            merged.changePercent ||
+            liveQuote.percentChange ||
+            liveQuote.livePercentChange ||
+            0
+          );
 
       const current = map.get(symbol);
 
@@ -44235,17 +44235,15 @@ app.get("/live-movers", (req, res) => {
           liveQuote.spreadPercent || merged.spreadPercent || 0
         ),
 
-        liveQuoteUpdatedAt:
-          liveQuote.liveQuoteUpdatedAt ||
-          liveQuote.quoteFetchedAt ||
-          liveQuote.updatedAt ||
-          merged.liveQuoteUpdatedAt ||
-          new Date().toISOString(),
+liveQuoteUpdatedAt: new Date().toISOString(),
 
         liveQuoteSource:
           liveQuote.liveQuoteSource ||
           liveQuote.source ||
+          liveQuote.dataSource ||
           merged.liveQuoteSource ||
+          merged.source ||
+          merged.dataSource ||
           "live_movers",
 
         priceIsLive: true,
@@ -44253,30 +44251,30 @@ app.get("/live-movers", (req, res) => {
         score: Number(merged.score || 0),
         runnerScore: Number(
           merged.runnerScore ||
-            merged.fastRunnerScore ||
-            liveQuote.fastRunnerScore ||
-            0
+          merged.fastRunnerScore ||
+          liveQuote.fastRunnerScore ||
+          0
         ),
 
         quickInstitutionalScore: Number(
           merged.quickInstitutionalScore ||
-            merged.institutionalScore ||
-            merged.score ||
-            0
+          merged.institutionalScore ||
+          merged.score ||
+          0
         ),
 
         tapeSpeedScore: Number(
           merged.tapeSpeedScore ||
-            merged.tapeSpeed ||
-            liveQuote.tapeSpeed ||
-            0
+          merged.tapeSpeed ||
+          liveQuote.tapeSpeed ||
+          0
         ),
 
         liquidityPressureScore: Number(
           merged.liquidityPressureScore ||
-            merged.liquidityPressure ||
-            liveQuote.liquidityPressure ||
-            0
+          merged.liquidityPressure ||
+          liveQuote.liquidityPressure ||
+          0
         ),
 
         qualifiedToBuy: merged.qualifiedToBuy === true,
@@ -44296,9 +44294,9 @@ app.get("/live-movers", (req, res) => {
 
         recommendedTradeAmount: Number(
           merged.recommendedTradeAmount ||
-            merged.positionSizing?.recommendedTradeAmount ||
-            merged.portfolioManager?.recommendedTradeAmount ||
-            0
+          merged.positionSizing?.recommendedTradeAmount ||
+          merged.portfolioManager?.recommendedTradeAmount ||
+          0
         ),
 
         aiPortfolioAction:
