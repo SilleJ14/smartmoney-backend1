@@ -44227,45 +44227,45 @@ app.get("/live-movers", (req, res) => {
             0
           );
 
-          const liveStarterCandidate =
-  (engineState.liveStarterBuyHistory || []).find(
-    (x) => normalizeSymbol(x?.symbol) === symbol
-  ) ||
-  (engineState.quickInstitutionalCandidates || []).find(
-    (x) => normalizeSymbol(x?.symbol) === symbol
-  ) ||
-  (engineState.fastRunnerCandidates || []).find(
-    (x) => normalizeSymbol(x?.symbol) === symbol
-  ) ||
-  (engineState.topAutonomousCandidates || []).find(
-    (x) => normalizeSymbol(x?.symbol) === symbol
-  ) ||
-  {};
+      const liveStarterCandidate =
+        (engineState.liveStarterBuyHistory || []).find(
+          (x) => normalizeSymbol(x?.symbol) === symbol
+        ) ||
+        (engineState.quickInstitutionalCandidates || []).find(
+          (x) => normalizeSymbol(x?.symbol) === symbol
+        ) ||
+        (engineState.fastRunnerCandidates || []).find(
+          (x) => normalizeSymbol(x?.symbol) === symbol
+        ) ||
+        (engineState.topAutonomousCandidates || []).find(
+          (x) => normalizeSymbol(x?.symbol) === symbol
+        ) ||
+        {};
 
-const resolvedRecommendedTradeAmount = Number(
-  merged.recommendedTradeAmount ||
-    merged.rawRecommendedTradeAmount ||
-    merged.recommendedSize ||
-    merged.tradeAmount ||
-    merged.positionSize ||
-    merged.dollarAmount ||
-    merged.notional ||
+      const resolvedRecommendedTradeAmount = Number(
+        merged.recommendedTradeAmount ||
+        merged.rawRecommendedTradeAmount ||
+        merged.recommendedSize ||
+        merged.tradeAmount ||
+        merged.positionSize ||
+        merged.dollarAmount ||
+        merged.notional ||
 
-    merged.positionSizing?.recommendedTradeAmount ||
-    merged.positionSizing?.recommendedSize ||
+        merged.positionSizing?.recommendedTradeAmount ||
+        merged.positionSizing?.recommendedSize ||
 
-    merged.portfolioManager?.recommendedTradeAmount ||
-    merged.portfolioManager?.aiRecommendedTradeAmount ||
+        merged.portfolioManager?.recommendedTradeAmount ||
+        merged.portfolioManager?.aiRecommendedTradeAmount ||
 
-    liveStarterCandidate.recommendedTradeAmount ||
-    liveStarterCandidate.rawRecommendedTradeAmount ||
-    liveStarterCandidate.recommendedSize ||
-    liveStarterCandidate.tradeAmount ||
-    liveStarterCandidate.positionSize ||
-    liveStarterCandidate.dollarAmount ||
+        liveStarterCandidate.recommendedTradeAmount ||
+        liveStarterCandidate.rawRecommendedTradeAmount ||
+        liveStarterCandidate.recommendedSize ||
+        liveStarterCandidate.tradeAmount ||
+        liveStarterCandidate.positionSize ||
+        liveStarterCandidate.dollarAmount ||
 
-    0
-);
+        0
+      );
 
       const current = map.get(symbol);
 
@@ -44298,9 +44298,24 @@ const resolvedRecommendedTradeAmount = Number(
         .map((value) => Number(value))
         .filter((value) => Number.isFinite(value) && value > 0);
 
+      const stockScoreCandidates = [
+        merged.score,
+        merged.institutionalScore,
+        merged.aiConfidence,
+        merged.autonomousConfidenceScore,
+        merged.quickInstitutionalScore,
+        merged.executionConfidence,
+        merged.runnerScore,
+        merged.fastRunnerScore,
+        merged.finalLiveScore,
+        merged.gateScore,
+      ]
+        .map((value) => Number(value))
+        .filter((value) => Number.isFinite(value) && value > 0);
+
       const displayScore = isCrypto
         ? Math.max(...cryptoScoreCandidates, Number(merged.score || 0))
-        : Number(merged.score || 0);
+        : Math.max(...stockScoreCandidates, Number(merged.score || 0));
 
       const displayQuickInstitutionalScore = isCrypto
         ? Math.max(
