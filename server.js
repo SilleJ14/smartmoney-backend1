@@ -13020,7 +13020,36 @@ function calculateFinalPositionSizingReconciliation({
 
   const liveQuoteFreshness = isLiveQuoteFresh(symbol, 120);
 
-  if (!liveQuoteFreshness.fresh && !isCryptoSignal) {
+  const signalQuoteMs = signal.liveQuoteUpdatedAt
+    ? new Date(signal.liveQuoteUpdatedAt).getTime()
+    : signal.quoteFetchedAt
+    ? new Date(signal.quoteFetchedAt).getTime()
+    : signal.updatedAt
+    ? new Date(signal.updatedAt).getTime()
+    : 0;
+
+  const signalQuoteAgeSeconds =
+    signalQuoteMs > 0 ? (Date.now() - signalQuoteMs) / 1000 : 999999;
+
+  const signalSourceLooksLive =
+    String(
+      signal.liveQuoteSource ||
+        signal.dataSource ||
+        signal.source ||
+        ""
+    )
+      .toLowerCase()
+      .includes("live");
+
+  const signalHasFreshLiveQuote =
+    signalSourceLooksLive &&
+    Number(signal.price || signal.livePrice || signal.displayPrice || 0) > 0 &&
+    signalQuoteAgeSeconds <= 120;
+
+  const finalQuoteIsFresh =
+    liveQuoteFreshness.fresh === true || signalHasFreshLiveQuote;
+
+  if (!finalQuoteIsFresh && !isCryptoSignal) {
     return {
       phase: "56.2_FINAL_POSITION_SIZING_RECONCILIATION",
       updatedAt: new Date().toISOString(),
@@ -44256,7 +44285,7 @@ app.get("/live-movers", (req, res) => {
 
         merged.portfolioManager?.recommendedTradeAmount ||
         merged.portfolioManager?.aiRecommendedTradeAmount ||
-        
+
         liveStarterCandidate.decision?.starterAmount ||
         liveStarterCandidate.decision?.plannedFullTradeAmount ||
 
