@@ -44165,15 +44165,35 @@ app.get("/live-movers", (req, res) => {
       const merged = mergeLiveQuoteIntoSignal(rawSignal);
       const liveQuote = findLiveQuote(symbol) || {};
 
-      const livePrice = Number(
-        liveQuote.price ||
-        liveQuote.livePrice ||
-        merged.livePrice ||
-        merged.currentPrice ||
-        merged.price ||
-        merged.current ||
-        0
-      );
+const livePrice = Number(
+  liveQuote.lastTradePrice ||
+    liveQuote.tradePrice ||
+    liveQuote.lastPrice ||
+    liveQuote.markPrice ||
+    liveQuote.midPrice ||
+    liveQuote.price ||
+    liveQuote.livePrice ||
+
+    merged.lastTradePrice ||
+    merged.tradePrice ||
+    merged.lastPrice ||
+    merged.markPrice ||
+    merged.midPrice ||
+    merged.livePrice ||
+    merged.currentPrice ||
+
+    (
+      Number(merged.price || 0) > 0 &&
+      Number(merged.price || 0) !== Number(merged.high || 0)
+        ? merged.price
+        : 0
+    ) ||
+
+    merged.current ||
+    merged.close ||
+    merged.c ||
+    0
+);
 
       if (!Number.isFinite(livePrice) || livePrice <= 0) continue;
 
@@ -44209,6 +44229,54 @@ app.get("/live-movers", (req, res) => {
 
       const current = map.get(symbol);
 
+      const isCrypto = isCryptoSymbol(symbol);
+
+      const cryptoMemory =
+        engineState.cryptoInstitutionalMemory?.[symbol] ||
+        engineState.cryptoInstitutionalMemory?.[symbol.replace("/", "")] ||
+        engineState.cryptoInstitutionalMemory?.[symbol.replace("-USD", "USD")] ||
+        {};
+
+      const cryptoScoreCandidates = [
+        merged.score,
+        merged.institutionalScore,
+        merged.aiConfidence,
+        merged.autonomousConfidenceScore,
+        merged.quickInstitutionalScore,
+        merged.executionConfidence,
+        merged.cryptoInstitutionalScore,
+        merged.cryptoLiquidityScore,
+        merged.cryptoMomentumScore,
+        merged.phase42CryptoInstitutional?.cryptoInstitutionalScore,
+        merged.cryptoInstitutionalQualification?.cryptoInstitutionalScore,
+        merged.cryptoInstitutionalQualification?.score,
+        merged.cryptoInstitutionalQualification?.volumeConfidenceScore,
+        cryptoMemory.cryptoInstitutionalScore,
+        cryptoMemory.cryptoLiquidityScore,
+        cryptoMemory.cryptoMomentumScore,
+      ]
+        .map((value) => Number(value))
+        .filter((value) => Number.isFinite(value) && value > 0);
+
+      const displayScore = isCrypto
+        ? Math.max(...cryptoScoreCandidates, Number(merged.score || 0))
+        : Number(merged.score || 0);
+
+      const displayQuickInstitutionalScore = isCrypto
+        ? Math.max(
+          displayScore,
+          Number(merged.quickInstitutionalScore || 0),
+          Number(merged.institutionalScore || 0),
+          Number(merged.phase42CryptoInstitutional?.cryptoInstitutionalScore || 0),
+          Number(cryptoMemory.cryptoInstitutionalScore || 0)
+        )
+        : Number(
+          merged.quickInstitutionalScore ||
+          merged.institutionalScore ||
+          merged.score ||
+          0
+        );
+
       const next = {
         symbol,
         assetClass:
@@ -44235,20 +44303,25 @@ app.get("/live-movers", (req, res) => {
           liveQuote.spreadPercent || merged.spreadPercent || 0
         ),
 
-liveQuoteUpdatedAt: new Date().toISOString(),
+        liveQuoteUpdatedAt: new Date().toISOString(),
 
         liveQuoteSource:
           liveQuote.liveQuoteSource ||
           liveQuote.source ||
           liveQuote.dataSource ||
           merged.liveQuoteSource ||
+
           merged.source ||
           merged.dataSource ||
           "live_movers",
 
         priceIsLive: true,
 
-        score: Number(merged.score || 0),
+        score: displayScore,
+        institutionalScore: displayScore,
+        aiConfidence: displayScore,
+        autonomousConfidenceScore: displayScore,
+        cryptoInstitutionalScore: displayScore,
         runnerScore: Number(
           merged.runnerScore ||
           merged.fastRunnerScore ||
@@ -44256,12 +44329,7 @@ liveQuoteUpdatedAt: new Date().toISOString(),
           0
         ),
 
-        quickInstitutionalScore: Number(
-          merged.quickInstitutionalScore ||
-          merged.institutionalScore ||
-          merged.score ||
-          0
-        ),
+        quickInstitutionalScore: displayQuickInstitutionalScore,
 
         tapeSpeedScore: Number(
           merged.tapeSpeedScore ||
