@@ -44165,35 +44165,35 @@ app.get("/live-movers", (req, res) => {
       const merged = mergeLiveQuoteIntoSignal(rawSignal);
       const liveQuote = findLiveQuote(symbol) || {};
 
-const livePrice = Number(
-  liveQuote.lastTradePrice ||
-    liveQuote.tradePrice ||
-    liveQuote.lastPrice ||
-    liveQuote.markPrice ||
-    liveQuote.midPrice ||
-    liveQuote.price ||
-    liveQuote.livePrice ||
+      const livePrice = Number(
+        liveQuote.lastTradePrice ||
+        liveQuote.tradePrice ||
+        liveQuote.lastPrice ||
+        liveQuote.markPrice ||
+        liveQuote.midPrice ||
+        liveQuote.price ||
+        liveQuote.livePrice ||
 
-    merged.lastTradePrice ||
-    merged.tradePrice ||
-    merged.lastPrice ||
-    merged.markPrice ||
-    merged.midPrice ||
-    merged.livePrice ||
-    merged.currentPrice ||
+        merged.lastTradePrice ||
+        merged.tradePrice ||
+        merged.lastPrice ||
+        merged.markPrice ||
+        merged.midPrice ||
+        merged.livePrice ||
+        merged.currentPrice ||
 
-    (
-      Number(merged.price || 0) > 0 &&
-      Number(merged.price || 0) !== Number(merged.high || 0)
-        ? merged.price
-        : 0
-    ) ||
+        (
+          Number(merged.price || 0) > 0 &&
+            Number(merged.price || 0) !== Number(merged.high || 0)
+            ? merged.price
+            : 0
+        ) ||
 
-    merged.current ||
-    merged.close ||
-    merged.c ||
-    0
-);
+        merged.current ||
+        merged.close ||
+        merged.c ||
+        0
+      );
 
       if (!Number.isFinite(livePrice) || livePrice <= 0) continue;
 
@@ -44362,8 +44362,27 @@ const livePrice = Number(
 
         recommendedTradeAmount: Number(
           merged.recommendedTradeAmount ||
+          merged.recommendedSize ||
+          merged.tradeAmount ||
+          merged.positionSize ||
+          merged.dollarAmount ||
+          merged.notional ||
           merged.positionSizing?.recommendedTradeAmount ||
+          merged.positionSizing?.recommendedSize ||
+          merged.positionSizing?.dollarAmount ||
+          merged.positionSizing?.notional ||
           merged.portfolioManager?.recommendedTradeAmount ||
+          merged.portfolioManager?.recommendedSize ||
+          merged.portfolioManager?.aiRecommendedTradeAmount ||
+          merged.liveStarterBuyGate?.recommendedTradeAmount ||
+          merged.liveStarterBuyGate?.starterBuyAmount ||
+          0
+        ),
+
+        aiAllocationPercentOfBotBudget: Number(
+          merged.aiAllocationPercentOfBotBudget ||
+          merged.positionSizing?.aiAllocationPercentOfBotBudget ||
+          merged.portfolioManager?.aiAllocationPercentOfBotBudget ||
           0
         ),
 
