@@ -44124,6 +44124,229 @@ app.get("/live-quotes", (req, res) => {
   }
 });
 
+app.get("/live-movers", (req, res) => {
+  try {
+    const limit = Math.min(
+      100,
+      Math.max(10, Number(req.query.limit || 50))
+    );
+
+    const toArray = (value) => (Array.isArray(value) ? value : []);
+
+    const findLiveQuote = (symbol) => {
+      const clean = normalizeSymbol(symbol);
+      const cache = engineState.liveQuoteCache || {};
+
+      return (
+        cache[clean] ||
+        cache[clean.replace("/", "")] ||
+        cache[clean.replace("-USD", "USD")] ||
+        cache[clean.replace("/USD", "USD")] ||
+        cache[clean.replace("USD", "/USD")] ||
+        null
+      );
+    };
+
+    const sourceSignals = [
+      ...toArray(engineState.topStockSignals),
+      ...toArray(engineState.lastStockSignals),
+      ...toArray(engineState.topCryptoSignals),
+      ...toArray(engineState.lastCryptoSignals),
+      ...toArray(engineState.topSignals),
+      ...toArray(engineState.lastSignals),
+    ];
+
+    const map = new Map();
+
+    for (const rawSignal of sourceSignals) {
+      const symbol = normalizeSymbol(rawSignal?.symbol);
+      if (!symbol) continue;
+
+      const merged = mergeLiveQuoteIntoSignal(rawSignal);
+      const liveQuote = findLiveQuote(symbol) || {};
+
+      const livePrice = Number(
+        liveQuote.price ||
+          liveQuote.livePrice ||
+          merged.livePrice ||
+          merged.currentPrice ||
+          merged.price ||
+          merged.current ||
+          0
+      );
+
+      if (!Number.isFinite(livePrice) || livePrice <= 0) continue;
+
+      const previousClose = Number(
+        liveQuote.previousClose ||
+          liveQuote.prevClose ||
+          merged.previousClose ||
+          merged.prevClose ||
+          merged.pc ||
+          0
+      );
+
+      const open = Number(
+        liveQuote.open ||
+          liveQuote.dayOpen ||
+          merged.open ||
+          merged.dayOpen ||
+          merged.o ||
+          0
+      );
+
+      const changePercent =
+        previousClose > 0
+          ? ((livePrice - previousClose) / previousClose) * 100
+          : Number(
+              merged.dayChangePercent ||
+                merged.percentChange ||
+                merged.changePercent ||
+                liveQuote.percentChange ||
+                liveQuote.livePercentChange ||
+                0
+            );
+
+      const current = map.get(symbol);
+
+      const next = {
+        symbol,
+        assetClass:
+          merged.assetClass ||
+          merged.asset_class ||
+          (isCryptoSymbol(symbol) ? "crypto" : "stock"),
+
+        price: livePrice,
+        livePrice,
+        displayPrice: livePrice,
+        current: livePrice,
+
+        previousClose,
+        open,
+        dayOpen: open,
+
+        changePercent,
+        dayChangePercent: changePercent,
+        percentChange: changePercent,
+
+        bid: Number(liveQuote.bid || merged.bid || 0),
+        ask: Number(liveQuote.ask || merged.ask || 0),
+        spreadPercent: Number(
+          liveQuote.spreadPercent || merged.spreadPercent || 0
+        ),
+
+        liveQuoteUpdatedAt:
+          liveQuote.liveQuoteUpdatedAt ||
+          liveQuote.quoteFetchedAt ||
+          liveQuote.updatedAt ||
+          merged.liveQuoteUpdatedAt ||
+          new Date().toISOString(),
+
+        liveQuoteSource:
+          liveQuote.liveQuoteSource ||
+          liveQuote.source ||
+          merged.liveQuoteSource ||
+          "live_movers",
+
+        priceIsLive: true,
+
+        score: Number(merged.score || 0),
+        runnerScore: Number(
+          merged.runnerScore ||
+            merged.fastRunnerScore ||
+            liveQuote.fastRunnerScore ||
+            0
+        ),
+
+        quickInstitutionalScore: Number(
+          merged.quickInstitutionalScore ||
+            merged.institutionalScore ||
+            merged.score ||
+            0
+        ),
+
+        tapeSpeedScore: Number(
+          merged.tapeSpeedScore ||
+            merged.tapeSpeed ||
+            liveQuote.tapeSpeed ||
+            0
+        ),
+
+        liquidityPressureScore: Number(
+          merged.liquidityPressureScore ||
+            merged.liquidityPressure ||
+            liveQuote.liquidityPressure ||
+            0
+        ),
+
+        qualifiedToBuy: merged.qualifiedToBuy === true,
+        backendApproved:
+          merged.backendApproved === true ||
+          merged.approved === true ||
+          merged.qualifiedToBuy === true ||
+          merged.autoTradeApproved === true,
+
+        approved:
+          merged.approved === true ||
+          merged.backendApproved === true ||
+          merged.qualifiedToBuy === true ||
+          merged.autoTradeApproved === true,
+
+        autoTradeApproved: merged.autoTradeApproved === true,
+
+        recommendedTradeAmount: Number(
+          merged.recommendedTradeAmount ||
+            merged.positionSizing?.recommendedTradeAmount ||
+            merged.portfolioManager?.recommendedTradeAmount ||
+            0
+        ),
+
+        aiPortfolioAction:
+          merged.aiPortfolioAction ||
+          merged.portfolioAction ||
+          merged.portfolioManager?.aiPortfolioAction ||
+          (merged.autoTradeApproved ? "AUTO-TRADE APPROVED" : "Watch Only"),
+
+        portfolioManagerReason:
+          merged.portfolioManagerReason ||
+          merged.reason ||
+          merged.pattern ||
+          merged.tradeQuality ||
+          "Live mover price update",
+      };
+
+      if (!current || Math.abs(next.changePercent) > Math.abs(current.changePercent)) {
+        map.set(symbol, next);
+      }
+    }
+
+    const movers = Array.from(map.values())
+      .sort((a, b) => Math.abs(b.changePercent) - Math.abs(a.changePercent))
+      .slice(0, limit);
+
+    res.json({
+      ok: true,
+      source: "live_movers_lightweight",
+      generatedAt: new Date().toISOString(),
+      count: movers.length,
+      movers,
+      signals: movers,
+      stockSignals: movers.filter((s) => !isCryptoSymbol(s.symbol)),
+      cryptoSignals: movers.filter((s) => isCryptoSymbol(s.symbol)),
+      autoTradingEnabled,
+      mode: TRADING_MODE,
+      effectiveMode: engineState.effectiveMode,
+    });
+  } catch (err) {
+    res.status(500).json({
+      ok: false,
+      error: "Failed to load live movers",
+      details: err.message,
+      generatedAt: new Date().toISOString(),
+    });
+  }
+});
+
 app.get("/deep-intelligence-sync", (req, res) => {
   try {
     res.json({
