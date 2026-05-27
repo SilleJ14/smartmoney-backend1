@@ -44256,6 +44256,12 @@ app.get("/live-movers", (req, res) => {
 
         merged.portfolioManager?.recommendedTradeAmount ||
         merged.portfolioManager?.aiRecommendedTradeAmount ||
+        
+        liveStarterCandidate.decision?.starterAmount ||
+        liveStarterCandidate.decision?.plannedFullTradeAmount ||
+
+        engineState.aiEntryScores?.[symbol]?.starterAmount ||
+        engineState.aiEntryScores?.[symbol]?.plannedFullTradeAmount ||
 
         liveStarterCandidate.recommendedTradeAmount ||
         liveStarterCandidate.rawRecommendedTradeAmount ||
