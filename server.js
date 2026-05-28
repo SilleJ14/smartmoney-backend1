@@ -201,7 +201,7 @@ const FAST_RUNNER_ENGINE_INTERVAL_MS = Number(
   process.env.FAST_RUNNER_ENGINE_INTERVAL_MS || 2000
 );
 const FAST_RUNNER_MIN_SCORE = Number(
-  process.env.FAST_RUNNER_MIN_SCORE || 82
+  process.env.FAST_RUNNER_MIN_SCORE || 88
 );
 
 const FAST_RUNNER_MAX_CANDIDATES = Number(
@@ -7687,14 +7687,18 @@ function applyFastRunnerOverride(signals = []) {
           ? 12
           : 8;
 
-    signal.runnerScore = Math.max(
-      Number(signal.runnerScore || 0),
-      84 + explosiveBoost
+    signal.runnerScore = clampScore(
+      Math.max(
+        Number(signal.runnerScore || 0),
+        84 + explosiveBoost
+      )
     );
 
-    signal.explosiveRunnerScore = Math.max(
-      Number(signal.explosiveRunnerScore || 0),
-      84 + explosiveBoost
+    signal.explosiveRunnerScore = clampScore(
+      Math.max(
+        Number(signal.explosiveRunnerScore || 0),
+        84 + explosiveBoost
+      )
     );
 
     signal.score = clampScore(Number(signal.score || 0) + explosiveBoost);
@@ -35060,6 +35064,39 @@ async function engineTick() {
       topSymbols:
         finalDashboardSignalSync.topSymbols || [],
     });
+
+      signals = signals.map((signal) => ({
+      ...signal,
+      score: clampScore(signal.score),
+      runnerScore: clampScore(signal.runnerScore),
+      explosiveRunnerScore: clampScore(signal.explosiveRunnerScore),
+      fastRunnerScore: clampScore(signal.fastRunnerScore),
+      quickInstitutionalScore: clampScore(signal.quickInstitutionalScore),
+      aiConfidence: clampScore(signal.aiConfidence),
+      autonomousConfidenceScore: clampScore(signal.autonomousConfidenceScore),
+    }));
+
+    stockSignals = stockSignals.map((signal) => ({
+      ...signal,
+      score: clampScore(signal.score),
+      runnerScore: clampScore(signal.runnerScore),
+      explosiveRunnerScore: clampScore(signal.explosiveRunnerScore),
+      fastRunnerScore: clampScore(signal.fastRunnerScore),
+      quickInstitutionalScore: clampScore(signal.quickInstitutionalScore),
+      aiConfidence: clampScore(signal.aiConfidence),
+      autonomousConfidenceScore: clampScore(signal.autonomousConfidenceScore),
+    }));
+
+    cryptoSignals = cryptoSignals.map((signal) => ({
+      ...signal,
+      score: clampScore(signal.score),
+      runnerScore: clampScore(signal.runnerScore),
+      explosiveRunnerScore: clampScore(signal.explosiveRunnerScore),
+      fastRunnerScore: clampScore(signal.fastRunnerScore),
+      quickInstitutionalScore: clampScore(signal.quickInstitutionalScore),
+      aiConfidence: clampScore(signal.aiConfidence),
+      autonomousConfidenceScore: clampScore(signal.autonomousConfidenceScore),
+    }));  
 
     engineState.lastSignals = signals;
 
