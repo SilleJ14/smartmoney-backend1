@@ -175,7 +175,7 @@ const ENABLE_POLYGON_CRYPTO_WEBSOCKET =
   process.env.ENABLE_POLYGON_CRYPTO_WEBSOCKET !== "false";
 
 const POLYGON_LIVE_STREAM_LIMIT = Number(
-  process.env.POLYGON_LIVE_STREAM_LIMIT || 75
+  process.env.POLYGON_LIVE_STREAM_LIMIT || 50
 );
 
 const LIVE_MARKET_MEMORY_MAX_SECOND_CANDLES = Number(
@@ -183,7 +183,7 @@ const LIVE_MARKET_MEMORY_MAX_SECOND_CANDLES = Number(
 );
 
 const LIVE_MARKET_MEMORY_MAX_SYMBOLS = Number(
-  process.env.LIVE_MARKET_MEMORY_MAX_SYMBOLS || 200
+  process.env.LIVE_MARKET_MEMORY_MAX_SYMBOLS || 150
 );
 
 const LIVE_MARKET_MEMORY_MAX_AGE_MINUTES = Number(
@@ -198,7 +198,7 @@ const ENABLE_FAST_RUNNER_ENGINE =
   process.env.ENABLE_FAST_RUNNER_ENGINE !== "false";
 
 const FAST_RUNNER_ENGINE_INTERVAL_MS = Number(
-  process.env.FAST_RUNNER_ENGINE_INTERVAL_MS || 1500
+  process.env.FAST_RUNNER_ENGINE_INTERVAL_MS || 2000
 );
 const FAST_RUNNER_MIN_SCORE = Number(
   process.env.FAST_RUNNER_MIN_SCORE || 82
@@ -238,7 +238,7 @@ const LIVE_STARTER_BUY_PERCENT = Number(
 );
 
 const LIVE_STARTER_MIN_GATE_SCORE = Number(
-  process.env.LIVE_STARTER_MIN_GATE_SCORE || 82
+  process.env.LIVE_STARTER_MIN_GATE_SCORE || 78
 );
 
 const LIVE_STARTER_MAX_BUYS_PER_CYCLE = Number(
@@ -246,11 +246,11 @@ const LIVE_STARTER_MAX_BUYS_PER_CYCLE = Number(
 );
 
 const LIVE_ORDER_MAX_QUOTE_AGE_SECONDS = Number(
-  process.env.LIVE_ORDER_MAX_QUOTE_AGE_SECONDS || 8
+  process.env.LIVE_ORDER_MAX_QUOTE_AGE_SECONDS || 15
 );
 
 const LIVE_ORDER_MAX_SPREAD_PERCENT = Number(
-  process.env.LIVE_ORDER_MAX_SPREAD_PERCENT || 1
+  process.env.LIVE_ORDER_MAX_SPREAD_PERCENT || 2.5
 );
 
 const LIVE_ORDER_REQUIRE_POLYGON_CONNECTED =
@@ -299,7 +299,7 @@ const LIVE_SCALE_IN_MIN_PROFIT_PERCENT = Number(
 );
 
 const LIVE_SCALE_IN_MIN_FAST_SCORE = Number(
-  process.env.LIVE_SCALE_IN_MIN_FAST_SCORE || 80
+  process.env.LIVE_SCALE_IN_MIN_FAST_SCORE || 76
 );
 
 const LIVE_SCALE_IN_PERCENT_OF_PLAN = Number(
@@ -7504,14 +7504,54 @@ function calculateExplosiveRunnerPrediction(signal = {}) {
     0
   );
 
+  const confirmations = signal.confirmations || {};
+
+  const livePercentChange = Number(
+    signal.percentChange ||
+    signal.changePercent ||
+    signal.liveMomentumPercent ||
+    0
+  );
+
+  const liveVolumeRatio = Number(
+    confirmations.volumeSpikeRatio ||
+    signal.volumeSpikeRatio ||
+    signal.relativeVolume ||
+    signal.volumeRatio ||
+    0
+  );
+
+  const liveCloseNearHighPercent = Number(
+    confirmations.closeNearHighPercent ||
+    signal.closeNearHighPercent ||
+    0
+  );
+
+  const livePullbackFromHighPercent = Number(
+    confirmations.pullbackFromHighPercent ||
+    signal.pullbackFromHighPercent ||
+    0
+  );
+
+  const liveAccelerationScore = clampScore(
+    (livePercentChange >= 5 ? 18 : 0) +
+    (livePercentChange >= 10 ? 14 : 0) +
+    (liveVolumeRatio >= 2 ? 16 : 0) +
+    (liveVolumeRatio >= 4 ? 14 : 0) +
+    (liveCloseNearHighPercent >= 80 ? 14 : 0) +
+    (liveCloseNearHighPercent >= 90 ? 10 : 0) -
+    (livePullbackFromHighPercent >= 8 ? 18 : 0)
+  );
+
   const explosiveRunnerScore = clampScore(
-    accumulation.accumulationScore * 0.22 +
-    compression.compressionScore * 0.18 +
-    catalyst.catalystScore * 0.18 +
-    floatRotation.squeezeProbability * 0.16 +
-    premarket.openingDriveProbability * 0.14 +
-    technicalScore * 0.07 +
-    statisticalScore * 0.05
+    liveAccelerationScore * 0.34 +
+    accumulation.accumulationScore * 0.16 +
+    compression.compressionScore * 0.12 +
+    catalyst.catalystScore * 0.14 +
+    floatRotation.squeezeProbability * 0.1 +
+    premarket.openingDriveProbability * 0.08 +
+    technicalScore * 0.04 +
+    statisticalScore * 0.02
   );
 
   const runnerLabel =
@@ -7640,13 +7680,24 @@ function applyFastRunnerOverride(signals = []) {
     signal.fastRunnerOverride = true;
     signal.earlyRunner = true;
     signal.explosiveRunnerLabel = "FAST_RUNNER_OVERRIDE";
-    signal.runnerScore = Math.max(Number(signal.runnerScore || 0), 78);
-    signal.explosiveRunnerScore = Math.max(
-      Number(signal.explosiveRunnerScore || 0),
-      78
+    const explosiveBoost =
+      percentChange >= 12 && volumeRatio >= 3 && closeNearHighPercent >= 85
+        ? 18
+        : percentChange >= 8 && volumeRatio >= 2 && closeNearHighPercent >= 80
+          ? 12
+          : 8;
+
+    signal.runnerScore = Math.max(
+      Number(signal.runnerScore || 0),
+      84 + explosiveBoost
     );
 
-    signal.score = clampScore(Number(signal.score || 0) + 5);
+    signal.explosiveRunnerScore = Math.max(
+      Number(signal.explosiveRunnerScore || 0),
+      84 + explosiveBoost
+    );
+
+    signal.score = clampScore(Number(signal.score || 0) + explosiveBoost);
     signal.fastRunnerReason =
       `FAST_RUNNER_OVERRIDE • Move ${percentChange.toFixed(2)}% • RVOL ${volumeRatio.toFixed(2)}x • Near high ${closeNearHighPercent.toFixed(1)}%`;
   }
@@ -13023,10 +13074,10 @@ function calculateFinalPositionSizingReconciliation({
   const signalQuoteMs = signal.liveQuoteUpdatedAt
     ? new Date(signal.liveQuoteUpdatedAt).getTime()
     : signal.quoteFetchedAt
-    ? new Date(signal.quoteFetchedAt).getTime()
-    : signal.updatedAt
-    ? new Date(signal.updatedAt).getTime()
-    : 0;
+      ? new Date(signal.quoteFetchedAt).getTime()
+      : signal.updatedAt
+        ? new Date(signal.updatedAt).getTime()
+        : 0;
 
   const signalQuoteAgeSeconds =
     signalQuoteMs > 0 ? (Date.now() - signalQuoteMs) / 1000 : 999999;
@@ -13034,9 +13085,9 @@ function calculateFinalPositionSizingReconciliation({
   const signalSourceLooksLive =
     String(
       signal.liveQuoteSource ||
-        signal.dataSource ||
-        signal.source ||
-        ""
+      signal.dataSource ||
+      signal.source ||
+      ""
     )
       .toLowerCase()
       .includes("live");
@@ -22258,6 +22309,8 @@ function calculateCryptoInstitutionalQualification({
   return {
     qualifiedToBuy,
     cryptoInstitutionalQualification: {
+      passed: qualifiedToBuy,
+      approved: qualifiedToBuy,
       dataPass,
       momentumPass,
       liquidityPass,
@@ -40603,7 +40656,16 @@ function calculateFastRunnerScoreFromMemory(memory = {}) {
   const momentumScore = clampLiveScore(momentum10 * 12 + momentum30 * 6 + 50);
   const volumeScore = clampLiveScore(volumeSpikeRatio * 35 + 45);
   const closeNearHighScore = clampLiveScore(closeNearHighPercent);
-  const tapeSpeedScore = clampLiveScore(tapeSpeed * 8);
+  const tapeAccelerationScore = clampLiveScore(
+    tapeSpeed * 14 +
+    (volumeSpikeRatio >= 2 ? 12 : 0) +
+    (volumeSpikeRatio >= 4 ? 18 : 0) +
+    (momentum10 > 0 ? 10 : 0) +
+    (momentum10 >= 0.4 ? 18 : 0) +
+    (closeNearHighPercent >= 80 ? 12 : 0)
+  );
+
+  const tapeSpeedScore = tapeAccelerationScore;
   const fakeBreakoutRisk =
     momentum10 > 0.35 && closeNearHighPercent < 35
       ? 25
@@ -40612,11 +40674,11 @@ function calculateFastRunnerScoreFromMemory(memory = {}) {
         : 0;
 
   const fastRunnerScore = clampLiveScore(
-    momentumScore * 0.3 +
-    volumeScore * 0.25 +
-    liquidityScore * 0.2 +
-    closeNearHighScore * 0.15 +
-    tapeSpeedScore * 0.1 -
+    momentumScore * 0.28 +
+    volumeScore * 0.24 +
+    tapeSpeedScore * 0.24 +
+    closeNearHighScore * 0.16 +
+    liquidityScore * 0.08 -
     fakeBreakoutRisk
   );
 
@@ -40625,6 +40687,8 @@ function calculateFastRunnerScoreFromMemory(memory = {}) {
     momentum10: Number(momentum10.toFixed(4)),
     momentum30: Number(momentum30.toFixed(4)),
     volumeSpikeRatio: Number(volumeSpikeRatio.toFixed(4)),
+    tapeAccelerationScore: Number(tapeAccelerationScore.toFixed(2)),
+    tapeSpeedScore: Number(tapeSpeedScore.toFixed(2)),
     closeNearHighPercent: Number(closeNearHighPercent.toFixed(2)),
     liquidityScore,
     tapeSpeed,
@@ -41406,11 +41470,16 @@ function buildFastRunnerCandidateFromMemory(symbol, memory = {}) {
     volumeSpikeRatio,
   });
 
+  const runnerSpreadLimit =
+    volumeSpikeRatio >= 3 || tapeSpeed > 0
+      ? QUICK_GATE_MAX_SPREAD_PERCENT * 1.75
+      : QUICK_GATE_MAX_SPREAD_PERCENT;
+
   const qualifiedFastRunner =
     fastScore >= minFastScoreForRunnerAsset &&
-    spreadPercent <= QUICK_GATE_MAX_SPREAD_PERCENT &&
+    spreadPercent <= runnerSpreadLimit &&
     momentum > 0 &&
-    fakeBreakoutRisk < 25;
+    fakeBreakoutRisk < 35;
 
   return {
     symbol: cleanSymbol,
