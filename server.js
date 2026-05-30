@@ -4461,10 +4461,20 @@ function buildLiveQuotesPayload(symbols = []) {
         volume: Number(quote?.volume || memory.lastVolume || 0),
         change: Number(quote?.change || 0),
         percentChange: Number(
-          quote?.percentChange ||
-          quote?.liveMoveFromPreviousPercent ||
+          quote?.displayPercent ??
+          quote?.todayPercent ??
+          quote?.livePercentChange ??
+          quote?.percentChange ??
           0
         ),
+        todayPercent: Number(quote?.todayPercent || memory.todayPercent || 0),
+        afterhoursPercent: Number(quote?.afterhoursPercent || memory.afterhoursPercent || 0),
+        intradayPercent: Number(quote?.intradayPercent || memory.intradayPercent || 0),
+        displayPercent: Number(quote?.displayPercent || memory.displayPercent || 0),
+        displayPercentLabel:
+          quote?.displayPercentLabel ||
+          memory.displayPercentLabel ||
+          "Today",
         source: quote?.source || "live_cache",
         livePrice: Number(quote?.price || quote?.current || 0),
         displayPrice: Number(quote?.price || quote?.current || 0),
@@ -40300,7 +40310,7 @@ function mergeLiveQuoteIntoSignal(signal = {}) {
   const symbol = normalizeSymbol(signal.symbol);
   const liveQuote = engineState.liveQuoteCache?.[symbol];
 
-  if (!symbol || !liveQuote?.price) {
+  if (!symbol || !liveQuote?.price || !isFreshLiveQuote(liveQuote)) {
     return signal;
   }
 
@@ -40395,6 +40405,32 @@ function buildLiveSignalPushPayload() {
   };
 }
 
+function isFreshLiveQuote(quote = {}) {
+  const updatedAt =
+    quote.liveQuoteUpdatedAt ||
+    quote.quoteFetchedAt ||
+    quote.updatedAt ||
+    quote.timestamp ||
+    null;
+
+  if (!updatedAt) return false;
+
+  const ageSeconds = Math.max(
+    0,
+    Math.round((Date.now() - new Date(updatedAt).getTime()) / 1000)
+  );
+
+  const source =
+    quote.liveQuoteSource ||
+    quote.source ||
+    "";
+
+  return (
+    ageSeconds <= LIVE_ORDER_MAX_QUOTE_AGE_SECONDS &&
+    isLiveQuoteSource(source)
+  );
+}
+
 function getAuthoritativeLiveQuote(symbol) {
   const cleanSymbol = normalizeSymbol(symbol);
   const cached = engineState.liveQuoteCache?.[cleanSymbol] || null;
@@ -40404,6 +40440,12 @@ function getAuthoritativeLiveQuote(symbol) {
   const price = Number(cached.price || cached.current || 0);
   if (!price || price <= 0) return null;
 
+  const fresh = isFreshLiveQuote(cached);
+
+  if (!fresh) {
+    return null;
+  }
+
   return {
     ...cached,
     symbol: cleanSymbol,
@@ -40411,9 +40453,9 @@ function getAuthoritativeLiveQuote(symbol) {
     price,
     source: cached.liveQuoteSource || cached.source || "live_cache",
     liveQuoteSource: cached.liveQuoteSource || cached.source || "live_cache",
-    priceIsLive: cached.priceIsLive === true,
-    priceStale: cached.priceIsLive !== true,
-    quoteAuthorityRank: cached.priceIsLive === true ? 1 : 2,
+    priceIsLive: true,
+    priceStale: false,
+    quoteAuthorityRank: 1,
   };
 }
 
@@ -40483,7 +40525,6 @@ function updateLiveQuoteCache(symbol, quote = {}) {
       quote.previousClose ||
       quote.pc ||
       quote.regularMarketPreviousClose ||
-      previous.previousClose ||
       0,
     dayOpen:
       quote.dayOpen ||
@@ -40536,10 +40577,18 @@ function updateLiveQuoteCache(symbol, quote = {}) {
     liveMoveFromPreviousPercent,
     previousClose: liveMemory.previousClose || null,
     dayOpen: liveMemory.dayOpen || null,
-    percentChange: liveMemory.livePercentChange || 0,
-    livePercentChange: liveMemory.livePercentChange || 0,
+    percentChange:
+      liveMemory.previousClose > 0 ? liveMemory.livePercentChange : 0,
+    livePercentChange:
+      liveMemory.previousClose > 0 ? liveMemory.livePercentChange : 0,
     premarketPercent: liveMemory.premarketPercent || 0,
     intradayPercent: liveMemory.intradayPercent || 0,
+     todayPercent: liveMemory.todayPercent || liveMemory.livePercentChange || 0,
+    afterhoursPercent: liveMemory.afterhoursPercent || 0,
+    displayPercent: liveMemory.displayPercent || liveMemory.livePercentChange || 0,
+    displayPercentLabel: liveMemory.displayPercentLabel || "Today",
+    regularClose: liveMemory.regularClose || null,
+    session: liveMemory.session || null,   
     fastRunnerScore: liveMemory.fastRunnerScore,
     liveMomentumPercent: liveMemory.liveMomentumPercent,
     tapeSpeed: liveMemory.tapeSpeed,
@@ -40733,6 +40782,54 @@ function calculateFastRunnerScoreFromMemory(memory = {}) {
   };
 }
 
+function buildRobinhoodStylePercentFields({
+  price = 0,
+  previousClose = 0,
+  dayOpen = 0,
+  regularClose = 0,
+  session = "closed",
+}) {
+  const cleanPrice = Number(price || 0);
+  const cleanPreviousClose = Number(previousClose || 0);
+  const cleanDayOpen = Number(dayOpen || 0);
+  const cleanRegularClose = Number(regularClose || 0);
+
+  const todayPercent =
+    cleanPrice > 0 && cleanPreviousClose > 0
+      ? Number((((cleanPrice - cleanPreviousClose) / cleanPreviousClose) * 100).toFixed(4))
+      : 0;
+
+  const intradayPercent =
+    cleanPrice > 0 && cleanDayOpen > 0
+      ? Number((((cleanPrice - cleanDayOpen) / cleanDayOpen) * 100).toFixed(4))
+      : todayPercent;
+
+  const afterhoursPercent =
+    cleanPrice > 0 && cleanRegularClose > 0
+      ? Number((((cleanPrice - cleanRegularClose) / cleanRegularClose) * 100).toFixed(4))
+      : 0;
+
+  const displayPercent =
+    session === "afterhours"
+      ? afterhoursPercent
+      : todayPercent;
+
+  const displayPercentLabel =
+    session === "premarket"
+      ? "Pre-market"
+      : session === "afterhours"
+        ? "After-hours"
+        : "Today";
+
+  return {
+    todayPercent,
+    intradayPercent,
+    afterhoursPercent,
+    displayPercent,
+    displayPercentLabel,
+  };
+}
+
 function updateLiveMarketMemory(symbol, tick = {}) {
   const cleanSymbol = normalizeSymbol(symbol);
   const price = Number(tick.price || 0);
@@ -40756,13 +40853,15 @@ function updateLiveMarketMemory(symbol, tick = {}) {
 
   const now = Date.now();
   const previousPrice = Number(previous.price || 0);
-  const previousClose = Number(
+  const incomingPreviousClose = Number(
     tick.previousClose ||
     tick.pc ||
     tick.regularMarketPreviousClose ||
-    previous.previousClose ||
     0
   );
+
+  const previousClose =
+    incomingPreviousClose > 0 ? incomingPreviousClose : 0;
 
   const dayOpen = Number(
     tick.dayOpen ||
@@ -40779,19 +40878,33 @@ function updateLiveMarketMemory(symbol, tick = {}) {
     0
   );
 
+    const session = getMarketSession({
+    is_open: Boolean(engineState.marketOpen),
+  });
+
+  const regularClose = Number(
+    tick.regularClose ||
+    tick.close ||
+    tick.c ||
+    previous.regularClose ||
+    previousClose ||
+    0
+  );
+
+  const robinhoodPercent = buildRobinhoodStylePercentFields({
+    price,
+    previousClose,
+    dayOpen,
+    regularClose,
+    session,
+  });
+
   const livePercentChange =
-    previousClose > 0
-      ? Number((((price - previousClose) / previousClose) * 100).toFixed(4))
-      : Number.isFinite(fallbackPercent)
-        ? fallbackPercent
-        : 0;
+    robinhoodPercent.todayPercent || Number(fallbackPercent || 0);
 
-  const premarketPercent = livePercentChange;
+  const premarketPercent = robinhoodPercent.todayPercent;
 
-  const intradayPercent =
-    dayOpen > 0
-      ? Number((((price - dayOpen) / dayOpen) * 100).toFixed(4))
-      : 0;
+  const intradayPercent = robinhoodPercent.intradayPercent;
 
   const bid = Number(tick.bid || previous.bid || 0);
   const ask = Number(tick.ask || previous.ask || 0);
@@ -40831,6 +40944,12 @@ function updateLiveMarketMemory(symbol, tick = {}) {
     livePercentChange,
     premarketPercent,
     intradayPercent,
+    todayPercent: robinhoodPercent.todayPercent,
+    afterhoursPercent: robinhoodPercent.afterhoursPercent,
+    displayPercent: robinhoodPercent.displayPercent,
+    displayPercentLabel: robinhoodPercent.displayPercentLabel,
+    regularClose,
+    session,    
     previousPrice: previousPrice || null,
     bid,
     ask,
