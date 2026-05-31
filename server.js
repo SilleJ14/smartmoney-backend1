@@ -1627,6 +1627,10 @@ const CONFIG = {
     process.env.CRYPTO_MAX_EXPOSURE_SHARE_OF_BOT_EXPOSURE || 30
   ),
 
+  minCryptoTradeAmount: Number(
+    process.env.MIN_CRYPTO_TRADE_AMOUNT || 25
+  ),  
+
   maxBotExposurePercent: Number(
     process.env.MAX_BOT_EXPOSURE_PERCENT || 80
   ),
@@ -32704,9 +32708,10 @@ function calculateAdaptiveCryptoPositionSize(signal = {}, account = {}) {
         : 0.5;
 
   const volatilityMultiplier =
-    percentChange >= 12 ? 0.35 :
-      percentChange >= 8 ? 0.5 :
-        percentChange >= 5 ? 0.75 : 1;
+    percentChange >= 20 ? 0.85 :
+      percentChange >= 12 ? 1.15 :
+        percentChange >= 8 ? 1 :
+          percentChange >= 5 ? 0.9 : 1;
 
   const macroMultiplier =
     engineState.macroRiskState?.shouldBlockNewTrades
@@ -32720,10 +32725,19 @@ function calculateAdaptiveCryptoPositionSize(signal = {}, account = {}) {
     volatilityMultiplier *
     macroMultiplier;
 
-  const recommendedAmount = Math.max(
-    0,
-    Math.min(rawRecommendedAmount, availableCryptoBuyingPower)
+  const minCryptoTradeAmount = Number(
+    CONFIG.minCryptoTradeAmount || CONFIG.minAutonomousTradeAmount || 25
   );
+
+  const cappedRecommendedAmount = Math.min(
+    rawRecommendedAmount,
+    availableCryptoBuyingPower
+  );
+
+  const recommendedAmount =
+    cappedRecommendedAmount > 0 && cappedRecommendedAmount < minCryptoTradeAmount
+      ? minCryptoTradeAmount
+      : cappedRecommendedAmount;
 
   return {
     recommendedAmount: Number(recommendedAmount.toFixed(2)),
@@ -33048,12 +33062,16 @@ async function autoBuyCryptoSignals(signals) {
         ).toFixed(2)
       );
 
-      if (finalTradeAmount > 0 && finalTradeAmount < 25) {
+      const minCryptoTradeAmount = Number(
+        CONFIG.minCryptoTradeAmount || CONFIG.minAutonomousTradeAmount || 25
+      );
+
+      if (finalTradeAmount > 0 && finalTradeAmount < minCryptoTradeAmount) {
         finalTradeAmount =
-          availableCryptoBuyingPower >= 25 &&
-          remainingCryptoBudget >= 25 &&
-          remainingTotalBotBudget >= 25
-            ? 25
+          availableCryptoBuyingPower >= minCryptoTradeAmount &&
+          remainingCryptoBudget >= minCryptoTradeAmount &&
+          remainingTotalBotBudget >= minCryptoTradeAmount
+            ? minCryptoTradeAmount
             : 0;
       }
 
