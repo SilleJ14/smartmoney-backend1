@@ -268,7 +268,7 @@ const FAST_RUNNER_ENGINE_INTERVAL_MS = Number(
   process.env.FAST_RUNNER_ENGINE_INTERVAL_MS || 2000
 );
 const FAST_RUNNER_MIN_SCORE = Number(
-  process.env.FAST_RUNNER_MIN_SCORE || 88
+  process.env.FAST_RUNNER_MIN_SCORE || 78
 );
 
 const FAST_RUNNER_MAX_CANDIDATES = Number(
