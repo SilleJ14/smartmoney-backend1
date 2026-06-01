@@ -32969,11 +32969,15 @@ async function autoBuyCryptoSignals(signals) {
         );
 
       crypto.adaptiveCryptoSizing = adaptiveCryptoSizing;
-      crypto.positionSizing = adaptiveCryptoSizing;
-      crypto.recommendedTradeAmount = adaptiveCryptoSizing.recommendedAmount;
-      crypto.rawRecommendedTradeAmount = adaptiveCryptoSizing.recommendedAmount;
-      crypto.displayTradeAmount = adaptiveCryptoSizing.recommendedAmount;
-      
+      crypto.cryptoPositionSizing = adaptiveCryptoSizing;
+      crypto.positionSizing = {
+        ...adaptiveCryptoSizing,
+        recommendedTradeAmount: Number(adaptiveCryptoSizing.recommendedAmount || 0),
+        recommendedSize: Number(adaptiveCryptoSizing.recommendedAmount || 0),
+      };
+      crypto.recommendedTradeAmount = Number(adaptiveCryptoSizing.recommendedAmount || 0);
+      crypto.rawRecommendedTradeAmount = Number(adaptiveCryptoSizing.recommendedAmount || 0);
+      crypto.displayTradeAmount = Number(adaptiveCryptoSizing.recommendedAmount || 0);
       const cryptoConvictionMultiplier =
         cryptoInstitutionalScore >= 88 &&
           cryptoTechnicalScore >= 82 &&
@@ -33081,6 +33085,24 @@ async function autoBuyCryptoSignals(signals) {
             : 0;
       }
 
+      crypto.finalApprovedTradeAmount = Number(finalTradeAmount || 0);
+      crypto.finalTradeAmount = Number(finalTradeAmount || 0);
+      crypto.displayTradeAmount = Number(finalTradeAmount || crypto.displayTradeAmount || 0);
+      crypto.recommendedTradeAmount = Number(finalTradeAmount || crypto.recommendedTradeAmount || 0);
+      crypto.rawRecommendedTradeAmount = Number(rawFinalTradeAmount || crypto.rawRecommendedTradeAmount || 0);
+      crypto.finalSizingReconciliation = {
+        rawFinalTradeAmount,
+        finalTradeAmount,
+        adaptiveRecommendedAmount: adaptiveCryptoSizing.recommendedAmount,
+        cryptoConvictionMultiplier,
+        finalMasterCryptoSizingMultiplier,
+        parliamentMultiplier: Number(cryptoParliamentGate.multiplier || 1),
+        availableCryptoBuyingPower,
+        remainingCryptoBudget,
+        remainingTotalBotBudget,
+        minCryptoTradeAmount,
+      };
+
       if (!finalTradeAmount || finalTradeAmount <= 0) {
         saveRecentOrder(
           "AUTO_CRYPTO_BUY_SKIPPED_SIZE_ZERO",
@@ -33088,6 +33110,7 @@ async function autoBuyCryptoSignals(signals) {
           {
             score: crypto.score,
             adaptiveCryptoSizing,
+            finalSizingReconciliation: crypto.finalSizingReconciliation,
           }
         );
 
