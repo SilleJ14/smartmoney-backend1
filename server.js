@@ -43683,6 +43683,44 @@ function runQuickInstitutionalGate() {
   return engineState.quickInstitutionalGateState;
 }
 
+function isSoftMasterBlockRestorable(candidate = {}) {
+  const master = candidate.finalMasterDecisionProfile || {};
+  const sizing = candidate.finalSizingReconciliation || {};
+  const penalty = candidate.penaltyCompression || {};
+
+  const masterBlocked =
+    candidate.masterExecutionDecision === "BLOCK_EXECUTION" ||
+    master.executionDecision === "BLOCK_EXECUTION" ||
+    candidate.centralAutonomousAction === "BLOCK" ||
+    master.action === "BLOCK";
+
+  const hardBlocked =
+    candidate.centralCoreHardBlock === true ||
+    master.hardBlock === true ||
+    sizing.finalBlocked === true ||
+    candidate.finalBlocked === true;
+
+  const finalAmount = Number(
+    candidate.finalApprovedTradeAmount ||
+    candidate.displayTradeAmount ||
+    sizing.finalTradeAmount ||
+    0
+  );
+
+  const approvalProtected =
+    candidate.finalApprovalProtection?.protected === true ||
+    penalty.shouldRestoreApproval === true ||
+    candidate.eliteHeatOverride === true ||
+    candidate.tacticalEliteRunnerOverride === true;
+
+  return (
+    masterBlocked &&
+    !hardBlocked &&
+    finalAmount >= Number(CONFIG.minAutonomousTradeAmount || 25) &&
+    approvalProtected
+  );
+}
+
 function buildLiveStarterBuyDecision(candidate = {}, account = {}, openBotPositions = []) {
   const symbol = normalizeSymbol(candidate.symbol);
   const price = Number(candidate.price || candidate.current || 0);
@@ -43734,20 +43772,30 @@ function buildLiveStarterBuyDecision(candidate = {}, account = {}, openBotPositi
       assetMaxBotBudget - assetExposure
     )
   );
+  const backendApprovedTradeAmount = Number(
+    candidate.finalApprovedTradeAmount ||
+    candidate.displayTradeAmount ||
+    candidate.finalSizingReconciliation?.finalTradeAmount ||
+    candidate.recommendedTradeAmount ||
+    0
+  );
+
   const plannedFullTradeAmount =
-    typeof getDynamicTradeAmount === "function"
-      ? Number(
-        getDynamicTradeAmount(
-          account,
-          openBotPositions,
-          finalLiveScore
-        ) || 0
-      )
-      : Math.min(
-        remainingBudget,
-        cash,
-        equity * 0.02
-      );
+    backendApprovedTradeAmount > 0
+      ? backendApprovedTradeAmount
+      : typeof getDynamicTradeAmount === "function"
+        ? Number(
+          getDynamicTradeAmount(
+            account,
+            openBotPositions,
+            finalLiveScore
+          ) || 0
+        )
+        : Math.min(
+          remainingBudget,
+          cash,
+          equity * 0.02
+        );
 
   const starterPercent = Math.max(
     1,
@@ -43775,7 +43823,28 @@ function buildLiveStarterBuyDecision(candidate = {}, account = {}, openBotPositi
 
   const blockReasons = [];
 
+  const softMasterBlockRestored = isSoftMasterBlockRestorable(candidate);
+
+  if (
+    (
+      candidate.masterExecutionDecision === "BLOCK_EXECUTION" ||
+      candidate.finalMasterDecisionProfile?.executionDecision === "BLOCK_EXECUTION" ||
+      candidate.centralAutonomousAction === "BLOCK" ||
+      candidate.finalMasterDecisionProfile?.action === "BLOCK"
+    ) &&
+    !softMasterBlockRestored
+  ) {
+    blockReasons.push(
+      candidate.centralCoreHardBlock === true ||
+      candidate.finalMasterDecisionProfile?.hardBlock === true
+        ? "Master hard block active"
+        : "Master execution block active"
+    );
+  }  
+
+
   const liveSafety = checkLiveOrderSafety(symbol, "BUY");
+
 
   if (!liveSafety.approved) {
     blockReasons.push(...liveSafety.blockReasons);
@@ -43878,6 +43947,15 @@ function buildLiveStarterBuyDecision(candidate = {}, account = {}, openBotPositi
     remainingBudget: Number(remainingBudget.toFixed(2)),
     openTradeCount,
     liveSafety,
+      softMasterBlockRestored,
+    masterExecutionDecision:
+      candidate.masterExecutionDecision ||
+      candidate.finalMasterDecisionProfile?.executionDecision ||
+      null,
+    centralAutonomousAction:
+      candidate.centralAutonomousAction ||
+      candidate.finalMasterDecisionProfile?.action ||
+      null,  
     earlyMover:
       (engineState.liveEarlyMoverSymbols || [])
         .includes(symbol),
