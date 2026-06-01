@@ -32968,6 +32968,12 @@ async function autoBuyCryptoSignals(signals) {
           account
         );
 
+      crypto.adaptiveCryptoSizing = adaptiveCryptoSizing;
+      crypto.positionSizing = adaptiveCryptoSizing;
+      crypto.recommendedTradeAmount = adaptiveCryptoSizing.recommendedAmount;
+      crypto.rawRecommendedTradeAmount = adaptiveCryptoSizing.recommendedAmount;
+      crypto.displayTradeAmount = adaptiveCryptoSizing.recommendedAmount;
+      
       const cryptoConvictionMultiplier =
         cryptoInstitutionalScore >= 88 &&
           cryptoTechnicalScore >= 82 &&
