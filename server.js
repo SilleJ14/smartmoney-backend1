@@ -18,15 +18,81 @@ console.log("ENV CHECK:", {
 });
 
 const app = express();
-app.use(cors());
+
+const ALLOWED_CORS_ORIGINS = String(
+  process.env.ALLOWED_CORS_ORIGINS ||
+  process.env.FRONTEND_URL ||
+  ""
+)
+  .split(",")
+  .map((origin) => origin.trim())
+  .filter(Boolean);
+
+function isAllowedCorsOrigin(origin = "") {
+  if (!origin) return true;
+
+  if (ALLOWED_CORS_ORIGINS.includes("*")) return true;
+
+  return ALLOWED_CORS_ORIGINS.includes(origin);
+}
+
+function getCorsStreamOrigin(req) {
+  const origin = String(req.headers.origin || "");
+
+  if (!origin) return "*";
+
+  return isAllowedCorsOrigin(origin) ? origin : "null";
+}
+
+const corsOptions = {
+  origin(origin, callback) {
+    if (isAllowedCorsOrigin(origin || "")) {
+      return callback(null, true);
+    }
+
+    return callback(new Error("CORS origin not allowed"));
+  },
+  credentials: true,
+};
+
+app.use(cors(corsOptions));
 app.use(express.json());
+
+const ADMIN_API_TOKEN = process.env.ADMIN_API_TOKEN || "";
+
+function requireAdmin(req, res, next) {
+  if (!ADMIN_API_TOKEN) {
+    return res.status(500).json({
+      ok: false,
+      error: "ADMIN_API_TOKEN is not set on backend",
+    });
+  }
+
+  const authHeader = String(req.headers.authorization || "");
+  const bearerToken = authHeader.startsWith("Bearer ")
+    ? authHeader.slice("Bearer ".length).trim()
+    : "";
+
+  const headerToken = String(req.headers["x-admin-token"] || "").trim();
+  const queryToken = String(req.query.adminToken || req.query.token || "").trim();
+  const providedToken = bearerToken || headerToken || queryToken;
+
+  if (providedToken !== ADMIN_API_TOKEN) {
+    return res.status(401).json({
+      ok: false,
+      error: "Unauthorized",
+    });
+  }
+
+  next();
+}
 
 let runtimeAlpacaKeys = {
   liveKey: process.env.ALPACA_LIVE_KEY || "",
   liveSecret: process.env.ALPACA_LIVE_SECRET || "",
 };
 
-app.post("/alpaca-keys", (req, res) => {
+app.post("/alpaca-keys", requireAdmin, (req, res) => {
   const { liveKey, liveSecret } = req.body;
 
   runtimeAlpacaKeys = {
@@ -40,14 +106,14 @@ app.post("/alpaca-keys", (req, res) => {
   });
 });
 
-app.get("/alpaca-keys-test", (req, res) => {
+app.get("/alpaca-keys-test", requireAdmin, (req, res) => {
   res.json({
     ok: true,
     message: "Alpaca keys route is live",
   });
 });
 
-app.get("/alpaca/broker-positions", async (req, res) => {
+app.get("/alpaca/broker-positions", requireAdmin, async (req, res) => {
   try {
     const { key, secret } = getAlpacaKeys();
 
@@ -85,7 +151,7 @@ app.get("/alpaca/broker-positions", async (req, res) => {
   }
 });
 
-app.get("/alpaca/broker-orders", async (req, res) => {
+app.get("/alpaca/broker-orders", requireAdmin, async (req, res) => {
   try {
     const { key, secret } = getAlpacaKeys();
 
@@ -152,12 +218,14 @@ const POLYGON_MOVERS_LIMIT = Number(
 );
 
 const POLYGON_MOVERS_CACHE_MS = Number(
-  process.env.POLYGON_MOVERS_CACHE_MS || 60000
+  process.env.POLYGON_MOVERS_CACHE_MS || 15000
 );
 
 let polygonMoversCache = {
   at: 0,
   symbols: [],
+  gainers: [],
+  losers: [],
   reason: "",
 };
 
@@ -190,7 +258,7 @@ const LIVE_MARKET_MEMORY_MAX_AGE_MINUTES = Number(
 );
 
 const POLYGON_SUBSCRIPTION_ROTATION_LIMIT = Number(
-  process.env.POLYGON_SUBSCRIPTION_ROTATION_LIMIT || 75
+  process.env.POLYGON_SUBSCRIPTION_ROTATION_LIMIT || 100
 );
 
 const ENABLE_FAST_RUNNER_ENGINE =
@@ -5136,6 +5204,21 @@ function calculateGapContinuationIntelligence(signal = {}) {
   const aboveVwap = confirmations.aboveVwap === true;
   const fakeBreakout = confirmations.fakeBreakout === true;
 
+  const premarketContinuationRelief =
+    !engineState.marketOpen &&
+    (
+      isPremarketMomentumWindow() ||
+      isMorningStrikeWindow()
+    ) &&
+    Number(
+      signal.premarketContinuationScore ||
+      signal.premarketDominanceScore ||
+      signal.openingDriveProbability ||
+      signal.continuationProbability ||
+      signal.breakoutProbability ||
+      0
+    ) >= 70;  
+
   const gapContinuationScore = clampScore(
     45 +
     (percentChange >= 5 ? 10 : 0) +
@@ -5143,22 +5226,22 @@ function calculateGapContinuationIntelligence(signal = {}) {
     (relativeVolume >= 2 ? 12 : 0) +
     (relativeVolume >= 4 ? 10 : 0) +
     (closeNearHighPercent >= 80 ? 12 : 0) +
-    (aboveVwap ? 10 : 0) -
-    (pullbackFromHighPercent >= 3 ? 15 : 0) -
-    (pullbackFromHighPercent >= 6 ? 15 : 0) -
-    (fakeBreakout ? 25 : 0) -
-    (percentChange >= 80 ? 20 : 0)
+    (aboveVwap ? 10 : premarketContinuationRelief ? 4 : 0) -
+    (pullbackFromHighPercent >= 3 ? (premarketContinuationRelief ? 5 : 15) : 0) -
+    (pullbackFromHighPercent >= 6 ? (premarketContinuationRelief ? 7 : 15) : 0) -
+    (fakeBreakout ? (premarketContinuationRelief ? 8 : 25) : 0) -
+    (percentChange >= 80 ? (premarketContinuationRelief ? 8 : 20) : 0)
   );
 
   const gapFadeRisk = clampScore(
     35 +
-    (percentChange >= 50 ? 15 : 0) +
-    (percentChange >= 80 ? 25 : 0) +
-    (pullbackFromHighPercent >= 3 ? 15 : 0) +
-    (pullbackFromHighPercent >= 6 ? 20 : 0) +
+    (percentChange >= 50 ? (premarketContinuationRelief ? 6 : 15) : 0) +
+    (percentChange >= 80 ? (premarketContinuationRelief ? 10 : 25) : 0) +
+    (pullbackFromHighPercent >= 3 ? (premarketContinuationRelief ? 5 : 15) : 0) +
+    (pullbackFromHighPercent >= 6 ? (premarketContinuationRelief ? 7 : 20) : 0) +
     (relativeVolume < 1.5 ? 15 : 0) +
-    (fakeBreakout ? 25 : 0) -
-    (aboveVwap ? 10 : 0) -
+    (fakeBreakout ? (premarketContinuationRelief ? 8 : 25) : 0) -
+    (aboveVwap ? 10 : premarketContinuationRelief ? 4 : 0) -
     (closeNearHighPercent >= 80 ? 10 : 0)
   );
 
@@ -5279,6 +5362,21 @@ function calculatePremarketMomentumEngine(signal = {}) {
   );
 
   const confirmations = signal.confirmations || {};
+
+  const premarketContinuationRelief =
+    !engineState.marketOpen &&
+    (
+      isPremarketMomentumWindow() ||
+      isMorningStrikeWindow()
+    ) &&
+    Number(
+      signal.premarketContinuationScore ||
+      signal.premarketDominanceScore ||
+      signal.openingDriveProbability ||
+      signal.continuationProbability ||
+      signal.breakoutProbability ||
+      0
+    ) >= 70;  
 
   const volume = Number(
     signal.volume ||
@@ -5431,7 +5529,7 @@ function calculatePremarketMomentumEngine(signal = {}) {
     35 +
     (percentChange >= 50 ? 20 : 0) +
     (relativeVolume < 1.5 ? 20 : 0) +
-    (confirmations.fakeBreakout ? 25 : 0) +
+    (confirmations.fakeBreakout ? (premarketContinuationRelief ? 8 : 25) : 0) +
     (negativeCatalystHits.length > 0 ? 20 : 0) -
     (relativeVolume >= 5 ? 15 : 0) -
     (catalystHits.length > 0 ? 10 : 0)
@@ -8002,6 +8100,20 @@ function estimateSectorIntelligence(q) {
   const percentChange = Number(q.percentChange || 0);
   const confirmations = q.confirmations || {};
 
+  const premarketContinuationRelief =
+    !engineState.marketOpen &&
+    (
+      isPremarketMomentumWindow() ||
+      isMorningStrikeWindow()
+    ) &&
+    Number(
+      q.premarketContinuationScore ||
+      q.premarketDominanceScore ||
+      q.openingDriveProbability ||
+      q.continuationProbability ||
+      q.breakoutProbability ||
+      0
+    ) >= 70;
   const liquidityTier =
     volume >= 1000000
       ? "Institutional Liquidity"
@@ -8039,7 +8151,7 @@ function estimateSectorIntelligence(q) {
   const sectorMomentumScore = clampScore(
     50 +
     (percentChange > 0 && percentChange <= 20 ? 15 : 0) -
-    (percentChange > 40 ? 20 : 0) +
+    (percentChange > 40 ? (premarketContinuationRelief ? 8 : 20) : 0) +
     (confirmations.closeNearHigh ? 10 : 0)
   );
 
@@ -8047,7 +8159,7 @@ function estimateSectorIntelligence(q) {
     75 -
     (estimatedSector === "Speculative Small Cap" ? 25 : 0) -
     (volatilityTier === "Extreme Volatility" ? 20 : 0) -
-    (confirmations.fakeBreakout ? 30 : 0) -
+    (confirmations.fakeBreakout ? (premarketContinuationRelief ? 10 : 30) : 0) -
     (confirmations.newsRisk ? 25 : 0) -
     (volume < 25000 ? 10 : 0)
   );
@@ -13840,6 +13952,20 @@ function calculateCitadelTechnicalIntelligenceEngine(q = {}) {
   const macdSignal = Number(technicals.macdSignal || 0);
 
   const confirmations = q.confirmations || {};
+    const premarketContinuationRelief =
+    !engineState.marketOpen &&
+    (
+      isPremarketMomentumWindow() ||
+      isMorningStrikeWindow()
+    ) &&
+    Number(
+      q.premarketContinuationScore ||
+      q.premarketDominanceScore ||
+      q.openingDriveProbability ||
+      q.continuationProbability ||
+      q.breakoutProbability ||
+      0
+    ) >= 70;
 
   const range = Math.max(0.01, high - low);
   const closeLocationPercent =
@@ -13861,7 +13987,7 @@ function calculateCitadelTechnicalIntelligenceEngine(q = {}) {
     (ema9 > ema20 ? 20 : -10) +
     (macd > macdSignal ? 15 : -5) +
     (rsi >= 45 && rsi <= 70 ? 15 : 0) -
-    (rsi > 78 ? 20 : 0) +
+    (rsi > 78 ? (premarketContinuationRelief ? 7 : 20) : 0) +
     (percentChange > 0 && percentChange <= 15 ? 10 : 0)
   );
 
@@ -13870,26 +13996,26 @@ function calculateCitadelTechnicalIntelligenceEngine(q = {}) {
     (closeLocationPercent >= 75 ? 20 : 0) +
     (volumeRatio >= 1.5 ? 20 : volumeRatio >= 1 ? 10 : -10) +
     (openToCloseStrength > 0 ? 10 : -10) -
-    (pullbackFromHighPercent > 3 ? 20 : 0) -
-    (Math.abs(gapPercent) > CONFIG.maxGapUpPercent ? 20 : 0)
+    (pullbackFromHighPercent > 3 ? (premarketContinuationRelief ? 7 : 20) : 0) -
+    (Math.abs(gapPercent) > CONFIG.maxGapUpPercent ? (premarketContinuationRelief ? 6 : 20) : 0)
   );
 
   const executionTimingScore = clampScore(
     50 +
     (price > open ? 15 : -10) +
     (closeLocationPercent >= 65 ? 15 : 0) +
-    (pullbackFromHighPercent <= 2 ? 10 : -10) +
+    (pullbackFromHighPercent <= 2 ? 10 : premarketContinuationRelief ? 0 : -10) +
     (rsi >= 50 && rsi <= 72 ? 10 : 0) -
-    (percentChange > 25 ? 25 : 0)
+    (percentChange > 25 ? (premarketContinuationRelief ? 8 : 25) : 0)
   );
 
   const exhaustionRiskScore = clampScore(
     20 +
-    (rsi > 75 ? 25 : 0) +
-    (percentChange > 20 ? 25 : 0) +
-    (pullbackFromHighPercent > 4 ? 20 : 0) +
+    (rsi > 75 ? (premarketContinuationRelief ? 8 : 25) : 0) +
+    (percentChange > 20 ? (premarketContinuationRelief ? 8 : 25) : 0) +
+    (pullbackFromHighPercent > 4 ? (premarketContinuationRelief ? 7 : 20) : 0) +
     (volumeRatio < 0.75 ? 15 : 0) +
-    (confirmations.fakeBreakout ? 35 : 0)
+    (confirmations.fakeBreakout ? (premarketContinuationRelief ? 10 : 35) : 0)
   );
 
   const institutionalEntryScore = clampScore(
@@ -15186,21 +15312,48 @@ function calculateMorningStrikeOverrideGate(signal = {}, ownedSymbols = new Set(
   const blockedByFakeBreakout =
     signal.confirmations?.fakeBreakout === true;
 
-  if (
+  const continuationScore = Math.max(
+    Number(signal.premarketContinuationScore || 0),
+    Number(signal.premarketDominanceScore || 0),
+    Number(signal.openingDriveProbability || 0),
+    Number(signal.continuationProbability || 0),
+    Number(signal.breakoutProbability || 0),
+    Number(premarket.morningMomentumScore || 0),
+    Number(premarket.openingDriveProbability || 0),
+    Number(premarket.gapContinuation?.openingRangeBreakoutProbability || 0)
+  );
+
+  const hasPremarketContinuationOverride =
     isMorningStrikeWindow() &&
     isEliteMorningCandidate &&
-    hasStrongMomentum &&
     hasLiquidity &&
-    !blockedByFakeBreakout
-  ) {
+    (
+      hasStrongMomentum ||
+      continuationScore >= 72
+    ) &&
+    (
+      !blockedByFakeBreakout ||
+      continuationScore >= 78
+    );
+
+  if (hasPremarketContinuationOverride) {
     return {
       allowed: true,
-      multiplier: 0.65,
+      multiplier: continuationScore >= 82 ? 0.75 : 0.65,
       reason:
         `MORNING_STRIKE_OVERRIDE approved for ${symbol} • ` +
         `Morning ${premarket.morningMomentumScore}/100 • ` +
-        `OpenDrive ${premarket.openingDriveProbability}/100`,
+        `OpenDrive ${premarket.openingDriveProbability}/100 • ` +
+        `Continuation ${continuationScore}/100`,
       premarket,
+      checks: {
+        isMorningStrikeWindow: isMorningStrikeWindow(),
+        isEliteMorningCandidate,
+        hasStrongMomentum,
+        hasLiquidity,
+        blockedByFakeBreakout,
+        continuationScore,
+      },
     };
   }
 
@@ -16753,14 +16906,44 @@ async function getAdvancedConfirmations(q) {
     closeNearHighPercent >= CONFIG.minCloseNearHighPercent;
 
 
+  const premarketContinuationWindow =
+    !engineState.marketOpen &&
+    (
+      isPremarketMomentumWindow() ||
+      isMorningStrikeWindow()
+    );
+
+  const fakeBreakoutTolerance =
+    premarketContinuationWindow
+      ? CONFIG.fakeBreakoutMaxHighPullbackPercent * 4
+      : engineState.marketOpen
+        ? CONFIG.fakeBreakoutMaxHighPullbackPercent * 1.5
+        : CONFIG.fakeBreakoutMaxHighPullbackPercent;
+
+  const premarketContinuationScore = Math.max(
+    Number(q.premarketContinuationScore || 0),
+    Number(q.premarketDominanceScore || 0),
+    Number(q.morningMomentumScore || 0),
+    Number(q.openingDriveProbability || 0),
+    Number(q.continuationProbability || 0),
+    Number(q.breakoutProbability || 0)
+  );
+
+  const hasPremarketContinuationRelief =
+    premarketContinuationWindow &&
+    premarketContinuationScore >= 70;
+
   const fakeBreakout =
     q.percentChange > 5 &&
-    pullbackFromHighPercent >
-    (engineState.marketOpen
-      ? CONFIG.fakeBreakoutMaxHighPullbackPercent * 1.5
-      : CONFIG.fakeBreakoutMaxHighPullbackPercent);
+    pullbackFromHighPercent > fakeBreakoutTolerance &&
+    !hasPremarketContinuationRelief;
 
-  const gapTooHigh = gapUpPercent > CONFIG.maxGapUpPercent;
+  const gapTooHigh =
+    gapUpPercent > CONFIG.maxGapUpPercent &&
+    !(
+      hasPremarketContinuationRelief &&
+      gapUpPercent <= CONFIG.maxGapUpPercent * 1.75
+    );
 
   const newsRisk = await getNewsRisk(q.symbol);
 
@@ -16825,15 +17008,34 @@ function calculatePhase5InstitutionalSignalQuality(q = {}) {
       ? ((current - vwap) / vwap) * 100
       : 0;
 
+        const premarketContinuationWindow =
+    !engineState.marketOpen &&
+    (
+      isPremarketMomentumWindow() ||
+      isMorningStrikeWindow()
+    );
+
+  const premarketContinuationScore = Math.max(
+    Number(q.premarketContinuationScore || 0),
+    Number(q.premarketDominanceScore || 0),
+    Number(q.morningMomentumScore || 0),
+    Number(q.openingDriveProbability || 0),
+    Number(q.premarketMomentum?.openingDriveProbability || 0),
+    Number(q.premarketDominance?.premarketDominanceScore || 0)
+  );
+
+  const premarketContinuationRelief =
+    premarketContinuationWindow && premarketContinuationScore >= 70;
+
   const antiChaseRisk = clampScore(
     20 +
-    (percentChange > 8 ? 18 : 0) +
-    (percentChange > 15 ? 22 : 0) +
-    (gapUpPercent > 12 ? 15 : 0) +
-    (vwapExtensionPercent > 4 ? 15 : 0) +
-    (vwapExtensionPercent > 8 ? 18 : 0) +
-    (rsi > 72 ? 14 : 0) +
-    (rsi > 82 ? 18 : 0) -
+    (percentChange > 8 ? (premarketContinuationRelief ? 6 : 18) : 0) +
+    (percentChange > 15 ? (premarketContinuationRelief ? 8 : 22) : 0) +
+    (gapUpPercent > 12 ? (premarketContinuationRelief ? 4 : 15) : 0) +
+    (vwapExtensionPercent > 4 ? (premarketContinuationRelief ? 5 : 15) : 0) +
+    (vwapExtensionPercent > 8 ? (premarketContinuationRelief ? 7 : 18) : 0) +
+    (rsi > 72 ? (premarketContinuationRelief ? 5 : 14) : 0) +
+    (rsi > 82 ? (premarketContinuationRelief ? 7 : 18) : 0) -
     (pullbackFromHighPercent >= 1 && pullbackFromHighPercent <= 5 ? 12 : 0) -
     (volumeSpikeRatio >= 2 ? 8 : 0)
   );
@@ -16844,7 +17046,7 @@ function calculatePhase5InstitutionalSignalQuality(q = {}) {
     (percentChange > 18 ? 24 : 0) +
     (intradayRangePercent > 12 ? 18 : 0) +
     (closeNearHighPercent < 55 && percentChange > 5 ? 18 : 0) +
-    (confirmations.fakeBreakout ? 35 : 0) +
+    (confirmations.fakeBreakout ? (premarketContinuationRelief ? 10 : 35) : 0) +
     (pullbackFromHighPercent > 7 ? 16 : 0)
   );
 
@@ -16965,14 +17167,50 @@ function calculatePhase6SeparateScoringLayers(q = {}, baseScore = 0) {
     phase5.liquidityStabilityScore * 0.2
   );
 
+  const premarketContinuationWindow =
+    !engineState.marketOpen &&
+    (
+      isPremarketMomentumWindow() ||
+      isMorningStrikeWindow()
+    );
+
+  const premarketContinuationScore = Number(
+    q.premarketContinuationScore ||
+    q.premarketDominance?.premarketDominanceScore ||
+    q.premarketMomentum?.openingDriveProbability ||
+    q.premarketMomentum?.morningMomentumScore ||
+    0
+  );
+
   const tacticalMomentumScore = clampScore(
     45 +
     (percentChange > 0 ? 10 : -8) +
-    (percentChange >= 1 && percentChange <= 12 ? 18 : 0) +
+    (
+      percentChange >= 1 && percentChange <= 12
+        ? 18
+        : premarketContinuationWindow && percentChange > 12
+          ? 10
+          : 0
+    ) +
     (volumeRatio >= 1.5 ? 14 : 0) +
-    (confirmations.aboveVwap ? 12 : -8) +
-    (macd > macdSignal ? 10 : -5) -
-    (phase5.antiChaseRisk > 70 ? 12 : 0)
+    (
+      confirmations.aboveVwap
+        ? 12
+        : premarketContinuationWindow && premarketContinuationScore >= 70
+          ? 4
+          : -8
+    ) +
+    (macd > macdSignal ? 10 : premarketContinuationWindow ? 0 : -5) -
+    (
+      phase5.antiChaseRisk > 70 && premarketContinuationScore < 75
+        ? 12
+        : 0
+    ) +
+    (
+      premarketContinuationWindow && premarketContinuationScore >= 75
+        ? 8
+        : 0
+    )
   );
 
   const entryTimingScore = clampScore(
@@ -17128,10 +17366,67 @@ function scoreStock(q) {
     if (!q.confirmations.fakeBreakout) score += 8;
     if (!q.confirmations.gapTooHigh) score += 6;
 
-    if (q.confirmations.fakeBreakout) score -= 25;
-    if (q.confirmations.gapTooHigh) score -= 20;
+ const premarketContinuationRelief =
+      !engineState.marketOpen &&
+      (
+        isPremarketMomentumWindow() ||
+        isMorningStrikeWindow()
+      ) &&
+      Number(
+        q.premarketContinuationScore ||
+        q.premarketDominanceScore ||
+        q.openingDriveProbability ||
+        q.continuationProbability ||
+        q.breakoutProbability ||
+        0
+      ) >= 70;
+
+    if (q.confirmations.fakeBreakout) score -= premarketContinuationRelief ? 8 : 25;
+    if (q.confirmations.gapTooHigh) score -= premarketContinuationRelief ? 6 : 20;
     if (q.confirmations.newsRisk) score -= 30;
   }
+
+  const premarketContinuationWindow =
+    !engineState.marketOpen &&
+    (
+      isPremarketMomentumWindow() ||
+      isMorningStrikeWindow()
+    );
+
+  if (premarketContinuationWindow) {
+    const premarketMomentum =
+      q.premarketMomentum ||
+      calculatePremarketMomentumEngine(q);
+
+    const premarketDominance =
+      q.premarketDominance ||
+      calculatePremarketDominanceEngine({
+        ...q,
+        premarketMomentum,
+      });
+
+    const continuationScore = Math.max(
+      Number(premarketMomentum.openingDriveProbability || 0),
+      Number(premarketMomentum.morningMomentumScore || 0),
+      Number(premarketMomentum.gapContinuation?.openingRangeBreakoutProbability || 0),
+      Number(premarketDominance.premarketDominanceScore || 0)
+    );
+
+    q.premarketMomentum = premarketMomentum;
+    q.premarketDominance = premarketDominance;
+    q.premarketContinuationScore = continuationScore;
+
+    if (continuationScore >= 85) {
+      score += 18;
+      q.premarketContinuationBoost = 18;
+    } else if (continuationScore >= 75) {
+      score += 12;
+      q.premarketContinuationBoost = 12;
+    } else if (continuationScore >= 65) {
+      score += 7;
+      q.premarketContinuationBoost = 7;
+    }
+  }  
 
   const phase5SignalQuality =
     calculatePhase5InstitutionalSignalQuality(q);
@@ -17180,11 +17475,20 @@ function calculateRenaissanceStatisticalEdgeEngine(q) {
   const macd = Number(q.technicals?.macd || 0);
   const macdSignal = Number(q.technicals?.macdSignal || 0);
 
+  const premarketContinuationRelief =
+    !engineState.marketOpen &&
+    (
+      isPremarketMomentumWindow() ||
+      isMorningStrikeWindow()
+    ) &&
+    Number(q.premarketContinuationScore || q.premarketDominanceScore || q.openingDriveProbability || 0) >= 70;
+
   const trendPersistenceScore = clampScore(
     50 +
-    (percentChange > 0 && percentChange <= 12 ? 20 : 0) -
-    (percentChange > 25 ? 25 : 0) +
-    (macd > macdSignal ? 15 : -10)
+    (percentChange > 0 && percentChange <= 12 ? 20 : 0) +
+    (premarketContinuationRelief && percentChange > 12 ? 12 : 0) -
+    (percentChange > 25 ? (premarketContinuationRelief ? 8 : 25) : 0) +
+    (macd > macdSignal ? 15 : premarketContinuationRelief ? 0 : -10)
   );
 
   const volumeAnomalyScore = clampScore(
@@ -17196,9 +17500,9 @@ function calculateRenaissanceStatisticalEdgeEngine(q) {
 
   const meanReversionRiskScore = clampScore(
     100 -
-    (rsi > 80 ? 35 : 0) -
-    (percentChange > 35 ? 30 : 0) -
-    (q.confirmations?.fakeBreakout ? 35 : 0)
+    (rsi > 80 ? (premarketContinuationRelief ? 12 : 35) : 0) -
+    (percentChange > 35 ? (premarketContinuationRelief ? 10 : 30) : 0) -
+    (q.confirmations?.fakeBreakout ? (premarketContinuationRelief ? 10 : 35) : 0)
   );
 
   const statisticalEdgeScore = clampScore(
@@ -17672,6 +17976,21 @@ function calculateEarningsIntelligenceEngine(q) {
 
   const rsi = Number(technicals.rsi || 50);
 
+  const premarketContinuationRelief =
+    !engineState.marketOpen &&
+    (
+      isPremarketMomentumWindow() ||
+      isMorningStrikeWindow()
+    ) &&
+    Number(
+      q.premarketContinuationScore ||
+      q.premarketDominanceScore ||
+      q.openingDriveProbability ||
+      q.continuationProbability ||
+      q.breakoutProbability ||
+      0
+    ) >= 70;  
+
   const riskyHeadlineText = (
     confirmations.riskyNewsHeadlines || []
   )
@@ -17754,7 +18073,7 @@ function calculateEarningsIntelligenceEngine(q) {
     (percentChange > 0 ? 10 : -10) +
     (positiveEarningsNews ? 20 : 0) -
     (negativeEarningsNews ? 30 : 0) -
-    (confirmations.fakeBreakout ? 25 : 0)
+    (confirmations.fakeBreakout ? (premarketContinuationRelief ? 8 : 25) : 0)
   );
 
   const institutionalEarningsSentiment = clampScore(
@@ -18074,6 +18393,21 @@ function calculateStatisticalEdge(q) {
   const macd = Number(technicals.macd || 0);
   const macdSignal = Number(technicals.macdSignal || 0);
 
+  const premarketContinuationRelief =
+    !engineState.marketOpen &&
+    (
+      isPremarketMomentumWindow() ||
+      isMorningStrikeWindow()
+    ) &&
+    Number(
+      q.premarketContinuationScore ||
+      q.premarketDominanceScore ||
+      q.openingDriveProbability ||
+      q.continuationProbability ||
+      q.breakoutProbability ||
+      0
+    ) >= 70;  
+
   const relativeStrengthPercentile = clampScore(
     50 +
     percentChange * 2 +
@@ -18087,8 +18421,8 @@ function calculateStatisticalEdge(q) {
     (percentChange >= 2 ? 15 : 0) +
     (volumeRatio >= 1.5 ? 15 : 0) +
     (closeNearHighPercent >= 70 ? 15 : 0) -
-    (pullbackFromHighPercent > 4 ? 20 : 0) -
-    (confirmations.fakeBreakout ? 35 : 0)
+    (pullbackFromHighPercent > 4 ? (premarketContinuationRelief ? 7 : 20) : 0) -
+    (confirmations.fakeBreakout ? (premarketContinuationRelief ? 10 : 35) : 0)
   );
 
   const continuationProbability = clampScore(
@@ -18097,7 +18431,7 @@ function calculateStatisticalEdge(q) {
     (macd > macdSignal ? 15 : 0) +
     (rsi >= 45 && rsi <= 70 ? 15 : 0) +
     (percentChange >= 1 && percentChange <= 12 ? 10 : 0) -
-    (rsi > 80 ? 20 : 0)
+    (rsi > 80 ? (premarketContinuationRelief ? 7 : 20) : 0)
   );
 
   const volumeConfirmationQuality = clampScore(
@@ -18116,9 +18450,9 @@ function calculateStatisticalEdge(q) {
 
   const volatilityQuality = clampScore(
     75 -
-    (percentChange > 20 ? 20 : 0) -
-    (pullbackFromHighPercent > 5 ? 20 : 0) -
-    (confirmations.gapTooHigh ? 15 : 0)
+    (percentChange > 20 ? (premarketContinuationRelief ? 6 : 20) : 0) -
+    (pullbackFromHighPercent > 5 ? (premarketContinuationRelief ? 7 : 20) : 0) -
+    (confirmations.gapTooHigh ?  (premarketContinuationRelief ? 4 : 15) : 0)
   );
 
   const statisticalEdgeScore = clampScore(
@@ -21173,20 +21507,34 @@ function calculateAdvancedRiskEngine(q) {
 
   const rsi = Number(technicals.rsi || 50);
   const volumeRatio = Number(confirmations.volumeSpikeRatio || q.volumeRatio || 0);
+  const premarketContinuationRelief =
+    !engineState.marketOpen &&
+    (
+      isPremarketMomentumWindow() ||
+      isMorningStrikeWindow()
+    ) &&
+    Number(
+      q.premarketContinuationScore ||
+      q.premarketDominanceScore ||
+      q.openingDriveProbability ||
+      q.continuationProbability ||
+      q.breakoutProbability ||
+      0
+    ) >= 70;
 
   const drawdownRiskScore = clampScore(
     80 -
-    (percentChange > 20 ? 25 : 0) -
-    (percentChange > 40 ? 20 : 0) -
-    (confirmations.fakeBreakout ? 30 : 0) -
-    (confirmations.gapTooHigh ? 20 : 0)
+    (percentChange > 20 ? (premarketContinuationRelief ? 8 : 25) : 0) -
+    (percentChange > 40 ? (premarketContinuationRelief ? 8 : 20) : 0) -
+    (confirmations.fakeBreakout ? (premarketContinuationRelief ? 10 : 30) : 0) -
+    (confirmations.gapTooHigh ? (premarketContinuationRelief ? 6 : 20) : 0)
   );
 
   const volatilityShockScore = clampScore(
     75 -
-    (Math.abs(percentChange) > 15 ? 15 : 0) -
-    (Math.abs(percentChange) > 30 ? 20 : 0) -
-    (rsi > 80 ? 15 : 0) -
+    (Math.abs(percentChange) > 15 ? (premarketContinuationRelief ? 5 : 15) : 0) -
+    (Math.abs(percentChange) > 30 ? (premarketContinuationRelief ? 7 : 20) : 0) -
+    (rsi > 80 ? (premarketContinuationRelief ? 5 : 15) : 0) -
     (volumeRatio > 5 ? 10 : 0)
   );
 
@@ -21199,9 +21547,9 @@ function calculateAdvancedRiskEngine(q) {
   const downsideExposureScore = clampScore(
     80 -
     (percentChange < -20 ? 20 : 0) -
-    (percentChange > 30 ? 20 : 0) -
+    (percentChange > 30 ? (premarketContinuationRelief ? 7 : 20) : 0) -
     (confirmations.newsRisk ? 30 : 0) -
-    (!confirmations.aboveVwap ? 10 : 0)
+    (!confirmations.aboveVwap ? (premarketContinuationRelief ? 4 : 10) : 0)
   );
 
   const crashSurvivabilityScore = clampScore(
@@ -21209,7 +21557,7 @@ function calculateAdvancedRiskEngine(q) {
     (liquidityStressScore >= 70 ? 15 : 0) +
     (drawdownRiskScore >= 70 ? 15 : 0) +
     (price >= 10 ? 10 : 0) -
-    (confirmations.fakeBreakout ? 25 : 0)
+    (confirmations.fakeBreakout ? (premarketContinuationRelief ? 8 : 25) : 0)
   );
 
   const institutionalRiskScore = clampScore(
@@ -21248,7 +21596,20 @@ function calculatePortfolioConstructionEngine(q) {
 
   const rsi = Number(technicals.rsi || 50);
   const volumeRatio = Number(confirmations.volumeSpikeRatio || q.volumeRatio || 0);
-
+  const premarketContinuationRelief =
+    !engineState.marketOpen &&
+    (
+      isPremarketMomentumWindow() ||
+      isMorningStrikeWindow()
+    ) &&
+    Number(
+      q.premarketContinuationScore ||
+      q.premarketDominanceScore ||
+      q.openingDriveProbability ||
+      q.continuationProbability ||
+      q.breakoutProbability ||
+      0
+    ) >= 70;
   const liquidityFitScore = clampScore(
     45 +
     (volume >= 1000000 ? 25 : volume >= 250000 ? 18 : volume >= 25000 ? 10 : -20) +
@@ -21257,17 +21618,17 @@ function calculatePortfolioConstructionEngine(q) {
 
   const volatilityBalanceScore = clampScore(
     75 -
-    (Math.abs(percentChange) > 20 ? 25 : 0) -
-    (Math.abs(percentChange) > 12 ? 12 : 0) -
-    (confirmations.gapTooHigh ? 15 : 0) -
-    (rsi > 80 ? 15 : 0)
+    (Math.abs(percentChange) > 20 ? (premarketContinuationRelief ? 8 : 25) : 0) -
+    (Math.abs(percentChange) > 12 ? (premarketContinuationRelief ? 4 : 12) : 0) -
+    (confirmations.gapTooHigh ? (premarketContinuationRelief ? 5 : 15) : 0) -
+    (rsi > 80 ? (premarketContinuationRelief ? 5 : 15) : 0)
   );
 
   const diversificationFitScore = clampScore(
     55 +
     (price >= 5 ? 8 : -8) +
     (volumeRatio >= 1 && volumeRatio <= 3 ? 10 : 0) -
-    (confirmations.fakeBreakout ? 25 : 0)
+    (confirmations.fakeBreakout ? (premarketContinuationRelief ? 8 : 25) : 0)
   );
 
   const positionSizingQualityScore = clampScore(
@@ -21275,13 +21636,13 @@ function calculatePortfolioConstructionEngine(q) {
     (volume >= 250000 ? 10 : 0) +
     (percentChange >= 0 && percentChange <= 15 ? 10 : 0) -
     (confirmations.newsRisk ? 20 : 0) -
-    (confirmations.fakeBreakout ? 25 : 0)
+    (confirmations.fakeBreakout ? (premarketContinuationRelief ? 8 : 25) : 0)
   );
 
   const portfolioRiskContributionScore = clampScore(
     80 -
-    (percentChange > 20 ? 20 : 0) -
-    (confirmations.gapTooHigh ? 15 : 0) -
+    (percentChange > 20 ? (premarketContinuationRelief ? 7 : 20) : 0) -
+    (confirmations.gapTooHigh ? (premarketContinuationRelief ? 5 : 15) : 0) -
     (confirmations.newsRisk ? 25 : 0) -
     (volume < 25000 ? 25 : 0)
   );
@@ -21335,7 +21696,20 @@ function calculateHarvardDividendCompoundingEngine(q) {
   const confirmations = q.confirmations || {};
   const technicals = q.technicals || {};
   const rsi = Number(technicals.rsi || 50);
-
+  const premarketContinuationRelief =
+    !engineState.marketOpen &&
+    (
+      isPremarketMomentumWindow() ||
+      isMorningStrikeWindow()
+    ) &&
+    Number(
+      q.premarketContinuationScore ||
+      q.premarketDominanceScore ||
+      q.openingDriveProbability ||
+      q.continuationProbability ||
+      q.breakoutProbability ||
+      0
+    ) >= 70;
   const existingWealth = calculateDividendWealthEngine(q);
   const sector = estimateSectorIntelligence(q);
 
@@ -21491,6 +21865,20 @@ function calculateMoatEngine(q) {
   const confirmations = q.confirmations || {};
   const technicals = q.technicals || {};
   const rsi = Number(technicals.rsi || 50);
+  const premarketContinuationRelief =
+    !engineState.marketOpen &&
+    (
+      isPremarketMomentumWindow() ||
+      isMorningStrikeWindow()
+    ) &&
+    Number(
+      q.premarketContinuationScore ||
+      q.premarketDominanceScore ||
+      q.openingDriveProbability ||
+      q.continuationProbability ||
+      q.breakoutProbability ||
+      0
+    ) >= 70;
 
   const sectorInfo = estimateSectorIntelligence(q);
   const sectorScore = Number(sectorInfo.sectorScore || 50);
@@ -21517,7 +21905,7 @@ function calculateMoatEngine(q) {
     (percentChange > 0 && percentChange <= 12 ? 12 : 0) +
     (rsi >= 45 && rsi <= 70 ? 10 : 0) +
     (sectorRiskScore >= 65 ? 12 : 0) -
-    (percentChange > 30 ? 18 : 0) -
+    (percentChange > 30 ? (premarketContinuationRelief ? 6 : 18) : 0) -
     (price < 2 ? 20 : 0)
   );
 
@@ -21527,14 +21915,14 @@ function calculateMoatEngine(q) {
     (sectorLiquidityScore >= 65 ? 12 : 0) +
     (volumeRatio >= 1.2 ? 8 : 0) +
     (confirmations.aboveVwap ? 7 : 0) -
-    (confirmations.fakeBreakout ? 25 : 0)
+    (confirmations.fakeBreakout ? (premarketContinuationRelief ? 8 : 25) : 0)
   );
 
   const durabilityScore = clampScore(
     55 +
     (price >= 10 ? 12 : price >= 5 ? 6 : -12) +
     (volume >= 100000 ? 10 : volume >= 25000 ? 5 : -10) +
-    (Math.abs(percentChange) <= 15 ? 10 : -12) -
+    (Math.abs(percentChange) <= 15 ? 10 : premarketContinuationRelief ? 0 : -12) -
     (confirmations.newsRisk ? 20 : 0) -
     (estimatedSector === "Speculative Small Cap" ? 15 : 0)
   );
@@ -21544,8 +21932,8 @@ function calculateMoatEngine(q) {
     (percentChange > 0 && percentChange <= 15 ? 12 : 0) +
     (volumeRatio >= 1 ? 8 : -8) +
     (sectorScore >= 60 ? 10 : 0) -
-    (rsi > 80 ? 15 : 0) -
-    (percentChange > 35 ? 20 : 0)
+    (rsi > 80 ? (premarketContinuationRelief ? 5 : 15) : 0) -
+    (percentChange > 35 ? (premarketContinuationRelief ? 7 : 20) : 0)
   );
 
   const competitiveAdvantageScore = clampScore(
@@ -21602,11 +21990,27 @@ function calculateInstitutionalScores(q) {
 
   const momentum = Number(q.percentChange || 0);
   const volumeRatio = Number(confirmations.volumeSpikeRatio || q.volumeRatio || 0);
+  const premarketContinuationRelief =
+    !engineState.marketOpen &&
+    (
+      isPremarketMomentumWindow() ||
+      isMorningStrikeWindow()
+    ) &&
+    Number(
+      q.premarketContinuationScore ||
+      q.premarketDominanceScore ||
+      q.openingDriveProbability ||
+      q.continuationProbability ||
+      q.breakoutProbability ||
+      0
+    ) >= 70; 
+ 
   const rsi = Number(technicals.rsi || 50);
   const ema9 = Number(technicals.ema9 || 0);
   const ema20 = Number(technicals.ema20 || 0);
   const macd = Number(technicals.macd || 0);
   const macdSignal = Number(technicals.macdSignal || 0);
+
   const institutionalDcf =
     calculateInstitutionalDcfValuationEngine(q);
 
@@ -21624,10 +22028,10 @@ function calculateInstitutionalScores(q) {
 
   const riskScore = clampScore(
     80 -
-    (confirmations.fakeBreakout ? 35 : 0) -
-    (confirmations.gapTooHigh ? 20 : 0) -
+    (confirmations.fakeBreakout ? (premarketContinuationRelief ? 10 : 35) : 0) -
+    (confirmations.gapTooHigh ? (premarketContinuationRelief ? 6 : 20) : 0) -
     (confirmations.newsRisk ? 30 : 0) -
-    (momentum > 25 ? 15 : 0) -
+    (momentum > 25 ? (premarketContinuationRelief ? 5 : 15) : 0) -
     (volumeRatio < 0.8 ? 10 : 0)
   );
 
@@ -21674,7 +22078,7 @@ function calculateInstitutionalScores(q) {
     50 +
     momentum * 1.5 +
     volumeRatio * 8 -
-    (momentum > 35 ? 15 : 0)
+    (momentum > 35 ? (premarketContinuationRelief ? 5 : 15) : 0)
   );
 
   const fundamentalBlendScore = clampScore(
@@ -21972,8 +22376,23 @@ function passesQualityFilters(q) {
     };
   }
 
+  const premarketContinuationRelief =
+    !engineState.marketOpen &&
+    (
+      isPremarketMomentumWindow() ||
+      isMorningStrikeWindow()
+    ) &&
+    Number(
+      q.premarketContinuationScore ||
+      q.premarketDominanceScore ||
+      q.openingDriveProbability ||
+      q.continuationProbability ||
+      q.breakoutProbability ||
+      0
+    ) >= 70;
+
   if (CONFIG.enableAdvancedFilters && q.confirmations) {
-    if (q.confirmations.fakeBreakout) {
+    if (q.confirmations.fakeBreakout && !premarketContinuationRelief) {
       return {
         ok: false,
         reason: `Fake breakout risk. Pulled back ${q.confirmations.pullbackFromHighPercent}% from high`,
@@ -22967,7 +23386,7 @@ async function getPolygonMoverSymbols(limit = POLYGON_MOVERS_LIMIT, forceRefresh
     const data = await response.json();
     const tickers = Array.isArray(data?.tickers) ? data.tickers : [];
 
-    const ranked = tickers
+    const rankedRaw = tickers
       .map((ticker) => {
         const symbol = normalizeSymbol(ticker?.ticker);
 
@@ -23001,6 +23420,12 @@ async function getPolygonMoverSymbols(limit = POLYGON_MOVERS_LIMIT, forceRefresh
           symbol,
           percentChange,
           volume,
+          direction:
+            percentChange > 0
+              ? "GAINER"
+              : percentChange < 0
+                ? "LOSER"
+                : "FLAT",
         };
       })
       .filter((item) => isNormalStockSymbol(item.symbol))
@@ -23019,15 +23444,41 @@ async function getPolygonMoverSymbols(limit = POLYGON_MOVERS_LIMIT, forceRefresh
           Math.abs(item.percentChange) >= 0.3 ||
           Number(item.volume || 0) >= 500
         );
-      })
-      .sort((a, b) => Math.abs(b.percentChange) - Math.abs(a.percentChange))
+      });
+
+    const gainers = rankedRaw
+      .filter((item) => item.percentChange > 0)
+      .sort((a, b) => b.percentChange - a.percentChange)
       .slice(0, limit);
+
+    const losers = rankedRaw
+      .filter((item) => item.percentChange < 0)
+      .sort((a, b) => a.percentChange - b.percentChange)
+      .slice(0, Math.max(10, Math.floor(limit * 0.25)));
+
+    const ranked = [
+      ...gainers,
+      ...losers,
+    ].slice(0, limit);
 
     const rankedSymbols = ranked
       .map((item) => item.symbol)
       .filter(Boolean)
       .map(normalizeSymbol)
       .filter(isNormalStockSymbol);
+
+    const gainerSymbols = gainers
+      .map((item) => item.symbol)
+      .filter(Boolean)
+      .map(normalizeSymbol)
+      .filter(isNormalStockSymbol);
+
+    const loserSymbols = losers
+      .map((item) => item.symbol)
+      .filter(Boolean)
+      .map(normalizeSymbol)
+      .filter(isNormalStockSymbol);
+
 
     const fallbackSymbols = [
       ...(engineState.lastStockSignals || []).map((s) => s.symbol),
@@ -23071,9 +23522,11 @@ async function getPolygonMoverSymbols(limit = POLYGON_MOVERS_LIMIT, forceRefresh
     polygonMoversCache = {
       at: Date.now(),
       symbols: cleanSymbols,
+      gainers: gainerSymbols,
+      losers: loserSymbols,
       reason: cleanSymbols.length
         ? rankedSymbols.length
-          ? "polygon_movers_success"
+          ? "polygon_movers_success_gainers_prioritized"
           : "polygon_movers_fallback"
         : "polygon_movers_empty",
     };
@@ -23967,16 +24420,72 @@ async function scanMarket() {
           quote.confirmations = await getAdvancedConfirmations(quote);
         }
 
+        const premarketContinuationWindow =
+          !engineState.marketOpen &&
+          (
+            isPremarketMomentumWindow() ||
+            isMorningStrikeWindow()
+          );
+
+        if (premarketContinuationWindow) {
+          quote.premarketMomentum =
+            calculatePremarketMomentumEngine(quote);
+
+          quote.premarketDominance =
+            calculatePremarketDominanceEngine(quote);
+
+          quote.premarketDominanceScore =
+            Number(quote.premarketDominance?.premarketDominanceScore || 0);
+
+          quote.morningMomentumScore =
+            Number(quote.premarketMomentum?.morningMomentumScore || 0);
+
+          quote.openingDriveProbability =
+            Number(quote.premarketMomentum?.openingDriveProbability || 0);
+
+          quote.continuationProbability = Math.max(
+            Number(quote.continuationProbability || 0),
+            Number(quote.premarketMomentum?.gapContinuation?.openingRangeBreakoutProbability || 0),
+            Number(quote.premarketMomentum?.openingDriveProbability || 0)
+          );
+
+          quote.breakoutProbability = Math.max(
+            Number(quote.breakoutProbability || 0),
+            Number(quote.premarketMomentum?.gapContinuation?.openingRangeBreakoutProbability || 0)
+          );
+        }        
+
         const quality = passesQualityFilters(quote);
 
         if (!quality.ok) {
-          saveSkippedSymbol(symbol, quality.reason);
-          return null;
+          const premarketContinuationScore = Math.max(
+            Number(quote.premarketContinuationScore || 0),
+            Number(quote.premarketDominanceScore || 0),
+            Number(quote.morningMomentumScore || 0),
+            Number(quote.openingDriveProbability || 0),
+            Number(quote.continuationProbability || 0),
+            Number(quote.breakoutProbability || 0)
+          );
+
+          const allowPremarketDisplay =
+            premarketContinuationWindow &&
+            premarketContinuationScore >= 70 &&
+            /fake|breakout|gap|vwap|extended|chase/i.test(String(quality.reason || ""));
+
+          if (!allowPremarketDisplay) {
+            saveSkippedSymbol(symbol, quality.reason);
+            return null;
+          }
+
+          quote.displayOnly = true;
+          quote.blockBuying = true;
+          quote.displayOnlyReason =
+            `PREMARKET_CONTINUATION_DISPLAY_ONLY: ${quality.reason || "quality filter"}`;
         }
 
-        quote.displayOnly = quality.displayOnly === true;
-        quote.blockBuying = quality.blockBuying === true;
-        quote.displayOnlyReason = quality.reason || "";
+        quote.displayOnly = quote.displayOnly === true || quality.displayOnly === true;
+        quote.blockBuying = quote.blockBuying === true || quality.blockBuying === true;
+        quote.displayOnlyReason = quote.displayOnlyReason || quality.reason || "";
 
         const score = scoreStock(quote);
 
@@ -29065,20 +29574,38 @@ function calculateAdaptiveAggressionRebalancer(signal = {}) {
   const aboveVwap =
     signal.confirmations?.aboveVwap === true;
 
+  const premarketContinuationRelief =
+    !engineState.marketOpen &&
+    (
+      isPremarketMomentumWindow() ||
+      isMorningStrikeWindow()
+    ) &&
+    Number(
+      signal.premarketContinuationScore ||
+      signal.premarketDominanceScore ||
+      signal.openingDriveProbability ||
+      signal.continuationProbability ||
+      signal.breakoutProbability ||
+      0
+    ) >= 70;
+
   const suppressionReliefScore = clampScore(
     (score - 65) * 1.4 +
     Math.min(30, relativeVolume * 5) +
     accumulationScore * 0.18 +
     executionConfidence * 0.16 +
     breakoutProbability * 0.12 +
-    (aboveVwap ? 10 : 0) -
-    (fakeBreakout ? 35 : 0)
+    (aboveVwap ? 10 : premarketContinuationRelief ? 4 : 0) -
+    (fakeBreakout ? (premarketContinuationRelief ? 8 : 35) : 0)
   );
 
   const allowProbeOverride =
     suppressionReliefScore >= 68 &&
     relativeVolume >= 2 &&
-    fakeBreakout !== true;
+    (
+      fakeBreakout !== true ||
+      premarketContinuationRelief
+    );
 
   const aggressionMultiplier =
     marketPhase === "DEFENSIVE_TRAP_MARKET"
@@ -36278,7 +36805,7 @@ setInterval(() => {
 
 
 
-app.get("/", (req, res) => {
+app.get("/", requireAdmin, (req, res) => {
   res.json({
 
 
@@ -36295,7 +36822,7 @@ app.get("/", (req, res) => {
 });
 
 
-app.get("/infra-status", (req, res) => {
+app.get("/infra-status", requireAdmin, (req, res) => {
   res.json({
     ok: true,
     phase: "13A",
@@ -36332,7 +36859,7 @@ app.get("/infra-status", (req, res) => {
   });
 });
 
-app.get("/debug", async (req, res) => {
+app.get("/debug", requireAdmin, async (req, res) => {
   try {
     const account = await getAccount();
     const clock = await getClock();
@@ -40646,7 +41173,7 @@ function getLatestFrontendStatusSnapshot() {
   };
 }
 
-app.get("/frontend/portfolio", async (req, res) => {
+app.get("/frontend/portfolio", requireAdmin, async (req, res) => {
   try {
     const latestStatus = getLatestFrontendStatusSnapshot();
     const account = latestStatus?.account || {};
@@ -40796,7 +41323,7 @@ function buildFrontendStartupSnapshot(limit = 50) {
   };
 }
 
-app.get("/frontend/snapshot", (req, res) => {
+app.get("/frontend/snapshot", requireAdmin, (req, res) => {
   try {
     const limit = Math.min(
       100,
@@ -40817,7 +41344,7 @@ app.get("/frontend/snapshot", (req, res) => {
   }
 });
 
-app.get("/frontend/signals", async (req, res) => {
+app.get("/frontend/signals", requireAdmin, async (req, res) => {
   try {
 
     const latestStatus = getLatestFrontendStatusSnapshot();
@@ -40880,7 +41407,7 @@ app.get("/frontend/signals", async (req, res) => {
   }
 });
 
-app.get("/frontend/ai", async (req, res) => {
+app.get("/frontend/ai", requireAdmin, async (req, res) => {
   try {
     const latestStatus = getLatestFrontendStatusSnapshot();
     const brain =
@@ -40947,7 +41474,7 @@ app.get("/frontend/ai", async (req, res) => {
   }
 });
 
-app.get("/frontend/alerts", async (req, res) => {
+app.get("/frontend/alerts", requireAdmin, async (req, res) => {
   try {
     const latestStatus = getLatestFrontendStatusSnapshot();
     const orchestration =
@@ -41014,7 +41541,7 @@ app.get("/frontend/alerts", async (req, res) => {
   }
 });
 
-app.get("/frontend/dashboard", async (req, res) => {
+app.get("/frontend/dashboard", requireAdmin, async (req, res) => {
   try {
 
     const latestStatus = getLatestFrontendStatusSnapshot();
@@ -41277,8 +41804,30 @@ function mergeLiveQuoteIntoSignal(signal = {}) {
     liveQuoteSource:
       liveQuote.liveQuoteSource || liveQuote.source || "live_cache",
     priceIsLive: liveQuote.priceIsLive === true,
+    earlyMover:
+      (engineState.liveEarlyMoverSymbols || []).includes(symbol) ||
+      signal.earlyMover === true,
     fastRunnerScore:
       liveQuote.fastRunnerScore ?? signal.fastRunnerScore,
+    quickGate:
+      (engineState.quickInstitutionalCandidates || [])
+        .find((item) => normalizeSymbol(item.symbol) === symbol) || null,
+    starterBuyApproved:
+      engineState.liveStarterBuyGateState?.topApproved?.some(
+        (item) => normalizeSymbol(item.symbol) === symbol
+      ) || signal.starterBuyApproved === true,
+    blockReason:
+      engineState.liveStarterBuyGateState?.blocked?.find(
+        (item) => normalizeSymbol(item.symbol) === symbol
+      )?.starterBuyBlockReason ||
+      signal.blockReason ||
+      null,
+    freshBreakoutScore:
+      engineState.liveMarketMemory?.[symbol]?.fastRunnerBreakdown?.freshBreakoutScore ??
+      signal.freshBreakoutScore,
+    chaseRisk:
+      engineState.liveMarketMemory?.[symbol]?.fastRunnerBreakdown?.chaseRisk ??
+      signal.chaseRisk,
     tapeSpeed:
       liveQuote.tapeSpeed ?? signal.tapeSpeed,
     liquidityPressure:
@@ -41476,6 +42025,31 @@ function updateLiveQuoteCache(symbol, quote = {}) {
       quote.livePercentChange ||
       previous.percentChange ||
       0,
+
+    vwap:
+      quote.vwap ||
+      quote.dayVwap ||
+      quote.avgPrice ||
+      previous.vwap ||
+      previous.dayVwap ||
+      previous.avgPrice ||
+      0,
+    dayVwap:
+      quote.dayVwap ||
+      quote.vwap ||
+      quote.avgPrice ||
+      previous.dayVwap ||
+      previous.vwap ||
+      previous.avgPrice ||
+      0,
+    avgPrice:
+      quote.avgPrice ||
+      quote.vwap ||
+      quote.dayVwap ||
+      previous.avgPrice ||
+      previous.vwap ||
+      previous.dayVwap ||
+      0,      
     spread,
     spreadPercent,
     volume: tradeVolume,
@@ -41857,6 +42431,16 @@ function updateLiveMarketMemory(symbol, tick = {}) {
       ? Number(((spread / price) * 100).toFixed(4))
       : Number(previous.spreadPercent || 0));
 
+  const incomingVwap = Number(
+    tick.vwap ||
+    tick.dayVwap ||
+    tick.avgPrice ||
+    previous.vwap ||
+    previous.dayVwap ||
+    previous.avgPrice ||
+    0
+  );      
+
   const tickWindow = Array.isArray(previous.tickWindow)
     ? previous.tickWindow
     : [];
@@ -41894,6 +42478,9 @@ function updateLiveMarketMemory(symbol, tick = {}) {
     spread,
     spreadPercent,
     lastVolume: Number(tick.volume || 0),
+    vwap: incomingVwap,
+    dayVwap: incomingVwap,
+    avgPrice: incomingVwap,    
     lastSize: Number(tick.size || 0),
     source: tick.source || previous.source || "live_stream",
     updatedAt: new Date().toISOString(),
@@ -41907,7 +42494,41 @@ function updateLiveMarketMemory(symbol, tick = {}) {
   };
 
   updateOneSecondCandle(nextMemory, tick);
+  const vwapCandles = Array.isArray(nextMemory.secondCandles)
+    ? nextMemory.secondCandles
+    : [];
 
+  const vwapTotals = vwapCandles.reduce(
+    (totals, candle) => {
+      const high = Number(candle.high || 0);
+      const low = Number(candle.low || 0);
+      const close = Number(candle.close || 0);
+      const volume = Number(candle.volume || 0);
+
+      if (high > 0 && low > 0 && close > 0 && volume > 0) {
+        const typicalPrice = (high + low + close) / 3;
+        totals.priceVolume += typicalPrice * volume;
+        totals.volume += volume;
+      }
+
+      return totals;
+    },
+    {
+      priceVolume: 0,
+      volume: 0,
+    }
+  );
+
+  const calculatedVwap =
+    vwapTotals.volume > 0
+      ? Number((vwapTotals.priceVolume / vwapTotals.volume).toFixed(4))
+      : Number(nextMemory.vwap || 0);
+
+  if (calculatedVwap > 0) {
+    nextMemory.vwap = calculatedVwap;
+    nextMemory.dayVwap = calculatedVwap;
+    nextMemory.avgPrice = calculatedVwap;
+  }
   const fastScore = calculateFastRunnerScoreFromMemory(nextMemory);
 
   nextMemory.fastRunnerScore = fastScore.fastRunnerScore;
@@ -41954,9 +42575,17 @@ function getSymbolsForPolygonLiveStream(
         0
       ).getTime();
 
+      const isEarlyMover =
+        (engineState.liveEarlyMoverSymbols || []).includes(symbol);
+
+      const isPolygonGainer =
+        (polygonMoversCache.gainers || []).includes(symbol);
+
       const earlyMoverBonus =
-        (engineState.liveEarlyMoverSymbols || []).includes(symbol)
-          ? 1000
+        isEarlyMover
+          ? isPolygonGainer
+            ? 1500
+            : 750
           : 0;
 
       return {
@@ -42341,6 +42970,9 @@ function handlePolygonLiveMessage(message = {}) {
     updateLiveQuoteCache(symbol, {
       price: message.c || message.close,
       volume: message.v,
+      vwap: message.vw || message.vwap || 0,
+      dayVwap: message.vw || message.vwap || 0,
+      avgPrice: message.vw || message.vwap || 0,      
       source: "polygon_ws_second_aggregate",
       liveQuoteSource: "polygon_ws_second_aggregate",
       liveQuoteUpdatedAt: new Date().toISOString(),
@@ -42504,6 +43136,126 @@ function startPolygonLiveMarketStream() {
   }
 }
 
+function calculateWindowMomentumFromCandles(candles = [], seconds = 10) {
+  const usable = Array.isArray(candles) ? candles.slice(-seconds) : [];
+  const first = usable[0];
+  const last = usable[usable.length - 1];
+
+  if (!first?.open || !last?.close) return 0;
+
+  const open = Number(first.open || 0);
+  const close = Number(last.close || 0);
+
+  if (!open || open <= 0 || !close || close <= 0) return 0;
+
+  return Number((((close - open) / open) * 100).toFixed(4));
+}
+
+function calculateFreshBreakoutProfile(memory = {}) {
+  const candles = Array.isArray(memory.secondCandles)
+    ? memory.secondCandles
+    : [];
+
+  const candleCount = candles.length;
+  const enoughFreshCandles = candleCount >= 10;    
+
+  const momentum10 = calculateWindowMomentumFromCandles(candles, 10);
+  const momentum30 = calculateWindowMomentumFromCandles(candles, 30);
+  const momentum60 = calculateWindowMomentumFromCandles(candles, 60);
+
+  const last = candles[candles.length - 1] || {};
+  const closeNearHighPercent =
+    last?.high && last?.low && Number(last.high) !== Number(last.low)
+      ? ((Number(last.close || 0) - Number(last.low || 0)) /
+        Math.max(0.0001, Number(last.high || 0) - Number(last.low || 0))) * 100
+      : Number(memory.fastRunnerBreakdown?.closeNearHighPercent || 50);
+
+  const freshBreakoutScore = clampLiveScore(
+    50 +
+    momentum10 * 16 +
+    momentum30 * 9 +
+    momentum60 * 5 +
+    (closeNearHighPercent >= 75 ? 12 : 0) +
+    (Number(memory.tapeSpeed || 0) > 0 ? 8 : 0)
+  );
+
+  return {
+    momentum10,
+    momentum30,
+    momentum60,
+    candleCount,
+    enoughFreshCandles,    
+    closeNearHighPercent: Number(closeNearHighPercent.toFixed(2)),
+    freshBreakoutScore: Number(freshBreakoutScore.toFixed(2)),
+  };
+}
+
+function calculateLiveChaseRisk(memory = {}, breakout = {}) {
+  const price = Number(memory.price || memory.current || 0);
+  const vwap = Number(memory.vwap || memory.dayVwap || memory.avgPrice || 0);
+  const spreadPercent = Number(memory.spreadPercent || 0);
+  const momentum10 = Number(breakout.momentum10 || 0);
+  const momentum30 = Number(breakout.momentum30 || 0);
+  const closeNearHighPercent = Number(breakout.closeNearHighPercent || 0);
+
+  const vwapExtensionPercent =
+    price > 0 && vwap > 0
+      ? Number((((price - vwap) / vwap) * 100).toFixed(4))
+      : 0;
+
+  const candleExhaustion =
+    momentum10 > 1.8 && closeNearHighPercent < 45
+      ? 35
+      : momentum10 > 1.2 && closeNearHighPercent < 55
+        ? 20
+        : 0;
+
+  const vwapExtensionRisk =
+    vwapExtensionPercent >= 8
+      ? 35
+      : vwapExtensionPercent >= 5
+        ? 20
+        : vwapExtensionPercent >= 3.5
+          ? 10
+          : 0;
+
+  const momentumExtensionRisk =
+    momentum30 >= 6
+      ? 30
+      : momentum30 >= 4
+        ? 18
+        : momentum30 >= 2.75
+          ? 10
+          : 0;
+
+  const spreadRisk =
+    spreadPercent > LIVE_ORDER_MAX_SPREAD_PERCENT
+      ? 25
+      : spreadPercent > QUICK_GATE_MAX_SPREAD_PERCENT
+        ? 12
+        : 0;
+
+  const chaseRisk = clampLiveScore(
+    candleExhaustion +
+    vwapExtensionRisk +
+    momentumExtensionRisk +
+    spreadRisk
+  );
+
+  return {
+    chaseRisk,
+    vwapExtensionPercent,
+    candleExhaustion,
+    vwapExtensionRisk,
+    momentumExtensionRisk,
+    spreadRisk,
+    tooLateToChase:
+      chaseRisk >= 45 ||
+      vwapExtensionPercent >= 8 ||
+      (momentum10 >= 2.5 && closeNearHighPercent < 50),
+  };
+}
+
 function classifyLiveRunnerStage({
   fastScore = 0,
   momentum = 0,
@@ -42511,17 +43263,23 @@ function classifyLiveRunnerStage({
   spreadPercent = 0,
   tapeSpeed = 0,
   volumeSpikeRatio = 0,
+  freshBreakoutScore = 0,
+  chaseRisk = 0,
+  tooLateToChase = false,
 }) {
   if (
-    fakeBreakoutRisk >= 25 ||
-    spreadPercent > QUICK_GATE_MAX_SPREAD_PERCENT ||
-    momentum >= 18
+    tooLateToChase ||
+    chaseRisk >= 45 ||
+    fakeBreakoutRisk >= 35 ||
+    spreadPercent > LIVE_ORDER_MAX_SPREAD_PERCENT ||
+    momentum >= 8
   ) {
     return "TOO_LATE";
   }
 
   if (
     fastScore >= FAST_RUNNER_MIN_SCORE &&
+    freshBreakoutScore >= 70 &&
     momentum > 0 &&
     tapeSpeed > 0
   ) {
@@ -42530,6 +43288,7 @@ function classifyLiveRunnerStage({
 
   if (
     fastScore >= Math.max(60, FAST_RUNNER_MIN_SCORE - 18) &&
+    freshBreakoutScore >= 60 &&
     momentum > 0
   ) {
     return "HEATING_UP";
@@ -42555,6 +43314,9 @@ function buildFastRunnerCandidateFromMemory(symbol, memory = {}) {
   const minFastScoreForRunnerAsset =
     isCrypto ? 72 : FAST_RUNNER_MIN_SCORE;
 
+  const freshBreakout = calculateFreshBreakoutProfile(memory);
+  const chaseProtection = calculateLiveChaseRisk(memory, freshBreakout);
+
   const runnerStage = classifyLiveRunnerStage({
     fastScore,
     momentum,
@@ -42562,6 +43324,9 @@ function buildFastRunnerCandidateFromMemory(symbol, memory = {}) {
     spreadPercent,
     tapeSpeed,
     volumeSpikeRatio,
+    freshBreakoutScore: freshBreakout.freshBreakoutScore,
+    chaseRisk: chaseProtection.chaseRisk,
+    tooLateToChase: chaseProtection.tooLateToChase,
   });
 
   const runnerSpreadLimit =
@@ -42571,9 +43336,12 @@ function buildFastRunnerCandidateFromMemory(symbol, memory = {}) {
 
   const qualifiedFastRunner =
     fastScore >= minFastScoreForRunnerAsset &&
+    freshBreakout.enoughFreshCandles === true &&
+    freshBreakout.freshBreakoutScore >= 65 &&
     spreadPercent <= runnerSpreadLimit &&
     momentum > 0 &&
-    fakeBreakoutRisk < 35;
+    fakeBreakoutRisk < 35 &&
+    chaseProtection.tooLateToChase !== true;
 
   return {
     symbol: cleanSymbol,
@@ -42584,6 +43352,22 @@ function buildFastRunnerCandidateFromMemory(symbol, memory = {}) {
     fastRunnerScore: fastScore,
     qualifiedFastRunner,
     liveMomentumPercent: momentum,
+earlyMover:
+  (engineState.liveEarlyMoverSymbols || [])
+    .includes(cleanSymbol),
+
+freshBreakoutScore:
+  freshBreakout.freshBreakoutScore,
+
+freshBreakout,
+
+chaseRisk:
+  chaseProtection.chaseRisk,
+
+chaseProtection,
+
+starterBuyApproved: false,
+starterBuyBlockReason: null,    
     volumeSpikeRatio,
     runnerStage,
     tapeSpeed,
@@ -42595,7 +43379,14 @@ function buildFastRunnerCandidateFromMemory(symbol, memory = {}) {
     updatedAt: memory.updatedAt || new Date().toISOString(),
     reason: qualifiedFastRunner
       ? `Fast runner approved • Score ${fastScore}/100`
-      : `Fast runner not ready • Score ${fastScore}/100`,
+      : chaseProtection.tooLateToChase
+        ? `Fast runner blocked • Too late / chase risk ${chaseProtection.chaseRisk}/100`
+        : `Fast runner not ready • Score ${fastScore}/100`,
+    blockReason: qualifiedFastRunner
+      ? null
+      : chaseProtection.tooLateToChase
+        ? `Too late / chase risk ${chaseProtection.chaseRisk}/100`
+        : `Fast runner score ${fastScore}/100 or fresh breakout score ${freshBreakout.freshBreakoutScore}/100 not ready`,
   };
 }
 
@@ -42984,6 +43775,15 @@ function buildLiveStarterBuyDecision(candidate = {}, account = {}, openBotPositi
 
   const blockReasons = [];
 
+  const liveSafety = checkLiveOrderSafety(symbol, "BUY");
+
+  if (!liveSafety.approved) {
+    blockReasons.push(...liveSafety.blockReasons);
+  }
+
+  if (Number(liveSafety.quoteAgeSeconds || 999) > 15) {
+    blockReasons.push("Live quote older than 15 seconds");
+  }
   if (!ENABLE_LIVE_STARTER_BUY) {
     blockReasons.push("Live starter buy disabled by ENABLE_LIVE_STARTER_BUY");
   }
@@ -43077,6 +43877,14 @@ function buildLiveStarterBuyDecision(candidate = {}, account = {}, openBotPositi
     assetMaxBotBudget: Number(assetMaxBotBudget.toFixed(2)),
     remainingBudget: Number(remainingBudget.toFixed(2)),
     openTradeCount,
+    liveSafety,
+    earlyMover:
+      (engineState.liveEarlyMoverSymbols || [])
+        .includes(symbol),
+    freshBreakoutScore: Number(candidate.freshBreakoutScore || 0),
+    chaseRisk: Number(candidate.chaseRisk || 0),
+    starterBuyApproved: approved,
+    starterBuyBlockReason: approved ? null : blockReasons.join(" • "),
     blockReasons,
     candidate,
     reason: approved
@@ -43178,21 +43986,6 @@ async function runLiveStarterBuyGate() {
         continue;
       }
 
-      const liveSafety = checkLiveOrderSafety(symbol, "BUY");
-
-      if (!liveSafety.approved) {
-        saveFailedOrder(
-          "LIVE_STARTER_BUY_SAFETY_BLOCKED",
-          symbol,
-          liveSafety.blockReasons.join(" • "),
-          {
-            liveSafety,
-            decision,
-          }
-        );
-
-        continue;
-      }
 
       const duplicateCheck = checkAndMarkLiveDuplicateOrder(
         symbol,
@@ -44190,7 +44983,8 @@ async function refreshEarlyMoversThenPolygonSubscriptions() {
   }
 
   const earlyMoverSymbols = await getPolygonMoverSymbols(
-    LIVE_EARLY_MOVER_LIMIT
+    LIVE_EARLY_MOVER_LIMIT,
+    true
   );
 
   const polygonState = await refreshPolygonLiveSubscriptions();
@@ -45224,7 +46018,7 @@ async function getTopSignalsWithFreshQuotes(signals = [], limit = 25) {
   );
 }
 
-app.get("/high-conviction", (req, res) => {
+app.get("/high-conviction", requireAdmin, (req, res) => {
   try {
     const limit = Math.min(
       10,
@@ -45244,7 +46038,7 @@ app.get("/high-conviction", (req, res) => {
   }
 });
 
-app.get("/production-health", (req, res) => {
+app.get("/production-health", requireAdmin, (req, res) => {
   const liveQuoteCount = Object.keys(engineState.liveQuoteCache || {}).length;
 
   res.json({
@@ -45266,12 +46060,13 @@ app.get("/production-health", (req, res) => {
   });
 });
 
-app.get("/stream", (req, res) => {
+app.get("/stream", requireAdmin, (req, res) => {
   res.writeHead(200, {
     "Content-Type": "text/event-stream",
     "Cache-Control": "no-cache",
     Connection: "keep-alive",
-    "Access-Control-Allow-Origin": "*",
+    "Access-Control-Allow-Origin": getCorsStreamOrigin(req),
+    "Access-Control-Allow-Credentials": "true",
   });
 
   const allowedSymbols = String(req.query.symbols || "")
@@ -45318,12 +46113,13 @@ app.get("/stream", (req, res) => {
   });
 });
 
-app.get("/live-signals/stream", (req, res) => {
+app.get("/live-signals/stream", requireAdmin, (req, res) => {
   res.writeHead(200, {
     "Content-Type": "text/event-stream",
     "Cache-Control": "no-cache",
     Connection: "keep-alive",
-    "Access-Control-Allow-Origin": "*",
+    "Access-Control-Allow-Origin": getCorsStreamOrigin(req),
+    "Access-Control-Allow-Credentials": "true",
   });
 
   res.write(
@@ -45336,7 +46132,7 @@ app.get("/live-signals/stream", (req, res) => {
     liveSignalClients.delete(res);
   });
 });
-app.get("/live-quotes", (req, res) => {
+app.get("/live-quotes", requireAdmin, (req, res) => {
   try {
     const rawSymbols = String(req.query.symbols || "")
       .split(",")
@@ -45354,7 +46150,7 @@ app.get("/live-quotes", (req, res) => {
   }
 });
 
-app.get("/live-movers", (req, res) => {
+app.get("/live-movers", requireAdmin, (req, res) => {
   try {
     const limit = Math.min(
       100,
@@ -45706,7 +46502,7 @@ app.get("/live-movers", (req, res) => {
   }
 });
 
-app.get("/deep-intelligence-sync", (req, res) => {
+app.get("/deep-intelligence-sync", requireAdmin, (req, res) => {
   try {
     res.json({
       ok: true,
@@ -45724,7 +46520,7 @@ app.get("/deep-intelligence-sync", (req, res) => {
   }
 });
 
-app.get("/full-brain-fast-sync", (req, res) => {
+app.get("/full-brain-fast-sync", requireAdmin, (req, res) => {
   try {
     res.json({
       ok: true,
@@ -45743,7 +46539,7 @@ app.get("/full-brain-fast-sync", (req, res) => {
 });
 
 
-app.get("/live-scale-in", (req, res) => {
+app.get("/live-scale-in", requireAdmin, (req, res) => {
   try {
     res.json({
       ok: true,
@@ -45762,7 +46558,7 @@ app.get("/live-scale-in", (req, res) => {
 });
 
 
-app.get("/live-position-management", (req, res) => {
+app.get("/live-position-management", requireAdmin, (req, res) => {
   try {
     res.json({
       ok: true,
@@ -45780,7 +46576,7 @@ app.get("/live-position-management", (req, res) => {
   }
 });
 
-app.get("/live-starter-buy-gate", (req, res) => {
+app.get("/live-starter-buy-gate", requireAdmin, (req, res) => {
   try {
     res.json({
       ok: true,
@@ -45798,7 +46594,7 @@ app.get("/live-starter-buy-gate", (req, res) => {
   }
 });
 
-app.get("/quick-institutional-gate", (req, res) => {
+app.get("/quick-institutional-gate", requireAdmin, (req, res) => {
   try {
     res.json({
       ok: true,
@@ -45816,7 +46612,7 @@ app.get("/quick-institutional-gate", (req, res) => {
   }
 });
 
-app.get("/fast-runners", (req, res) => {
+app.get("/fast-runners", requireAdmin, (req, res) => {
   try {
     res.json({
       ok: true,
@@ -45834,7 +46630,7 @@ app.get("/fast-runners", (req, res) => {
   }
 });
 
-app.get("/live-market-memory", (req, res) => {
+app.get("/live-market-memory", requireAdmin, (req, res) => {
   try {
     const rawSymbols = String(req.query.symbols || "")
       .split(",")
@@ -45882,7 +46678,7 @@ app.get("/live-market-memory", (req, res) => {
   }
 });
 
-app.get("/live-signals", async (req, res) => {
+app.get("/live-signals", requireAdmin, async (req, res) => {
   try {
     const stockSignals = getTopSignals(
       engineState.lastStockSignals || [],
@@ -45924,7 +46720,7 @@ app.get("/live-signals", async (req, res) => {
   }
 });
 
-app.get("/top-brains", async (req, res) => {
+app.get("/top-brains", requireAdmin, async (req, res) => {
   try {
     const brains = buildTopAiBrains();
 
@@ -45944,7 +46740,7 @@ app.get("/top-brains", async (req, res) => {
 });
 
 
-app.get("/pending-exits", async (req, res) => {
+app.get("/pending-exits", requireAdmin, async (req, res) => {
   try {
     const openOrders = await getOpenOrders();
     const pendingExits = buildPendingExitsFromAlpacaOrders(openOrders);
@@ -45966,7 +46762,86 @@ app.get("/pending-exits", async (req, res) => {
   }
 });
 
-app.get("/status", async (req, res) => {
+app.get("/status", requireAdmin, (req, res) => {
+  try {
+    const latestStatus = getLatestFrontendStatusSnapshot();
+
+    res.json({
+      ok: true,
+      lightweight: true,
+      generatedAt: new Date().toISOString(),
+
+      online: true,
+      mode: TRADING_MODE,
+      effectiveMode: engineState.effectiveMode,
+      tradingModeLocked,
+      autoTradingEnabled,
+
+      marketOpen: engineState.marketOpen,
+      marketRegime: engineState.marketRegime,
+      marketStressLevel: engineState.marketStressLevel,
+      marketMomentumScore: engineState.marketMomentumScore,
+      marketVolatility: engineState.marketVolatility,
+      marketBreadth: engineState.marketBreadth,
+      institutionalExposureMode: engineState.institutionalExposureMode,
+
+      lastScanAt: engineState.lastScanAt,
+      lastHeartbeatAt: engineState.lastHeartbeatAt,
+      lastSuccessfulCycleAt: engineState.lastSuccessfulCycleAt,
+      lastTickDurationMs: engineState.lastTickDurationMs,
+      lastError: engineState.lastError,
+
+      liveQuoteStreamState: engineState.liveQuoteStreamState || null,
+      polygonLiveStreamState: engineState.polygonLiveStreamState || null,
+      liveEarlyMoverRefreshState:
+        engineState.liveEarlyMoverRefreshState || null,
+
+      signalCount:
+        (engineState.lastStockSignals || []).length +
+        (engineState.lastCryptoSignals || []).length,
+
+      stockSignalCount:
+        (engineState.lastStockSignals || []).length,
+
+      cryptoSignalCount:
+        (engineState.lastCryptoSignals || []).length,
+
+      topStockSignals:
+        (engineState.topStockSignals || [])
+          .slice(0, 25)
+          .map(mergeLiveQuoteIntoSignal),
+
+      topCryptoSignals:
+        (engineState.topCryptoSignals || [])
+          .slice(0, 25)
+          .map(mergeLiveQuoteIntoSignal),
+
+      fastRunnerCandidates:
+        (engineState.fastRunnerCandidates || []).slice(0, 25),
+
+      quickInstitutionalCandidates:
+        (engineState.quickInstitutionalCandidates || []).slice(0, 25),
+
+      liveStarterBuyGateState:
+        engineState.liveStarterBuyGateState || null,
+
+      account: latestStatus?.account || engineState.cachedAccount || null,
+      risk: latestStatus?.risk || null,
+
+      note:
+        "Lightweight status. Use /status/full for full broker/account/order debug payload.",
+    });
+  } catch (err) {
+    res.status(500).json({
+      ok: false,
+      error: "Failed to load lightweight status",
+      details: err.message,
+      generatedAt: new Date().toISOString(),
+    });
+  }
+});
+
+app.get("/status/full", requireAdmin, async (req, res) => {
   try {
     const account = await getAccount();
     const peaks = updateAccountPeaks(account);
@@ -46154,7 +47029,7 @@ app.get("/status", async (req, res) => {
   }
 });
 
-app.get("/stock-quote/:symbol", async (req, res) => {
+app.get("/stock-quote/:symbol", requireAdmin, async (req, res) => {
   try {
     const symbol = normalizeSymbol(req.params.symbol);
     const q = await getCombinedStockQuote(symbol);
@@ -46202,7 +47077,7 @@ app.get("/stock-quote/:symbol", async (req, res) => {
   }
 });
 
-app.get("/institutional-dashboard", (req, res) => {
+app.get("/institutional-dashboard", requireAdmin, async (req, res) => {
   try {
     res.json({
       success: true,
@@ -46217,7 +47092,7 @@ app.get("/institutional-dashboard", (req, res) => {
   }
 });
 
-app.get("/signals", (req, res) => {
+app.get("/signals", requireAdmin, async (req, res) => {
   res.json({
     lastScanAt: engineState.lastScanAt,
     signals: (engineState.lastSignals || []).map(mergeLiveQuoteIntoSignal),
@@ -46226,7 +47101,7 @@ app.get("/signals", (req, res) => {
 });
 // ===== CRYPTO ROUTE START =====
 
-app.get("/crypto-signals", async (req, res) => {
+app.get("/crypto-signals", requireAdmin, async (req, res) => {
   try {
     if (!["live_crypto", "smart"].includes(TRADING_MODE)) {
       return res.status(403).json({
@@ -46246,7 +47121,7 @@ app.get("/crypto-signals", async (req, res) => {
   } catch (err) {
     res.status(500).json({ error: err.message });
   }
-}); app.get("/all-positions-test", async (req, res) => {
+}); app.get("/all-positions-test", requireAdmin, async (req, res) => {
   try {
     const positions = await getPositions();
 
@@ -46266,7 +47141,7 @@ app.get("/crypto-signals", async (req, res) => {
 
 // ===== CRYPTO ROUTE END =====
 
-app.get("/alpaca/raw-positions", async (req, res) => {
+app.get("/alpaca/raw-positions", requireAdmin, async (req, res) => {
   try {
     const positions = await getPositions();
     const aiOwnedSymbols = await getAiOwnedSymbols();
@@ -46288,7 +47163,7 @@ app.get("/alpaca/raw-positions", async (req, res) => {
   }
 });
 
-app.get("/alpaca/raw-orders", async (req, res) => {
+app.get("/alpaca/raw-orders", requireAdmin, async (req, res) => {
   try {
     const orders = await getOrders();
 
@@ -46336,7 +47211,7 @@ app.get("/alpaca/raw-orders", async (req, res) => {
     res.status(500).json({ error: err.message });
   }
 });
-app.get("/telemetry", async (req, res) => {
+app.get("/telemetry", requireAdmin, async (req, res) => {
   res.json({
     engine: {
       running: engineState.running,
@@ -46406,7 +47281,7 @@ app.get("/telemetry", async (req, res) => {
       engineState.marketRegimeHistory?.slice(0, 20) || [],
   });
 });
-app.post("/scan-now", async (req, res) => {
+app.post("/scan-now", requireAdmin, async (req, res) => {
   if (engineState.running) {
     return res.json({
       ok: true,
@@ -46433,7 +47308,7 @@ app.post("/scan-now", async (req, res) => {
   });
 });
 
-app.post("/auto-trading/on", (req, res) => {
+app.post("/auto-trading/on", requireAdmin, (req, res) => {
   if (engineState.dailyLossLocked) {
     return res.status(403).json({
       message: "Auto trading locked because daily loss limit was reached",
@@ -46458,7 +47333,7 @@ app.post("/auto-trading/on", (req, res) => {
     autoTradingEnabled,
   });
 });
-app.post("/reset-runtime-config", (req, res) => {
+app.post("/reset-runtime-config", requireAdmin, (req, res) => {
   try {
     if (fs.existsSync(CONFIG_FILE)) {
       fs.unlinkSync(CONFIG_FILE);
@@ -46478,7 +47353,7 @@ app.post("/reset-runtime-config", (req, res) => {
     });
   }
 });
-app.get("/config", (req, res) => {
+app.get("/config", requireAdmin, (req, res) => {
   res.json({
     message: "Current remote config",
     config: CONFIG,
@@ -46486,7 +47361,7 @@ app.get("/config", (req, res) => {
 });
 
 
-app.post("/config", (req, res) => {
+app.post("/config", requireAdmin, (req, res) => {
   const numericConfigKeys = [
     "minStockPrice",
     "maxStockPrice",
@@ -46630,7 +47505,7 @@ app.post("/config", (req, res) => {
   });
 });
 
-app.post("/mode-lock/on", (req, res) => {
+app.post("/mode-lock/on", requireAdmin, (req, res) => {
   tradingModeLocked = true;
 
   runtimeConfig = saveRuntimeConfig({
@@ -46648,7 +47523,7 @@ app.post("/mode-lock/on", (req, res) => {
   });
 });
 
-app.post("/mode-lock/off", (req, res) => {
+app.post("/mode-lock/off", requireAdmin, (req, res) => {
   tradingModeLocked = false;
 
   runtimeConfig = saveRuntimeConfig({
@@ -46665,7 +47540,7 @@ app.post("/mode-lock/off", (req, res) => {
     autoTradingEnabled,
   });
 });
-app.post("/manual-buy-stock", async (req, res) => {
+app.post("/manual-buy-stock", requireAdmin, async (req, res) => {
   try {
     const { symbol, dollars, shares, buyMode } = req.body;
 
@@ -46757,7 +47632,7 @@ app.post("/manual-buy-stock", async (req, res) => {
   }
 });
 
-app.post("/close-position", async (req, res) => {
+app.post("/close-position", requireAdmin, async (req, res) => {
   const { symbol } = req.body;
 
   if (!symbol) {
@@ -46788,7 +47663,7 @@ app.post("/close-position", async (req, res) => {
   }
 });
 
-app.get("/probability-reinforcement", async (req, res) => {
+app.get("/probability-reinforcement", requireAdmin, async (req, res) => {
   try {
     res.json({
       ok: true,
@@ -46809,7 +47684,7 @@ app.get("/probability-reinforcement", async (req, res) => {
   }
 });
 
-app.get("/institutional-orchestrator", async (req, res) => {
+app.get("/institutional-orchestrator", requireAdmin, async (req, res) => {
   try {
     res.json({
       ok: true,
@@ -46830,7 +47705,7 @@ app.get("/institutional-orchestrator", async (req, res) => {
   }
 });
 
-app.get("/dcf-valuation", async (req, res) => {
+app.get("/dcf-valuation", requireAdmin, async (req, res) => {
   try {
     res.json({
       ok: true,
@@ -46851,7 +47726,7 @@ app.get("/dcf-valuation", async (req, res) => {
   }
 });
 
-app.get("/competitive-advantage", async (req, res) => {
+app.get("/competitive-advantage", requireAdmin, async (req, res) => {
   try {
     res.json({
       ok: true,
@@ -46872,7 +47747,7 @@ app.get("/competitive-advantage", async (req, res) => {
   }
 });
 
-app.get("/earnings-intelligence", async (req, res) => {
+app.get("/earnings-intelligence", requireAdmin, async (req, res) => {
   try {
     res.json({
       ok: true,
@@ -46893,7 +47768,7 @@ app.get("/earnings-intelligence", async (req, res) => {
   }
 });
 
-app.get("/portfolio-optimizer", async (req, res) => {
+app.get("/portfolio-optimizer", requireAdmin, async (req, res) => {
   try {
     res.json({
       ok: true,
@@ -46914,7 +47789,7 @@ app.get("/portfolio-optimizer", async (req, res) => {
   }
 });
 
-app.get("/technical-intelligence", async (req, res) => {
+app.get("/technical-intelligence", requireAdmin, async (req, res) => {
   try {
     res.json({
       ok: true,
@@ -46934,7 +47809,7 @@ app.get("/technical-intelligence", async (req, res) => {
   }
 });
 
-app.get("/statistical-edge", async (req, res) => {
+app.get("/statistical-edge", requireAdmin, async (req, res) => {
   try {
     res.json({
       ok: true,
@@ -46954,7 +47829,7 @@ app.get("/statistical-edge", async (req, res) => {
   }
 });
 
-app.get("/capital-compounding", async (req, res) => {
+app.get("/capital-compounding", requireAdmin, async (req, res) => {
   try {
     res.json({
       ok: true,
@@ -46980,7 +47855,7 @@ app.get("/capital-compounding", async (req, res) => {
   }
 });
 
-app.post("/reset-daily-lock", (req, res) => {
+app.post("/reset-daily-lock", requireAdmin, (req, res) => {
   engineState.dailyLossLocked = false;
   engineState.profitLocked = false;
   engineState.dailyStartEquity = null;
@@ -46999,7 +47874,7 @@ app.post("/reset-daily-lock", (req, res) => {
   });
 });
 
-app.get("/morning-strike", async (req, res) => {
+app.get("/morning-strike", requireAdmin, async (req, res) => {
   try {
     resetMorningTradeCounterIfNewDay();
 
@@ -47077,7 +47952,7 @@ app.get("/morning-strike", async (req, res) => {
   }
 });
 
-app.get("/polygon-test/:symbol", async (req, res) => {
+app.get("/polygon-test/:symbol", requireAdmin, async (req, res) => {
   try {
     const symbol = normalizeSymbol(req.params.symbol);
     const quote = await polygonQuote(symbol);
@@ -47099,7 +47974,7 @@ app.get("/polygon-test/:symbol", async (req, res) => {
   }
 });
 
-app.get("/trade-journal", async (req, res) => {
+app.get("/trade-journal", requireAdmin, (req, res) => {
   try {
     ensureTradeJournalState();
 
