@@ -324,6 +324,10 @@ const LIVE_STARTER_MIN_GATE_SCORE = Number(
   process.env.LIVE_STARTER_MIN_GATE_SCORE || 78
 );
 
+const LIVE_STARTER_MIN_FINAL_SCORE = Number(
+  process.env.LIVE_STARTER_MIN_FINAL_SCORE || 86
+);
+
 const LIVE_STARTER_MAX_BUYS_PER_CYCLE = Number(
   process.env.LIVE_STARTER_MAX_BUYS_PER_CYCLE || 5
 );
@@ -363,11 +367,11 @@ const LIVE_PROFIT_TRIM_QTY_PERCENT = Number(
 );
 
 const LIVE_HARD_STOP_PERCENT = Number(
-  process.env.LIVE_HARD_STOP_PERCENT || 2
+  process.env.LIVE_HARD_STOP_PERCENT || 3.5
 );
 
 const LIVE_TRAIL_STOP_FROM_HIGH_PERCENT = Number(
-  process.env.LIVE_TRAIL_STOP_FROM_HIGH_PERCENT || 2
+  process.env.LIVE_TRAIL_STOP_FROM_HIGH_PERCENT || 4
 );
 
 const ENABLE_LIVE_SCALE_IN =
@@ -17496,6 +17500,61 @@ function calculateRunnerStageProfile(q = {}) {
   };
 }
 
+function calculateRunnerHoldQuality(q = {}) {
+  const confirmations = q.confirmations || {};
+  const profile = q.runnerStageProfile || calculateRunnerStageProfile(q);
+  const technicals = q.technicals || {};
+
+  const percentChange = Number(q.percentChange || 0);
+  const volumeSpikeRatio = Number(
+    confirmations.volumeSpikeRatio ||
+    q.volumeSpikeRatio ||
+    q.volumeRatio ||
+    0
+  );
+
+  const closeNearHighPercent = Number(profile.closeNearHighPercent || 0);
+  const pullbackFromHighPercent = Number(profile.pullbackFromHighPercent || 0);
+  const vwapExtensionPercent = Number(profile.vwapExtensionPercent || 0);
+  const rsi = Number(technicals.rsi || 50);
+
+  const supportHolding =
+    profile.aboveVwap === true &&
+    closeNearHighPercent >= 65 &&
+    pullbackFromHighPercent <= 6;
+
+  const volumeSustained =
+    volumeSpikeRatio >= 1.5;
+
+  const notOverextended =
+    vwapExtensionPercent <= 6 &&
+    percentChange <= 18 &&
+    rsi <= 78;
+
+  const runnerHoldScore = clampScore(
+    35 +
+    (supportHolding ? 25 : -20) +
+    (volumeSustained ? 20 : -15) +
+    (notOverextended ? 20 : -25) +
+    (profile.runnerStage === "IGNITION" ? 10 : 0) +
+    (profile.runnerStage === "EXPANSION" ? 8 : 0) -
+    (profile.runnerStage === "MATURE" ? 18 : 0) -
+    (profile.runnerStage === "EXHAUSTION" ? 35 : 0)
+  );
+
+  return {
+    runnerHoldScore: Number(runnerHoldScore.toFixed(2)),
+    supportHolding,
+    volumeSustained,
+    notOverextended,
+    runnerHoldApproved:
+      runnerHoldScore >= 78 &&
+      supportHolding &&
+      volumeSustained &&
+      notOverextended,
+  };
+}
+
 function scoreStock(q) {
   let score = 0;
   const runnerStageProfile = calculateRunnerStageProfile(q);
@@ -17504,6 +17563,9 @@ function scoreStock(q) {
   q.runnerStageProfile = runnerStageProfile;
   q.lateChaseRisk = runnerStageProfile.lateChaseRisk;
 
+  const runnerHoldQuality = calculateRunnerHoldQuality(q);
+  q.runnerHoldQuality = runnerHoldQuality;
+  q.runnerHoldScore = runnerHoldQuality.runnerHoldScore;
 
   // 🔥 LARGE CAP / INSTITUTIONAL BIAS
   if (q.current >= 5) score += 5;
@@ -22962,7 +23024,28 @@ function scoreCrypto(quote, bars = []) {
   if (shortMomentumPercent < -0.35) score -= 8;
   if (closeNearHigh < 25) score -= 8;
 
-  return clampScore(score);
+  let finalScore = clampScore(score);
+
+  if (!runnerHoldQuality.runnerHoldApproved) {
+    finalScore = Math.min(finalScore, 86);
+  }
+
+  if (runnerHoldQuality.runnerHoldScore < 70) {
+    finalScore = Math.min(finalScore, 82);
+  }
+
+  if (runnerStageProfile.runnerStage === "MATURE") {
+    finalScore = Math.min(finalScore, 84);
+  }
+
+  if (
+    runnerStageProfile.runnerStage === "EXHAUSTION" ||
+    runnerStageProfile.lateChaseRisk === true
+  ) {
+    finalScore = Math.min(finalScore, 76);
+  }
+
+  return finalScore;
 }
 
 async function getBestCryptoBars(symbol) {
@@ -43686,7 +43769,29 @@ function buildFastRunnerCandidateFromMemory(symbol, memory = {}) {
       ? QUICK_GATE_MAX_SPREAD_PERCENT * 1.75
       : QUICK_GATE_MAX_SPREAD_PERCENT;
 
+  const runnerHoldQuality = calculateRunnerHoldQuality({
+    ...memory,
+    current: price,
+    price,
+    percentChange: Number(memory.percentChange || breakdown.percentChange || 0),
+    volumeSpikeRatio,
+    confirmations: {
+      ...(memory.confirmations || {}),
+      volumeSpikeRatio,
+      closeNearHighPercent: Number(breakdown.closeNearHighPercent || 0),
+      aboveVwap: memory.aboveVwap === true || breakdown.aboveVwap === true,
+    },
+    runnerStageProfile: {
+      runnerStage,
+      closeNearHighPercent: Number(breakdown.closeNearHighPercent || 0),
+      pullbackFromHighPercent: Number(breakdown.pullbackFromHighPercent || 0),
+      vwapExtensionPercent: Number(breakdown.vwapExtensionPercent || 0),
+      aboveVwap: memory.aboveVwap === true || breakdown.aboveVwap === true,
+    },
+  });
+
   const qualifiedFastRunner =
+    runnerHoldQuality.runnerHoldApproved === true &&
     fastScore >= minFastScoreForRunnerAsset &&
     freshBreakout.enoughFreshCandles === true &&
     freshBreakout.freshBreakoutScore >= 65 &&
@@ -43696,7 +43801,6 @@ function buildFastRunnerCandidateFromMemory(symbol, memory = {}) {
     fakeBreakoutRisk < 35 &&
     chaseProtection.tooLateToChase !== true &&
     runnerStage !== "TOO_LATE";
-
   return {
     symbol: cleanSymbol,
     assetClass: isCrypto ? "crypto" : "stock",
@@ -43704,6 +43808,9 @@ function buildFastRunnerCandidateFromMemory(symbol, memory = {}) {
     price,
     current: price,
     fastRunnerScore: fastScore,
+    runnerHoldQuality,
+    runnerHoldScore: runnerHoldQuality.runnerHoldScore,
+    runnerHoldApproved: runnerHoldQuality.runnerHoldApproved,    
     qualifiedFastRunner,
     liveMomentumPercent: momentum,
 earlyMover:
@@ -44385,7 +44492,12 @@ function buildLiveStarterBuyDecision(candidate = {}, account = {}, openBotPositi
   if (!symbol || price <= 0) {
     blockReasons.push("Invalid live price");
   }
-
+  
+  if (candidate.runnerHoldQuality?.runnerHoldApproved !== true) {
+    blockReasons.push(
+      `Runner hold quality failed: ${candidate.runnerHoldQuality?.runnerHoldScore ?? "missing"}`
+    );
+  }
   if (candidate.quickInstitutionalApproved !== true) {
     blockReasons.push("Quick Institutional Gate not approved");
   }
@@ -44409,8 +44521,8 @@ function buildLiveStarterBuyDecision(candidate = {}, account = {}, openBotPositi
     blockReasons.push(`Live starter gate score below ${minGateScoreForAsset}`);
   }
 
-  if (finalLiveScore < Number(CONFIG.minScoreToBuy || 70)) {
-    blockReasons.push(`Final live score below minScoreToBuy ${CONFIG.minScoreToBuy}`);
+  if (finalLiveScore < LIVE_STARTER_MIN_FINAL_SCORE) {
+    blockReasons.push(`Final live score below live minimum ${LIVE_STARTER_MIN_FINAL_SCORE}`);
   }
 
   if (alreadyOwned) {
@@ -44459,6 +44571,7 @@ function buildLiveStarterBuyDecision(candidate = {}, account = {}, openBotPositi
     fastScore,
     gateScore,
     finalLiveScore,
+    runnerHoldQuality: candidate.runnerHoldQuality || null,    
     cash,
     equity,
     currentExposure: Number(totalExposure.toFixed(2)),
@@ -44624,6 +44737,7 @@ async function runLiveStarterBuyGate() {
           score: decision.finalLiveScore,
           fastRunnerScore: decision.fastScore,
           quickInstitutionalScore: decision.gateScore,
+          runnerHoldQuality: decision.runnerHoldQuality || null,          
           entryType: "LIVE_STARTER_BUY",
           starterAmount: decision.starterAmount,
           plannedFullTradeAmount: decision.plannedFullTradeAmount,
@@ -44642,6 +44756,7 @@ async function runLiveStarterBuyGate() {
             quickInstitutionalApproved: true,
             fastRunnerScore: decision.fastScore,
             quickInstitutionalScore: decision.gateScore,
+            runnerHoldQuality: decision.runnerHoldQuality || null,            
           },
           institutionalExecutionPlan: {
             starterBuy: true,
