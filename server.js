@@ -1998,8 +1998,41 @@ const CONFIG = {
     process.env.MAX_GAP_UP_PERCENT || 30
   ),
 
+  realCashTradingUnlocked:
+    process.env.REAL_CASH_TRADING_UNLOCKED === "true",
+
+  maxRealCashStarterBuyDollars: Number(
+    process.env.MAX_REAL_CASH_STARTER_BUY_DOLLARS || 25
+  ),
+
+  maxStarterBuyEquityPercent: Number(
+    process.env.MAX_STARTER_BUY_EQUITY_PERCENT || 35
+  ),
+
+  requireEarlyTechnicalForLiveStock:
+    process.env.REQUIRE_EARLY_TECHNICAL_FOR_LIVE_STOCK !== "false",
+
+  minLiveEarlyTechnicalScore: Number(
+    process.env.MIN_LIVE_EARLY_TECHNICAL_SCORE || 75
+  ),  
+
   requireAboveVwap:
     process.env.REQUIRE_ABOVE_VWAP === "true",
+
+  earlyMoverBenchmarkSymbol:
+    process.env.EARLY_MOVER_BENCHMARK_SYMBOL || "SPY",
+
+  earlyMoverAtrLength: Number(
+    process.env.EARLY_MOVER_ATR_LENGTH || 14
+  ),
+
+  earlyMoverAtrBreakoutMultiplier: Number(
+    process.env.EARLY_MOVER_ATR_BREAKOUT_MULTIPLIER || 1.5
+  ),
+
+  earlyMoverDailyAtrExpansionMultiplier: Number(
+    process.env.EARLY_MOVER_DAILY_ATR_EXPANSION_MULTIPLIER || 1.5
+  ),
 
   enableNewsRiskFilter:
     process.env.ENABLE_NEWS_RISK_FILTER === "true",
@@ -2009,6 +2042,24 @@ const CONFIG = {
   ),
 
   ...runtimeConfig,
+
+  realCashTradingUnlocked:
+    process.env.REAL_CASH_TRADING_UNLOCKED === "true",
+
+  maxRealCashStarterBuyDollars: Number(
+    process.env.MAX_REAL_CASH_STARTER_BUY_DOLLARS || 25
+  ),
+
+  maxStarterBuyEquityPercent: Number(
+    process.env.MAX_STARTER_BUY_EQUITY_PERCENT || 35
+  ),
+
+  requireEarlyTechnicalForLiveStock:
+    process.env.REQUIRE_EARLY_TECHNICAL_FOR_LIVE_STOCK !== "false",
+
+  minLiveEarlyTechnicalScore: Number(
+    process.env.MIN_LIVE_EARLY_TECHNICAL_SCORE || 75
+  ),  
 
   minScoreToBuy: Math.max(
     70,
@@ -2040,6 +2091,12 @@ const NUMERIC_CONFIG_DEFAULTS = {
   maxPercentChange: 80,
   maxSignalsToReturn: 75,
   topAutoTradeCandidates: 15,
+  earlyMoverAtrLength: 14,
+    maxRealCashStarterBuyDollars: 25,
+  maxStarterBuyEquityPercent: 35,
+  minLiveEarlyTechnicalScore: 75,
+  earlyMoverAtrBreakoutMultiplier: 1.5,
+  earlyMoverDailyAtrExpansionMultiplier: 1.5,  
 };
 
 for (const [key, fallback] of Object.entries(NUMERIC_CONFIG_DEFAULTS)) {
@@ -16818,47 +16875,250 @@ async function getRecentBars(symbol, timeframe = "5Min", limit = 30) {
 }
 
 function calculateBarStats(bars = []) {
-  if (!bars.length) {
+  const cleanBars = (bars || [])
+    .map((bar) => ({
+      open: Number(bar.o || bar.open || 0),
+      high: Number(bar.h || bar.high || 0),
+      low: Number(bar.l || bar.low || 0),
+      close: Number(bar.c || bar.close || 0),
+      volume: Number(bar.v || bar.volume || 0),
+      time: bar.t || bar.timestamp || null,
+    }))
+    .filter((bar) => bar.high > 0 && bar.low > 0 && bar.close > 0);
+
+  if (!cleanBars.length) {
     return {
       avgVolume: 0,
       lastVolume: 0,
       volumeSpikeRatio: 0,
       vwap: 0,
+      previousVwap: 0,
       latestClose: 0,
+      previousClose: 0,
       latestHigh: 0,
       latestLow: 0,
       highOfBars: 0,
+      trueRange: 0,
+      averageTrueRange: 0,
+      atrExpansionRatio: 0,
+      vwapCrossUp: false,
     };
   }
 
-  const totalVolume = bars.reduce((sum, b) => sum + Number(b.v || 0), 0);
-  const avgVolume = totalVolume / bars.length;
+  const totalVolume = cleanBars.reduce((sum, b) => sum + Number(b.volume || 0), 0);
+  const avgVolume = totalVolume / cleanBars.length;
 
-  let vwapNumerator = 0;
-  let vwapVolume = 0;
+  function buildVwap(sampleBars = []) {
+    let numerator = 0;
+    let volumeTotal = 0;
 
-  for (const b of bars) {
-    const high = Number(b.h || 0);
-    const low = Number(b.l || 0);
-    const close = Number(b.c || 0);
-    const volume = Number(b.v || 0);
-    const typicalPrice = (high + low + close) / 3;
+    for (const b of sampleBars) {
+      const typicalPrice = (b.high + b.low + b.close) / 3;
+      numerator += typicalPrice * b.volume;
+      volumeTotal += b.volume;
+    }
 
-    vwapNumerator += typicalPrice * volume;
-    vwapVolume += volume;
+    return volumeTotal > 0 ? numerator / volumeTotal : 0;
   }
 
-  const latest = bars[bars.length - 1];
+  const latest = cleanBars[cleanBars.length - 1];
+  const previous = cleanBars[cleanBars.length - 2] || latest;
+  const priorBars = cleanBars.slice(0, -1);
+
+  const trueRanges = cleanBars.map((bar, index) => {
+    const previousClose = index > 0 ? cleanBars[index - 1].close : bar.close;
+
+    return Math.max(
+      bar.high - bar.low,
+      Math.abs(bar.high - previousClose),
+      Math.abs(bar.low - previousClose)
+    );
+  });
+
+  const atrLength = Math.max(2, Number(CONFIG.earlyMoverAtrLength || 14));
+  const atrSample = trueRanges.slice(-atrLength - 1, -1);
+  const averageTrueRange =
+    atrSample.length > 0
+      ? atrSample.reduce((sum, value) => sum + value, 0) / atrSample.length
+      : 0;
+
+  const trueRange = trueRanges[trueRanges.length - 1] || 0;
+  const vwap = buildVwap(cleanBars);
+  const previousVwap = buildVwap(priorBars);
 
   return {
     avgVolume,
-    lastVolume: Number(latest.v || 0),
-    volumeSpikeRatio: avgVolume > 0 ? Number(latest.v || 0) / avgVolume : 0,
-    vwap: vwapVolume > 0 ? vwapNumerator / vwapVolume : 0,
-    latestClose: Number(latest.c || 0),
-    latestHigh: Number(latest.h || 0),
-    latestLow: Number(latest.l || 0),
-    highOfBars: Math.max(...bars.map((b) => Number(b.h || 0))),
+    lastVolume: latest.volume,
+    volumeSpikeRatio: avgVolume > 0 ? latest.volume / avgVolume : 0,
+    vwap,
+    previousVwap,
+    latestClose: latest.close,
+    previousClose: previous.close,
+    latestHigh: latest.high,
+    latestLow: latest.low,
+    highOfBars: Math.max(...cleanBars.map((b) => b.high)),
+    trueRange,
+    averageTrueRange,
+    atrExpansionRatio:
+      averageTrueRange > 0 ? trueRange / averageTrueRange : 0,
+    vwapCrossUp:
+      previousVwap > 0 &&
+      previous.close <= previousVwap &&
+      latest.close > vwap,
+  };
+}
+function calculateRelativeStrengthVsBenchmark(stockDailyBars = [], benchmarkDailyBars = []) {
+  const stock = (stockDailyBars || [])
+    .map((bar) => ({
+      close: Number(bar.c || bar.close || 0),
+    }))
+    .filter((bar) => bar.close > 0);
+
+  const benchmark = (benchmarkDailyBars || [])
+    .map((bar) => ({
+      close: Number(bar.c || bar.close || 0),
+    }))
+    .filter((bar) => bar.close > 0);
+
+  const count = Math.min(stock.length, benchmark.length);
+
+  if (count < 3) {
+    return {
+      rsRatio: 0,
+      previousRsRatio: 0,
+      rsTrend: 0,
+      stockPercentChange: 0,
+      benchmarkPercentChange: 0,
+      relativeStrengthScore: 0,
+      hasRelativeStrength: false,
+    };
+  }
+
+  const stockNow = stock[stock.length - 1].close;
+  const stockPrev = stock[stock.length - 2].close;
+  const benchmarkNow = benchmark[benchmark.length - 1].close;
+  const benchmarkPrev = benchmark[benchmark.length - 2].close;
+
+  const rsRatio = benchmarkNow > 0 ? stockNow / benchmarkNow : 0;
+  const previousRsRatio = benchmarkPrev > 0 ? stockPrev / benchmarkPrev : 0;
+  const rsTrend = rsRatio - previousRsRatio;
+
+  const stockPercentChange =
+    stockPrev > 0 ? ((stockNow - stockPrev) / stockPrev) * 100 : 0;
+
+  const benchmarkPercentChange =
+    benchmarkPrev > 0 ? ((benchmarkNow - benchmarkPrev) / benchmarkPrev) * 100 : 0;
+
+  const outperformance = stockPercentChange - benchmarkPercentChange;
+
+  const relativeStrengthScore = clampScore(
+    35 +
+    (rsTrend > 0 ? 25 : -15) +
+    (outperformance > 0 ? 15 : -10) +
+    (outperformance >= 1 ? 12 : 0) +
+    (outperformance >= 2 ? 13 : 0)
+  );
+
+  return {
+    rsRatio: Number(rsRatio.toFixed(6)),
+    previousRsRatio: Number(previousRsRatio.toFixed(6)),
+    rsTrend: Number(rsTrend.toFixed(6)),
+    stockPercentChange: Number(stockPercentChange.toFixed(2)),
+    benchmarkPercentChange: Number(benchmarkPercentChange.toFixed(2)),
+    relativeStrengthScore,
+    hasRelativeStrength: rsTrend > 0 && outperformance > 0,
+  };
+}
+
+function calculateEarlyMoverTechnicalProfile({
+  q = {},
+  intradayStats = {},
+  dailyStats = {},
+  stockDailyBars = [],
+  benchmarkDailyBars = [],
+} = {}) {
+  const volumeSpikeRatio = Number(
+    intradayStats.volumeSpikeRatio ||
+    q.confirmations?.volumeSpikeRatio ||
+    q.volumeSpikeRatio ||
+    q.volumeRatio ||
+    0
+  );
+
+  const atrExpansionRatio = Number(intradayStats.atrExpansionRatio || 0);
+  const dailyAtrExpansionRatio = Number(dailyStats.atrExpansionRatio || 0);
+
+  const vwapCrossUp = intradayStats.vwapCrossUp === true;
+  const aboveVwap =
+    Number(intradayStats.vwap || 0) > 0
+      ? Number(q.current || q.price || 0) >= Number(intradayStats.vwap || 0)
+      : q.confirmations?.aboveVwap === true;
+
+  const relativeStrength =
+    calculateRelativeStrengthVsBenchmark(stockDailyBars, benchmarkDailyBars);
+
+  const volumeScore =
+    volumeSpikeRatio >= 3 ? 100 :
+    volumeSpikeRatio >= 2 ? 85 :
+    volumeSpikeRatio >= 1.5 ? 70 :
+    volumeSpikeRatio >= 1.2 ? 50 :
+    0;
+
+  const atrBreakoutScore =
+    atrExpansionRatio >= 2 ? 100 :
+    atrExpansionRatio >= Number(CONFIG.earlyMoverAtrBreakoutMultiplier || 1.5) ? 85 :
+    atrExpansionRatio >= 1.2 ? 65 :
+    0;
+
+  const dailyAtrExpansionScore =
+    dailyAtrExpansionRatio >= 2.5 ? 100 :
+    dailyAtrExpansionRatio >= 2 ? 85 :
+    dailyAtrExpansionRatio >= Number(CONFIG.earlyMoverDailyAtrExpansionMultiplier || 1.5) ? 70 :
+    0;
+
+  const vwapCrossScore =
+    vwapCrossUp ? 100 :
+    aboveVwap ? 65 :
+    0;
+
+  const earlyTechnicalScore = clampScore(
+    volumeScore * 0.25 +
+    atrBreakoutScore * 0.2 +
+    dailyAtrExpansionScore * 0.2 +
+    relativeStrength.relativeStrengthScore * 0.2 +
+    vwapCrossScore * 0.15
+  );
+
+  const earlyTechnicalGrade =
+    earlyTechnicalScore >= 85
+      ? "ELITE_EARLY_MOVER_CONFIRMATION"
+      : earlyTechnicalScore >= 75
+        ? "STRONG_EARLY_MOVER_CONFIRMATION"
+        : earlyTechnicalScore >= 60
+          ? "DEVELOPING_EARLY_MOVER_CONFIRMATION"
+          : "WEAK_EARLY_MOVER_CONFIRMATION";
+
+  return {
+    volumeScore,
+    atrBreakoutScore,
+    dailyAtrExpansionScore,
+    relativeStrengthScore: relativeStrength.relativeStrengthScore,
+    vwapCrossScore,
+    earlyTechnicalScore,
+    earlyTechnicalGrade,
+
+    volumeSpikeRatio: Number(volumeSpikeRatio.toFixed(2)),
+    atrExpansionRatio: Number(atrExpansionRatio.toFixed(2)),
+    dailyAtrExpansionRatio: Number(dailyAtrExpansionRatio.toFixed(2)),
+    aboveVwap,
+    vwapCrossUp,
+
+    rsRatio: relativeStrength.rsRatio,
+    previousRsRatio: relativeStrength.previousRsRatio,
+    rsTrend: relativeStrength.rsTrend,
+    stockPercentChange: relativeStrength.stockPercentChange,
+    benchmarkPercentChange: relativeStrength.benchmarkPercentChange,
+    hasRelativeStrength: relativeStrength.hasRelativeStrength,
   };
 }
 
@@ -16983,10 +17243,120 @@ async function getNewsRisk(symbol) {
   }
 }
 
+let benchmarkDailyBarsCache = {
+  symbol: "",
+  at: 0,
+  bars: [],
+};
+
+async function getCachedBenchmarkDailyBars(symbol = "SPY") {
+  const cleanSymbol = normalizeSymbol(symbol || "SPY");
+  const now = Date.now();
+
+  if (
+    benchmarkDailyBarsCache.symbol === cleanSymbol &&
+    now - benchmarkDailyBarsCache.at < 60_000 &&
+    Array.isArray(benchmarkDailyBarsCache.bars)
+  ) {
+    return benchmarkDailyBarsCache.bars;
+  }
+
+  const bars = await getRecentBars(cleanSymbol, "1Day", 25);
+
+  benchmarkDailyBarsCache = {
+    symbol: cleanSymbol,
+    at: now,
+    bars,
+  };
+
+  return bars;
+}
+
+function calculateCurrentDailyAtrExpansionRatio(q = {}, dailyBars = []) {
+  const bars = (dailyBars || [])
+    .map((bar) => ({
+      high: Number(bar.h || bar.high || 0),
+      low: Number(bar.l || bar.low || 0),
+      close: Number(bar.c || bar.close || 0),
+    }))
+    .filter((bar) => bar.high > 0 && bar.low > 0 && bar.close > 0);
+
+  const atrLength = Math.max(2, Number(CONFIG.earlyMoverAtrLength || 14));
+  const historicalBars = bars.slice(-atrLength - 1, -1);
+
+  if (historicalBars.length < 2) return 0;
+
+  const historicalTrueRanges = historicalBars.map((bar, index) => {
+    const previousClose =
+      index > 0 ? historicalBars[index - 1].close : bar.close;
+
+    return Math.max(
+      bar.high - bar.low,
+      Math.abs(bar.high - previousClose),
+      Math.abs(bar.low - previousClose)
+    );
+  });
+
+  const averageTrueRange =
+    historicalTrueRanges.reduce((sum, value) => sum + value, 0) /
+    historicalTrueRanges.length;
+
+  const current = Number(q.current || q.price || 0);
+  const high = Number(q.high || current || 0);
+  const low = Number(q.low || current || 0);
+  const previousClose = Number(q.previousClose || historicalBars.at(-1)?.close || 0);
+
+  if (!averageTrueRange || !current || !high || !low || !previousClose) return 0;
+
+  const currentTrueRange = Math.max(
+    high - low,
+    Math.abs(high - previousClose),
+    Math.abs(low - previousClose)
+  );
+
+  return averageTrueRange > 0 ? currentTrueRange / averageTrueRange : 0;
+}
 
 async function getAdvancedConfirmations(q) {
   const bars = await getRecentBars(q.symbol, "5Min", 30);
   const stats = calculateBarStats(bars);
+
+  let dailyBars = [];
+  let benchmarkDailyBars = [];
+
+  try {
+    dailyBars = await getRecentBars(q.symbol, "1Day", 25);
+  } catch {
+    dailyBars = [];
+  }
+
+  try {
+    benchmarkDailyBars = await getCachedBenchmarkDailyBars(
+      CONFIG.earlyMoverBenchmarkSymbol || "SPY"
+    );
+  } catch {
+    benchmarkDailyBars = [];
+  }
+
+  const rawDailyStats = calculateBarStats(dailyBars);
+  const liveDailyAtrExpansionRatio =
+    calculateCurrentDailyAtrExpansionRatio(q, dailyBars);
+
+  const dailyStats = {
+    ...rawDailyStats,
+    atrExpansionRatio:
+      liveDailyAtrExpansionRatio > 0
+        ? liveDailyAtrExpansionRatio
+        : rawDailyStats.atrExpansionRatio,
+  };
+
+  const earlyTechnicalProfile = calculateEarlyMoverTechnicalProfile({
+    q,
+    intradayStats: stats,
+    dailyStats,
+    stockDailyBars: dailyBars,
+    benchmarkDailyBars,
+  });
 
   const closeNearHighPercent =
     q.high > q.low ? ((q.current - q.low) / (q.high - q.low)) * 100 : 0;
@@ -17059,6 +17429,31 @@ async function getAdvancedConfirmations(q) {
     closeNearHighPercent: Number(closeNearHighPercent.toFixed(2)),
     gapUpPercent: Number(gapUpPercent.toFixed(2)),
     pullbackFromHighPercent: Number(pullbackFromHighPercent.toFixed(2)),
+    atrBreakout:
+      earlyTechnicalProfile.atrExpansionRatio >=
+      Number(CONFIG.earlyMoverAtrBreakoutMultiplier || 1.5),
+
+    atrExpansionRatio: earlyTechnicalProfile.atrExpansionRatio,
+
+    dailyAtrExpansion:
+      earlyTechnicalProfile.dailyAtrExpansionRatio >=
+      Number(CONFIG.earlyMoverDailyAtrExpansionMultiplier || 1.5),
+
+    dailyAtrExpansionRatio: earlyTechnicalProfile.dailyAtrExpansionRatio,
+
+    vwapCrossUp: earlyTechnicalProfile.vwapCrossUp,
+
+    relativeStrengthVsSpy:
+      earlyTechnicalProfile.hasRelativeStrength,
+
+    rsRatio: earlyTechnicalProfile.rsRatio,
+    rsTrend: earlyTechnicalProfile.rsTrend,
+    stockPercentChange: earlyTechnicalProfile.stockPercentChange,
+    benchmarkPercentChange: earlyTechnicalProfile.benchmarkPercentChange,
+
+    earlyTechnicalProfile,
+    earlyTechnicalScore: earlyTechnicalProfile.earlyTechnicalScore,
+    earlyTechnicalGrade: earlyTechnicalProfile.earlyTechnicalGrade,
 
     volumeSpike,
     aboveVwap,
@@ -17606,6 +18001,43 @@ function scoreStock(q) {
   } else if (q.runnerStage === "EXHAUSTION") {
     score -= 35;
   }
+ 
+   const earlyTechnicalProfile =
+    q.confirmations?.earlyTechnicalProfile ||
+    q.earlyTechnicalProfile ||
+    null;
+
+  if (earlyTechnicalProfile) {
+    q.earlyTechnicalProfile = earlyTechnicalProfile;
+    q.earlyTechnicalScore = Number(earlyTechnicalProfile.earlyTechnicalScore || 0);
+    q.earlyTechnicalGrade = earlyTechnicalProfile.earlyTechnicalGrade;
+
+    let earlyTechnicalBoost = 0;
+
+    if (q.runnerStage === "IGNITION") {
+      earlyTechnicalBoost = q.earlyTechnicalScore * 0.25;
+    } else if (q.runnerStage === "EXPANSION") {
+      earlyTechnicalBoost = q.earlyTechnicalScore * 0.2;
+    } else if (q.runnerStage === "WATCHING") {
+      earlyTechnicalBoost = q.earlyTechnicalScore * 0.12;
+    } else if (q.runnerStage === "MATURE") {
+      earlyTechnicalBoost = q.earlyTechnicalScore * 0.05;
+    } else {
+      earlyTechnicalBoost = q.earlyTechnicalScore * 0.02;
+    }
+
+    q.earlyTechnicalBoost = Number(earlyTechnicalBoost.toFixed(2));
+    score += q.earlyTechnicalBoost;
+
+    const strongEarlyTechnical =
+      q.earlyTechnicalScore >= 70 &&
+      ["IGNITION", "EXPANSION"].includes(q.runnerStage);
+
+    if (strongEarlyTechnical && earlyTechnicalProfile.vwapCrossUp) score += 4;
+    if (strongEarlyTechnical && earlyTechnicalProfile.hasRelativeStrength) score += 5;
+    if (strongEarlyTechnical && earlyTechnicalProfile.atrExpansionRatio >= 1.5) score += 4;
+    if (strongEarlyTechnical && earlyTechnicalProfile.dailyAtrExpansionRatio >= 1.5) score += 4;
+  } 
 
   if (q.lateChaseRisk) {
     score -= 25;
@@ -44349,6 +44781,143 @@ function isSoftMasterBlockRestorable(candidate = {}) {
   );
 }
 
+function validateLiveBuyQuality(candidate = {}) {
+  const blockReasons = [];
+
+  const finalLiveScore = Number(candidate.finalLiveScore || 0);
+  const fastScore = Number(candidate.fastRunnerScore || candidate.fastScore || 0);
+  const gateScore = Number(candidate.quickInstitutionalScore || candidate.gateScore || 0);
+  const runnerHoldScore = Number(candidate.runnerHoldScore || candidate.runnerHoldQuality?.runnerHoldScore || 0);
+  const freshBreakoutScore = Number(candidate.freshBreakoutScore || candidate.freshBreakout?.freshBreakoutScore || 0);
+  const chaseRisk = Number(candidate.chaseRisk || candidate.chaseProtection?.chaseRisk || 0);
+  const fakeBreakoutRisk = Number(candidate.fakeBreakoutRisk || candidate.fastRunnerBreakdown?.fakeBreakoutRisk || 0);
+  const spreadPercent = Number(candidate.spreadPercent || 0);
+  const volumeSpikeRatio = Number(candidate.volumeSpikeRatio || 0);
+  const momentum = Number(candidate.liveMomentumPercent || 0);
+  const closeNearHighPercent = Number(candidate.closeNearHighPercent || 0);
+
+  const runnerStage = String(candidate.runnerStage || "").toUpperCase();
+  const symbol = normalizeSymbol(candidate.symbol);
+  const isCrypto = isCryptoSymbol(symbol);
+
+  const confirmations = candidate.confirmations || {};
+  const earlyProfile =
+    candidate.earlyTechnicalProfile ||
+    confirmations.earlyTechnicalProfile ||
+    {};
+
+  const earlyTechnicalScore = Number(
+    candidate.earlyTechnicalScore ||
+    confirmations.earlyTechnicalScore ||
+    earlyProfile.earlyTechnicalScore ||
+    0
+  );
+
+  const atrBreakout =
+    confirmations.atrBreakout === true ||
+    Number(earlyProfile.atrExpansionRatio || 0) >=
+      Number(CONFIG.earlyMoverAtrBreakoutMultiplier || 1.5);
+
+  const dailyAtrExpansion =
+    confirmations.dailyAtrExpansion === true ||
+    Number(earlyProfile.dailyAtrExpansionRatio || 0) >=
+      Number(CONFIG.earlyMoverDailyAtrExpansionMultiplier || 1.5);
+
+  const relativeStrengthVsSpy =
+    confirmations.relativeStrengthVsSpy === true ||
+    earlyProfile.hasRelativeStrength === true;
+
+  const vwapQuality =
+    confirmations.vwapCrossUp === true ||
+    earlyProfile.vwapCrossUp === true ||
+    confirmations.aboveVwap === true ||
+    earlyProfile.aboveVwap === true;
+
+  const earlyTechnicalPassCount = [
+    atrBreakout,
+    dailyAtrExpansion,
+    relativeStrengthVsSpy,
+    vwapQuality,
+  ].filter(Boolean).length;
+  if (finalLiveScore < LIVE_STARTER_MIN_FINAL_SCORE) {
+    blockReasons.push(`Final live score below ${LIVE_STARTER_MIN_FINAL_SCORE}`);
+  }
+
+  if (fastScore < FAST_RUNNER_MIN_SCORE) {
+    blockReasons.push(`Fast runner score below ${FAST_RUNNER_MIN_SCORE}`);
+  }
+
+  if (gateScore < LIVE_STARTER_MIN_GATE_SCORE) {
+    blockReasons.push(`Quick institutional score below ${LIVE_STARTER_MIN_GATE_SCORE}`);
+  }
+
+  if (runnerHoldScore < 80 || candidate.runnerHoldQuality?.runnerHoldApproved !== true) {
+    blockReasons.push(`Runner hold quality not strong enough: ${runnerHoldScore}`);
+  }
+
+  if (!["IGNITION", "RUNNER_CONFIRMED"].includes(runnerStage)) {
+    blockReasons.push(`Runner stage not clean enough: ${runnerStage || "UNKNOWN"}`);
+  }
+
+  if (freshBreakoutScore < 70) {
+    blockReasons.push(`Fresh breakout score below 70: ${freshBreakoutScore}`);
+  }
+
+  if (chaseRisk >= 35) {
+    blockReasons.push(`Chase risk too high: ${chaseRisk}`);
+  }
+
+  if (fakeBreakoutRisk >= 25) {
+    blockReasons.push(`Fake breakout risk too high: ${fakeBreakoutRisk}`);
+  }
+
+  if (spreadPercent > QUICK_GATE_MAX_SPREAD_PERCENT) {
+    blockReasons.push(`Spread too wide for live buy: ${spreadPercent}%`);
+  }
+
+  if (volumeSpikeRatio < IGNITION_MIN_VOLUME_SPIKE_RATIO) {
+    blockReasons.push(`Volume spike too weak: ${volumeSpikeRatio}`);
+  }
+
+  if (momentum <= 0) {
+    blockReasons.push(`Momentum not positive: ${momentum}`);
+  }
+
+  if (closeNearHighPercent < 70) {
+    blockReasons.push(`Not holding near high: ${closeNearHighPercent}%`);
+  }
+
+  if (
+    !isCrypto &&
+    CONFIG.requireEarlyTechnicalForLiveStock === true
+  ) {
+    if (earlyTechnicalScore < Number(CONFIG.minLiveEarlyTechnicalScore || 75)) {
+      blockReasons.push(
+        `Early technical score below ${CONFIG.minLiveEarlyTechnicalScore}: ${earlyTechnicalScore}`
+      );
+    }
+
+    if (earlyTechnicalPassCount < 3) {
+      blockReasons.push(
+        `Early technical confirmations too weak: ${earlyTechnicalPassCount}/4`
+      );
+    }
+
+    if (!relativeStrengthVsSpy) {
+      blockReasons.push("Missing relative strength vs SPY");
+    }
+
+    if (!vwapQuality) {
+      blockReasons.push("Missing VWAP reclaim / VWAP support");
+    }
+  }  
+
+  return {
+    approved: blockReasons.length === 0,
+    blockReasons,
+  };
+}
+
 function buildLiveStarterBuyDecision(candidate = {}, account = {}, openBotPositions = []) {
   const symbol = normalizeSymbol(candidate.symbol);
   const price = Number(candidate.price || candidate.current || 0);
@@ -44430,11 +44999,22 @@ function buildLiveStarterBuyDecision(candidate = {}, account = {}, openBotPositi
     Math.min(100, Number(LIVE_STARTER_BUY_PERCENT || 30))
   );
 
+  const realCashStarterDollarCap = Number(
+    CONFIG.maxRealCashStarterBuyDollars || 25
+  );
+
+  const equityStarterCap =
+    equity > 0
+      ? equity * (Number(CONFIG.maxStarterBuyEquityPercent || 1) / 100)
+      : realCashStarterDollarCap;
+
   const starterAmount = Number(
     Math.min(
       cash,
       remainingBudget,
-      plannedFullTradeAmount * (starterPercent / 100)
+      plannedFullTradeAmount * (starterPercent / 100),
+      realCashStarterDollarCap,
+      equityStarterCap
     ).toFixed(2)
   );
 
@@ -44489,6 +45069,10 @@ function buildLiveStarterBuyDecision(candidate = {}, account = {}, openBotPositi
     blockReasons.push("Auto trading disabled");
   }
 
+  if (CONFIG.realCashTradingUnlocked !== true) {
+    blockReasons.push("Real cash trading locked: set REAL_CASH_TRADING_UNLOCKED=true only after paper validation");
+  }  
+
   if (!symbol || price <= 0) {
     blockReasons.push("Invalid live price");
   }
@@ -44498,11 +45082,24 @@ function buildLiveStarterBuyDecision(candidate = {}, account = {}, openBotPositi
       `Runner hold quality failed: ${candidate.runnerHoldQuality?.runnerHoldScore ?? "missing"}`
     );
   }
+
+   const liveBuyQuality = validateLiveBuyQuality({
+    ...candidate,
+    finalLiveScore,
+    fastScore,
+    gateScore,
+  });
+
+  if (!liveBuyQuality.approved) {
+    blockReasons.push(...liveBuyQuality.blockReasons);
+  }
+  
+  
   if (candidate.quickInstitutionalApproved !== true) {
     blockReasons.push("Quick Institutional Gate not approved");
   }
 
-  if (candidate.runnerStage === "TOO_LATE") {
+  if (["MATURE", "EXHAUSTION", "TOO_LATE"].includes(String(candidate.runnerStage || "").toUpperCase())) {
     blockReasons.push("Runner already too extended / chase risk");
   }
 
@@ -44572,6 +45169,7 @@ function buildLiveStarterBuyDecision(candidate = {}, account = {}, openBotPositi
     gateScore,
     finalLiveScore,
     runnerHoldQuality: candidate.runnerHoldQuality || null,    
+    liveBuyQuality,
     cash,
     equity,
     currentExposure: Number(totalExposure.toFixed(2)),
