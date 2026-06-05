@@ -23572,19 +23572,39 @@ function scoreCrypto(quote, bars = []) {
   if (momentumPercent < -0.75) score -= 10;
   if (shortMomentumPercent < -0.35) score -= 8;
   if (closeNearHigh < 25) score -= 8;
-  
+
+  const runnerStageProfile = calculateRunnerStageProfile({
+    ...quote,
+    current,
+    price: current,
+    open,
+    high,
+    low,
+    percentChange: momentumPercent,
+    volumeSpikeRatio: volumeRatio,
+    confirmations: {
+      volumeSpikeRatio: volumeRatio,
+      aboveVwap: current >= open,
+    },
+    technicals: {
+      rsi: 55,
+    },
+  });
+
   const runnerHoldQuality = calculateRunnerHoldQuality({
     ...quote,
     current,
     price: current,
+    open,
+    high,
+    low,
     percentChange: momentumPercent,
     volumeSpikeRatio: volumeRatio,
-    closeNearHighPercent: closeNearHigh,
-    pullbackFromHighPercent:
-      high > 0 ? ((high - current) / high) * 100 : 0,
-    vwapExtensionPercent: 0,
-    runnerStage: momentumPercent >= 1.5 ? "EXPANSION" : "IGNITION",
-    aboveVwap: current >= open,
+    runnerStageProfile,
+    confirmations: {
+      volumeSpikeRatio: volumeRatio,
+      aboveVwap: current >= open,
+    },
     technicals: {
       rsi: 55,
     },
@@ -42142,34 +42162,97 @@ function buildInstitutionalDashboardPayload() {
 // ================================
 // FRONTEND CLEAN API ENDPOINTS
 // ================================
+async function refreshFrontendAccountCache() {
+  try {
+    const [account, positions] = await Promise.all([
+      getAccount(),
+      getPositions(),
+    ]);
+
+    if (account && Object.keys(account).length > 0) {
+      engineState.cachedAccount = account;
+    }
+
+    if (Array.isArray(positions)) {
+      engineState.cachedPositions = positions;
+    }
+
+    return {
+      ok: true,
+      accountLoaded: !!engineState.cachedAccount,
+      positionCount: Array.isArray(engineState.cachedPositions)
+        ? engineState.cachedPositions.length
+        : 0,
+      updatedAt: new Date().toISOString(),
+    };
+  } catch (err) {
+    return {
+      ok: false,
+      error: err.message,
+      updatedAt: new Date().toISOString(),
+    };
+  }
+}
 
 function getLatestFrontendStatusSnapshot() {
+  const account = engineState.cachedAccount || {};
+  const positions = Array.isArray(engineState.cachedPositions)
+    ? engineState.cachedPositions
+    : [];
+
+  const stockSignals = getTopSignals(
+    [
+      ...(engineState.lastStockSignals || []),
+      ...(engineState.fastRunnerCandidates || []),
+      ...(engineState.quickInstitutionalCandidates || []),
+    ],
+    25
+  ).map(mergeLiveQuoteIntoSignal);
+
+  const cryptoSignals = getTopSignals(
+    engineState.lastCryptoSignals || [],
+    25
+  ).map(mergeLiveQuoteIntoSignal);
+
+  const equity = Number(account.equity || 0);
+
   return {
-    account: engineState.cachedAccount || {},
-    positions: engineState.cachedPositions || [],
+    generatedAt: new Date().toISOString(),
+    account,
+    positions,
     risk: {
       maxBotExposurePercent: CONFIG.maxBotExposurePercent,
-      maxBotBudget:
-        Number(engineState.cachedAccount?.equity || 0) *
-        (CONFIG.maxBotExposurePercent / 100),
-      currentBotExposure: getBotExposure(
-        engineState.cachedPositions || []
-      ),
-      currentEquity: Number(engineState.cachedAccount?.equity || 0),
-      currentCash: Number(engineState.cachedAccount?.cash || 0),
+      maxBotBudget: equity * (CONFIG.maxBotExposurePercent / 100),
+      currentBotExposure: getBotExposure(positions),
+      currentEquity: equity,
+      currentCash: Number(account.cash || 0),
+      peakEquity: engineState.dailyPeakEquity || equity,
     },
+    stockSignals,
+    cryptoSignals,
+    topStockSignals: stockSignals,
+    topCryptoSignals: cryptoSignals,
+    signalCount: stockSignals.length + cryptoSignals.length,
+    stockSignalCount: stockSignals.length,
+    cryptoSignalCount: cryptoSignals.length,
+    fastRunnerCandidates: engineState.fastRunnerCandidates || [],
+    quickInstitutionalCandidates: engineState.quickInstitutionalCandidates || [],
+    fastRunnerEngineState: engineState.fastRunnerEngineState || null,
+    quickInstitutionalGateState: engineState.quickInstitutionalGateState || null,
+    liveStarterBuyGateState: engineState.liveStarterBuyGateState || null,
+    liveSchedulerState: engineState.liveSchedulerState || null,
+    liveMemoryCount: Object.keys(engineState.liveMarketMemory || {}).length,
+    liveQuoteCacheCount: Object.keys(engineState.liveQuoteCache || {}).length,
     institutionalDashboard: buildInstitutionalDashboardPayload(),
-    autonomousTradingSystem:
-      engineState.autonomousTradingSystemState || {},
-    phase20AutonomousOrchestration:
-      engineState.phase20AutonomousOrchestrationState || {},
-    phase21AutonomousBrain:
-      engineState.phase21AutonomousBrainState || {},
+    autonomousTradingSystem: engineState.autonomousTradingSystemState || {},
+    phase20AutonomousOrchestration: engineState.phase20AutonomousOrchestrationState || {},
+    phase21AutonomousBrain: engineState.phase21AutonomousBrainState || {},
   };
 }
 
 app.get("/frontend/portfolio", requireAdmin, async (req, res) => {
   try {
+    const accountRefresh = await refreshFrontendAccountCache();
     const latestStatus = getLatestFrontendStatusSnapshot();
     const account = latestStatus?.account || {};
     const risk = latestStatus?.risk || {};
@@ -42253,18 +42336,21 @@ app.get("/frontend/portfolio", requireAdmin, async (req, res) => {
   }
 });
 
+
 function collectFrontendSignalSnapshot() {
   const latestStatus = getLatestFrontendStatusSnapshot();
   const orchestration =
     latestStatus?.phase20AutonomousOrchestration || {};
 
-  return [
-    ...(Array.isArray(engineState.topStockSignals) ? engineState.topStockSignals : []),
-    ...(Array.isArray(engineState.lastStockSignals) ? engineState.lastStockSignals : []),
-    ...(Array.isArray(engineState.topCryptoSignals) ? engineState.topCryptoSignals : []),
-    ...(Array.isArray(engineState.lastCryptoSignals) ? engineState.lastCryptoSignals : []),
-    ...(Array.isArray(orchestration.topSignals) ? orchestration.topSignals : []),
-  ]
+return [
+  ...(Array.isArray(engineState.topStockSignals) ? engineState.topStockSignals : []),
+  ...(Array.isArray(engineState.lastStockSignals) ? engineState.lastStockSignals : []),
+  ...(Array.isArray(engineState.fastRunnerCandidates) ? engineState.fastRunnerCandidates : []),
+  ...(Array.isArray(engineState.quickInstitutionalCandidates) ? engineState.quickInstitutionalCandidates : []),
+  ...(Array.isArray(engineState.topCryptoSignals) ? engineState.topCryptoSignals : []),
+  ...(Array.isArray(engineState.lastCryptoSignals) ? engineState.lastCryptoSignals : []),
+  ...(Array.isArray(orchestration.topSignals) ? orchestration.topSignals : []),
+]
     .filter(Boolean)
     .filter(
       (signal, index, arr) =>
@@ -42346,23 +42432,29 @@ app.get("/frontend/signals", requireAdmin, async (req, res) => {
     const orchestration =
       latestStatus?.phase20AutonomousOrchestration || {};
 
-    const signals = [
-      ...(Array.isArray(engineState.topStockSignals)
-        ? engineState.topStockSignals
-        : []),
-      ...(Array.isArray(engineState.lastStockSignals)
-        ? engineState.lastStockSignals
-        : []),
-      ...(Array.isArray(engineState.topCryptoSignals)
-        ? engineState.topCryptoSignals
-        : []),
-      ...(Array.isArray(engineState.lastCryptoSignals)
-        ? engineState.lastCryptoSignals
-        : []),
-      ...(Array.isArray(orchestration.topSignals)
-        ? orchestration.topSignals
-        : []),
-    ]
+const signals = [
+  ...(Array.isArray(engineState.topStockSignals)
+    ? engineState.topStockSignals
+    : []),
+  ...(Array.isArray(engineState.lastStockSignals)
+    ? engineState.lastStockSignals
+    : []),
+  ...(Array.isArray(engineState.fastRunnerCandidates)
+    ? engineState.fastRunnerCandidates
+    : []),
+  ...(Array.isArray(engineState.quickInstitutionalCandidates)
+    ? engineState.quickInstitutionalCandidates
+    : []),
+  ...(Array.isArray(engineState.topCryptoSignals)
+    ? engineState.topCryptoSignals
+    : []),
+  ...(Array.isArray(engineState.lastCryptoSignals)
+    ? engineState.lastCryptoSignals
+    : []),
+  ...(Array.isArray(orchestration.topSignals)
+    ? orchestration.topSignals
+    : []),
+]
       .filter(Boolean)
       .filter(
         (signal, index, arr) =>
@@ -42833,10 +42925,15 @@ function mergeLiveQuoteIntoSignal(signal = {}) {
 }
 
 function buildLiveSignalPushPayload() {
-  const stockSignals = getTopSignals(
-    engineState.lastStockSignals || [],
-    25
-  ).map(mergeLiveQuoteIntoSignal);
+
+const stockSignals = getTopSignals(
+  [
+    ...(engineState.lastStockSignals || []),
+    ...(engineState.fastRunnerCandidates || []),
+    ...(engineState.quickInstitutionalCandidates || []),
+  ],
+  25
+).map(mergeLiveQuoteIntoSignal);
 
 
 
@@ -48307,7 +48404,11 @@ app.get("/live-market-memory", requireAdmin, (req, res) => {
 app.get("/live-signals", requireAdmin, async (req, res) => {
   try {
     const stockSignals = getTopSignals(
-      engineState.lastStockSignals || [],
+      [
+        ...(engineState.lastStockSignals || []),
+        ...(engineState.fastRunnerCandidates || []),
+        ...(engineState.quickInstitutionalCandidates || []),
+      ],
       25
     ).map(mergeLiveQuoteIntoSignal);
 
@@ -48388,8 +48489,9 @@ app.get("/pending-exits", requireAdmin, async (req, res) => {
   }
 });
 
-app.get("/status", requireAdmin, (req, res) => {
+app.get("/status", requireAdmin, async (req, res) => {
   try {
+    const accountRefresh = await refreshFrontendAccountCache();
     const latestStatus = getLatestFrontendStatusSnapshot();
 
     res.json({
@@ -48422,40 +48524,36 @@ app.get("/status", requireAdmin, (req, res) => {
       liveEarlyMoverRefreshState:
         engineState.liveEarlyMoverRefreshState || null,
 
-      signalCount:
-        (engineState.lastStockSignals || []).length +
-        (engineState.lastCryptoSignals || []).length,
+      signalCount: latestStatus.signalCount,
 
-      stockSignalCount:
-        (engineState.lastStockSignals || []).length,
+      stockSignalCount: latestStatus.stockSignalCount,
 
-      cryptoSignalCount:
-        (engineState.lastCryptoSignals || []).length,
+      cryptoSignalCount: latestStatus.cryptoSignalCount,
 
-      topStockSignals:
-        (engineState.topStockSignals || [])
-          .slice(0, 25)
-          .map(mergeLiveQuoteIntoSignal),
+      topStockSignals: latestStatus.topStockSignals || [],
 
-      topCryptoSignals:
-        (engineState.topCryptoSignals || [])
-          .slice(0, 25)
-          .map(mergeLiveQuoteIntoSignal),
+      topCryptoSignals: latestStatus.topCryptoSignals || [],
 
       fastRunnerCandidates:
-        (engineState.fastRunnerCandidates || []).slice(0, 25),
+        (engineState.fastRunnerCandidates || [])
+          .slice(0, 25)
+          .map(mergeLiveQuoteIntoSignal),
 
       quickInstitutionalCandidates:
-        (engineState.quickInstitutionalCandidates || []).slice(0, 25),
+        (engineState.quickInstitutionalCandidates || [])
+          .slice(0, 25)
+          .map(mergeLiveQuoteIntoSignal),
 
       liveStarterBuyGateState:
         engineState.liveStarterBuyGateState || null,
 
       account: latestStatus?.account || engineState.cachedAccount || null,
       risk: latestStatus?.risk || null,
+      statusAccountRefresh: accountRefresh,
 
       note:
         "Lightweight status. Use /status/full for full broker/account/order debug payload.",
+
     });
   } catch (err) {
     res.status(500).json({
