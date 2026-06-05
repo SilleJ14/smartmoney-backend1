@@ -5,8 +5,15 @@ import path from "path";
 import fs from "fs";
 
 dotenv.config({ path: path.resolve(process.cwd(), ".env") });
-const CONFIG_FILE = path.resolve(process.cwd(), "runtime-config.json");
-const ENGINE_STATE_FILE = path.resolve(process.cwd(), "engine-state.json");
+
+const DATA_DIR = process.env.DATA_DIR || process.cwd();
+
+try {
+  fs.mkdirSync(DATA_DIR, { recursive: true });
+} catch { }
+
+const CONFIG_FILE = path.resolve(DATA_DIR, "runtime-config.json");
+const ENGINE_STATE_FILE = path.resolve(DATA_DIR, "engine-state.json");
 
 console.log("ENV CHECK:", {
   ALPACA_LIVE_SECRET: process.env.ALPACA_LIVE_SECRET ? "FOUND" : "MISSING",
@@ -74,7 +81,8 @@ function requireAdmin(req, res, next) {
     : "";
 
   const headerToken = String(req.headers["x-admin-token"] || "").trim();
-  const providedToken = bearerToken || headerToken;
+  const queryToken = String(req.query?.adminToken || "").trim();
+  const providedToken = bearerToken || headerToken || queryToken;
 
   if (providedToken !== ADMIN_API_TOKEN) {
     return res.status(401).json({
@@ -309,97 +317,206 @@ const QUICK_GATE_MAX_SPREAD_PERCENT = Number(
 const QUICK_GATE_BLOCK_PANIC =
   process.env.QUICK_GATE_BLOCK_PANIC !== "false";
 
-const ENABLE_LIVE_STARTER_BUY =
-  process.env.ENABLE_LIVE_STARTER_BUY !== "false";
+let runtimeConfig = loadRuntimeConfig();
 
-const LIVE_STARTER_BUY_INTERVAL_MS = Number(
-  process.env.LIVE_STARTER_BUY_INTERVAL_MS || 3500
+function runtimeNumber(key, envName, defaultValue) {
+  const runtimeValue = runtimeConfig?.[key];
+
+  if (runtimeValue !== undefined && runtimeValue !== null && runtimeValue !== "") {
+    const value = Number(runtimeValue);
+    return Number.isFinite(value) ? value : defaultValue;
+  }
+
+  return parseEnvNumber(envName, defaultValue);
+}
+
+function runtimeBoolean(key, envName, defaultValue = false) {
+  const runtimeValue = runtimeConfig?.[key];
+
+  if (runtimeValue !== undefined && runtimeValue !== null && runtimeValue !== "") {
+    return (
+      runtimeValue === true ||
+      runtimeValue === "true" ||
+      runtimeValue === 1 ||
+      runtimeValue === "1" ||
+      runtimeValue === "yes" ||
+      runtimeValue === "on"
+    );
+  }
+
+  return parseEnvBoolean(envName, defaultValue);
+}
+
+let ENABLE_LIVE_STARTER_BUY = runtimeBoolean(
+  "enableLiveStarterBuy",
+  "ENABLE_LIVE_STARTER_BUY",
+  true
 );
 
-const LIVE_STARTER_BUY_PERCENT = Number(
-  process.env.LIVE_STARTER_BUY_PERCENT || 70
+let LIVE_STARTER_BUY_INTERVAL_MS = runtimeNumber(
+  "liveStarterBuyIntervalMs",
+  "LIVE_STARTER_BUY_INTERVAL_MS",
+  3500
 );
 
-const LIVE_STARTER_MIN_GATE_SCORE = Number(
-  process.env.LIVE_STARTER_MIN_GATE_SCORE || 78
+let LIVE_STARTER_BUY_PERCENT = runtimeNumber(
+  "liveStarterBuyPercent",
+  "LIVE_STARTER_BUY_PERCENT",
+  70
 );
 
-const LIVE_STARTER_MIN_FINAL_SCORE = Number(
-  process.env.LIVE_STARTER_MIN_FINAL_SCORE || 86
+let LIVE_STARTER_MIN_GATE_SCORE = runtimeNumber(
+  "liveStarterMinGateScore",
+  "LIVE_STARTER_MIN_GATE_SCORE",
+  78
 );
 
-const LIVE_STARTER_MAX_BUYS_PER_CYCLE = Number(
-  process.env.LIVE_STARTER_MAX_BUYS_PER_CYCLE || 5
+let LIVE_STARTER_MIN_FINAL_SCORE = runtimeNumber(
+  "liveStarterMinFinalScore",
+  "LIVE_STARTER_MIN_FINAL_SCORE",
+  86
 );
 
-const LIVE_ORDER_MAX_QUOTE_AGE_SECONDS = Number(
-  process.env.LIVE_ORDER_MAX_QUOTE_AGE_SECONDS || 15
+let LIVE_STARTER_MAX_BUYS_PER_CYCLE = runtimeNumber(
+  "liveStarterMaxBuysPerCycle",
+  "LIVE_STARTER_MAX_BUYS_PER_CYCLE",
+  5
 );
 
-const LIVE_ORDER_MAX_SPREAD_PERCENT = Number(
-  process.env.LIVE_ORDER_MAX_SPREAD_PERCENT || 2.5
+let LIVE_ORDER_MAX_QUOTE_AGE_SECONDS = runtimeNumber(
+  "liveOrderMaxQuoteAgeSeconds",
+  "LIVE_ORDER_MAX_QUOTE_AGE_SECONDS",
+  15
 );
 
-const LIVE_ORDER_REQUIRE_POLYGON_CONNECTED =
-  parseEnvBoolean("LIVE_ORDER_REQUIRE_POLYGON_CONNECTED", true);
-
-const LIVE_ORDER_LOCK_MS = Number(
-  process.env.LIVE_ORDER_LOCK_MS || 15000
+let LIVE_ORDER_MAX_SPREAD_PERCENT = runtimeNumber(
+  "liveOrderMaxSpreadPercent",
+  "LIVE_ORDER_MAX_SPREAD_PERCENT",
+  2.5
 );
 
-const LIVE_DUPLICATE_ORDER_WINDOW_MS = Number(
-  process.env.LIVE_DUPLICATE_ORDER_WINDOW_MS || 60000
+let LIVE_ORDER_REQUIRE_POLYGON_CONNECTED = runtimeBoolean(
+  "liveOrderRequirePolygonConnected",
+  "LIVE_ORDER_REQUIRE_POLYGON_CONNECTED",
+  true
 );
 
-const ENABLE_LIVE_POSITION_MANAGEMENT =
-  process.env.ENABLE_LIVE_POSITION_MANAGEMENT !== "false";
-
-const LIVE_POSITION_MANAGEMENT_INTERVAL_MS = Number(
-  process.env.LIVE_POSITION_MANAGEMENT_INTERVAL_MS || 5000
+let LIVE_ORDER_LOCK_MS = runtimeNumber(
+  "liveOrderLockMs",
+  "LIVE_ORDER_LOCK_MS",
+  15000
 );
 
-const LIVE_PROFIT_TRIM_TRIGGER_PERCENT = Number(
-  process.env.LIVE_PROFIT_TRIM_TRIGGER_PERCENT || 4
+let LIVE_DUPLICATE_ORDER_WINDOW_MS = runtimeNumber(
+  "liveDuplicateOrderWindowMs",
+  "LIVE_DUPLICATE_ORDER_WINDOW_MS",
+  60000
 );
 
-const LIVE_PROFIT_TRIM_QTY_PERCENT = Number(
-  process.env.LIVE_PROFIT_TRIM_QTY_PERCENT || 35
+let ENABLE_LIVE_POSITION_MANAGEMENT = runtimeBoolean(
+  "enableLivePositionManagement",
+  "ENABLE_LIVE_POSITION_MANAGEMENT",
+  true
 );
 
-const LIVE_HARD_STOP_PERCENT = Number(
-  process.env.LIVE_HARD_STOP_PERCENT || 3.5
+let LIVE_POSITION_MANAGEMENT_INTERVAL_MS = runtimeNumber(
+  "livePositionManagementIntervalMs",
+  "LIVE_POSITION_MANAGEMENT_INTERVAL_MS",
+  5000
 );
 
-const LIVE_TRAIL_STOP_FROM_HIGH_PERCENT = Number(
-  process.env.LIVE_TRAIL_STOP_FROM_HIGH_PERCENT || 4
+let LIVE_PROFIT_TRIM_TRIGGER_PERCENT = runtimeNumber(
+  "liveProfitTrimTriggerPercent",
+  "LIVE_PROFIT_TRIM_TRIGGER_PERCENT",
+  4
 );
 
-const ENABLE_LIVE_SCALE_IN =
-  process.env.ENABLE_LIVE_SCALE_IN !== "false";
-
-const LIVE_SCALE_IN_INTERVAL_MS = Number(
-  process.env.LIVE_SCALE_IN_INTERVAL_MS || 10000
+let LIVE_PROFIT_TRIM_QTY_PERCENT = runtimeNumber(
+  "liveProfitTrimQtyPercent",
+  "LIVE_PROFIT_TRIM_QTY_PERCENT",
+  35
 );
 
-const LIVE_SCALE_IN_MIN_PROFIT_PERCENT = Number(
-  process.env.LIVE_SCALE_IN_MIN_PROFIT_PERCENT || 1.5
+let LIVE_HARD_STOP_PERCENT = runtimeNumber(
+  "liveHardStopPercent",
+  "LIVE_HARD_STOP_PERCENT",
+  3.5
 );
 
-const LIVE_SCALE_IN_MIN_FAST_SCORE = Number(
-  process.env.LIVE_SCALE_IN_MIN_FAST_SCORE || 76
+let LIVE_TRAIL_STOP_FROM_HIGH_PERCENT = runtimeNumber(
+  "liveTrailStopFromHighPercent",
+  "LIVE_TRAIL_STOP_FROM_HIGH_PERCENT",
+  4
 );
 
-const LIVE_SCALE_IN_PERCENT_OF_PLAN = Number(
-  process.env.LIVE_SCALE_IN_PERCENT_OF_PLAN || 20
+let ENABLE_LIVE_SCALE_IN = runtimeBoolean(
+  "enableLiveScaleIn",
+  "ENABLE_LIVE_SCALE_IN",
+  true
 );
 
-const LIVE_SCALE_IN_MAX_ADDS_PER_SYMBOL = Number(
-  process.env.LIVE_SCALE_IN_MAX_ADDS_PER_SYMBOL || 2
+let LIVE_SCALE_IN_INTERVAL_MS = runtimeNumber(
+  "liveScaleInIntervalMs",
+  "LIVE_SCALE_IN_INTERVAL_MS",
+  10000
 );
 
-const LIVE_SCALE_IN_MAX_ADDS_PER_CYCLE = Number(
-  process.env.LIVE_SCALE_IN_MAX_ADDS_PER_CYCLE || 3
+let LIVE_SCALE_IN_MIN_PROFIT_PERCENT = runtimeNumber(
+  "liveScaleInMinProfitPercent",
+  "LIVE_SCALE_IN_MIN_PROFIT_PERCENT",
+  1.5
 );
+
+let LIVE_SCALE_IN_MIN_FAST_SCORE = runtimeNumber(
+  "liveScaleInMinFastScore",
+  "LIVE_SCALE_IN_MIN_FAST_SCORE",
+  76
+);
+
+let LIVE_SCALE_IN_PERCENT_OF_PLAN = runtimeNumber(
+  "liveScaleInPercentOfPlan",
+  "LIVE_SCALE_IN_PERCENT_OF_PLAN",
+  20
+);
+
+let LIVE_SCALE_IN_MAX_ADDS_PER_SYMBOL = runtimeNumber(
+  "liveScaleInMaxAddsPerSymbol",
+  "LIVE_SCALE_IN_MAX_ADDS_PER_SYMBOL",
+  2
+);
+
+let LIVE_SCALE_IN_MAX_ADDS_PER_CYCLE = runtimeNumber(
+  "liveScaleInMaxAddsPerCycle",
+  "LIVE_SCALE_IN_MAX_ADDS_PER_CYCLE",
+  3
+);
+
+function applyRuntimeLiveSettings() {
+  ENABLE_LIVE_STARTER_BUY = runtimeBoolean("enableLiveStarterBuy", "ENABLE_LIVE_STARTER_BUY", true);
+  LIVE_STARTER_BUY_INTERVAL_MS = runtimeNumber("liveStarterBuyIntervalMs", "LIVE_STARTER_BUY_INTERVAL_MS", 3500);
+  LIVE_STARTER_BUY_PERCENT = runtimeNumber("liveStarterBuyPercent", "LIVE_STARTER_BUY_PERCENT", 70);
+  LIVE_STARTER_MIN_GATE_SCORE = runtimeNumber("liveStarterMinGateScore", "LIVE_STARTER_MIN_GATE_SCORE", 78);
+  LIVE_STARTER_MIN_FINAL_SCORE = runtimeNumber("liveStarterMinFinalScore", "LIVE_STARTER_MIN_FINAL_SCORE", 86);
+  LIVE_STARTER_MAX_BUYS_PER_CYCLE = runtimeNumber("liveStarterMaxBuysPerCycle", "LIVE_STARTER_MAX_BUYS_PER_CYCLE", 5);
+  LIVE_ORDER_MAX_QUOTE_AGE_SECONDS = runtimeNumber("liveOrderMaxQuoteAgeSeconds", "LIVE_ORDER_MAX_QUOTE_AGE_SECONDS", 15);
+  LIVE_ORDER_MAX_SPREAD_PERCENT = runtimeNumber("liveOrderMaxSpreadPercent", "LIVE_ORDER_MAX_SPREAD_PERCENT", 2.5);
+  LIVE_ORDER_REQUIRE_POLYGON_CONNECTED = runtimeBoolean("liveOrderRequirePolygonConnected", "LIVE_ORDER_REQUIRE_POLYGON_CONNECTED", true);
+  LIVE_ORDER_LOCK_MS = runtimeNumber("liveOrderLockMs", "LIVE_ORDER_LOCK_MS", 15000);
+  LIVE_DUPLICATE_ORDER_WINDOW_MS = runtimeNumber("liveDuplicateOrderWindowMs", "LIVE_DUPLICATE_ORDER_WINDOW_MS", 60000);
+  ENABLE_LIVE_POSITION_MANAGEMENT = runtimeBoolean("enableLivePositionManagement", "ENABLE_LIVE_POSITION_MANAGEMENT", true);
+  LIVE_POSITION_MANAGEMENT_INTERVAL_MS = runtimeNumber("livePositionManagementIntervalMs", "LIVE_POSITION_MANAGEMENT_INTERVAL_MS", 5000);
+  LIVE_PROFIT_TRIM_TRIGGER_PERCENT = runtimeNumber("liveProfitTrimTriggerPercent", "LIVE_PROFIT_TRIM_TRIGGER_PERCENT", 4);
+  LIVE_PROFIT_TRIM_QTY_PERCENT = runtimeNumber("liveProfitTrimQtyPercent", "LIVE_PROFIT_TRIM_QTY_PERCENT", 35);
+  LIVE_HARD_STOP_PERCENT = runtimeNumber("liveHardStopPercent", "LIVE_HARD_STOP_PERCENT", 3.5);
+  LIVE_TRAIL_STOP_FROM_HIGH_PERCENT = runtimeNumber("liveTrailStopFromHighPercent", "LIVE_TRAIL_STOP_FROM_HIGH_PERCENT", 4);
+  ENABLE_LIVE_SCALE_IN = runtimeBoolean("enableLiveScaleIn", "ENABLE_LIVE_SCALE_IN", true);
+  LIVE_SCALE_IN_INTERVAL_MS = runtimeNumber("liveScaleInIntervalMs", "LIVE_SCALE_IN_INTERVAL_MS", 10000);
+  LIVE_SCALE_IN_MIN_PROFIT_PERCENT = runtimeNumber("liveScaleInMinProfitPercent", "LIVE_SCALE_IN_MIN_PROFIT_PERCENT", 1.5);
+  LIVE_SCALE_IN_MIN_FAST_SCORE = runtimeNumber("liveScaleInMinFastScore", "LIVE_SCALE_IN_MIN_FAST_SCORE", 76);
+  LIVE_SCALE_IN_PERCENT_OF_PLAN = runtimeNumber("liveScaleInPercentOfPlan", "LIVE_SCALE_IN_PERCENT_OF_PLAN", 20);
+  LIVE_SCALE_IN_MAX_ADDS_PER_SYMBOL = runtimeNumber("liveScaleInMaxAddsPerSymbol", "LIVE_SCALE_IN_MAX_ADDS_PER_SYMBOL", 2);
+  LIVE_SCALE_IN_MAX_ADDS_PER_CYCLE = runtimeNumber("liveScaleInMaxAddsPerCycle", "LIVE_SCALE_IN_MAX_ADDS_PER_CYCLE", 3);
+}
 
 const ENABLE_FULL_BRAIN_FAST_SYNC =
   process.env.ENABLE_FULL_BRAIN_FAST_SYNC !== "false";
@@ -1665,7 +1782,7 @@ function saveEngineState(reason = "STATE_UPDATE") {
   }
 }
 
-let runtimeConfig = loadRuntimeConfig();
+runtimeConfig = runtimeConfig || loadRuntimeConfig();
 
 function sanitizeRuntimeConfig(config = {}) {
   const safe = { ...config };
@@ -1768,7 +1885,7 @@ const CONFIG = {
 
   minCryptoTradeAmount: Number(
     process.env.MIN_CRYPTO_TRADE_AMOUNT || 25
-  ),  
+  ),
 
   maxBotExposurePercent: Number(
     process.env.MAX_BOT_EXPOSURE_PERCENT || 80
@@ -2014,7 +2131,7 @@ const CONFIG = {
 
   minLiveEarlyTechnicalScore: Number(
     process.env.MIN_LIVE_EARLY_TECHNICAL_SCORE || 75
-  ),  
+  ),
 
   requireAboveVwap:
     process.env.REQUIRE_ABOVE_VWAP === "true",
@@ -2059,7 +2176,7 @@ const CONFIG = {
 
   minLiveEarlyTechnicalScore: Number(
     process.env.MIN_LIVE_EARLY_TECHNICAL_SCORE || 75
-  ),  
+  ),
 
   minScoreToBuy: Math.max(
     70,
@@ -2092,11 +2209,11 @@ const NUMERIC_CONFIG_DEFAULTS = {
   maxSignalsToReturn: 75,
   topAutoTradeCandidates: 15,
   earlyMoverAtrLength: 14,
-    maxRealCashStarterBuyDollars: 25,
+  maxRealCashStarterBuyDollars: 25,
   maxStarterBuyEquityPercent: 35,
   minLiveEarlyTechnicalScore: 75,
   earlyMoverAtrBreakoutMultiplier: 1.5,
-  earlyMoverDailyAtrExpansionMultiplier: 1.5,  
+  earlyMoverDailyAtrExpansionMultiplier: 1.5,
 };
 
 for (const [key, fallback] of Object.entries(NUMERIC_CONFIG_DEFAULTS)) {
@@ -4332,9 +4449,9 @@ function canRunSwingSafeRotation(position = {}, context = {}) {
   }
 
   if (
-  Number(engineState.rotationCountToday || 0) >=
-  Number(CONFIG.maxRotationsPerDay || engineState.maxRotationsPerDay || 6)
-) {
+    Number(engineState.rotationCountToday || 0) >=
+    Number(CONFIG.maxRotationsPerDay || engineState.maxRotationsPerDay || 6)
+  ) {
     return {
       allowed: false,
       reason: "Daily rotation limit reached",
@@ -5378,7 +5495,7 @@ function calculateGapContinuationIntelligence(signal = {}) {
       signal.continuationProbability ||
       signal.breakoutProbability ||
       0
-    ) >= 70;  
+    ) >= 70;
 
   const gapContinuationScore = clampScore(
     45 +
@@ -5537,7 +5654,7 @@ function calculatePremarketMomentumEngine(signal = {}) {
       signal.continuationProbability ||
       signal.breakoutProbability ||
       0
-    ) >= 70;  
+    ) >= 70;
 
   const volume = Number(
     signal.volume ||
@@ -14112,7 +14229,7 @@ function calculateCitadelTechnicalIntelligenceEngine(q = {}) {
   const macdSignal = Number(technicals.macdSignal || 0);
 
   const confirmations = q.confirmations || {};
-    const premarketContinuationRelief =
+  const premarketContinuationRelief =
     !engineState.marketOpen &&
     (
       isPremarketMomentumWindow() ||
@@ -17059,27 +17176,27 @@ function calculateEarlyMoverTechnicalProfile({
 
   const volumeScore =
     volumeSpikeRatio >= 3 ? 100 :
-    volumeSpikeRatio >= 2 ? 85 :
-    volumeSpikeRatio >= 1.5 ? 70 :
-    volumeSpikeRatio >= 1.2 ? 50 :
-    0;
+      volumeSpikeRatio >= 2 ? 85 :
+        volumeSpikeRatio >= 1.5 ? 70 :
+          volumeSpikeRatio >= 1.2 ? 50 :
+            0;
 
   const atrBreakoutScore =
     atrExpansionRatio >= 2 ? 100 :
-    atrExpansionRatio >= Number(CONFIG.earlyMoverAtrBreakoutMultiplier || 1.5) ? 85 :
-    atrExpansionRatio >= 1.2 ? 65 :
-    0;
+      atrExpansionRatio >= Number(CONFIG.earlyMoverAtrBreakoutMultiplier || 1.5) ? 85 :
+        atrExpansionRatio >= 1.2 ? 65 :
+          0;
 
   const dailyAtrExpansionScore =
     dailyAtrExpansionRatio >= 2.5 ? 100 :
-    dailyAtrExpansionRatio >= 2 ? 85 :
-    dailyAtrExpansionRatio >= Number(CONFIG.earlyMoverDailyAtrExpansionMultiplier || 1.5) ? 70 :
-    0;
+      dailyAtrExpansionRatio >= 2 ? 85 :
+        dailyAtrExpansionRatio >= Number(CONFIG.earlyMoverDailyAtrExpansionMultiplier || 1.5) ? 70 :
+          0;
 
   const vwapCrossScore =
     vwapCrossUp ? 100 :
-    aboveVwap ? 65 :
-    0;
+      aboveVwap ? 65 :
+        0;
 
   const earlyTechnicalScore = clampScore(
     volumeScore * 0.25 +
@@ -17506,7 +17623,7 @@ function calculatePhase5InstitutionalSignalQuality(q = {}) {
       ? ((current - vwap) / vwap) * 100
       : 0;
 
-        const premarketContinuationWindow =
+  const premarketContinuationWindow =
     !engineState.marketOpen &&
     (
       isPremarketMomentumWindow() ||
@@ -18001,8 +18118,8 @@ function scoreStock(q) {
   } else if (q.runnerStage === "EXHAUSTION") {
     score -= 35;
   }
- 
-   const earlyTechnicalProfile =
+
+  const earlyTechnicalProfile =
     q.confirmations?.earlyTechnicalProfile ||
     q.earlyTechnicalProfile ||
     null;
@@ -18037,7 +18154,7 @@ function scoreStock(q) {
     if (strongEarlyTechnical && earlyTechnicalProfile.hasRelativeStrength) score += 5;
     if (strongEarlyTechnical && earlyTechnicalProfile.atrExpansionRatio >= 1.5) score += 4;
     if (strongEarlyTechnical && earlyTechnicalProfile.dailyAtrExpansionRatio >= 1.5) score += 4;
-  } 
+  }
 
   if (q.lateChaseRisk) {
     score -= 25;
@@ -18080,7 +18197,7 @@ function scoreStock(q) {
     if (!q.confirmations.fakeBreakout) score += 8;
     if (!q.confirmations.gapTooHigh) score += 6;
 
- const premarketContinuationRelief =
+    const premarketContinuationRelief =
       !engineState.marketOpen &&
       (
         isPremarketMomentumWindow() ||
@@ -18140,7 +18257,7 @@ function scoreStock(q) {
       score += 7;
       q.premarketContinuationBoost = 7;
     }
-  }  
+  }
 
   const phase5SignalQuality =
     calculatePhase5InstitutionalSignalQuality(q);
@@ -18709,7 +18826,7 @@ function calculateEarningsIntelligenceEngine(q) {
       q.continuationProbability ||
       q.breakoutProbability ||
       0
-    ) >= 70;  
+    ) >= 70;
 
   const riskyHeadlineText = (
     confirmations.riskyNewsHeadlines || []
@@ -19126,7 +19243,7 @@ function calculateStatisticalEdge(q) {
       q.continuationProbability ||
       q.breakoutProbability ||
       0
-    ) >= 70;  
+    ) >= 70;
 
   const relativeStrengthPercentile = clampScore(
     50 +
@@ -19172,7 +19289,7 @@ function calculateStatisticalEdge(q) {
     75 -
     (percentChange > 20 ? (premarketContinuationRelief ? 6 : 20) : 0) -
     (pullbackFromHighPercent > 5 ? (premarketContinuationRelief ? 7 : 20) : 0) -
-    (confirmations.gapTooHigh ?  (premarketContinuationRelief ? 4 : 15) : 0)
+    (confirmations.gapTooHigh ? (premarketContinuationRelief ? 4 : 15) : 0)
   );
 
   const statisticalEdgeScore = clampScore(
@@ -22723,8 +22840,8 @@ function calculateInstitutionalScores(q) {
       q.continuationProbability ||
       q.breakoutProbability ||
       0
-    ) >= 70; 
- 
+    ) >= 70;
+
   const rsi = Number(technicals.rsi || 50);
   const ema9 = Number(technicals.ema9 || 0);
   const ema20 = Number(technicals.ema20 || 0);
@@ -23998,6 +24115,11 @@ async function scanCryptoMarket() {
 }
 
 async function placeCryptoMarketBuy(symbol, dollars) {
+
+  if (CONFIG.realCashTradingUnlocked !== true) {
+    throw new Error("Real cash trading locked: set REAL_CASH_TRADING_UNLOCKED=true only after paper validation");
+  }
+
   if (!["live_crypto", "smart"].includes(TRADING_MODE)) {
     throw new Error("Crypto buying is only allowed in live modes");
   }
@@ -24009,7 +24131,7 @@ async function placeCryptoMarketBuy(symbol, dollars) {
     );
   }
 
-  
+
 
   return alpacaTradingRequest("/v2/orders", {
     method: "POST",
@@ -24037,7 +24159,7 @@ async function placeCryptoMarketSell(symbol, qty, reason = "CRYPTO_EXIT") {
     throw new Error(
       `Crypto live sell blocked for ${symbol}: ${liveSafety.blockReasons.join("; ")}`
     );
-  }  
+  }
 
   return alpacaTradingRequest("/v2/orders", {
     method: "POST",
@@ -24327,7 +24449,7 @@ async function getPolygonMoverSymbols(limit = POLYGON_MOVERS_LIMIT, forceRefresh
         ranked
           .filter((item) => item.symbol)
           .map((item) => [normalizeSymbol(item.symbol), item])
-      ),      
+      ),
       reason: cleanSymbols.length
         ? rankedSymbols.length
           ? "polygon_movers_success_gainers_prioritized"
@@ -25282,7 +25404,7 @@ async function scanMarket() {
             Number(quote.breakoutProbability || 0),
             Number(quote.premarketMomentum?.gapContinuation?.openingRangeBreakoutProbability || 0)
           );
-        }        
+        }
 
         const quality = passesQualityFilters(quote);
 
@@ -26346,6 +26468,11 @@ async function scanMarket() {
 }
 
 async function placeMarketBuy(symbol, dollars, score = 0) {
+
+  if (CONFIG.realCashTradingUnlocked !== true) {
+    throw new Error("Real cash trading locked: set REAL_CASH_TRADING_UNLOCKED=true only after paper validation");
+  }
+
   const normalizedSymbol = normalizeSymbol(symbol);
 
   if (buyingNow.has(normalizedSymbol)) {
@@ -26362,7 +26489,7 @@ async function placeMarketBuy(symbol, dollars, score = 0) {
       throw new Error(
         `Live stock buy blocked for ${normalizedSymbol}: ${liveSafety.blockReasons.join("; ")}`
       );
-    }    
+    }
     const assetCheck = await isAssetBuyEligible(normalizedSymbol);
 
     if (!assetCheck.ok) {
@@ -26651,9 +26778,9 @@ async function executeAdaptiveBuyOrder({
 
 async function placeMarketSell(symbol, qty, reason = "AI_EXIT") {
   const normalizedSymbol = normalizeSymbol(symbol);
-  const cleanQty = Math.max(1, Math.floor(Number(qty || 0)));
+  const rawQty = Number(qty || 0);
 
-  if (!cleanQty || cleanQty <= 0) {
+  if (!rawQty || rawQty <= 0) {
     throw new Error(`Invalid sell quantity for ${normalizedSymbol}`);
   }
 
@@ -26664,10 +26791,29 @@ async function placeMarketSell(symbol, qty, reason = "AI_EXIT") {
   sellingNow.add(normalizedSymbol);
 
   try {
+    const liveSafety = checkLiveOrderSafety(normalizedSymbol, "SELL");
+
+    if (!liveSafety.approved) {
+      throw new Error(
+        `Live stock sell blocked for ${normalizedSymbol}: ${(liveSafety.blockReasons || []).join("; ")}`
+      );
+    }
+
     const assetCheck = await isAssetSellEligible(normalizedSymbol);
 
     if (!assetCheck.ok) {
       throw new Error(assetCheck.reason);
+    }
+
+    const asset = assetCheck.asset || {};
+    const fractionable = asset.fractionable === true;
+
+    const cleanQty = fractionable
+      ? Number(rawQty.toFixed(8))
+      : Math.floor(rawQty);
+
+    if (!cleanQty || cleanQty <= 0) {
+      throw new Error(`Invalid sell quantity for ${normalizedSymbol}`);
     }
 
     const clock = await getClock();
@@ -26943,7 +27089,7 @@ async function flattenStocksAndCryptoBeforeMarketClose(clock) {
       delete engineState.highWaterMarks[symbol];
       delete engineState.aiEntryScores[symbol];
       delete engineState.runnerPositions[symbol];
-      
+
     } catch (err) {
       saveFailedOrder(
         "POSITION_CLOSE_1_HOUR_BEFORE_CLOSE_FAILED",
@@ -32604,12 +32750,12 @@ async function autoBuySignals(signals = []) {
 
   const effectiveBuyThreshold = getEffectiveBuyThreshold(signals);
 
-const adaptiveMinScoreToBuy = Math.max(
-  70,
-  effectiveBuyThreshold,
-  Number(CONFIG.minScoreToBuy || 70),
-  Number(engineState.selfOptimizationState?.adaptiveMinScoreToBuy || 0)
-);
+  const adaptiveMinScoreToBuy = Math.max(
+    70,
+    effectiveBuyThreshold,
+    Number(CONFIG.minScoreToBuy || 70),
+    Number(engineState.selfOptimizationState?.adaptiveMinScoreToBuy || 0)
+  );
 
   engineState.effectiveBuyThreshold = {
     updatedAt: new Date().toISOString(),
@@ -34443,8 +34589,8 @@ async function autoBuyCryptoSignals(signals) {
       if (finalTradeAmount > 0 && finalTradeAmount < minCryptoTradeAmount) {
         finalTradeAmount =
           availableCryptoBuyingPower >= minCryptoTradeAmount &&
-          remainingCryptoBudget >= minCryptoTradeAmount &&
-          remainingTotalBotBudget >= minCryptoTradeAmount
+            remainingCryptoBudget >= minCryptoTradeAmount &&
+            remainingTotalBotBudget >= minCryptoTradeAmount
             ? minCryptoTradeAmount
             : 0;
       }
@@ -42881,7 +43027,7 @@ function updateLiveQuoteCache(symbol, quote = {}) {
       previous.avgPrice ||
       previous.vwap ||
       previous.dayVwap ||
-      0,      
+      0,
     spread,
     spreadPercent,
     volume: tradeVolume,
@@ -43208,11 +43354,11 @@ function updateLiveMarketMemory(symbol, tick = {}) {
     incomingPreviousClose > 0
       ? incomingPreviousClose
       : Number(
-          previous.previousClose ||
-          previous.regularClose ||
-          previous.dayPreviousClose ||
-          0
-        );
+        previous.previousClose ||
+        previous.regularClose ||
+        previous.dayPreviousClose ||
+        0
+      );
 
   const dayOpen = Number(
     tick.dayOpen ||
@@ -43278,7 +43424,7 @@ function updateLiveMarketMemory(symbol, tick = {}) {
     previous.dayVwap ||
     previous.avgPrice ||
     0
-  );      
+  );
 
   const tickWindow = Array.isArray(previous.tickWindow)
     ? previous.tickWindow
@@ -43319,7 +43465,7 @@ function updateLiveMarketMemory(symbol, tick = {}) {
     lastVolume: Number(tick.volume || 0),
     vwap: incomingVwap,
     dayVwap: incomingVwap,
-    avgPrice: incomingVwap,    
+    avgPrice: incomingVwap,
     lastSize: Number(tick.size || 0),
     source: tick.source || previous.source || "live_stream",
     updatedAt: new Date().toISOString(),
@@ -43811,7 +43957,7 @@ function handlePolygonLiveMessage(message = {}) {
       volume: message.v,
       vwap: message.vw || message.vwap || 0,
       dayVwap: message.vw || message.vwap || 0,
-      avgPrice: message.vw || message.vwap || 0,      
+      avgPrice: message.vw || message.vwap || 0,
       source: "polygon_ws_second_aggregate",
       liveQuoteSource: "polygon_ws_second_aggregate",
       liveQuoteUpdatedAt: new Date().toISOString(),
@@ -43996,7 +44142,7 @@ function calculateFreshBreakoutProfile(memory = {}) {
     : [];
 
   const candleCount = candles.length;
-  const enoughFreshCandles = candleCount >= 10;    
+  const enoughFreshCandles = candleCount >= 10;
 
   const momentum10 = calculateWindowMomentumFromCandles(candles, 10);
   const momentum30 = calculateWindowMomentumFromCandles(candles, 30);
@@ -44023,7 +44169,7 @@ function calculateFreshBreakoutProfile(memory = {}) {
     momentum30,
     momentum60,
     candleCount,
-    enoughFreshCandles,    
+    enoughFreshCandles,
     closeNearHighPercent: Number(closeNearHighPercent.toFixed(2)),
     freshBreakoutScore: Number(freshBreakoutScore.toFixed(2)),
   };
@@ -44242,25 +44388,25 @@ function buildFastRunnerCandidateFromMemory(symbol, memory = {}) {
     fastRunnerScore: fastScore,
     runnerHoldQuality,
     runnerHoldScore: runnerHoldQuality.runnerHoldScore,
-    runnerHoldApproved: runnerHoldQuality.runnerHoldApproved,    
+    runnerHoldApproved: runnerHoldQuality.runnerHoldApproved,
     qualifiedFastRunner,
     liveMomentumPercent: momentum,
-earlyMover:
-  (engineState.liveEarlyMoverSymbols || [])
-    .includes(cleanSymbol),
+    earlyMover:
+      (engineState.liveEarlyMoverSymbols || [])
+        .includes(cleanSymbol),
 
-freshBreakoutScore:
-  freshBreakout.freshBreakoutScore,
+    freshBreakoutScore:
+      freshBreakout.freshBreakoutScore,
 
-freshBreakout,
+    freshBreakout,
 
-chaseRisk:
-  chaseProtection.chaseRisk,
+    chaseRisk:
+      chaseProtection.chaseRisk,
 
-chaseProtection,
+    chaseProtection,
 
-starterBuyApproved: false,
-starterBuyBlockReason: null,    
+    starterBuyApproved: false,
+    starterBuyBlockReason: null,
     volumeSpikeRatio,
     runnerStage,
     tapeSpeed,
@@ -44475,7 +44621,7 @@ async function runFastRunnerEngine() {
     rawMemoryCount: rawMemoryEntries.length,
     freshMemoryCount: memoryEntries.length,
     staleMemorySkippedCount,
-    polygonFallbackSeededCount,    
+    polygonFallbackSeededCount,
     reviewedCount: reviewed.length,
     candidateCount: candidates.length,
     minScore: FAST_RUNNER_MIN_SCORE,
@@ -44672,9 +44818,9 @@ function calculateQuickInstitutionalGate(candidate = {}) {
     brainConviction,
     remainingTotalBotBudget: Number(
       candidate.remainingTotalBotBudget ||
-        candidate.remainingBudget ||
-        candidate.maxBotBudget ||
-        0
+      candidate.remainingBudget ||
+      candidate.maxBotBudget ||
+      0
     ),
     blockReasons,
     reason: approved
@@ -44816,12 +44962,12 @@ function validateLiveBuyQuality(candidate = {}) {
   const atrBreakout =
     confirmations.atrBreakout === true ||
     Number(earlyProfile.atrExpansionRatio || 0) >=
-      Number(CONFIG.earlyMoverAtrBreakoutMultiplier || 1.5);
+    Number(CONFIG.earlyMoverAtrBreakoutMultiplier || 1.5);
 
   const dailyAtrExpansion =
     confirmations.dailyAtrExpansion === true ||
     Number(earlyProfile.dailyAtrExpansionRatio || 0) >=
-      Number(CONFIG.earlyMoverDailyAtrExpansionMultiplier || 1.5);
+    Number(CONFIG.earlyMoverDailyAtrExpansionMultiplier || 1.5);
 
   const relativeStrengthVsSpy =
     confirmations.relativeStrengthVsSpy === true ||
@@ -44910,7 +45056,7 @@ function validateLiveBuyQuality(candidate = {}) {
     if (!vwapQuality) {
       blockReasons.push("Missing VWAP reclaim / VWAP support");
     }
-  }  
+  }
 
   return {
     approved: blockReasons.length === 0,
@@ -44926,13 +45072,48 @@ function buildLiveStarterBuyDecision(candidate = {}, account = {}, openBotPositi
   const gateScore = Number(candidate.quickInstitutionalScore || 0);
   const isCrypto = isCryptoSymbol(symbol);
 
-  const finalLiveScore = Number(
-    (
-      Math.min(fastScore, gateScore) *
-      (isCrypto ? 0.45 : 0.60) +
-      Math.max(fastScore, gateScore) *
-      (isCrypto ? 0.55 : 0.40)
-    ).toFixed(2)
+  const runnerHoldScore = Number(
+    candidate.runnerHoldScore ||
+    candidate.runnerHoldQuality?.runnerHoldScore ||
+    0
+  );
+
+  const freshBreakoutScore = Number(
+    candidate.freshBreakoutScore ||
+    candidate.freshBreakout?.freshBreakoutScore ||
+    0
+  );
+
+  const chaseRisk = Number(
+    candidate.chaseRisk ||
+    candidate.chaseProtection?.chaseRisk ||
+    0
+  );
+
+  const fakeBreakoutRisk = Number(
+    candidate.fakeBreakoutRisk ||
+    candidate.fastRunnerBreakdown?.fakeBreakoutRisk ||
+    0
+  );
+
+  const spreadPercent = Number(candidate.spreadPercent || 0);
+  const volumeSpikeRatio = Number(candidate.volumeSpikeRatio || 0);
+  const momentum = Number(candidate.liveMomentumPercent || 0);
+
+  const finalLiveScore = clampScore(
+    Number(
+      (
+        fastScore * 0.28 +
+        gateScore * 0.24 +
+        runnerHoldScore * 0.16 +
+        freshBreakoutScore * 0.14 +
+        Math.min(100, volumeSpikeRatio * 18) * 0.07 +
+        Math.min(100, Math.max(0, momentum) * 20) * 0.05 +
+        Math.max(0, 100 - chaseRisk) * 0.035 +
+        Math.max(0, 100 - fakeBreakoutRisk) * 0.025 -
+        Math.max(0, spreadPercent - 0.6) * 6
+      ).toFixed(2)
+    )
   );
 
   const cash = Number(account?.cash || 0);
@@ -45044,23 +45225,22 @@ function buildLiveStarterBuyDecision(candidate = {}, account = {}, openBotPositi
   ) {
     blockReasons.push(
       candidate.centralCoreHardBlock === true ||
-      candidate.finalMasterDecisionProfile?.hardBlock === true
+        candidate.finalMasterDecisionProfile?.hardBlock === true
         ? "Master hard block active"
         : "Master execution block active"
     );
-  }  
-
+  }
 
   const liveSafety = checkLiveOrderSafety(symbol, "BUY");
 
-
   if (!liveSafety.approved) {
-    blockReasons.push(...liveSafety.blockReasons);
+    blockReasons.push(...(liveSafety.blockReasons || []));
   }
 
   if (Number(liveSafety.quoteAgeSeconds || 999) > LIVE_ORDER_MAX_QUOTE_AGE_SECONDS) {
     blockReasons.push(`Live quote older than ${LIVE_ORDER_MAX_QUOTE_AGE_SECONDS} seconds`);
   }
+
   if (!ENABLE_LIVE_STARTER_BUY) {
     blockReasons.push("Live starter buy disabled by ENABLE_LIVE_STARTER_BUY");
   }
@@ -45071,19 +45251,19 @@ function buildLiveStarterBuyDecision(candidate = {}, account = {}, openBotPositi
 
   if (CONFIG.realCashTradingUnlocked !== true) {
     blockReasons.push("Real cash trading locked: set REAL_CASH_TRADING_UNLOCKED=true only after paper validation");
-  }  
+  }
 
   if (!symbol || price <= 0) {
     blockReasons.push("Invalid live price");
   }
-  
+
   if (candidate.runnerHoldQuality?.runnerHoldApproved !== true) {
     blockReasons.push(
       `Runner hold quality failed: ${candidate.runnerHoldQuality?.runnerHoldScore ?? "missing"}`
     );
   }
 
-   const liveBuyQuality = validateLiveBuyQuality({
+  const liveBuyQuality = validateLiveBuyQuality({
     ...candidate,
     finalLiveScore,
     fastScore,
@@ -45091,20 +45271,22 @@ function buildLiveStarterBuyDecision(candidate = {}, account = {}, openBotPositi
   });
 
   if (!liveBuyQuality.approved) {
-    blockReasons.push(...liveBuyQuality.blockReasons);
+    blockReasons.push(...(liveBuyQuality.blockReasons || []));
   }
-  
-  
+
   if (candidate.quickInstitutionalApproved !== true) {
     blockReasons.push("Quick Institutional Gate not approved");
   }
 
-  if (["MATURE", "EXHAUSTION", "TOO_LATE"].includes(String(candidate.runnerStage || "").toUpperCase())) {
+  if (
+    ["MATURE", "EXHAUSTION", "TOO_LATE"].includes(
+      String(candidate.runnerStage || "").toUpperCase()
+    )
+  ) {
     blockReasons.push("Runner already too extended / chase risk");
   }
 
-  const minFastScoreForStarterAsset =
-    isCrypto ? 72 : FAST_RUNNER_MIN_SCORE;
+  const minFastScoreForStarterAsset = isCrypto ? 72 : FAST_RUNNER_MIN_SCORE;
 
   if (fastScore < minFastScoreForStarterAsset) {
     blockReasons.push(
@@ -45168,7 +45350,7 @@ function buildLiveStarterBuyDecision(candidate = {}, account = {}, openBotPositi
     fastScore,
     gateScore,
     finalLiveScore,
-    runnerHoldQuality: candidate.runnerHoldQuality || null,    
+    runnerHoldQuality: candidate.runnerHoldQuality || null,
     liveBuyQuality,
     cash,
     equity,
@@ -45179,7 +45361,7 @@ function buildLiveStarterBuyDecision(candidate = {}, account = {}, openBotPositi
     remainingBudget: Number(remainingBudget.toFixed(2)),
     openTradeCount,
     liveSafety,
-      softMasterBlockRestored,
+    softMasterBlockRestored,
     masterExecutionDecision:
       candidate.masterExecutionDecision ||
       candidate.finalMasterDecisionProfile?.executionDecision ||
@@ -45187,7 +45369,7 @@ function buildLiveStarterBuyDecision(candidate = {}, account = {}, openBotPositi
     centralAutonomousAction:
       candidate.centralAutonomousAction ||
       candidate.finalMasterDecisionProfile?.action ||
-      null,  
+      null,
     earlyMover:
       (engineState.liveEarlyMoverSymbols || [])
         .includes(symbol),
@@ -45213,11 +45395,33 @@ async function runLiveStarterBuyGate() {
     const candidates = (engineState.quickInstitutionalCandidates || [])
       .filter((candidate) => marketOpen || isCryptoSymbol(candidate.symbol))
       .filter((candidate) => candidate.quickInstitutionalApproved === true)
-      .sort(
-        (a, b) =>
-          Number(b.quickInstitutionalScore || 0) -
-          Number(a.quickInstitutionalScore || 0)
-      );
+      .sort((a, b) => {
+        const scoreA =
+          Number(a.finalLiveScore || 0) ||
+          (
+            Number(a.fastRunnerScore || 0) * 0.45 +
+            Number(a.quickInstitutionalScore || 0) * 0.35 +
+            Number(
+              a.runnerHoldScore ||
+              a.runnerHoldQuality?.runnerHoldScore ||
+              0
+            ) * 0.20
+          );
+
+        const scoreB =
+          Number(b.finalLiveScore || 0) ||
+          (
+            Number(b.fastRunnerScore || 0) * 0.45 +
+            Number(b.quickInstitutionalScore || 0) * 0.35 +
+            Number(
+              b.runnerHoldScore ||
+              b.runnerHoldQuality?.runnerHoldScore ||
+              0
+            ) * 0.20
+          );
+
+        return scoreB - scoreA;
+      });
 
     const hasCryptoCandidates = candidates.some((candidate) =>
       isCryptoSymbol(candidate.symbol)
@@ -45269,7 +45473,13 @@ async function runLiveStarterBuyGate() {
       buildLiveStarterBuyDecision(candidate, account, openBotPositions)
     );
 
-    const approved = decisions.filter((decision) => decision.approved);
+    const approved = decisions
+      .filter((decision) => decision.approved)
+      .sort(
+        (a, b) =>
+          Number(b.finalLiveScore || 0) -
+          Number(a.finalLiveScore || 0)
+      );
 
     const orders = [];
     let liveStarterBudgetReservedThisCycle = 0;
@@ -45287,9 +45497,9 @@ async function runLiveStarterBuyGate() {
           0,
           Number(
             decision.remainingTotalBotBudget ||
-              decision.remainingBudget ||
-              decision.maxBotBudget ||
-              0
+            decision.remainingBudget ||
+            decision.maxBotBudget ||
+            0
           ) - liveStarterBudgetReservedThisCycle
         )
       ) {
@@ -45335,7 +45545,7 @@ async function runLiveStarterBuyGate() {
           score: decision.finalLiveScore,
           fastRunnerScore: decision.fastScore,
           quickInstitutionalScore: decision.gateScore,
-          runnerHoldQuality: decision.runnerHoldQuality || null,          
+          runnerHoldQuality: decision.runnerHoldQuality || null,
           entryType: "LIVE_STARTER_BUY",
           starterAmount: decision.starterAmount,
           plannedFullTradeAmount: decision.plannedFullTradeAmount,
@@ -45354,7 +45564,7 @@ async function runLiveStarterBuyGate() {
             quickInstitutionalApproved: true,
             fastRunnerScore: decision.fastScore,
             quickInstitutionalScore: decision.gateScore,
-            runnerHoldQuality: decision.runnerHoldQuality || null,            
+            runnerHoldQuality: decision.runnerHoldQuality || null,
           },
           institutionalExecutionPlan: {
             starterBuy: true,
@@ -45502,6 +45712,7 @@ function buildLivePositionDecision(position = {}) {
   if (unrealizedPercent <= -LIVE_HARD_STOP_PERCENT) {
     action = "EXIT";
     sellQty = qty;
+
     reason = `Live hard stop hit: ${unrealizedPercent.toFixed(2)}%`;
   } else if (
     unrealizedPercent >= Number(CONFIG.runnerTriggerPercent || 6) &&
@@ -45515,13 +45726,21 @@ function buildLivePositionDecision(position = {}) {
     dropFromHighPercent >= 1 &&
     liveMomentumPercent <= 0
   ) {
-    action = "TRIM";
     const rawTrimQty = qty * (LIVE_PROFIT_TRIM_QTY_PERCENT / 100);
 
-    sellQty = isCryptoSymbol(symbol)
-      ? Number(Math.min(qty, rawTrimQty).toFixed(8))
-      : Math.max(1, Math.min(qty, Math.floor(rawTrimQty)));
-    reason = `Live profit trim: profit ${unrealizedPercent.toFixed(2)}%, momentum fading`;
+    if (isCryptoSymbol(symbol)) {
+      action = "TRIM";
+      sellQty = Number(Math.min(qty, rawTrimQty).toFixed(8));
+      reason = `Live profit trim: profit ${unrealizedPercent.toFixed(2)}%, momentum fading`;
+    } else if (qty >= 1) {
+      action = "TRIM";
+      sellQty = Math.min(qty, Math.max(1, Math.floor(rawTrimQty)));
+      reason = `Live profit trim: profit ${unrealizedPercent.toFixed(2)}%, momentum fading`;
+    } else {
+      action = "HOLD";
+      sellQty = 0;
+      reason = "Fractional stock trim skipped; waiting for full exit or whole-share trim.";
+    }
   } else if (
     isRunner &&
     unrealizedPercent > 0 &&
@@ -45799,7 +46018,7 @@ function buildLiveScaleInDecision(position = {}, account = {}, openBotPositions 
     ).toFixed(2)
   );
 
-    const remainingTotalBotBudgetForDecision = Number(
+  const remainingTotalBotBudgetForDecision = Number(
     remainingTotalBotBudget.toFixed(2)
   );
   const blockReasons = [];
@@ -45942,7 +46161,7 @@ async function runLiveScaleInEngine() {
         )
       ) {
         continue;
-      }      
+      }
 
       const liveSafety = checkLiveOrderSafety(symbol, "BUY");
 
@@ -45989,7 +46208,7 @@ async function runLiveScaleInEngine() {
             decision.scaleAmount,
             decision.fastRunnerScore
           );
-        markLiveOrderDedupSuccess(symbol, "BUY", "LIVE_SCALE_IN");          
+        markLiveOrderDedupSuccess(symbol, "BUY", "LIVE_SCALE_IN");
         liveScaleInBudgetReservedThisCycle += decision.scaleAmount;
         engineState.pyramidAddsBySymbol[symbol] =
           Number(engineState.pyramidAddsBySymbol?.[symbol] || 0) + 1;
@@ -46545,6 +46764,7 @@ function cleanupLiveOrderDedupMap() {
 function checkLiveOrderSafety(symbol, side = "BUY") {
   const cleanSymbol = normalizeSymbol(symbol);
   const isCrypto = isCryptoSymbol(cleanSymbol);
+  const cleanSide = String(side || "BUY").toUpperCase();
 
   const quote =
     engineState.liveQuoteCache?.[cleanSymbol] ||
@@ -46559,26 +46779,28 @@ function checkLiveOrderSafety(symbol, side = "BUY") {
 
   const blockReasons = [];
 
-  if (!cleanSymbol) blockReasons.push("Missing symbol");
-  const requiresLiveQuote = side === "BUY" || side === "SELL";
+  if (!cleanSymbol) {
+    blockReasons.push("Missing symbol");
+  }
 
-  if (requiresLiveQuote && (!price || price <= 0)) {
+  if (cleanSide === "BUY" && (!price || price <= 0)) {
     blockReasons.push("Missing valid live price");
   }
 
-  if (requiresLiveQuote && !quoteIsLive) {
+  if (cleanSide === "BUY" && !quoteIsLive) {
     blockReasons.push(`Quote is not live websocket source: ${quoteSource || "unknown"}`);
   }
 
-  if (requiresLiveQuote && quoteAgeSeconds > LIVE_ORDER_MAX_QUOTE_AGE_SECONDS) {
+  if (cleanSide === "BUY" && quoteAgeSeconds > LIVE_ORDER_MAX_QUOTE_AGE_SECONDS) {
     blockReasons.push(`Live quote stale: ${quoteAgeSeconds}s old`);
   }
 
-  if (side === "BUY" && spreadPercent > LIVE_ORDER_MAX_SPREAD_PERCENT) {
+  if (cleanSide === "BUY" && spreadPercent > LIVE_ORDER_MAX_SPREAD_PERCENT) {
     blockReasons.push(`Spread too wide: ${spreadPercent}%`);
   }
+
   if (
-    side === "BUY" &&
+    cleanSide === "BUY" &&
     !isCrypto &&
     LIVE_ORDER_REQUIRE_POLYGON_CONNECTED &&
     !isPolygonLiveConnected()
@@ -46587,7 +46809,7 @@ function checkLiveOrderSafety(symbol, side = "BUY") {
   }
 
   if (
-    side === "BUY" &&
+    cleanSide === "BUY" &&
     isCrypto &&
     LIVE_ORDER_REQUIRE_POLYGON_CONNECTED &&
     !isPolygonCryptoLiveConnected()
@@ -46598,13 +46820,15 @@ function checkLiveOrderSafety(symbol, side = "BUY") {
   return {
     approved: blockReasons.length === 0,
     symbol: cleanSymbol,
-    side,
+    side: cleanSide,
     price,
     spreadPercent,
     quoteAgeSeconds,
     quoteSource,
     quoteIsLive,
-    polygonConnected: isPolygonLiveConnected(),
+    polygonConnected: isCrypto
+      ? isPolygonCryptoLiveConnected()
+      : isPolygonLiveConnected(),
     blockReasons,
     checkedAt: new Date().toISOString(),
   };
@@ -48718,7 +48942,7 @@ app.post("/config", requireAdmin, (req, res) => {
     "maxStockPrice",
     "minScoreToBuy",
     "maxBotExposurePercent",
-   "cryptoMaxExposureShareOfBotExposure",
+    "cryptoMaxExposureShareOfBotExposure",
     "stopLossPercent",
     "trailingStopPercent",
     "takeProfitPercent",
@@ -48743,7 +48967,7 @@ app.post("/config", requireAdmin, (req, res) => {
     "maxSignalsToReturn",
     "topAutoTradeCandidates",
     "maxRotationsPerDay",
-    "maxContinuationHoldStocks",    
+    "maxContinuationHoldStocks",
     "maxMorningTradesPerDay",
     "morningStrikeStartHourET",
     "morningStrikeEndHourET",
@@ -48761,7 +48985,28 @@ app.post("/config", requireAdmin, (req, res) => {
     "newsLookbackDays",
     "eliteConcentrationMinScore",
     "eliteConcentrationMaxMultiplier",
-    "eliteConcentrationMinTradeAmount",    
+    "eliteConcentrationMinTradeAmount",
+
+    "liveStarterBuyIntervalMs",
+    "liveStarterBuyPercent",
+    "liveStarterMinGateScore",
+    "liveStarterMinFinalScore",
+    "liveStarterMaxBuysPerCycle",
+    "liveOrderMaxQuoteAgeSeconds",
+    "liveOrderMaxSpreadPercent",
+    "liveOrderLockMs",
+    "liveDuplicateOrderWindowMs",
+    "livePositionManagementIntervalMs",
+    "liveProfitTrimTriggerPercent",
+    "liveProfitTrimQtyPercent",
+    "liveHardStopPercent",
+    "liveTrailStopFromHighPercent",
+    "liveScaleInIntervalMs",
+    "liveScaleInMinProfitPercent",
+    "liveScaleInMinFastScore",
+    "liveScaleInPercentOfPlan",
+    "liveScaleInMaxAddsPerSymbol",
+    "liveScaleInMaxAddsPerCycle"
   ];
 
   const booleanConfigKeys = [
@@ -48774,6 +49019,11 @@ app.post("/config", requireAdmin, (req, res) => {
     "enableWeakestReplacement",
     "eliteCapitalConcentrationEnabled",
     "allowClosedMarketAutoTrade",
+
+    "enableLiveStarterBuy",
+    "enableLivePositionManagement",
+    "enableLiveScaleIn",
+    "liveOrderRequirePolygonConnected"
   ];
 
   const stringConfigKeys = ["tradingMode"];
@@ -48845,6 +49095,8 @@ app.post("/config", requireAdmin, (req, res) => {
 
   CONFIG.minScoreToBuy = Math.max(70, Number(CONFIG.minScoreToBuy || 70));
 
+  applyRuntimeLiveSettings();
+
   saveEngineState("MANUAL_CONFIG_UPDATED");
 
   res.json({
@@ -48853,6 +49105,21 @@ app.post("/config", requireAdmin, (req, res) => {
     message: "Remote config permanently updated",
     config: CONFIG,
     runtimeConfig,
+    liveSettings: {
+      ENABLE_LIVE_STARTER_BUY,
+      LIVE_STARTER_BUY_PERCENT,
+      LIVE_STARTER_MIN_FINAL_SCORE,
+      LIVE_ORDER_MAX_QUOTE_AGE_SECONDS,
+      LIVE_ORDER_MAX_SPREAD_PERCENT,
+      ENABLE_LIVE_POSITION_MANAGEMENT,
+      LIVE_HARD_STOP_PERCENT,
+      LIVE_TRAIL_STOP_FROM_HIGH_PERCENT,
+      LIVE_PROFIT_TRIM_TRIGGER_PERCENT,
+      LIVE_PROFIT_TRIM_QTY_PERCENT,
+      ENABLE_LIVE_SCALE_IN,
+      LIVE_SCALE_IN_MIN_PROFIT_PERCENT,
+      LIVE_SCALE_IN_MIN_FAST_SCORE,
+    },
   });
 });
 
