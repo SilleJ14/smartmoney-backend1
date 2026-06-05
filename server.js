@@ -23572,6 +23572,23 @@ function scoreCrypto(quote, bars = []) {
   if (momentumPercent < -0.75) score -= 10;
   if (shortMomentumPercent < -0.35) score -= 8;
   if (closeNearHigh < 25) score -= 8;
+  
+  const runnerHoldQuality = calculateRunnerHoldQuality({
+    ...quote,
+    current,
+    price: current,
+    percentChange: momentumPercent,
+    volumeSpikeRatio: volumeRatio,
+    closeNearHighPercent: closeNearHigh,
+    pullbackFromHighPercent:
+      high > 0 ? ((high - current) / high) * 100 : 0,
+    vwapExtensionPercent: 0,
+    runnerStage: momentumPercent >= 1.5 ? "EXPANSION" : "IGNITION",
+    aboveVwap: current >= open,
+    technicals: {
+      rsi: 55,
+    },
+  });
 
   let finalScore = clampScore(score);
 
@@ -46511,7 +46528,16 @@ function runDeepIntelligenceSync() {
 
 async function refreshEarlyMoversThenPolygonSubscriptions() {
   if (!ENABLE_LIVE_EARLY_MOVER_REFRESH) {
-    return refreshPolygonLiveSubscriptions();
+    const polygonState = await refreshPolygonLiveSubscriptions();
+    const finnhubSymbols = refreshFinnhubLiveSubscriptions();
+
+    return {
+      ok: true,
+      updatedAt: new Date().toISOString(),
+      earlyMoverCount: 0,
+      polygonState,
+      finnhubSymbols,
+    };
   }
 
   const earlyMoverSymbols = await getPolygonMoverSymbols(
@@ -46519,19 +46545,39 @@ async function refreshEarlyMoversThenPolygonSubscriptions() {
     true
   );
 
+  engineState.liveEarlyMoverSymbols = Array.isArray(earlyMoverSymbols)
+    ? earlyMoverSymbols.map(normalizeSymbol).filter(Boolean)
+    : [];
+
+  engineState.liveEarlyMoverRefreshState = {
+    ok: true,
+    provider: "polygon",
+    updatedAt: new Date().toISOString(),
+    symbolCount: engineState.liveEarlyMoverSymbols.length,
+    symbols: engineState.liveEarlyMoverSymbols.slice(0, 25),
+    reason: "Live early movers refreshed from Polygon snapshot.",
+  };
+
   const polygonState = await refreshPolygonLiveSubscriptions();
 
-  // CRYPTO LIVE SUBSCRIPTIONS
-  const polygonCryptoState =
-    refreshPolygonCryptoLiveSubscriptions();
+  const polygonCryptoState = await refreshPolygonCryptoLiveSubscriptions();
+
+  const finnhubSymbols = refreshFinnhubLiveSubscriptions();
+
+  engineState.liveQuoteStreamState = {
+    ...(engineState.liveQuoteStreamState || {}),
+    ok: true,
+    provider: "finnhub",
+    subscribedSymbols: finnhubSymbols,
+    subscribedCount: finnhubSymbols.length,
+    updatedAt: new Date().toISOString(),
+    reason: `Finnhub websocket subscribed with ${finnhubSymbols.length} symbols including live early movers.`,
+  };
 
   pushLiveSignalUpdate({
     type: "LIVE_EARLY_MOVER_REFRESH",
     polygonLiveStreamState: engineState.polygonLiveStreamState || null,
-
-    polygonCryptoLiveStreamState:
-      engineState.polygonCryptoLiveStreamState || null,
-
+    polygonCryptoLiveStreamState: engineState.polygonCryptoLiveStreamState || null,
     liveEarlyMoverSymbols: engineState.liveEarlyMoverSymbols || [],
     liveEarlyMoverRefreshState: engineState.liveEarlyMoverRefreshState || null,
     liveSignals: buildLiveSignalPushPayload(),
@@ -46542,8 +46588,10 @@ async function refreshEarlyMoversThenPolygonSubscriptions() {
   return {
     ok: true,
     updatedAt: new Date().toISOString(),
-    earlyMoverCount: earlyMoverSymbols?.length || 0,
+    earlyMoverCount: engineState.liveEarlyMoverSymbols.length,
     polygonState,
+    polygonCryptoState,
+    finnhubSymbols,
   };
 }
 
@@ -46924,11 +46972,14 @@ function getSymbolsForFinnhubLiveStream(limit = 75) {
       .filter((symbol) => !symbol.includes("/") && !symbol.endsWith("USD"));
 
   const signalSymbols = [
+    ...collectStockSymbols(engineState.liveEarlyMoverSymbols),
     ...collectStockSymbols(engineState.lastSignals),
     ...collectStockSymbols(engineState.lastStockSignals),
     ...collectStockSymbols(engineState.topSignals),
     ...collectStockSymbols(engineState.topStockSignals),
     ...collectStockSymbols(engineState.institutionalWatchlist),
+    ...collectStockSymbols(engineState.fastRunnerCandidates),
+    ...collectStockSymbols(engineState.quickInstitutionalCandidates),
   ];
 
   const positionSymbols = collectStockSymbols(engineState.cachedPositions);
