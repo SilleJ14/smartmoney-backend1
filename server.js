@@ -1858,6 +1858,12 @@ function resolveAutoTradingEnabled(config = {}) {
 const RUN_STARTUP_ENGINE_SCAN =
   parseEnvBoolean("RUN_STARTUP_ENGINE_SCAN", false);
 
+const ENABLE_MAIN_SWING_SCAN =
+  parseEnvBoolean("ENABLE_MAIN_SWING_SCAN", true);
+
+const MAIN_SWING_SCAN_INTERVAL_MS =
+  parseEnvNumber("MAIN_SWING_SCAN_INTERVAL_MS", 300000);  
+
 let autoTradingEnabled = resolveAutoTradingEnabled(runtimeConfig);
 
 const AI_ORDER_PREFIX = "SM_AI";
@@ -46787,6 +46793,14 @@ function startManagedLiveScheduler() {
       DEEP_INTELLIGENCE_SYNC_INTERVAL_MS,
       () => runDeepIntelligenceSync()
     );
+
+    if (ENABLE_MAIN_SWING_SCAN) {
+      void runLiveScheduledTask(
+        "runMainSwingScan",
+        MAIN_SWING_SCAN_INTERVAL_MS,
+        () => engineTick()
+      );
+    }
   }, 1000);
 
   try {
@@ -46814,6 +46828,7 @@ function startManagedLiveScheduler() {
       "runLiveScaleInEngine",
       "runFullBrainFastSync",
       "runDeepIntelligenceSync",
+      "runMainSwingScan",
     ],
   };
 
