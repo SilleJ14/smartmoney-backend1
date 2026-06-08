@@ -107,6 +107,11 @@ app.post("/alpaca-keys", requireAdmin, (req, res) => {
     liveSecret: liveSecret || runtimeAlpacaKeys.liveSecret,
   };
 
+  runtimeConfig = saveRuntimeConfig({
+    alpacaLiveKey: runtimeAlpacaKeys.liveKey,
+    alpacaLiveSecret: runtimeAlpacaKeys.liveSecret,
+  });
+
   res.json({
     success: true,
     message: "Alpaca keys saved",
@@ -140,11 +145,19 @@ app.get("/alpaca/broker-positions", requireAdmin, async (req, res) => {
     const text = await response.text();
 
     try {
+      if (!response.ok) {
+        return res.status(response.status).json({
+          error: "Alpaca API error",
+          details: text,
+        });
+      }
+
       const data = text ? JSON.parse(text) : [];
 
       return res.json({
         positions: Array.isArray(data) ? data : [],
       });
+
     } catch {
       return res.status(500).json({
         error: "Alpaca returned invalid JSON",
@@ -181,6 +194,13 @@ app.get("/alpaca/broker-orders", requireAdmin, async (req, res) => {
     const text = await response.text();
 
     try {
+      if (!response.ok) {
+        return res.status(response.status).json({
+          error: "Alpaca API error",
+          details: text,
+        });
+      }
+
       const data = text ? JSON.parse(text) : [];
 
       return res.json({
@@ -274,11 +294,11 @@ const LIVE_MARKET_MEMORY_MAX_SECOND_CANDLES = Number(
 );
 
 const LIVE_MARKET_MEMORY_MAX_SYMBOLS = Number(
-  process.env.LIVE_MARKET_MEMORY_MAX_SYMBOLS || 150
+  process.env.LIVE_MARKET_MEMORY_MAX_SYMBOLS || 100
 );
 
 const LIVE_MARKET_MEMORY_MAX_AGE_MINUTES = Number(
-  process.env.LIVE_MARKET_MEMORY_MAX_AGE_MINUTES || 20
+  process.env.LIVE_MARKET_MEMORY_MAX_AGE_MINUTES || 10
 );
 
 const POLYGON_SUBSCRIPTION_ROTATION_LIMIT = Number(
@@ -821,12 +841,12 @@ let pendingEngineStateSnapshot = null;
 let pendingEngineStateReason = "STATE_UPDATE";
 
 function flushEngineStateSave() {
-  if (!pendingEngineStateSnapshot) return;
+  if (!pendingEngineStateSnapshot) return Promise.resolve();
 
   const snapshot = pendingEngineStateSnapshot;
   pendingEngineStateSnapshot = null;
 
-  fs.promises.writeFile(
+  return fs.promises.writeFile(
     ENGINE_STATE_FILE,
     JSON.stringify(snapshot, null, 2)
   ).catch((err) => {
@@ -874,7 +894,7 @@ function saveEngineState(reason = "STATE_UPDATE") {
       institutionalWatchlist:
         engineState.institutionalWatchlist || [],
       analyticsSnapshots:
-        (engineState.analyticsSnapshots || []).slice(0, 300),
+        (engineState.analyticsSnapshots || []).slice(0, 100),
       apiHealth: engineState.apiHealth || {},
       apiFailureCounts:
         engineState.apiFailureCounts || {},
@@ -1152,29 +1172,29 @@ function saveEngineState(reason = "STATE_UPDATE") {
       lastScanRecoveryAt:
         engineState.lastScanRecoveryAt || null,
       aiDecisionHistory:
-        (engineState.aiDecisionHistory || []).slice(0, 500),
+        (engineState.aiDecisionHistory || []).slice(0, 100),
       institutionalDashboardSnapshots:
         (
           engineState.institutionalDashboardSnapshots || []
-        ).slice(0, 200),
+        ).slice(0, 50),
 
       lastSignals:
-        (engineState.lastSignals || []).slice(0, 100),
+        (engineState.lastSignals || []).slice(0, 50),
 
       topSignals:
-        (engineState.topSignals || []).slice(0, 100),
+        (engineState.topSignals || []).slice(0, 50),
 
       lastStockSignals:
-        (engineState.lastStockSignals || []).slice(0, 100),
+        (engineState.lastStockSignals || []).slice(0, 50),
 
       topStockSignals:
-        (engineState.topStockSignals || []).slice(0, 100),
+        (engineState.topStockSignals || []).slice(0, 50),
 
       lastCryptoSignals:
-        (engineState.lastCryptoSignals || []).slice(0, 100),
+        (engineState.lastCryptoSignals || []).slice(0, 50),
 
       topCryptoSignals:
-        (engineState.topCryptoSignals || []).slice(0, 100),
+        (engineState.topCryptoSignals || []).slice(0, 50),
 
       liveMarketMemory:
         engineState.liveMarketMemory || {},
@@ -1819,8 +1839,14 @@ function getEffectiveTradingMode(marketOpen) {
 
 function getAlpacaKeys() {
   return {
-    key: runtimeAlpacaKeys.liveKey || process.env.ALPACA_LIVE_KEY,
-    secret: runtimeAlpacaKeys.liveSecret || process.env.ALPACA_LIVE_SECRET,
+    key:
+      runtimeAlpacaKeys.liveKey ||
+      runtimeConfig.alpacaLiveKey ||
+      process.env.ALPACA_LIVE_KEY,
+    secret:
+      runtimeAlpacaKeys.liveSecret ||
+      runtimeConfig.alpacaLiveSecret ||
+      process.env.ALPACA_LIVE_SECRET,
   };
 }
 function getTradingBaseUrl() {
@@ -1862,7 +1888,7 @@ const ENABLE_MAIN_SWING_SCAN =
   parseEnvBoolean("ENABLE_MAIN_SWING_SCAN", true);
 
 const MAIN_SWING_SCAN_INTERVAL_MS =
-  parseEnvNumber("MAIN_SWING_SCAN_INTERVAL_MS", 300000);  
+  parseEnvNumber("MAIN_SWING_SCAN_INTERVAL_MS", 300000);
 
 let autoTradingEnabled = resolveAutoTradingEnabled(runtimeConfig);
 
@@ -5095,7 +5121,7 @@ function calculateFifteenPhaseMarketScanner(signal = {}) {
 
   const session = getMarketSession({
     is_open: Boolean(engineState.marketOpen),
-  }).session;
+  });
 
   const unusualVolume =
     relativeVolume >= 1.5 ||
@@ -6983,6 +7009,140 @@ function calculatePhase10RunnerFingerprint(signal = {}) {
   };
 }
 
+function calculateMultiDayProbability(signal = {}) {
+  const symbol = normalizeSymbol(signal.symbol);
+
+  const memory =
+    engineState.multiDayAccumulationMemory?.[symbol] ||
+    signal.multiDayAccumulation ||
+    {};
+
+  const confirmations = signal.confirmations || {};
+
+  const accumulationScore = Number(
+    memory.preBreakoutScore ||
+    signal.multiDayAccumulation?.preBreakoutScore ||
+    signal.accumulationIntelligence?.accumulationScore ||
+    0
+  );
+
+  const persistenceScore = Number(memory.persistenceScore || 0);
+  const supportHoldingScore = Number(memory.supportHoldingScore || 0);
+
+  const continuationProbability = Number(
+    signal.continuationProbability ||
+    signal.phase10RunnerMemory?.continuationProbability ||
+    0
+  );
+
+  const continuationHold =
+    calculateContinuationHoldScore(signal);
+
+  const technicalScore = Number(
+    signal.technicalScore ||
+    signal.technicalIntelligence?.technicalScore ||
+    0
+  );
+
+  const statisticalScore = Number(
+    signal.statisticalScore ||
+    signal.statisticalEdge?.statisticalScore ||
+    0
+  );
+
+  const relativeVolume = Number(
+    signal.relativeVolume ||
+    signal.volumeSpikeRatio ||
+    confirmations.volumeSpikeRatio ||
+    0
+  );
+
+  const closeNearHighPercent = Number(
+    confirmations.closeNearHighPercent ||
+    signal.closeNearHighPercent ||
+    0
+  );
+
+  const pullbackFromHighPercent = Number(
+    confirmations.pullbackFromHighPercent ||
+    signal.pullbackFromHighPercent ||
+    0
+  );
+
+  const percentChange = Number(signal.percentChange || 0);
+
+  const seenDaysCount = Array.isArray(memory.seenDays)
+    ? memory.seenDays.length
+    : 0;
+
+  const seenDaysScore = clampScore(seenDaysCount * 12);
+
+  const volumeExpansionScore = clampScore(
+    Math.min(relativeVolume * 18, 100)
+  );
+
+  const closeStrengthScore = clampScore(closeNearHighPercent);
+
+  const exhaustionRisk = clampScore(
+    (pullbackFromHighPercent >= 12 ? 30 : 0) +
+    (pullbackFromHighPercent >= 8 ? 15 : 0) +
+    (percentChange >= 80 ? 25 : 0) +
+    (percentChange >= 50 ? 12 : 0) +
+    (confirmations.fakeBreakout ? 25 : 0) +
+    (confirmations.newsRisk ? 15 : 0) -
+    (closeNearHighPercent >= 70 ? 10 : 0) -
+    (supportHoldingScore >= 70 ? 10 : 0)
+  );
+
+  const multiDayScore = clampScore(
+    accumulationScore * 0.22 +
+    persistenceScore * 0.16 +
+    seenDaysScore * 0.1 +
+    supportHoldingScore * 0.12 +
+    continuationProbability * 0.16 +
+    Number(continuationHold.continuationScore || 0) * 0.1 +
+    technicalScore * 0.06 +
+    statisticalScore * 0.04 +
+    volumeExpansionScore * 0.03 +
+    closeStrengthScore * 0.01 -
+    exhaustionRisk * 0.16
+  );
+
+  const multiDayLabel =
+    multiDayScore >= 90
+      ? "ELITE_MULTI_DAY"
+      : multiDayScore >= 80
+        ? "STRONG_MULTI_DAY"
+        : multiDayScore >= 70
+          ? "GOOD_CONTINUATION"
+          : multiDayScore >= 60
+            ? "POSSIBLE_CONTINUATION"
+            : "INTRADAY_ONLY";
+
+  return {
+    symbol,
+    multiDayScore,
+    multiDayProbability: multiDayScore,
+    multiDayLabel,
+    accumulationScore,
+    persistenceScore,
+    supportHoldingScore,
+    seenDaysCount,
+    continuationProbability,
+    continuationHoldScore:
+      continuationHold.continuationScore,
+    technicalScore,
+    statisticalScore,
+    relativeVolume,
+    closeNearHighPercent,
+    pullbackFromHighPercent,
+    exhaustionRisk,
+    reason:
+      `${multiDayLabel} • Multi-Day ${multiDayScore}/100 • ` +
+      `Accumulation ${accumulationScore}/100 • Persistence ${persistenceScore}/100`,
+  };
+}
+
 function updatePhase10RunnerMemoryState(signals = []) {
   const reviewed = signals.map((signal) => {
     const runnerMemory =
@@ -7062,7 +7222,7 @@ function updatePhase10RunnerMemoryState(signals = []) {
 
   engineState.multiDayAccumulationHistory.unshift(state);
   engineState.multiDayAccumulationHistory =
-    engineState.multiDayAccumulationHistory.slice(0, 200);
+    engineState.multiDayAccumulationHistory.slice(0, 100);
 
   saveEngineState("PHASE_10_RUNNER_MEMORY_UPDATED");
 
@@ -24442,23 +24602,32 @@ async function getPolygonMoverSymbols(limit = POLYGON_MOVERS_LIMIT, forceRefresh
       .filter(isNormalStockSymbol);
 
 
-    const fallbackSymbols = [
+    const preMoverFallbackSymbols = [
       ...(engineState.preMoverDiscoveryState?.topCandidates || []).map((s) => s.symbol || s),
       ...Object.values(engineState.preMoverDiscoveryMemory || {}).map((s) => s.symbol || s),
-      ...(engineState.lastStockSignals || []).map((s) => s.symbol),
-      ...(engineState.topStockSignals || []).map((s) => s.symbol),
-      ...(engineState.fastRunnerCandidates || []).map((s) => s.symbol),
-      ...(engineState.quickInstitutionalCandidates || []).map((s) => s.symbol),
-      ...(engineState.institutionalWatchlist || []).map((s) => s.symbol || s),
     ]
       .filter(Boolean)
       .map(normalizeSymbol)
       .filter(isNormalStockSymbol);
 
+    const runnerFallbackSymbols = [
+      ...(engineState.fastRunnerCandidates || []).map((s) => s.symbol),
+      ...(engineState.quickInstitutionalCandidates || []).map((s) => s.symbol),
+      ...(engineState.institutionalWatchlist || []).map((s) => s.symbol || s),
+      ...(engineState.lastStockSignals || []).map((s) => s.symbol),
+      ...(engineState.topStockSignals || []).map((s) => s.symbol),
+    ]
+      .filter(Boolean)
+      .map(normalizeSymbol)
+      .filter(isNormalStockSymbol);
+
+    const earlySymbolBudget = Math.max(10, Math.floor(limit * 0.45));
+
     const cleanSymbols = [
       ...new Set([
+        ...preMoverFallbackSymbols.slice(0, earlySymbolBudget),
         ...rankedSymbols,
-        ...fallbackSymbols,
+        ...runnerFallbackSymbols,
       ]),
     ]
       .filter(
@@ -24958,7 +25127,7 @@ async function getPreMoverDiscoverySymbols(seedSymbols = []) {
   }
 
   engineState.preMoverDiscoveryHistory.unshift(state);
-  engineState.preMoverDiscoveryHistory = engineState.preMoverDiscoveryHistory.slice(0, 200);
+  engineState.preMoverDiscoveryHistory = engineState.preMoverDiscoveryHistory.slice(0, 75);
 
   saveEngineState("PRE_MOVER_DISCOVERY_UPDATED");
 
@@ -26305,6 +26474,21 @@ async function scanMarket() {
 
       signal.runnerType =
         phase10RunnerMemory.runnerType;
+
+      const multiDayProbability =
+        calculateMultiDayProbability(signal);
+
+      signal.multiDayProbability =
+        multiDayProbability.multiDayProbability;
+
+      signal.multiDayScore =
+        multiDayProbability.multiDayScore;
+
+      signal.multiDayLabel =
+        multiDayProbability.multiDayLabel;
+
+      signal.multiDayContinuation =
+        multiDayProbability;        
 
       if (Number(phase10RunnerMemory.scoreBoost || 0) !== 0) {
         signal.score = clampScore(
@@ -37797,10 +37981,17 @@ async function engineTick() {
     engineState.lastTickDurationMs =
       Date.now() - engineState.lastTickStartedAt;
 
-    engineState.lastEngineStopReason = "ENGINE_TICK_COMPLETED";
+    const completedWithoutError =
+      engineState.lastEngineStopReason !== "ENGINE_ERROR";
+
+    if (completedWithoutError) {
+      engineState.lastEngineStopReason = "ENGINE_TICK_COMPLETED";
+    }
     engineState.engineFreezeDetected = false;
 
-    saveEngineState("ENGINE_TICK_COMPLETED");
+    saveEngineState(
+      completedWithoutError ? "ENGINE_TICK_COMPLETED" : "ENGINE_ERROR"
+    );
 
     engineState.running = false;
   }
@@ -42215,6 +42406,30 @@ function getLatestFrontendStatusSnapshot() {
     25
   ).map(mergeLiveQuoteIntoSignal);
 
+  const multiDaySignals = [...stockSignals]
+    .filter(
+      (signal) =>
+        Number(
+          signal.multiDayScore ||
+          signal.multiDayProbability ||
+          0
+        ) >= 60
+    )
+    .sort(
+      (a, b) =>
+        Number(
+          b.multiDayScore ||
+          b.multiDayProbability ||
+          0
+        ) -
+        Number(
+          a.multiDayScore ||
+          a.multiDayProbability ||
+          0
+        )
+    )
+    .slice(0, 25);  
+
   const cryptoSignals = getTopSignals(
     engineState.lastCryptoSignals || [],
     25
@@ -42235,11 +42450,13 @@ function getLatestFrontendStatusSnapshot() {
       peakEquity: engineState.dailyPeakEquity || equity,
     },
     stockSignals,
+    multiDaySignals,
     cryptoSignals,
     topStockSignals: stockSignals,
     topCryptoSignals: cryptoSignals,
     signalCount: stockSignals.length + cryptoSignals.length,
     stockSignalCount: stockSignals.length,
+    multiDaySignalCount: multiDaySignals.length,  
     cryptoSignalCount: cryptoSignals.length,
     fastRunnerCandidates: engineState.fastRunnerCandidates || [],
     quickInstitutionalCandidates: engineState.quickInstitutionalCandidates || [],
@@ -42348,15 +42565,15 @@ function collectFrontendSignalSnapshot() {
   const orchestration =
     latestStatus?.phase20AutonomousOrchestration || {};
 
-return [
-  ...(Array.isArray(engineState.topStockSignals) ? engineState.topStockSignals : []),
-  ...(Array.isArray(engineState.lastStockSignals) ? engineState.lastStockSignals : []),
-  ...(Array.isArray(engineState.fastRunnerCandidates) ? engineState.fastRunnerCandidates : []),
-  ...(Array.isArray(engineState.quickInstitutionalCandidates) ? engineState.quickInstitutionalCandidates : []),
-  ...(Array.isArray(engineState.topCryptoSignals) ? engineState.topCryptoSignals : []),
-  ...(Array.isArray(engineState.lastCryptoSignals) ? engineState.lastCryptoSignals : []),
-  ...(Array.isArray(orchestration.topSignals) ? orchestration.topSignals : []),
-]
+  return [
+    ...(Array.isArray(engineState.topStockSignals) ? engineState.topStockSignals : []),
+    ...(Array.isArray(engineState.lastStockSignals) ? engineState.lastStockSignals : []),
+    ...(Array.isArray(engineState.fastRunnerCandidates) ? engineState.fastRunnerCandidates : []),
+    ...(Array.isArray(engineState.quickInstitutionalCandidates) ? engineState.quickInstitutionalCandidates : []),
+    ...(Array.isArray(engineState.topCryptoSignals) ? engineState.topCryptoSignals : []),
+    ...(Array.isArray(engineState.lastCryptoSignals) ? engineState.lastCryptoSignals : []),
+    ...(Array.isArray(orchestration.topSignals) ? orchestration.topSignals : []),
+  ]
     .filter(Boolean)
     .filter(
       (signal, index, arr) =>
@@ -42438,29 +42655,29 @@ app.get("/frontend/signals", requireAdmin, async (req, res) => {
     const orchestration =
       latestStatus?.phase20AutonomousOrchestration || {};
 
-const signals = [
-  ...(Array.isArray(engineState.topStockSignals)
-    ? engineState.topStockSignals
-    : []),
-  ...(Array.isArray(engineState.lastStockSignals)
-    ? engineState.lastStockSignals
-    : []),
-  ...(Array.isArray(engineState.fastRunnerCandidates)
-    ? engineState.fastRunnerCandidates
-    : []),
-  ...(Array.isArray(engineState.quickInstitutionalCandidates)
-    ? engineState.quickInstitutionalCandidates
-    : []),
-  ...(Array.isArray(engineState.topCryptoSignals)
-    ? engineState.topCryptoSignals
-    : []),
-  ...(Array.isArray(engineState.lastCryptoSignals)
-    ? engineState.lastCryptoSignals
-    : []),
-  ...(Array.isArray(orchestration.topSignals)
-    ? orchestration.topSignals
-    : []),
-]
+    const signals = [
+      ...(Array.isArray(engineState.topStockSignals)
+        ? engineState.topStockSignals
+        : []),
+      ...(Array.isArray(engineState.lastStockSignals)
+        ? engineState.lastStockSignals
+        : []),
+      ...(Array.isArray(engineState.fastRunnerCandidates)
+        ? engineState.fastRunnerCandidates
+        : []),
+      ...(Array.isArray(engineState.quickInstitutionalCandidates)
+        ? engineState.quickInstitutionalCandidates
+        : []),
+      ...(Array.isArray(engineState.topCryptoSignals)
+        ? engineState.topCryptoSignals
+        : []),
+      ...(Array.isArray(engineState.lastCryptoSignals)
+        ? engineState.lastCryptoSignals
+        : []),
+      ...(Array.isArray(orchestration.topSignals)
+        ? orchestration.topSignals
+        : []),
+    ]
       .filter(Boolean)
       .filter(
         (signal, index, arr) =>
@@ -42932,14 +43149,14 @@ function mergeLiveQuoteIntoSignal(signal = {}) {
 
 function buildLiveSignalPushPayload() {
 
-const stockSignals = getTopSignals(
-  [
-    ...(engineState.lastStockSignals || []),
-    ...(engineState.fastRunnerCandidates || []),
-    ...(engineState.quickInstitutionalCandidates || []),
-  ],
-  25
-).map(mergeLiveQuoteIntoSignal);
+  const stockSignals = getTopSignals(
+    [
+      ...(engineState.lastStockSignals || []),
+      ...(engineState.fastRunnerCandidates || []),
+      ...(engineState.quickInstitutionalCandidates || []),
+    ],
+    25
+  ).map(mergeLiveQuoteIntoSignal);
 
 
 
@@ -47032,13 +47249,37 @@ function cleanupLiveQuoteCache(maxAgeMinutes = LIVE_MARKET_MEMORY_MAX_AGE_MINUTE
 
     if (Array.isArray(memory.secondCandles)) {
       memory.secondCandles = memory.secondCandles.slice(
-        -LIVE_MARKET_MEMORY_MAX_SECOND_CANDLES
+        -Math.min(LIVE_MARKET_MEMORY_MAX_SECOND_CANDLES, 60)
       );
     }
 
     if (Array.isArray(memory.tickWindow)) {
-      memory.tickWindow = memory.tickWindow.slice(-100);
+      memory.tickWindow = memory.tickWindow.slice(-50);
     }
+
+    if (Array.isArray(memory.minuteCandles)) {
+      memory.minuteCandles = memory.minuteCandles.slice(-30);
+    }
+
+    if (Array.isArray(memory.chartBars)) {
+      memory.chartBars = memory.chartBars.slice(-60);
+    }
+  }
+
+  const quoteEntries = Object.entries(engineState.liveQuoteCache);
+
+  if (quoteEntries.length > LIVE_MARKET_MEMORY_MAX_SYMBOLS) {
+    const keepQuotes = quoteEntries
+      .sort(([, a], [, b]) => {
+        return (
+          new Date(b?.updatedAt || 0).getTime() -
+          new Date(a?.updatedAt || 0).getTime()
+        );
+      })
+      .slice(0, LIVE_MARKET_MEMORY_MAX_SYMBOLS);
+
+    engineState.liveQuoteCache = Object.fromEntries(keepQuotes);
+    quoteRemoved += Math.max(0, quoteEntries.length - keepQuotes.length);
   }
 
   const memoryEntries = Object.entries(engineState.liveMarketMemory);
@@ -47366,7 +47607,16 @@ function getTopSignals(signals = [], limit = 25) {
           !(hasFreshLiveQuote || signalAlreadyLive),
       };
     })
-    .sort((a, b) => Number(b.score || 0) - Number(a.score || 0))
+    .sort((a, b) => {
+      const aQualified = a.qualifiedToBuy !== false ? 1 : 0;
+      const bQualified = b.qualifiedToBuy !== false ? 1 : 0;
+
+      if (aQualified !== bQualified) {
+        return bQualified - aQualified;
+      }
+
+      return Number(b.score || 0) - Number(a.score || 0);
+    })
     .slice(0, limit);
 }
 
@@ -49074,11 +49324,16 @@ app.post("/auto-trading/on", requireAdmin, (req, res) => {
 });
 app.post("/reset-runtime-config", requireAdmin, (req, res) => {
   try {
+    const preservedAlpacaKeys = {
+      alpacaLiveKey: runtimeConfig.alpacaLiveKey,
+      alpacaLiveSecret: runtimeConfig.alpacaLiveSecret,
+    };
+
     if (fs.existsSync(CONFIG_FILE)) {
       fs.unlinkSync(CONFIG_FILE);
     }
 
-    runtimeConfig = {};
+    runtimeConfig = saveRuntimeConfig(preservedAlpacaKeys);
 
     res.json({
       success: true,
@@ -49796,14 +50051,25 @@ app.get("/trade-journal", requireAdmin, (req, res) => {
 });
 
 
-process.on("SIGINT", () => {
-  flushEngineStateSave();
+async function gracefulShutdown(signal) {
+  saveEngineState(`SHUTDOWN_${signal}`);
+
+  if (engineStateSaveTimer) {
+    clearTimeout(engineStateSaveTimer);
+    engineStateSaveTimer = null;
+  }
+
+  await flushEngineStateSave();
+
   process.exit(0);
+}
+
+process.on("SIGINT", () => {
+  gracefulShutdown("SIGINT");
 });
 
 process.on("SIGTERM", () => {
-  flushEngineStateSave();
-  process.exit(0);
+  gracefulShutdown("SIGTERM");
 });
 
 app.listen(PORT, "0.0.0.0", async () => {
