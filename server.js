@@ -16886,14 +16886,45 @@ async function polygonQuote(symbol) {
 async function getAlpacaLatestStockPrice(symbol) {
   const cleanSymbol = normalizeSymbol(symbol);
 
-  return {
-    price: 0,
-    bid: 0,
-    ask: 0,
-    source: "alpaca_latest_disabled",
-    disabled: true,
-    symbol: cleanSymbol,
-  };
+  try {
+    const data = await alpacaDataRequest(
+      `/v2/stocks/${encodeURIComponent(cleanSymbol)}/quotes/latest`
+    );
+
+    const quote = data?.quote || {};
+    const bid = Number(quote.bp || 0);
+    const ask = Number(quote.ap || 0);
+
+    const price =
+      bid > 0 && ask > 0
+        ? Number(((bid + ask) / 2).toFixed(4))
+        : Number(quote.ap || quote.bp || 0);
+
+    return {
+      symbol: cleanSymbol,
+      price,
+      current: price,
+      bid,
+      ask,
+      source: "alpaca_latest_stock_quote",
+      liveQuoteSource: "alpaca_latest_stock_quote",
+      priceIsLive: price > 0,
+      priceStale: false,
+      quoteFetchedAt: new Date().toISOString(),
+    };
+  } catch (err) {
+    console.error("Alpaca latest stock quote failed:", cleanSymbol, err.message);
+
+    return {
+      symbol: cleanSymbol,
+      price: 0,
+      current: 0,
+      bid: 0,
+      ask: 0,
+      source: "alpaca_latest_failed",
+      error: err.message,
+    };
+  }
 }
 
 async function getCombinedStockQuote(symbol) {
@@ -16998,10 +17029,24 @@ async function getCombinedStockQuote(symbol) {
     }
   }
 
-  const primary = polygon || finnhub;
+  let alpacaLatestFallback = null;
+
+  if (!polygon && !finnhub && (!alpacaCurrent || alpacaCurrent <= 0)) {
+    alpacaLatestFallback = await getAlpacaLatestStockPrice(cleanSymbol);
+  }
+
+  const primary =
+    polygon ||
+    finnhub ||
+    (
+      Number(alpacaLatestFallback?.price || 0) > 0
+        ? alpacaLatestFallback
+        : null
+    );
 
   let current = Number(
     primary?.current ||
+    primary?.price ||
     primary?.c ||
     alpacaCurrent ||
     0
@@ -17044,9 +17089,19 @@ async function getCombinedStockQuote(symbol) {
   );
 
   if (!current || current <= 0) {
+    console.error("STOCK PRICE FAILED:", {
+      symbol: cleanSymbol,
+      polygon: Boolean(polygon),
+      finnhub: Boolean(finnhub),
+      alpacaCurrent,
+      alpacaLatestFallback,
+      barsFound: bars.length,
+      dataError,
+    });
+
     throw new Error(
       dataError ||
-      `No valid Polygon/Finnhub price for ${symbol}`
+      `No valid Polygon, Finnhub, Alpaca bars, or Alpaca latest quote for ${symbol}`
     );
   }
 
