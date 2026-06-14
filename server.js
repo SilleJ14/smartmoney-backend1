@@ -1388,7 +1388,9 @@ function isCrypto(symbolOrItem = "") {
     (symbol.endsWith("USD") && symbol.length > 5)
   );
 }
-
+function recordSkippedSymbol(symbol, reason, extra = {}) {
+  return saveSkippedSymbol(symbol, reason, extra);
+}
 function normalizeCryptoSymbolForPolygon(symbol = "") {
   return normalizeCryptoSymbolForPolygonBase(symbol, normalizeSymbol);
 }
@@ -37782,13 +37784,16 @@ function buildLiveStarterBuyDecision(candidate = {}, account = {}, managedPositi
   const totalExposure = managedPositions.reduce((sum, position) => {
     return sum + Math.abs(Number(position.market_value || 0));
   }, 0);
-  const assetExposure = managedPositions.reduce((sum, position) => {
-    const positionSymbol = normalizeSymbol(position.symbol);
-    const sameAssetClass = isCrypto(positionSymbol) === isCrypto;
-    return sameAssetClass
-      ? sum + Math.abs(Number(position.market_value || 0))
-      : sum;
-  }, 0);
+const assetExposure = managedPositions.reduce((sum, position) => {
+  const positionSymbol = normalizeSymbol(position.symbol);
+
+  const sameAssetClass =
+    isCrypto(positionSymbol) === Boolean(isCryptoCandidate);
+
+  return sameAssetClass
+    ? sum + Math.abs(Number(position.market_value || 0))
+    : sum;
+}, 0);
   const totalMaxBotBudget =
     equity > 0
       ? equity * (Number(CONFIG.maxBotExposurePercent || 0) / 100)
