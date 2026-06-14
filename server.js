@@ -41589,6 +41589,54 @@ app.get("/capital-compounding", requireAdmin, async (req, res) => {
     });
   }
 });
+
+app.post("/api/config", requireAdmin, (req, res) => {
+  try {
+    const updates = req.body || {};
+
+    runtimeConfig = sanitizeRuntimeConfig({
+      ...runtimeConfig,
+      ...updates,
+    });
+
+    if (updates.tradingMode) {
+      TRADING_MODE = String(updates.tradingMode);
+      runtimeConfig.tradingMode = TRADING_MODE;
+    }
+
+    if (updates.tradingModeLocked !== undefined) {
+      tradingModeLocked =
+        updates.tradingModeLocked === true ||
+        updates.tradingModeLocked === "true";
+      runtimeConfig.tradingModeLocked = tradingModeLocked;
+    }
+
+    if (updates.autoTradingEnabled !== undefined) {
+      autoTradingEnabled =
+        updates.autoTradingEnabled === true ||
+        updates.autoTradingEnabled === "true";
+      runtimeConfig.autoTradingEnabled = autoTradingEnabled;
+    }
+
+    saveRuntimeConfig(CONFIG_FILE, runtimeConfig);
+
+    res.json({
+      ok: true,
+      updatedAt: new Date().toISOString(),
+      runtimeConfig,
+      tradingMode: TRADING_MODE,
+      effectiveMode: getEffectiveTradingMode(engineState.marketOpen),
+      tradingModeLocked,
+      autoTradingEnabled,
+    });
+  } catch (err) {
+    res.status(500).json({
+      ok: false,
+      error: err.message,
+    });
+  }
+});
+
 app.post("/reset-daily-lock", requireAdmin, (req, res) => {
   engineState.dailyLossLocked = false;
   engineState.profitLocked = false;
