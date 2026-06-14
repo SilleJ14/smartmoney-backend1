@@ -1361,6 +1361,34 @@ function updateAccountPeaks(account) {
 function isValidStockTicker(symbol = "") {
   return isValidStockTickerBase(symbol, normalizeSymbol);
 }
+
+function isCrypto(symbolOrItem = "") {
+  const symbol =
+    typeof symbolOrItem === "string"
+      ? normalizeSymbol(symbolOrItem)
+      : normalizeSymbol(symbolOrItem?.symbol || symbolOrItem);
+
+  const assetClass =
+    typeof symbolOrItem === "object"
+      ? String(
+          symbolOrItem?.assetClass ||
+          symbolOrItem?.asset_class ||
+          symbolOrItem?.class ||
+          symbolOrItem?.type ||
+          ""
+        ).toLowerCase()
+      : "";
+
+  return (
+    assetClass === "crypto" ||
+    symbol.includes("/") ||
+    symbol.includes("-USD") ||
+    symbol.includes("USDT") ||
+    symbol.endsWith("/USD") ||
+    (symbol.endsWith("USD") && symbol.length > 5)
+  );
+}
+
 function normalizeCryptoSymbolForPolygon(symbol = "") {
   return normalizeCryptoSymbolForPolygonBase(symbol, normalizeSymbol);
 }
