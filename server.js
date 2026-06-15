@@ -1388,6 +1388,29 @@ function isCrypto(symbolOrItem = "") {
     (symbol.endsWith("USD") && symbol.length > 5)
   );
 }
+
+function saveSkippedSymbol(symbol, reason, extra = {}) {
+  const clean = normalizeSymbol(symbol);
+  if (!clean) return false;
+
+  if (!Array.isArray(engineState.skippedSymbols)) {
+    engineState.skippedSymbols = [];
+  }
+
+  engineState.skippedSymbols.unshift({
+    symbol: clean,
+    reason: String(reason || "SKIPPED"),
+    at: new Date().toISOString(),
+    ...extra,
+  });
+
+  engineState.skippedSymbols = engineState.skippedSymbols.slice(0, 100);
+
+  saveEngineState("SKIPPED_SYMBOL");
+
+  return true;
+}
+
 function recordSkippedSymbol(symbol, reason, extra = {}) {
   return saveSkippedSymbol(symbol, reason, extra);
 }
