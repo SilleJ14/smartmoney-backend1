@@ -37324,12 +37324,15 @@ function seedFastRunnerMemoryFromPolygonMovers(symbols = []) {
 }
 function isFastRunnerMemoryFresh(memory = {}) {
   const maxAgeMs = Number(
-    process.env.FAST_RUNNER_MEMORY_MAX_AGE_SECONDS || 90
+    process.env.FAST_RUNNER_MEMORY_MAX_AGE_SECONDS || 300
   ) * 1000;
+
   const updatedAtMs = getQuoteTimestampMs(memory);
+
   if (!updatedAtMs || Date.now() - updatedAtMs > maxAgeMs) {
     return false;
   }
+
   const price = Number(
     memory.price ||
     memory.current ||
@@ -37337,16 +37340,21 @@ function isFastRunnerMemoryFresh(memory = {}) {
     memory.close ||
     0
   );
+
   if (!price || price <= 0) {
     return false;
   }
+
   const secondCandles = Array.isArray(memory.secondCandles)
     ? memory.secondCandles
     : [];
+
   const tickWindow = Array.isArray(memory.tickWindow)
     ? memory.tickWindow
     : [];
-  return secondCandles.length >= 10 || tickWindow.length >= 10;
+
+  
+  return secondCandles.length >= 1 || tickWindow.length >= 1;
 }
 async function runFastRunnerEngine() {
   if (!ENABLE_FAST_RUNNER_ENGINE) {
@@ -39367,18 +39375,27 @@ function startFinnhubStream() {
         if (payload.type !== "trade" || !Array.isArray(payload.data)) {
           return;
         }
-        for (const trade of payload.data) {
-          updateQuoteCache(trade.s, {
-            price: trade.p,
-            source: "finnhub_ws_trade",
-            liveQuoteSource: "finnhub_ws_trade",
-            liveQuoteUpdatedAt: trade.t
-              ? new Date(Number(trade.t)).toISOString()
-              : new Date().toISOString(),
-            priceIsLive: true,
-            raw: trade,
-          });
-        }
+
+for (const trade of payload.data) {
+  const symbol = normalizeSymbol(trade.s);
+  const price = Number(trade.p || 0);
+  const size = Number(trade.v || trade.s || 1);
+
+  if (!symbol || !price || price <= 0) continue;
+
+  updateQuoteCache(symbol, {
+    price,
+    size,
+    volume: size,
+    source: "finnhub_ws_trade",
+    liveQuoteSource: "finnhub_ws_trade",
+    liveQuoteUpdatedAt: trade.t
+      ? new Date(Number(trade.t)).toISOString()
+      : new Date().toISOString(),
+    priceIsLive: true,
+    raw: trade,
+  });
+}
       } catch (err) {
         console.error("Finnhub websocket message error:", err.message);
       }
