@@ -37961,11 +37961,69 @@ async function runFastRunnerEngine() {
   const reviewed = memoryEntries
     .map(([symbol, memory]) => buildFastRunnerCandidateFromMemory(symbol, memory))
     .filter(Boolean);
+const visibleCandidates = reviewed
+  .filter((candidate) => {
+    const price = Number(candidate.price || candidate.current || 0);
+    const score = Number(candidate.fastRunnerScore || candidate.score || 0);
+    return price > 0 && score >= 35;
+  })
+  .sort((a, b) => Number(b.fastRunnerScore || 0) - Number(a.fastRunnerScore || 0))
+  .slice(0, 25)
+  .map((candidate) => {
+    const score = clampScore(
+      candidate.fastRunnerScore ||
+      candidate.score ||
+      0
+    );
+
+    return {
+      ...candidate,
+      score,
+      runnerScore: score,
+      tradeQuality:
+        score >= 70
+          ? "LIVE WATCH"
+          : score >= 55
+            ? "EARLY WATCH"
+            : "MARKET MEMORY",
+      decisionLevel: "WATCH_ONLY",
+      signal: "LIVE WATCH CANDIDATE",
+      backendApproved: false,
+      approved: false,
+      qualifiedToBuy: false,
+      autoTradeApproved: false,
+      aiPortfolioAction: "WATCH ONLY",
+      reason:
+        candidate.reason ||
+        "Visible live candidate from market memory; not approved for trade yet.",
+      updatedAt: new Date().toISOString(),
+    };
+  });
+
   const candidates = reviewed
     .filter((candidate) => candidate.qualifiedFastRunner)
     .sort((a, b) => Number(b.fastRunnerScore || 0) - Number(a.fastRunnerScore || 0))
     .slice(0, FAST_RUNNER_MAX_CANDIDATES);
   engineState.fastRunnerCandidates = candidates;
+  engineState.visibleLiveCandidates = visibleCandidates;
+
+if (candidates.length === 0 && visibleCandidates.length > 0) {
+  const stockVisible = visibleCandidates.filter((item) => !isCrypto(item));
+  const cryptoVisible = visibleCandidates.filter((item) => isCrypto(item));
+
+  if (!Array.isArray(engineState.topStockSignals) || engineState.topStockSignals.length === 0) {
+    engineState.topStockSignals = stockVisible.slice(0, 25);
+    engineState.lastStockSignals = stockVisible.slice(0, 50);
+  }
+
+  if (!Array.isArray(engineState.topCryptoSignals) || engineState.topCryptoSignals.length === 0) {
+    engineState.topCryptoSignals = cryptoVisible.slice(0, 25);
+    engineState.lastCryptoSignals = cryptoVisible.slice(0, 50);
+  }
+
+  engineState.topSignals = visibleCandidates.slice(0, 25);
+  engineState.lastSignals = visibleCandidates.slice(0, 50);
+}
   engineState.fastRunnerEngineState = {
     ok: true,
     enabled: true,
@@ -37979,6 +38037,8 @@ async function runFastRunnerEngine() {
     candidateCount: candidates.length,
     minScore: FAST_RUNNER_MIN_SCORE,
     topCandidates: candidates.slice(0, 10),
+    visibleCandidateCount: visibleCandidates.length,
+visibleCandidates: visibleCandidates.slice(0, 10),
     reason:
       candidates.length > 0
         ? `Fast Runner Engine found ${candidates.length} candidates.`
@@ -39699,6 +39759,13 @@ function startLiveScheduler() {
   Promise.resolve(refreshEarlyMoversThenPolygonSubscriptions()).catch((err) => {
     console.error("Initial Polygon live subscription refresh failed:", err.message);
   });
+
+  if (ENABLE_MAIN_SWING_SCAN) {
+  Promise.resolve(runEngineCycle()).catch((err) => {
+    console.error("Initial main swing scan failed:", err.message);
+    recordFailedOrder("INITIAL_MAIN_SWING_SCAN_FAILED", "STOCK", err.message);
+  });
+}
   engineState.liveSchedulerState = {
     ok: true,
     startedAt: new Date().toISOString(),
