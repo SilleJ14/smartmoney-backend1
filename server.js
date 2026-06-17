@@ -180,9 +180,9 @@ let moversCache = createEmptyPolygonMoversCache("");
 const ENABLE_POLYGON_WEBSOCKET =
   process.env.ENABLE_POLYGON_WEBSOCKET !== "false";
 const POLYGON_WS_URL =
-  process.env.POLYGON_WS_URL || "wss://socket.polygon.io/stocks";
+  process.env.POLYGON_WS_URL || "wss://delayed.polygon.io/stocks";
 const POLYGON_CRYPTO_WS_URL =
-  process.env.POLYGON_CRYPTO_WS_URL || "wss://socket.polygon.io/crypto";
+  process.env.POLYGON_CRYPTO_WS_URL || "wss://delayed.polygon.io/crypto";
 const ENABLE_POLYGON_CRYPTO_WEBSOCKET =
   process.env.ENABLE_POLYGON_CRYPTO_WEBSOCKET !== "false";
 const POLYGON_LIVE_STREAM_LIMIT = Number(
@@ -443,6 +443,9 @@ const VOLATILE_MARKET_SNAPSHOT_KEYS = [
   "runnerWatchlistState",
 "topRunnerWatchlist",
 "highAlertRunnerStocks",
+"swingWatchlistState",
+"topSwingWatchlist",
+"highConfidenceSwingStocks",
   "topPremarketSnipers",
   "topAccumulationCandidates",
   "executionQualityLeaders",
@@ -516,6 +519,20 @@ function saveRenderMemory(reason = "RENDER_MEMORY_SAVER") {
   engineState.highAlertRunnerStocks =
     trimArray(engineState.highAlertRunnerStocks, 10);
 
+engineState.swingWatchlistHistory =
+  trimArray(engineState.swingWatchlistHistory, 100);
+
+engineState.swingPredictionHistory =
+  trimArray(engineState.swingPredictionHistory, 300);
+
+engineState.swingLearningResults =
+  trimArray(engineState.swingLearningResults, 300);
+
+engineState.topSwingWatchlist =
+  trimArray(engineState.topSwingWatchlist, 25);
+
+engineState.highConfidenceSwingStocks =
+  trimArray(engineState.highConfidenceSwingStocks, 10);
   engineState.recentOrders =
     trimArray(engineState.recentOrders, 100);
 
@@ -948,6 +965,13 @@ runnerPredictionHistory: [],
 runnerLearningResults: [],
 topRunnerWatchlist: [],
 highAlertRunnerStocks: [],
+swingWatchlistState: null,
+swingWatchlistHistory: [],
+swingLearningState: null,
+swingPredictionHistory: [],
+swingLearningResults: [],
+topSwingWatchlist: [],
+highConfidenceSwingStocks: [],
   quickInstitutionalGateState: null,
   quickInstitutionalCandidates: [],
   liveStarterBuyGateState: null,
@@ -5522,13 +5546,17 @@ function updateMultiDayAccumulationMemory(signal = {}) {
         : preBreakoutScore >= 58
           ? "DEVELOPING_ACCUMULATION"
           : "LOW_ACCUMULATION_MEMORY";
-  next.persistenceScore = persistenceScore;
-  next.supportHoldingScore = supportHoldingScore;
-  next.preBreakoutScore = preBreakoutScore;
-  next.accumulationMemoryLabel = accumulationMemoryLabel;
-  next.reason =
-  engineState.multiDayAccumulationMemory[symbol] = next;
-  return next;
+next.persistenceScore = persistenceScore;
+next.supportHoldingScore = supportHoldingScore;
+next.preBreakoutScore = preBreakoutScore;
+next.accumulationMemoryLabel = accumulationMemoryLabel;
+next.reason =
+  `${accumulationMemoryLabel} • Persistence ${persistenceScore}/100 • ` +
+  `Support ${supportHoldingScore}/100 • Pre-breakout ${preBreakoutScore}/100`;
+
+engineState.multiDayAccumulationMemory[symbol] = next;
+
+return next;
 }
 function updateMultiDayAccumulationState(signals = []) {
   const stockSignals = (Array.isArray(signals) ? signals : []).filter(
@@ -6490,6 +6518,310 @@ signal.fastRunnerReason = "FAST_RUNNER_OVERRIDE";
 }
   return signals;
 }
+function calculateSwingProbabilities(signal = {}) {
+  const score = Number(signal.score || 0);
+  const percentChange = Number(signal.percentChange || signal.changePercent || 0);
+
+  const relativeVolume = Number(
+    signal.relativeVolume ||
+    signal.volumeRatio ||
+    signal.volumeSpikeRatio ||
+    signal.confirmations?.volumeSpikeRatio ||
+    0
+  );
+
+  const rsi = Number(signal.technicals?.rsi || 0);
+  const ema9 = Number(signal.technicals?.ema9 || 0);
+  const ema20 = Number(signal.technicals?.ema20 || 0);
+  const current = Number(signal.current || signal.price || 0);
+
+  const aboveVwap = signal.confirmations?.aboveVwap === true;
+  const closeNearHigh = signal.confirmations?.closeNearHigh === true;
+  const fakeBreakout = signal.confirmations?.fakeBreakout === true;
+  const newsRisk = signal.confirmations?.newsRisk === true;
+
+  const trendScore = clampScore(
+    (ema9 > ema20 ? 28 : 0) +
+    (current > ema9 && ema9 > ema20 ? 22 : 0) +
+    (rsi >= 45 && rsi <= 70 ? 22 : 0) +
+    (rsi > 70 && rsi <= 78 ? 10 : 0)
+  );
+
+  const volumeScore = clampScore(
+    (relativeVolume >= 1.5 ? 25 : 0) +
+    (relativeVolume >= 2.5 ? 20 : 0) +
+    (relativeVolume >= 4 ? 15 : 0)
+  );
+
+  const timingScore = clampScore(
+    (aboveVwap ? 30 : 0) +
+    (closeNearHigh ? 25 : 0) +
+    (percentChange >= 2 && percentChange <= 18 ? 25 : 0) +
+    (percentChange > 18 && percentChange <= 35 ? 10 : 0) -
+    (percentChange > 45 ? 25 : 0)
+  );
+
+  const riskPenalty =
+    (fakeBreakout ? 25 : 0) +
+    (newsRisk ? 20 : 0) +
+    (rsi > 82 ? 18 : 0) +
+    (percentChange > 60 ? 30 : 0);
+
+  const swingProbability = clampScore(
+    score * 0.25 +
+    trendScore * 0.25 +
+    volumeScore * 0.20 +
+    timingScore * 0.30 -
+    riskPenalty
+  );
+
+  const move10Probability = clampScore(swingProbability * 0.85);
+  const move20Probability = clampScore(
+    swingProbability * 0.58 +
+    (relativeVolume >= 2.5 ? 8 : 0) +
+    (aboveVwap ? 5 : 0)
+  );
+  const move40Probability = clampScore(
+    swingProbability * 0.32 +
+    (relativeVolume >= 4 ? 8 : 0) +
+    (percentChange <= 20 ? 5 : -8)
+  );
+
+  return {
+    phase: "SWING_PROBABILITY_ENGINE",
+    updatedAt: new Date().toISOString(),
+    swingProbability,
+    move10Probability,
+    move20Probability,
+    move40Probability,
+    trendScore,
+    volumeScore,
+    timingScore,
+    riskPenalty,
+    probabilityWindow: {
+      move10: "1-5_days",
+      move20: "3-15_days",
+      move40: "5-30_days",
+    },
+    reason: "STATE_UPDATED",
+  };
+}
+
+function buildSwingExplanation(signal = {}) {
+  const probabilities =
+    signal.swingProbabilities ||
+    calculateSwingProbabilities(signal);
+
+  const reasons = [];
+  const risks = [];
+
+  const percentChange = Number(signal.percentChange || signal.changePercent || 0);
+  const relativeVolume = Number(
+    signal.relativeVolume ||
+    signal.volumeRatio ||
+    signal.volumeSpikeRatio ||
+    signal.confirmations?.volumeSpikeRatio ||
+    0
+  );
+
+  if (Number(probabilities.trendScore || 0) >= 60) {
+    reasons.push("Trend structure is strong");
+  }
+
+  if (relativeVolume >= 1.5) {
+    reasons.push(`Volume expansion ${relativeVolume.toFixed(2)}x`);
+  }
+
+  if (signal.confirmations?.aboveVwap === true) {
+    reasons.push("Holding above VWAP");
+  }
+
+  if (percentChange >= 2 && percentChange <= 18) {
+    reasons.push("Move is still in early swing range");
+  }
+
+  if (Number(probabilities.move20Probability || 0) >= 50) {
+    reasons.push(`20% swing probability ${probabilities.move20Probability}%`);
+  }
+
+  if (signal.confirmations?.fakeBreakout) {
+    risks.push("Fake breakout risk");
+  }
+
+  if (percentChange > 45) {
+    risks.push("Late chase risk for swing entry");
+  }
+
+  return {
+    reasons,
+    risks,
+    summary:
+      reasons.length > 0
+        ? reasons.join(" • ")
+        : "No strong swing explanation signals found",
+  };
+}
+
+function buildSwingWatchlist(signals = []) {
+  const ranked = (Array.isArray(signals) ? signals : [])
+    .filter((signal) => {
+      const assetClass = String(signal.assetClass || signal.asset_class || "stock").toLowerCase();
+      return assetClass === "stock";
+    })
+    .map((signal) => {
+      const probabilities =
+        signal.swingProbabilities ||
+        calculateSwingProbabilities(signal);
+
+      const swingScore = clampScore(
+        Number(probabilities.swingProbability || 0) * 0.45 +
+        Number(probabilities.trendScore || 0) * 0.20 +
+        Number(probabilities.timingScore || 0) * 0.20 +
+        Number(signal.signalQualityScore || 0) * 0.10 +
+        Number(signal.executionConfidence || 0) * 0.05
+      );
+
+      const confidence = clampScore(
+        Number(signal.autonomousConfidenceScore || 0) ||
+        Number(signal.aiConfidence || 0) ||
+        Number(signal.executionConfidence || 0) ||
+        swingScore
+      );
+
+      const highConfidence =
+        swingScore >= 82 &&
+        confidence >= 72 &&
+        Number(probabilities.move10Probability || 0) >= 65;
+
+      return {
+        ...signal,
+        swingScore,
+        swingConfidence: confidence,
+        highConfidenceSwing: highConfidence,
+        swingProbabilities: probabilities,
+        swingExplanation: buildSwingExplanation({
+          ...signal,
+          swingScore,
+          swingConfidence: confidence,
+          swingProbabilities: probabilities,
+        }),
+        swingCategory:
+          swingScore >= 85
+            ? "ELITE_SWING"
+            : swingScore >= 75
+              ? "STRONG_SWING"
+              : swingScore >= 65
+                ? "WATCH_SWING"
+                : "IGNORE_SWING",
+      };
+    })
+    .sort((a, b) => Number(b.swingScore || 0) - Number(a.swingScore || 0));
+
+  const qualified = ranked.filter(
+  (item) => Number(item.swingScore || 0) >= 65
+);
+
+return {
+  updatedAt: new Date().toISOString(),
+  phase: "SWING_WATCHLIST_ENGINE",
+  reviewedCount: ranked.length,
+  qualifiedCount: qualified.length,
+  top10: qualified.slice(0, 10),
+  top25: qualified.slice(0, 25),
+  highConfidenceStocks: qualified
+    .filter((s) => s.highConfidenceSwing)
+    .slice(0, 25),
+};
+}
+
+function updateSwingLearningEngine(watchlist = {}) {
+  const candidates = Array.isArray(watchlist.top25)
+  ? watchlist.top25.filter((item) => Number(item.swingScore || 0) >= 65)
+  : [];
+
+  const predictions = candidates.map((signal) => {
+    const symbol = normalizeSymbol(signal.symbol);
+    const price = Number(signal.current || signal.price || 0);
+
+    return {
+      predictionId: `${symbol}_${Date.now()}`,
+      symbol,
+      savedAt: new Date().toISOString(),
+      priceAtPrediction: price,
+      swingScore: Number(signal.swingScore || 0),
+      swingConfidence: Number(signal.swingConfidence || 0),
+      swingProbabilities: signal.swingProbabilities || null,
+      explanation: signal.swingExplanation || null,
+      status: "OPEN",
+      checkWindows: {
+        fiveDays: false,
+        fifteenDays: false,
+        thirtyDays: false,
+      },
+    };
+  }).filter((item) => item.symbol && item.priceAtPrediction > 0);
+
+  if (!Array.isArray(engineState.swingPredictionHistory)) {
+    engineState.swingPredictionHistory = [];
+  }
+
+  engineState.swingPredictionHistory.unshift(...predictions);
+  engineState.swingPredictionHistory =
+    engineState.swingPredictionHistory.slice(0, 1000);
+
+  engineState.swingLearningState = {
+    updatedAt: new Date().toISOString(),
+    phase: "SWING_LEARNING_ENGINE",
+    savedPredictionCount: predictions.length,
+    openPredictionCount:
+      engineState.swingPredictionHistory.filter((p) => p.status === "OPEN").length,
+  };
+
+  saveEngineState("SWING_LEARNING_ENGINE_UPDATED");
+
+  return engineState.swingLearningState;
+}
+
+function updateSwingWatchlistState(signals = []) {
+  const swingWatchlist = buildSwingWatchlist(signals);
+const swingBySymbol = new Map(
+  swingWatchlist.top25.map((item) => [
+    normalizeSymbol(item.symbol),
+    item,
+  ])
+);
+
+for (const signal of signals) {
+  const clean = normalizeSymbol(signal.symbol);
+  const swing = swingBySymbol.get(clean);
+  if (!swing) continue;
+
+  signal.swingScore = swing.swingScore;
+  signal.swingConfidence = swing.swingConfidence;
+  signal.highConfidenceSwing = swing.highConfidenceSwing;
+  signal.swingProbabilities = swing.swingProbabilities;
+  signal.swingExplanation = swing.swingExplanation;
+  signal.swingCategory = swing.swingCategory;
+}
+  engineState.swingWatchlistState = swingWatchlist;
+  engineState.topSwingWatchlist = swingWatchlist.top25;
+  engineState.highConfidenceSwingStocks = swingWatchlist.highConfidenceStocks;
+
+  if (!Array.isArray(engineState.swingWatchlistHistory)) {
+    engineState.swingWatchlistHistory = [];
+  }
+
+  engineState.swingWatchlistHistory.unshift(swingWatchlist);
+  engineState.swingWatchlistHistory =
+    engineState.swingWatchlistHistory.slice(0, 200);
+
+  updateSwingLearningEngine(swingWatchlist);
+
+  saveEngineState("SWING_WATCHLIST_UPDATED");
+
+  return swingWatchlist;
+}
+
 function calculateRunnerProbabilities(signal = {}) {
   const score = Number(signal.score || 0);
   const runnerScore = Number(
@@ -6602,8 +6934,8 @@ function calculateRunnerProbabilities(signal = {}) {
 }
 function updateRunnerLearningEngine(watchlist = {}) {
   const candidates = Array.isArray(watchlist.top25)
-    ? watchlist.top25
-    : [];
+  ? watchlist.top25.filter((item) => Number(item.swingScore || 0) >= 65)
+  : [];
   const predictions = candidates.map((signal) => {
     const symbol = normalizeSymbol(signal.symbol);
     const price = Number(signal.current || signal.price || 0);
@@ -11296,7 +11628,7 @@ function calculateAutonomousPortfolioGovernor(
     sectorExposure,
 governorReason:
   `Throttle x${capitalThrottleMultiplier}` +
-  ` • Exposure ${totalExposurePercent.toFixed(2)}%`,
+  ` • Exposure ${exposurePercent.toFixed(2)}%`,
 };
 }
 function calculateFinalPositionSizingReconciliation({
@@ -13582,12 +13914,37 @@ async function getAsset(symbol) {
 async function checkAssetEligibility(symbol) {
   try {
     const asset = await getAsset(symbol);
+
     if (asset.status !== "active") {
       return { ok: false, reason: "Asset is not active" };
     }
+
     if (asset.tradable !== true) {
       return { ok: false, reason: "Asset is not tradable on Alpaca" };
     }
+
+    const assetName = String(asset.name || "").toLowerCase();
+    const assetClass = String(asset.class || asset.asset_class || "").toLowerCase();
+    const exchange = String(asset.exchange || "").toUpperCase();
+
+    if (
+      assetClass !== "us_equity" ||
+      assetName.includes("etf") ||
+      assetName.includes("fund") ||
+      assetName.includes("trust") ||
+      assetName.includes("treasury") ||
+      assetName.includes("bond") ||
+      assetName.includes("income") ||
+      assetName.includes("municipal") ||
+      assetName.includes("notes") ||
+      assetName.includes("index")
+    ) {
+      return {
+        ok: false,
+        reason: "ETF/fund/bond excluded from runner scan",
+      };
+    }
+
     return { ok: true, asset };
   } catch (err) {
     return { ok: false, reason: err.message };
@@ -14176,14 +14533,59 @@ async function getStockQuote(symbol) {
   return combinedQuote;
 }
 async function getRecentBars(symbol, timeframe = "5Min", limit = 30) {
-  const data = await alpacaDataRequest(
-    `/v2/stocks/${encodeURIComponent(
-      symbol
-    )}/bars?timeframe=${encodeURIComponent(
-      timeframe
-    )}&limit=${limit}&adjustment=raw`
-  );
-  return Array.isArray(data.bars) ? data.bars : [];
+  const cleanSymbol = normalizeSymbol(symbol);
+  if (!cleanSymbol) return [];
+
+  if (!ENABLE_POLYGON || !POLYGON_API_KEY) {
+    return [];
+  }
+
+  try {
+    const now = new Date();
+
+    const multiplier = timeframe === "1Day" ? 1 : 5;
+    const timespan = timeframe === "1Day" ? "day" : "minute";
+
+    const lookbackDays = timeframe === "1Day" ? 120 : 7;
+
+    const to = now.toISOString().slice(0, 10);
+    const from = new Date(
+      now.getTime() - lookbackDays * 24 * 60 * 60 * 1000
+    )
+      .toISOString()
+      .slice(0, 10);
+
+    const url =
+      `https://api.polygon.io/v2/aggs/ticker/${encodeURIComponent(cleanSymbol)}` +
+      `/range/${multiplier}/${timespan}/${from}/${to}` +
+      `?adjusted=true&sort=desc&limit=${Number(limit || 30)}` +
+      `&apiKey=${POLYGON_API_KEY}`;
+
+    const data = await fetchWithTimeout(url);
+
+    if (!data?.ok) {
+      console.warn("Polygon bars failed:", cleanSymbol, data?.status);
+      return [];
+    }
+
+    const json = await data.json();
+
+  return Array.isArray(json?.results)
+  ? json.results
+      .reverse()
+      .map((bar) => ({
+        o: Number(bar.o || 0),
+        h: Number(bar.h || 0),
+        l: Number(bar.l || 0),
+        c: Number(bar.c || 0),
+        v: Number(bar.v || 0),
+        t: bar.t || null,
+      }))
+  : [];
+  } catch (err) {
+    console.warn("Polygon bars error:", cleanSymbol, err?.message);
+    return [];
+  }
 }
 function computeBarStats(bars = []) {
   const cleanBars = (bars || [])
@@ -17338,9 +17740,10 @@ function calculateCrossMarketCorrelation(
     crossMarketMode,
     crossMarketMultiplier,
     blockWeakCrypto,
-    reason:
-        0
-      `Momentum spread ${momentumSpread.toFixed(2)}`,
+reason:
+  `${crossMarketMode} • Correlation ${correlationScore.toFixed(2)}/100 • ` +
+  `Momentum spread ${momentumSpread.toFixed(2)} • ` +
+  `Crypto leadership spread ${cryptoLeadershipSpread.toFixed(2)}`,
   };
   engineState.phase48CrossMarketCorrelationState = state;
   if (!Array.isArray(engineState.phase48CrossMarketCorrelationHistory)) {
@@ -21661,20 +22064,101 @@ async function scanMarket() {
       skipReasonCounts,
       topSkipped: engineState.skippedSymbols.slice(0, 10),
     });
-    console.log(`Scan finished. Found ${results.length} stocks.`);
-    console.log(
-      "APPROVED COUNT:",
-      results.filter(
-        (s) => s.approved === true || s.autoTradeApproved === true
-      ).length
-    );
-    const multiDayAccumulationState =
+console.log(`Scan finished. Found ${results.length} stocks.`);
+
+results.forEach((s) => {
+  console.log("APPROVAL DEBUG", s.symbol, {
+    approved: s.approved,
+    autoTradeApproved: s.autoTradeApproved,
+
+    institutionalScore: s.institutionalScore,
+    score: s.score,
+
+    decisionLevel: s.decisionLevel,
+
+    blockBuying: s.blockBuying,
+
+    finalTradeApproval:
+      s.phase6ScoringLayers?.finalTradeApproval,
+
+    hardReject:
+      s.phase6ScoringLayers?.hardReject,
+
+    recommendedTradeAmount:
+      s.recommendedTradeAmount,
+
+    portfolioAction:
+      s.portfolioAction,
+
+    aiPortfolioAction:
+      s.aiPortfolioAction,
+
+    displayOnly:
+      s.displayOnly,
+
+    displayOnlyReason:
+      s.displayOnlyReason,
+  });
+});
+
+console.log(
+  "APPROVED COUNT:",
+  results.filter(
+    (s) => s.approved === true || s.autoTradeApproved === true
+  ).length
+);
+let multiDayAccumulationState = {
+  reviewedCount: 0,
+  preBreakoutCount: 0,
+  topTwoSymbols: [],
+};
+
+try {
+  if (
+    typeof updateMultiDayAccumulationState === "function" &&
+    Array.isArray(results) &&
+    results.length > 0
+  ) {
+    multiDayAccumulationState =
       updateMultiDayAccumulationState(results);
+  } else {
+    engineState.multiDayAccumulationState = {
+      updatedAt: new Date().toISOString(),
+      phase: "27_MULTI_DAY_ACCUMULATION_MEMORY",
+      reviewedCount: 0,
+      memorySymbolCount: Object.keys(
+        engineState.multiDayAccumulationMemory || {}
+      ).length,
+      preBreakoutCount: 0,
+      preBreakoutCandidates: [],
+      topTwoSymbols: [],
+      reason: "No scan results to review.",
+    };
+  }
+
+  if (typeof recordOrder === "function") {
     recordOrder("MULTI_DAY_ACCUMULATION_UPDATED", "STOCK", {
       reviewedCount: multiDayAccumulationState.reviewedCount,
       preBreakoutCount: multiDayAccumulationState.preBreakoutCount,
       topTwoSymbols: multiDayAccumulationState.topTwoSymbols,
     });
+  }
+} catch (err) {
+  console.error("MULTI_DAY_ACCUMULATION_ERROR", {
+    message: err.message,
+    stack: err.stack,
+  });
+
+  engineState.multiDayAccumulationState = {
+    updatedAt: new Date().toISOString(),
+    phase: "27_MULTI_DAY_ACCUMULATION_MEMORY",
+    reviewedCount: 0,
+    preBreakoutCount: 0,
+    topTwoSymbols: [],
+    error: err.message,
+    reason: "Multi-day accumulation failed safely.",
+  };
+}
     for (const signal of results) {
       const sym = normalizeSymbol(signal.symbol);
 
@@ -21786,6 +22270,18 @@ async function scanMarket() {
       topEarlyRunnerCount: explosiveRunnerState.topEarlyRunnerCount,
       topTwoSymbols: explosiveRunnerState.topTwoSymbols,
     });
+
+    const swingWatchlistState =
+  updateSwingWatchlistState(results);
+
+recordOrder("SWING_WATCHLIST_UPDATED", "STOCK", {
+  reviewedCount: swingWatchlistState.reviewedCount,
+  topSwingCount: swingWatchlistState.top25.length,
+  highConfidenceCount: swingWatchlistState.highConfidenceStocks.length,
+  topTwoSymbols: swingWatchlistState.top10
+    .slice(0, 2)
+    .map((item) => item.symbol),
+});
     const autonomousCapitalRotationState =
       updateAutonomousCapitalRotationState(results);
     recordOrder(
@@ -31632,16 +32128,18 @@ async function runEngineCycle() {
       aiConfidence: clampScore(signal.aiConfidence),
       autonomousConfidenceScore: clampScore(signal.autonomousConfidenceScore),
     }));
-    stockSignals = stockSignals.map((signal) => ({
-      ...signal,
-      score: clampScore(signal.score),
-      runnerScore: clampScore(signal.runnerScore),
-      explosiveRunnerScore: clampScore(signal.explosiveRunnerScore),
-      fastRunnerScore: clampScore(signal.fastRunnerScore),
-      quickInstitutionalScore: clampScore(signal.quickInstitutionalScore),
-      aiConfidence: clampScore(signal.aiConfidence),
-      autonomousConfidenceScore: clampScore(signal.autonomousConfidenceScore),
-    }));
+stockSignals = stockSignals.map((signal) => ({
+  ...signal,
+  score: clampScore(signal.score),
+  runnerScore: clampScore(signal.runnerScore),
+  explosiveRunnerScore: clampScore(signal.explosiveRunnerScore),
+  fastRunnerScore: clampScore(signal.fastRunnerScore),
+  quickInstitutionalScore: clampScore(signal.quickInstitutionalScore),
+  swingScore: clampScore(signal.swingScore),
+  swingConfidence: clampScore(signal.swingConfidence),
+  aiConfidence: clampScore(signal.aiConfidence),
+  autonomousConfidenceScore: clampScore(signal.autonomousConfidenceScore),
+}));
     cryptoSignals = cryptoSignals.map((signal) => ({
       ...signal,
       score: clampScore(signal.score),
@@ -31671,6 +32169,24 @@ async function runEngineCycle() {
     engineState.topStockSignals = [...engineState.lastStockSignals]
       .sort((a, b) => Number(b.score || 0) - Number(a.score || 0))
       .slice(0, 25);
+engineState.topSwingWatchlist =
+  Array.isArray(engineState.topSwingWatchlist) &&
+  engineState.topSwingWatchlist.length > 0
+    ? engineState.topSwingWatchlist.slice(0, 25)
+    : [...(engineState.lastStockSignals || [])]
+        .filter((signal) => Number(signal.swingScore || 0) >= 65)
+        .sort((a, b) => Number(b.swingScore || 0) - Number(a.swingScore || 0))
+        .slice(0, 25);
+
+engineState.highConfidenceSwingStocks =
+  Array.isArray(engineState.highConfidenceSwingStocks) &&
+  engineState.highConfidenceSwingStocks.length > 0
+    ? engineState.highConfidenceSwingStocks.slice(0, 10)
+    : [...(engineState.lastStockSignals || [])]
+        .filter((signal) => signal.highConfidenceSwing === true)
+        .sort((a, b) => Number(b.swingScore || 0) - Number(a.swingScore || 0))
+        .slice(0, 10);
+
     engineState.topCryptoSignals = [...engineState.lastCryptoSignals]
       .sort((a, b) => Number(b.score || 0) - Number(a.score || 0))
       .slice(0, 25);
@@ -31810,7 +32326,10 @@ async function runEngineCycle() {
     engineState.selfHealingScanHistory =
       engineState.selfHealingScanHistory.slice(0, 200);
     engineState.lastEngineStopReason = "ENGINE_ERROR";
-    console.error("Engine error:", err.message);
+    console.error("ENGINE_ERROR_FULL", {
+  message: err?.message,
+  stack: err?.stack,
+});
   } finally {
     engineState.lastTickDurationMs =
       Date.now() - engineState.lastTickStartedAt;
@@ -36697,6 +37216,30 @@ function startPolygonCryptoStream() {
               subscribedCount: symbols.length,
               connectedAt: new Date().toISOString(),
             };
+          } else if (status === "error") {
+            const errorMsg = message.message || "Polygon crypto websocket status error";
+            const isPlanError =
+              errorMsg.toLowerCase().includes("real-time") ||
+              errorMsg.toLowerCase().includes("not authorized") ||
+              errorMsg.toLowerCase().includes("don't have access") ||
+              errorMsg.toLowerCase().includes("delayed");
+            engineState.polygonCryptoLiveStreamState = {
+              ok: false,
+              provider: "polygon_crypto",
+              authenticated: polygonCryptoAuthenticated,
+              error: errorMsg,
+              isPlanError,
+              checkedAt: new Date().toISOString(),
+            };
+            if (isPlanError) {
+              console.warn(
+                "[Polygon Crypto] Plan-level access error - streaming on delayed endpoint:",
+                errorMsg
+              );
+              // Close socket to stop reconnect loop - plan does not support this endpoint
+              try { polygonCryptoLiveSocket && polygonCryptoLiveSocket.close(); } catch (_) {}
+              polygonCryptoLiveSocket = null;
+            }
           }
           continue;
         }
@@ -36732,7 +37275,9 @@ function startPolygonCryptoStream() {
     reason: "Polygon crypto websocket starting.",
   };
 }
-function getSymbolsForPolygonCryptoLiveStream(limit = POLYGON_SUBSCRIPTION_ROTATION_LIMIT) {
+function getSymbolsForPolygonCryptoLiveStream(
+  limit = POLYGON_SUBSCRIPTION_ROTATION_LIMIT
+) {
   const cryptoCandidateSymbols = [
     ...(engineState.lastCryptoSignals || []),
     ...(engineState.topCryptoSignals || []),
@@ -36745,6 +37290,7 @@ function getSymbolsForPolygonCryptoLiveStream(limit = POLYGON_SUBSCRIPTION_ROTAT
     .filter(isCrypto)
     .map(normalizeCryptoSymbolForPolygon)
     .filter(Boolean);
+
   return [...new Set(cryptoCandidateSymbols)].slice(0, limit);
 }
 function refreshPolygonCryptoLiveSubscriptions() {
@@ -36910,13 +37456,29 @@ function startPolygonStockStream() {
                 reason: `Polygon websocket authenticated with ${symbols.length} symbols.`,
               };
             } else if (status === "error") {
+              const errorMsg = message.message || "Polygon websocket status error";
+              const isPlanError =
+                errorMsg.toLowerCase().includes("real-time") ||
+                errorMsg.toLowerCase().includes("not authorized") ||
+                errorMsg.toLowerCase().includes("don't have access") ||
+                errorMsg.toLowerCase().includes("delayed");
               engineState.polygonLiveStreamState = {
                 ok: false,
                 provider: "polygon",
                 authenticated: polygonAuthenticated,
-                error: message.message || "Polygon websocket status error",
+                error: errorMsg,
+                isPlanError,
                 checkedAt: new Date().toISOString(),
               };
+              if (isPlanError) {
+                console.warn(
+                  "[Polygon] Plan-level access error - streaming on delayed endpoint:",
+                  errorMsg
+                );
+                // Close socket to stop reconnect loop - plan does not support this endpoint
+                try { polygonLiveSocket && polygonLiveSocket.close(); } catch (_) {}
+                polygonLiveSocket = null;
+              }
             }
             continue;
           }
@@ -36962,6 +37524,9 @@ function startPolygonStockStream() {
     schedulePolygonReconnect();
     return engineState.polygonLiveStreamState;
   }
+}
+function clampLiveScore(value) {
+  return Math.min(100, Math.max(0, Number(value || 0)));
 }
 function calculateWindowMomentumFromCandles(candles = [], seconds = 10) {
   const usable = Array.isArray(candles) ? candles.slice(-seconds) : [];
@@ -37137,9 +37702,9 @@ function buildFastRunnerCandidateFromMemory(symbol, memory = {}) {
   const fakeBreakoutRisk = Number(breakdown.fakeBreakoutRisk || 0);
   const tapeSpeed = Number(memory.tapeSpeed || 0);
   const volumeSpikeRatio = Number(breakdown.volumeSpikeRatio || 0);
-  const isCrypto = isCrypto(cleanSymbol);
+  const cryptoAsset = isCrypto(cleanSymbol);
   const minFastScoreForRunnerAsset =
-    isCrypto ? 72 : FAST_RUNNER_MIN_SCORE;
+    cryptoAsset ? 72 : FAST_RUNNER_MIN_SCORE;
   const freshBreakout = calculateFreshBreakoutProfile(memory);
   const chaseProtection = calculateLiveChaseRisk(memory, freshBreakout);
   const runnerStage = classifyLiveRunnerStage({
@@ -37270,11 +37835,23 @@ function seedFastRunnerMemoryFromPolygonMovers(symbols = []) {
   let seededCount = 0;
   for (const symbol of symbols) {
     const cleanSymbol = normalizeSymbol(symbol);
-    const detail = moverDetails[cleanSymbol] || {};
-    const price = Number(detail.current || detail.price || 0);
-    if (!cleanSymbol || !isValidStockSymbol(cleanSymbol) || price <= 0) {
-      continue;
-    }
+const liveQuote = engineState.liveQuoteCache?.[cleanSymbol] || {};
+const detail = {
+  ...(moverDetails[cleanSymbol] || {}),
+  ...liveQuote,
+};
+
+const price = Number(
+  detail.current ||
+  detail.price ||
+  liveQuote.current ||
+  liveQuote.price ||
+  0
+);
+
+if (!cleanSymbol || !isValidStockSymbol(cleanSymbol) || price <= 0) {
+  continue;
+}
     const secondCandles = buildPolygonMoverFallbackCandles(detail);
     if (secondCandles.length < 10) {
       continue;
@@ -37427,7 +38004,7 @@ async function runFastRunnerEngine() {
 function calculateQuickInstitutionalGate(candidate = {}) {
   const symbol = normalizeSymbol(candidate.symbol);
   const fastScore = Number(candidate.fastRunnerScore || 0);
-  const isCrypto = isCrypto(symbol);
+  const cryptoAsset = isCrypto(symbol);
   const spreadPercent = Number(candidate.spreadPercent || 0);
   const liquidityPressure = Number(candidate.liquidityPressure || 0);
   const fakeBreakoutRisk = Number(candidate.fakeBreakoutRisk || 0);
@@ -37519,8 +38096,8 @@ function calculateQuickInstitutionalGate(candidate = {}) {
     exposurePenalty -
     fakeBreakoutRisk
   );
-  const minQuickScoreForAsset = isCrypto ? 60 : QUICK_INSTITUTIONAL_MIN_SCORE;
-  const minFastScoreForAsset = isCrypto ? 72 : FAST_RUNNER_MIN_SCORE;
+  const minQuickScoreForAsset = cryptoAsset ? 60 : QUICK_INSTITUTIONAL_MIN_SCORE;
+  const minFastScoreForAsset = cryptoAsset ? 72 : FAST_RUNNER_MIN_SCORE;
   const approved =
     quickInstitutionalScore >= minQuickScoreForAsset &&
     fastScore >= minFastScoreForAsset &&
@@ -37670,7 +38247,7 @@ function validateLiveBuyQuality(candidate = {}) {
   const closeNearHighPercent = Number(candidate.closeNearHighPercent || 0);
   const runnerStage = String(candidate.runnerStage || "").toUpperCase();
   const symbol = normalizeSymbol(candidate.symbol);
-  const isCrypto = isCrypto(symbol);
+  const cryptoAsset = isCrypto(symbol);
   const confirmations = candidate.confirmations || {};
   const earlyProfile =
     candidate.earlyTechnicalProfile ||
@@ -37771,7 +38348,7 @@ function buildLiveStarterBuyDecision(candidate = {}, account = {}, managedPositi
   const price = Number(candidate.price || candidate.current || 0);
   const fastScore = Number(candidate.fastRunnerScore || 0);
   const gateScore = Number(candidate.quickInstitutionalScore || 0);
-  const isCrypto = isCrypto(symbol);
+  const cryptoAsset = isCrypto(symbol);
   const runnerHoldScore = Number(
     candidate.runnerHoldScore ||
     candidate.runnerHoldQuality?.runnerHoldScore ||
@@ -37953,13 +38530,13 @@ const assetExposure = managedPositions.reduce((sum, position) => {
   ) {
     blockReasons.push("Runner already too extended / chase risk");
   }
-  const minFastScoreForStarterAsset = isCrypto ? 72 : FAST_RUNNER_MIN_SCORE;
+  const minFastScoreForStarterAsset = cryptoAsset ? 72 : FAST_RUNNER_MIN_SCORE;
   if (fastScore < minFastScoreForStarterAsset) {
     blockReasons.push(
       `Fast Runner score below ${minFastScoreForStarterAsset}`
     );
   }
-  const minGateScoreForAsset = isCrypto ? 72 : LIVE_STARTER_MIN_GATE_SCORE;
+  const minGateScoreForAsset = cryptoAsset ? 72 : LIVE_STARTER_MIN_GATE_SCORE;
   if (gateScore < minGateScoreForAsset) {
     blockReasons.push(`Live starter gate score below ${minGateScoreForAsset}`);
   }
@@ -38510,7 +39087,7 @@ function buildLiveScaleInDecision(position = {}, account = {}, managedPositions 
   const spreadPercent = Number(memory.spreadPercent || 0);
   const addsSoFar =
     Number(engineState.pyramidAddsBySymbol?.[symbol] || 0);
-  const isCrypto = isCrypto(symbol);
+  const cryptoAsset = isCrypto(symbol);
   const plannedFullTradeAmount = Number(
     entry.plannedFullTradeAmount ||
     getDynamicTradeAmount(
@@ -39206,51 +39783,81 @@ function cleanupLiveOrderDedupMap() {
     }
   }
 }
+
 function validateLiveOrder(symbol, side = "BUY") {
   const cleanSymbol = normalizeSymbol(symbol);
-  const isCrypto = isCrypto(cleanSymbol);
+  const cryptoAsset = isCrypto(cleanSymbol);
   const cleanSide = String(side || "BUY").toUpperCase();
+
   const quote =
     engineState.liveQuoteCache?.[cleanSymbol] ||
     engineState.liveMarketMemory?.[cleanSymbol] ||
     {};
+
   const price = Number(quote.price || quote.current || 0);
   const spreadPercent = Number(quote.spreadPercent || 0);
   const quoteAgeSeconds = getLiveQuoteAgeSeconds(cleanSymbol);
   const quoteSource = quote.liveQuoteSource || quote.source || "";
-  const quoteIsLive = quote.priceIsLive === true && isLiveQuoteSource(quoteSource);
+  const quoteIsLive =
+    quote.priceIsLive === true &&
+    isLiveQuoteSource(quoteSource);
+
   const blockReasons = [];
+
   if (!cleanSymbol) {
     blockReasons.push("Missing symbol");
   }
+
   if (cleanSide === "BUY" && (!price || price <= 0)) {
     blockReasons.push("Missing valid live price");
   }
+
   if (cleanSide === "BUY" && !quoteIsLive) {
-    blockReasons.push(`Quote is not live websocket source: ${quoteSource || "unknown"}`);
+    blockReasons.push(
+      `Quote is not live websocket source: ${quoteSource || "unknown"}`
+    );
   }
-  if (cleanSide === "BUY" && quoteAgeSeconds > LIVE_ORDER_MAX_QUOTE_AGE_SECONDS) {
-    blockReasons.push(`Live quote stale: ${quoteAgeSeconds}s old`);
-  }
-  if (cleanSide === "BUY" && spreadPercent > LIVE_ORDER_MAX_SPREAD_PERCENT) {
-    blockReasons.push(`Spread too wide: ${spreadPercent}%`);
-  }
+
   if (
     cleanSide === "BUY" &&
-    !isCrypto &&
+    quoteAgeSeconds > LIVE_ORDER_MAX_QUOTE_AGE_SECONDS
+  ) {
+    blockReasons.push(
+      `Live quote stale: ${quoteAgeSeconds}s old`
+    );
+  }
+
+  if (
+    cleanSide === "BUY" &&
+    spreadPercent > LIVE_ORDER_MAX_SPREAD_PERCENT
+  ) {
+    blockReasons.push(
+      `Spread too wide: ${spreadPercent}%`
+    );
+  }
+
+  if (
+    cleanSide === "BUY" &&
+    !cryptoAsset &&
     LIVE_ORDER_REQUIRE_POLYGON_CONNECTED &&
     !isPolygonLiveConnected()
   ) {
-    blockReasons.push("Polygon live stream not connected/authenticated");
+    blockReasons.push(
+      "Polygon live stream not connected/authenticated"
+    );
   }
+
   if (
     cleanSide === "BUY" &&
-    isCrypto &&
+    cryptoAsset &&
     LIVE_ORDER_REQUIRE_POLYGON_CONNECTED &&
     !isPolygonCryptoLiveConnected()
   ) {
-    blockReasons.push("Polygon crypto live stream not connected/authenticated");
+    blockReasons.push(
+      "Polygon crypto live stream not connected/authenticated"
+    );
   }
+
   return {
     approved: blockReasons.length === 0,
     symbol: cleanSymbol,
@@ -39260,13 +39867,14 @@ function validateLiveOrder(symbol, side = "BUY") {
     quoteAgeSeconds,
     quoteSource,
     quoteIsLive,
-    polygonConnected: isCrypto
+    polygonConnected: cryptoAsset
       ? isPolygonCryptoLiveConnected()
       : isPolygonLiveConnected(),
     blockReasons,
     checkedAt: new Date().toISOString(),
   };
 }
+
 function cleanupLiveQuoteCache(
   maxAgeMinutes = LIVE_MARKET_MEMORY_MAX_AGE_MINUTES
 ) {
@@ -39379,7 +39987,7 @@ function startFinnhubStream() {
 for (const trade of payload.data) {
   const symbol = normalizeSymbol(trade.s);
   const price = Number(trade.p || 0);
-  const size = Number(trade.v || trade.s || 1);
+  const size = Number(trade.v || 1);
 
   if (!symbol || !price || price <= 0) continue;
 
@@ -39395,6 +40003,10 @@ for (const trade of payload.data) {
     priceIsLive: true,
     raw: trade,
   });
+if (engineState.liveMarketMemory?.[symbol]) {
+  void runFastRunnerEngine();
+}
+
 }
       } catch (err) {
         console.error("Finnhub websocket message error:", err.message);
@@ -40122,7 +40734,7 @@ app.get("/live-movers", requireAdmin, (req, res) => {
         0
       );
       const current = map.get(symbol);
-      const isCrypto = isCrypto(symbol);
+      const cryptoAsset = isCrypto(symbol);
       const cryptoMemory =
         engineState.cryptoInstitutionalMemory?.[symbol] ||
         engineState.cryptoInstitutionalMemory?.[symbol.replace("/", "")] ||
@@ -41543,6 +42155,43 @@ app.get("/api/memory-status", requireAdmin, (req, res) => {
         ).length,
     },
   });
+});
+
+app.get("/api/swing-watchlist", requireAdmin, (req, res) => {
+  try {
+    saveRenderMemory("SWING_WATCHLIST_ROUTE_READ");
+
+    res.json({
+      ok: true,
+      updatedAt: new Date().toISOString(),
+
+      swingWatchlistState:
+        engineState.swingWatchlistState || null,
+
+      topSwingWatchlist:
+        (engineState.topSwingWatchlist || []).slice(0, 25),
+
+      highConfidenceSwingStocks:
+        (engineState.highConfidenceSwingStocks || []).slice(0, 10),
+
+      swingPredictionHistory:
+        (engineState.swingPredictionHistory || []).slice(0, 50),
+
+      swingLearningState:
+        engineState.swingLearningState || null,
+
+      swingLearningResults:
+        (engineState.swingLearningResults || []).slice(0, 50),
+
+      swingWatchlistHistory:
+        (engineState.swingWatchlistHistory || []).slice(0, 25),
+    });
+  } catch (err) {
+    res.status(500).json({
+      ok: false,
+      error: err.message,
+    });
+  }
 });
 
 app.get("/api/runner-watchlist", requireAdmin, (req, res) => {
