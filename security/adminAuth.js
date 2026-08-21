@@ -12,16 +12,17 @@ export function createAdminAuth({ adminToken, failureWindowMs = 15 * 60 * 1000,
     const record = streamTicket ? tickets.get(streamTicket) : null, clientIp = getClientIp(req), timestamp = now();
     const validTicket = Boolean(record && record.expiresAt > timestamp && record.ip === clientIp);
     if (validTicket) tickets.delete(streamTicket);
+    if (validTicket || provided === adminToken) {
+      failures.delete(clientIp);
+      return next();
+    }
     const failure = failures.get(clientIp);
     if (failure && failure.resetAt > timestamp && failure.count >= failureLimit) {
       return res.status(429).json({ ok: false, error: "Too many authentication failures" });
     }
-    if (!validTicket && provided !== adminToken) {
-      const active = failure && failure.resetAt > timestamp ? failure : { count: 0, resetAt: timestamp + failureWindowMs };
-      active.count += 1; failures.set(clientIp, active);
-      return res.status(401).json({ ok: false, error: "Unauthorized" });
-    }
-    failures.delete(clientIp); next();
+    const active = failure && failure.resetAt > timestamp ? failure : { count: 0, resetAt: timestamp + failureWindowMs };
+    active.count += 1; failures.set(clientIp, active);
+    return res.status(401).json({ ok: false, error: "Unauthorized" });
   };
   const registerRoutes = (app) => app.post("/auth/stream-ticket", requireAdmin, (req, res) => {
     const ticket = crypto.randomBytes(32).toString("base64url");
