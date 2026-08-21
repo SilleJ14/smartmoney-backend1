@@ -1,3 +1,8 @@
+import {
+  CRYPTO_MAX_ENTRY_SPREAD_PERCENT,
+} from "../scoring/cryptoScoring.js";
+import { evaluateCryptoTradeCandidate } from "../scoring/componentScore.js";
+
 export function createAutoBuyStrategies(dependencies) {
   const {
     CONFIG,
@@ -65,6 +70,49 @@ export function createAutoBuyStrategies(dependencies) {
     shouldSkipFromTradeMemory,
     getTradingMode,
   } = dependencies;
+
+  function getCryptoDecisionScore(signal = {}) {
+    const value =
+      signal.masterFinalScore ??
+      signal.cryptoDecisionScore ??
+      signal.finalAutonomousDecisionScore ??
+      signal.score ??
+      0;
+    const parsed = Number(value);
+    return Number.isFinite(parsed) ? parsed : 0;
+  }
+
+  function getMeasuredCryptoSpread(signal = {}) {
+    const bid = Number(signal.bid);
+    const ask = Number(signal.ask);
+    const providedSpread = signal.spreadPercent === null || signal.spreadPercent === undefined
+      ? undefined
+      : Number(signal.spreadPercent);
+    const quoteMeasured =
+      Number.isFinite(bid) &&
+      Number.isFinite(ask) &&
+      bid > 0 &&
+      ask >= bid;
+    if (quoteMeasured) {
+      const measured = ((ask - bid) / ((ask + bid) / 2)) * 100;
+      return measured >= 0 ? measured : null;
+    }
+    if (signal.cryptoRealism?.spreadAvailable === false || signal.spreadAvailable === false) {
+      return null;
+    }
+    if (
+      (signal.cryptoRealism?.spreadAvailable === true || signal.spreadAvailable === true) &&
+      Number.isFinite(providedSpread) &&
+      providedSpread >= 0
+    ) {
+      return providedSpread;
+    }
+    return null;
+  }
+
+  function hasCompleteCryptoEntryEvidence(signal = {}) {
+    return evaluateCryptoTradeCandidate(signal, { minimumScore: 0 }).approved;
+  }
 
   async function autoBuySignals(signals = []) {
     const TRADING_MODE = getTradingMode();
@@ -1250,7 +1298,7 @@ export function createAutoBuyStrategies(dependencies) {
       0,
       ...signals
         .filter((s) => s.qualifiedToBuy === true)
-        .map((s) => Number(s.score || 0))
+        .map((s) => getCryptoDecisionScore(s))
     );
     let scoreMultiplier = 0.5;
     if (bestCandidateScore >= 95) scoreMultiplier = 1;
@@ -1269,17 +1317,20 @@ export function createAutoBuyStrategies(dependencies) {
     }
     const buyCandidates = signals
       .filter((s) => {
-        const score = Number(s.score || 0);
-        const spread = Number(s.spreadPercent || 0);
+        const score = getCryptoDecisionScore(s);
+        const spread = getMeasuredCryptoSpread(s);
         const institutionalPassed =
           s.qualifiedToBuy === true ||
           s.cryptoInstitutionalQualification?.momentumPass === true;
         const autoTradeAllowed = s.autoTradeApproved !== false;
+        const completeEntryEvidence = hasCompleteCryptoEntryEvidence(s);
         return (
           institutionalPassed &&
           autoTradeAllowed &&
+          completeEntryEvidence &&
           score >= effectiveCryptoBuyThreshold &&
-          spread <= 0.85
+          spread !== null &&
+          spread <= CRYPTO_MAX_ENTRY_SPREAD_PERCENT
         );
       })
       .filter((s) => {
@@ -1289,8 +1340,8 @@ export function createAutoBuyStrategies(dependencies) {
       })
       .sort(
         (a, b) =>
-          Number(b.masterFinalScore || b.score || 0) -
-          Number(a.masterFinalScore || a.score || 0)
+          getCryptoDecisionScore(b) -
+          getCryptoDecisionScore(a)
       )
       .slice(0, openSlots);
     let cryptoBudgetReservedThisCycle = 0;
@@ -1312,15 +1363,20 @@ export function createAutoBuyStrategies(dependencies) {
         0
       );
       const cryptoBarsFound = Number(crypto.barsFound || 0);
+      const cryptoDecisionScore = getCryptoDecisionScore(crypto);
+      const measuredCryptoSpread = getMeasuredCryptoSpread(crypto);
+      const completeCryptoEntryEvidence = hasCompleteCryptoEntryEvidence(crypto);
       const cryptoQualified =
         crypto.qualifiedToBuy === true &&
-        Number(crypto.score || 0) >= effectiveCryptoBuyThreshold &&
-        Number(crypto.spreadPercent || 0) <= 0.85 &&
+        completeCryptoEntryEvidence &&
+        cryptoDecisionScore >= effectiveCryptoBuyThreshold &&
+        measuredCryptoSpread !== null &&
+        measuredCryptoSpread <= CRYPTO_MAX_ENTRY_SPREAD_PERCENT &&
         cryptoBarsFound >= 10;
       if (!cryptoQualified) {
         recordOrder("CRYPTO_SKIPPED_INSTITUTIONAL_FILTER", symbol, {
-          score: crypto.score,
-          spreadPercent: crypto.spreadPercent,
+          score: cryptoDecisionScore,
+          spreadPercent: measuredCryptoSpread,
           barsFound: cryptoBarsFound,
           qualifiedToBuy: crypto.qualifiedToBuy,
         });
@@ -1404,7 +1460,7 @@ export function createAutoBuyStrategies(dependencies) {
             "AUTO_CRYPTO_BUY_SKIPPED_FINAL_MASTER_DECISION",
             symbol,
             {
-              score: crypto.score,
+              score: cryptoDecisionScore,
               finalMasterDecisionProfile,
               reason:
                 "Final master decision profile blocked this crypto before sizing/execution.",
@@ -1484,7 +1540,7 @@ export function createAutoBuyStrategies(dependencies) {
             "AUTO_CRYPTO_BUY_SKIPPED_SIZE_ZERO",
             crypto.symbol,
             {
-              score: crypto.score,
+              score: cryptoDecisionScore,
               adaptiveCryptoSizing,
               finalSizingReconciliation: crypto.finalSizingReconciliation,
             }
@@ -1503,7 +1559,7 @@ export function createAutoBuyStrategies(dependencies) {
           assetClass: "crypto",
           entryType: "AUTO_CRYPTO_ENTRY",
           entryPrice: crypto.current || crypto.price,
-          score: crypto.score,
+          score: cryptoDecisionScore,
           sector: "Crypto",
           confirmations: crypto.confirmations || {},
           tradeAmount: finalTradeAmount,

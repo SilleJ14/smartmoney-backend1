@@ -94,6 +94,16 @@ import {
   evaluateInstitutionalApproval,
 } from "./scoring/institutionalBlend.js";
 import {
+  calculateCryptoLiquidityFromBars,
+  calculateCryptoSignalRealism,
+} from "./scoring/cryptoScoring.js";
+import {
+  CRYPTO_DECISION_WEIGHTS,
+  buildCryptoDecisionScore,
+  calculateAvailableWeightedScore,
+  evaluateCryptoTradeCandidate,
+} from "./scoring/componentScore.js";
+import {
   scoreValidatedFundamentals,
   validateFundamentalInputs,
 } from "./scoring/fundamentalValidation.js";
@@ -12085,85 +12095,22 @@ function classifyInstitutionalSetup(signal = {}) {
 }
 function calculateCryptoSignalRealismEngine(signal = {}) {
   const symbol = normalizeSymbol(signal.symbol);
-  const rawScore = Number(signal.score || 0);
-  const barsFound = Number(signal.barsFound || 0);
-  const bid = Number(signal.bid || 0);
-  const ask = Number(signal.ask || 0);
-  const price = Number(signal.current || signal.price || 0);
-  const isCrypto =
+  const isCryptoSignal =
     signal.assetClass === "crypto" ||
     signal.asset_class === "crypto" ||
     symbol.includes("/");
-  if (!isCrypto) {
+  if (!isCryptoSignal) {
     return {
-      realismScore: rawScore,
+      realismScore: Number(signal.score || 0),
+      rawScore: Number(signal.score || 0),
       cryptoRiskPenalty: 0,
+      penaltyComponents: [],
+      missingComponents: [],
+      entryBlockReasons: [],
       cryptoRealismReason: "Non-crypto signal",
     };
   }
-  const spreadPercent =
-    bid > 0 && ask > 0 ? ((ask - bid) / ask) * 100 : 1;
-  const volume = Number(
-    signal.volume ||
-    signal.barVolume ||
-    signal.confirmations?.lastVolume ||
-    0
-  );
-  const dollarVolume = Number(
-    signal.dollarVolume ||
-    signal.cryptoDollarVolume ||
-    volume * price ||
-    0
-  );
-  const weakCryptoLiquidity =
-    dollarVolume > 0 && dollarVolume < 25000;
-  const missingCryptoLiquidity =
-    dollarVolume <= 0;
-  const stableBehaviorDetected =
-    Math.abs(
-      Number(
-        signal.percent_change_24h ||
-        signal.changePercent ||
-        signal.percentChange ||
-        0
-      )
-    ) <= 0.35 &&
-    spreadPercent <= 0.12;
-  const memeOrUltraSpeculative =
-    price < 0.01 ||
-    spreadPercent >= 0.7 ||
-    barsFound < 15;
-  const weakHistoryPenalty = barsFound < 30 ? 10 : 0;
-  const spreadPenalty =
-    spreadPercent >= 0.75 ? 20 : spreadPercent >= 0.35 ? 10 : 0;
-  const stableBehaviorPenalty =
-    stableBehaviorDetected ? 45 : 0;
-  const memePenalty =
-    memeOrUltraSpeculative ? 12 : 0;
-  const noStatPenalty =
-    Number(signal.statisticalScore || signal.statisticalEdgeScore || 0) <= 0
-      ? 10
-      : 0;
-  const liquidityPenalty =
-    missingCryptoLiquidity ? 35 : weakCryptoLiquidity ? 20 : 0;
-  const cryptoRiskPenalty =
-    weakHistoryPenalty +
-    spreadPenalty +
-    stableBehaviorPenalty +
-    memePenalty +
-    noStatPenalty +
-    liquidityPenalty;
-  const realismScore = clampScore(rawScore - cryptoRiskPenalty);
-  return {
-    realismScore,
-    cryptoRiskPenalty,
-    spreadPercent: Number(spreadPercent.toFixed(3)),
-    dollarVolume: Number(dollarVolume.toFixed(2)),
-    weakCryptoLiquidity,
-    missingCryptoLiquidity,
-    memeOrUltraSpeculative,
-    cryptoRealismReason: "APPLIED",
-  };
+  return calculateCryptoSignalRealism(signal);
 }
 function calculateMultiTimeframeConfirmationEngine(signals = []) {
   const analyzedSignals = (signals || []).map((signal) => {
@@ -17151,98 +17098,6 @@ async function getBestCryptoBars(symbol) {
     }
   }
   return await getCryptoRecentBars(symbol, "1Min", 30);
-}
-function calculateCryptoLiquidityFromBars(
-  bars = [],
-  currentPrice = 0
-) {
-  const cleanBars = Array.isArray(bars)
-    ? bars
-      .map((bar) => {
-        const close = Number(
-          bar.c ??
-          bar.close ??
-          bar.price ??
-          0
-        );
-        const rawVolume =
-          bar.v ??
-          bar.volume ??
-          bar.volume_crypto ??
-          bar.volume_usd ??
-          bar.baseVolume ??
-          bar.quoteVolume ??
-          0;
-        const parsedVolume = Number(rawVolume);
-        return {
-          close,
-          volume:
-            Number.isFinite(parsedVolume)
-              ? parsedVolume
-              : 0,
-        };
-      })
-      .filter(
-        (bar) =>
-          Number.isFinite(bar.close) &&
-          bar.close > 0
-      )
-    : [];
-  const latestBar =
-    cleanBars[cleanBars.length - 1] || {};
-  const latestVolume = Number(
-    latestBar.volume || 0
-  );
-  const nonZeroVolumes = cleanBars
-    .map((bar) => Number(bar.volume || 0))
-    .filter((volume) => volume > 0);
-  const averageVolume =
-    nonZeroVolumes.length > 0
-      ? nonZeroVolumes.reduce(
-        (sum, volume) => sum + volume,
-        0
-      ) / nonZeroVolumes.length
-      : 0;
-  const maxVolume =
-    nonZeroVolumes.length > 0
-      ? Math.max(...nonZeroVolumes)
-      : 0;
-  const effectiveVolume =
-    latestVolume > 0
-      ? latestVolume
-      : averageVolume > 0
-        ? averageVolume
-        : maxVolume;
-  const volumeSpikeRatio =
-    averageVolume > 0 && latestVolume > 0
-      ? latestVolume / averageVolume
-      : averageVolume > 0
-        ? 1
-        : 0;
-  const effectivePrice = Number(
-    currentPrice ||
-    latestBar.close ||
-    cleanBars[cleanBars.length - 1]?.close ||
-    0
-  );
-  const dollarVolume =
-    effectiveVolume * effectivePrice;
-  const volumeConfidenceScore = clampScore(
-    25 +
-    (cleanBars.length >= 20 ? 20 : cleanBars.length >= 10 ? 10 : 0) +
-    (nonZeroVolumes.length >= 10 ? 25 : nonZeroVolumes.length >= 3 ? 15 : nonZeroVolumes.length > 0 ? 8 : 0) +
-    (volumeSpikeRatio >= 2 ? 20 : volumeSpikeRatio >= 1 ? 12 : volumeSpikeRatio > 0 ? 6 : 0)
-  );
-  return {
-    volume: Number(latestVolume.toFixed(2)),
-    averageVolume: Number(averageVolume.toFixed(2)),
-    effectiveVolume: Number(effectiveVolume.toFixed(2)),
-    maxVolume: Number(maxVolume.toFixed(2)),
-    nonZeroVolumeBars: nonZeroVolumes.length,
-    volumeSpikeRatio: Number(volumeSpikeRatio.toFixed(3)),
-    dollarVolume: Number(dollarVolume.toFixed(2)),
-    volumeConfidenceScore: Number(volumeConfidenceScore.toFixed(2)),
-  };
 }
 async function placeCryptoMarketBuy(symbol, dollars, options = {}) {
   if (CONFIG.realCashTradingUnlocked !== true) {
@@ -22492,8 +22347,81 @@ const { autoBuySignals, autoBuyCryptoSignals } = createAutoBuyStrategies({
   shouldSkipFromTradeMemory,
   getTradingMode: () => TRADING_MODE,
 });
+
+function hydrateCryptoExecutionCandidate(candidate = {}) {
+  const symbol = normalizeSymbol(candidate.symbol);
+  if (!isCrypto(symbol)) return candidate;
+
+  const finalizedSources = [
+    ...(engineState.lastCryptoSignals || []),
+    ...(engineState.topCryptoSignals || []),
+    ...(engineState.lastSignals || []),
+    ...(engineState.topSignals || []),
+  ];
+  const finalized = finalizedSources.find(
+    (signal) => normalizeSymbol(signal?.symbol) === symbol
+  ) || {};
+  const compactSymbol = symbol.replaceAll("/", "");
+  const slashSymbol = symbol.includes("/")
+    ? symbol
+    : symbol.endsWith("USD")
+      ? `${symbol.slice(0, -3)}/USD`
+      : symbol;
+  const quote =
+    engineState.liveQuoteCache?.[symbol] ||
+    engineState.liveQuoteCache?.[compactSymbol] ||
+    engineState.liveQuoteCache?.[slashSymbol] ||
+    engineState.liveMarketMemory?.[symbol] ||
+    engineState.liveMarketMemory?.[compactSymbol] ||
+    engineState.liveMarketMemory?.[slashSymbol] ||
+    {};
+  const firstPositive = (...values) => {
+    for (const value of values) {
+      const parsed = Number(value);
+      if (Number.isFinite(parsed) && parsed > 0) return parsed;
+    }
+    return 0;
+  };
+  const bid = firstPositive(quote.bid, quote.bp, quote.bidPrice);
+  const ask = firstPositive(quote.ask, quote.ap, quote.askPrice);
+  const spreadAvailable = bid > 0 && ask >= bid;
+  const current = firstPositive(
+    quote.price,
+    quote.current,
+    quote.livePrice,
+    quote.last,
+    finalized.current,
+    finalized.price,
+    candidate.current,
+    candidate.price
+  );
+  const spreadPercent = spreadAvailable
+    ? ((ask - bid) / ((ask + bid) / 2)) * 100
+    : null;
+
+  return {
+    ...candidate,
+    ...finalized,
+    symbol,
+    assetClass: "crypto",
+    asset_class: "crypto",
+    current,
+    price: current,
+    bid: spreadAvailable ? bid : null,
+    ask: spreadAvailable ? ask : null,
+    spreadAvailable,
+    spreadPercent,
+  };
+}
+
 async function rotateWeakCryptoIfBetter(signals, positions) {
   if (!["live_crypto", "smart"].includes(TRADING_MODE)) return false;
+  if (CONFIG.realCashTradingUnlocked !== true) {
+    recordOrder("CRYPTO_ROTATION_SKIPPED_CASH_LOCKED", "CRYPTO", {
+      reason: "A rotation cannot sell unless its replacement buy is permitted.",
+    });
+    return false;
+  }
   const cryptoPositions = positions.filter((p) => {
     const symbol = normalizeSymbol(p.symbol);
     return (
@@ -22506,13 +22434,19 @@ async function rotateWeakCryptoIfBetter(signals, positions) {
   const openSymbols = new Set(
     cryptoPositions.map((p) => normalizeSymbol(p.symbol))
   );
-  const topCandidate = signals
-    .filter((s) => s.qualifiedToBuy === true)
-    .filter((s) => s.autoTradeApproved !== false)
-    .filter((s) => Number(s.score || 0) >= 85)
-    .filter((s) => !openSymbols.has(normalizeSymbol(s.symbol)))
-    .sort((a, b) => Number(b.score || 0) - Number(a.score || 0))[0];
-  if (!topCandidate) return false;
+  const topCandidateEvaluation = signals
+    .map(hydrateCryptoExecutionCandidate)
+    .map((signal) => ({
+      signal,
+      gate: evaluateCryptoTradeCandidate(signal, { minimumScore: 85 }),
+    }))
+    .filter(({ signal, gate }) => (
+      gate.approved && !openSymbols.has(normalizeSymbol(signal.symbol))
+    ))
+    .sort((a, b) => b.gate.score - a.gate.score)[0];
+  if (!topCandidateEvaluation) return false;
+  const topCandidate = topCandidateEvaluation.signal;
+  const topCandidateGate = topCandidateEvaluation.gate;
   const aiEntryScores = await getBotEntryScores();
   const weakest = cryptoPositions.reduce((weak, pos) => {
     const weakSymbol = normalizeSymbol(weak.symbol);
@@ -22552,7 +22486,7 @@ async function rotateWeakCryptoIfBetter(signals, positions) {
     engineState.aiEntryScores?.[weakestSymbol] ||
     0
   );
-  const replacementScore = Number(topCandidate.score || 0);
+  const replacementScore = topCandidateGate.score;
   const scoreGap = replacementScore - weakestScore;
   if (scoreGap < CONFIG.replaceWeakestMinScoreGap) {
     recordOrder("CRYPTO_ROTATION_SKIPPED_SCORE_GAP", weakestSymbol, {
@@ -22584,6 +22518,21 @@ async function rotateWeakCryptoIfBetter(signals, positions) {
     );
     return false;
   }
+  const replacementBuyPreflight = validateLiveOrder(
+    topCandidate.symbol,
+    "BUY"
+  );
+  if (!replacementBuyPreflight.approved) {
+    recordOrder(
+      "CRYPTO_ROTATION_SKIPPED_BUY_PREFLIGHT",
+      weakest.symbol,
+      {
+        replacementSymbol: topCandidate.symbol,
+        blockReasons: replacementBuyPreflight.blockReasons,
+      }
+    );
+    return false;
+  }
   const weakestQty = Number(weakest.qty);
   if (!weakestQty || weakestQty <= 0) return false;
   try {
@@ -22600,20 +22549,92 @@ async function rotateWeakCryptoIfBetter(signals, positions) {
     });
     markSwingSafeRotationUsed(weakestSymbol, topCandidate.symbol);
     delete engineState.highWaterMarks[weakestSymbol];
-    setTimeout(async () => {
+    const maxReplacementAttempts = 3;
+    const scheduleReplacementAttempt = (attempt) => {
+      setTimeout(() => {
+        void attemptReplacementBuy(attempt);
+      }, 2500);
+    };
+    const attemptReplacementBuy = async (attempt) => {
       try {
-        const account = await getAccount();
         const freshPositions = await getPositions();
-        const freshAiOwnedSymbols = await getBotOwnedSymbols();
-        const freshAiPositions = freshPositions.filter((p) => {
-          const symbol = normalizeSymbol(p.symbol);
+        const weakestStillOpen = freshPositions.some((position) => (
+          normalizeSymbol(position.symbol) === weakestSymbol &&
+          Number(position.qty || 0) > 0
+        ));
+        if (weakestStillOpen) {
+          const willRetry = attempt < maxReplacementAttempts;
+          recordOrder(
+            willRetry
+              ? "CRYPTO_ROTATION_BUY_DEFERRED"
+              : "CRYPTO_ROTATION_BUY_SKIPPED",
+            topCandidate.symbol,
+            {
+              attempt,
+              maxReplacementAttempts,
+              reason: willRetry
+                ? "Outgoing crypto sell is not filled; replacement will retry."
+                : "Outgoing crypto sell did not fill before the bounded retry limit.",
+            }
+          );
+          if (willRetry) scheduleReplacementAttempt(attempt + 1);
+          return;
+        }
+        const replacementAlreadyOpen = freshPositions.some((position) => (
+          normalizeSymbol(position.symbol) === normalizeSymbol(topCandidate.symbol) &&
+          Number(position.qty || 0) > 0
+        ));
+        if (replacementAlreadyOpen) {
+          recordOrder("CRYPTO_ROTATION_BUY_ALREADY_FILLED", topCandidate.symbol, {
+            attempt,
+            replacedSymbol: weakestSymbol,
+          });
+          return;
+        }
+        const refreshedCandidate = hydrateCryptoExecutionCandidate(topCandidate);
+        const refreshedCandidateGate = evaluateCryptoTradeCandidate(
+          refreshedCandidate,
+          { minimumScore: 85 }
+        );
+        const refreshedLivePreflight = validateLiveOrder(
+          refreshedCandidate.symbol,
+          "BUY"
+        );
+        if (!refreshedCandidateGate.approved || !refreshedLivePreflight.approved) {
+          const willRetry = attempt < maxReplacementAttempts;
+          const reasons = [
+            ...refreshedCandidateGate.reasons,
+            ...(refreshedLivePreflight.blockReasons || []),
+          ];
+          recordOrder(
+            willRetry
+              ? "CRYPTO_ROTATION_BUY_DEFERRED"
+              : "CRYPTO_ROTATION_BUY_SKIPPED",
+            topCandidate.symbol,
+            {
+              attempt,
+              maxReplacementAttempts,
+              reason: `Refreshed replacement evidence failed: ${reasons.join(", ")}`,
+              refreshedCandidateGate,
+              refreshedLivePreflight,
+            }
+          );
+          if (willRetry) scheduleReplacementAttempt(attempt + 1);
+          return;
+        }
+        const [account, freshAiOwnedSymbols] = await Promise.all([
+          getAccount(),
+          getBotOwnedSymbols(),
+        ]);
+        const freshAiPositions = freshPositions.filter((position) => {
+          const positionSymbol = normalizeSymbol(position.symbol);
           return (
-            freshAiOwnedSymbols.has(symbol) ||
-            engineState.aiManagedSymbols?.includes(symbol)
+            freshAiOwnedSymbols.has(positionSymbol) ||
+            engineState.aiManagedSymbols?.includes(positionSymbol)
           );
         });
         const adaptiveCryptoSizing =
-          calculateAdaptiveCryptoPositionSize(topCandidate, account);
+          calculateAdaptiveCryptoPositionSize(refreshedCandidate, account);
         const cryptoMaxBudget =
           Number(account?.equity || 0) *
           (Number(CONFIG.maxBotExposurePercent || 0) / 100) *
@@ -22653,40 +22674,51 @@ async function rotateWeakCryptoIfBetter(signals, positions) {
           return;
         }
         const buyOrder = await placeCryptoMarketBuy(
-          topCandidate.symbol,
+          refreshedCandidate.symbol,
           tradeAmount
         );
-        markAiManagedSymbol(topCandidate.symbol);
-        engineState.aiEntryScores[normalizeSymbol(topCandidate.symbol)] = {
-          score: topCandidate.score,
+        markAiManagedSymbol(refreshedCandidate.symbol);
+        engineState.aiEntryScores[normalizeSymbol(refreshedCandidate.symbol)] = {
+          score: refreshedCandidateGate.score,
           entryType: "CRYPTO_ROTATED_IN",
           replacedSymbol: weakestSymbol,
           tradeAmount,
           enteredAt: new Date().toISOString(),
         };
-        recordOrder("CRYPTO_ROTATED_IN", topCandidate.symbol, {
-          score: topCandidate.score,
+        recordOrder("CRYPTO_ROTATED_IN", refreshedCandidate.symbol, {
+          score: refreshedCandidateGate.score,
           tradeAmount,
           replacedSymbol: weakestSymbol,
+          attempt,
           buyOrder,
         });
-        journalTradeEntry(topCandidate.symbol, {
+        journalTradeEntry(refreshedCandidate.symbol, {
           entryType: "CRYPTO_ROTATED_IN",
           assetClass: "crypto",
           entryPrice:
-            topCandidate.current || topCandidate.price || 0,
-          score: topCandidate.score,
+            refreshedCandidate.current || refreshedCandidate.price || 0,
+          score: refreshedCandidateGate.score,
           strategy: "crypto_rotation",
           sector: "Crypto",
           marketRegime:
             engineState.marketRegime?.state || "unknown",
-          confirmations: topCandidate.confirmations || {},
+          confirmations: refreshedCandidate.confirmations || {},
           tradeAmount,
         });
       } catch (err) {
-        recordFailedOrder("CRYPTO_ROTATION_BUY_FAILED", topCandidate.symbol, err.message);
+        if (attempt < maxReplacementAttempts) {
+          recordOrder("CRYPTO_ROTATION_BUY_DEFERRED", topCandidate.symbol, {
+            attempt,
+            maxReplacementAttempts,
+            reason: err.message,
+          });
+          scheduleReplacementAttempt(attempt + 1);
+        } else {
+          recordFailedOrder("CRYPTO_ROTATION_BUY_FAILED", topCandidate.symbol, err.message);
+        }
       }
-    }, 2500);
+    };
+    scheduleReplacementAttempt(1);
     return true;
   } catch (err) {
     recordFailedOrder("CRYPTO_ROTATION_SELL_FAILED", weakestSymbol, err.message);
@@ -24548,18 +24580,7 @@ function getArchetypeEngineWeights(tradeArchetype) {
       meta: 0.10,
       velocity: 0.04,
     },
-    CRYPTO_ROTATION: {
-      base: 0.14,
-      institutional: 0.14,
-      execution: 0.12,
-      runner: 0.10,
-      orderFlow: 0.18,
-      profitAggression: 0.10,
-      personality: 0.05,
-      strategyEvolution: 0.08,
-      meta: 0.08,
-      velocity: 0.14,
-    },
+    CRYPTO_ROTATION: CRYPTO_DECISION_WEIGHTS,
     DEFENSIVE_SETUP: {
       base: 0.14,
       institutional: 0.18,
@@ -24600,6 +24621,8 @@ function calculateArchetypeWeightedDecisionScore({
   metaScore,
   velocityScore,
   riskPenalty,
+  componentAvailability = {},
+  componentSources = {},
 }) {
   const tradeArchetype = classifyTradeArchetype(signal);
   const weights = getArchetypeEngineWeights(tradeArchetype);
@@ -24616,17 +24639,30 @@ function calculateArchetypeWeightedDecisionScore({
     Number(archetypeTrustAdjustment.archetypeTrustMultiplier || 1) < 1
       ? (1 - Number(archetypeTrustAdjustment.archetypeTrustMultiplier || 1)) * 25
       : 0;
-  const rawWeightedScore =
-    baseScore * weights.base +
-    institutionalScore * weights.institutional +
-    executionScore * weights.execution +
-    runnerScore * weights.runner +
-    orderFlowScore * weights.orderFlow +
-    profitAggressionScore * weights.profitAggression +
-    personalityScore * weights.personality +
-    strategyEvolutionDecisionScore * weights.strategyEvolution +
-    metaScore * weights.meta +
-    velocityScore * weights.velocity;
+  const componentValues = {
+    base: baseScore,
+    institutional: institutionalScore,
+    execution: executionScore,
+    runner: runnerScore,
+    orderFlow: orderFlowScore,
+    profitAggression: profitAggressionScore,
+    personality: personalityScore,
+    strategyEvolution: strategyEvolutionDecisionScore,
+    meta: metaScore,
+    velocity: velocityScore,
+  };
+  const componentTelemetry = Object.entries(weights).map(([name, weight]) => ({
+    name,
+    source: componentSources[name] || name,
+    available: componentAvailability[name] !== false,
+    value: Number(componentValues[name] || 0),
+    weight: Number(weight),
+  }));
+  const normalizeAvailableWeights = tradeArchetype === "CRYPTO_ROTATION";
+  const weightedScore = calculateAvailableWeightedScore(componentTelemetry, {
+    normalizeMissing: normalizeAvailableWeights,
+  });
+  const rawWeightedScore = weightedScore.score;
   const finalDecisionScore = clampScore(
     rawWeightedScore -
     riskPenalty +
@@ -24640,6 +24676,9 @@ function calculateArchetypeWeightedDecisionScore({
     archetypeTrustAdjustment,
     archetypeMemoryBonus: Number(archetypeMemoryBonus.toFixed(2)),
     archetypeMemoryPenalty: Number(archetypeMemoryPenalty.toFixed(2)),
+    scoreCoverage: weightedScore.coverage,
+    missingComponents: weightedScore.missingComponents,
+    decisionComponents: weightedScore.components,
     finalDecisionScore,
     reason: "STATE_UPDATED",
   };
@@ -25800,6 +25839,20 @@ function calculatePortfolioEcosystemIntelligence(signals = [], openPositions = [
     adjustedSignals,
   };
 }
+function resolveDecisionScoreComponent(candidates = []) {
+  for (const candidate of candidates) {
+    const value = candidate?.value;
+    if (value === null || value === undefined || value === "") continue;
+    const parsed = Number(value);
+    if (!Number.isFinite(parsed)) continue;
+    return {
+      value: clampScore(parsed),
+      available: true,
+      source: candidate.source || "unknown",
+    };
+  }
+  return { value: 0, available: false, source: "unavailable" };
+}
 function calculateCentralAutonomousDecisionCore(stockSignals = [], cryptoSignals = []) {
   const allSignals = [...stockSignals, ...cryptoSignals].filter(Boolean);
   const marketRegime = engineState.marketRegime?.state || "unknown";
@@ -25836,57 +25889,98 @@ function calculateCentralAutonomousDecisionCore(stockSignals = [], cryptoSignals
     ).toFixed(2)
   );
   const decisions = allSignals.map((signal) => {
-    const baseScore = Number(signal.score || 0);
-    const institutionalScore = Number(
-      signal.institutionalBrainScore ||
-      signal.fullInstitutionalAiBrain?.dynamicConvictionScore ||
-      signal.fullInstitutionalAiBrain?.consensusScore ||
-      signal.institutionalScore ||
-      signal.aiConfidence ||
-      0
-    );
-    const executionScore = Number(
-      signal.executionConfidence ||
-      signal.institutionalExecutionPlan?.executionConfidence ||
-      0
-    );
-    const orderFlowScore = Number(
-      signal.orderFlowConvictionScore ||
-      signal.phase59InstitutionalOrderFlow?.orderFlowConvictionScore ||
-      0
-    );
-    const runnerScore = Number(
-      signal.runnerScore ||
-      signal.explosiveRunnerScore ||
-      signal.explosiveRunnerPrediction?.explosiveRunnerScore ||
-      signal.adaptiveRunnerScore ||
-      0
-    );
-    const metaScore = Number(
-      signal.metaStrategyScore ||
-      signal.autonomousMetaStrategy?.metaStrategyScore ||
-      0
-    );
-    const velocityScore = Number(
-      signal.profitVelocityScore ||
-      signal.profitVelocityGovernor?.finalVelocityScore ||
-      0
-    );
-    const profitAggressionScore = Number(
-      signal.profitAggressionScore ||
-      signal.phase61ProfitAggression?.profitAggressionScore ||
-      0
-    );
-    const personalityScore = Number(
-      signal.personalityFitScore ||
-      signal.phase62MarketPersonality?.personalityFitScore ||
-      0
-    );
-    const strategyEvolutionDecisionScore = Number(
-      signal.strategyEvolutionScore ||
-      signal.phase63StrategyEvolution?.strategyEvolutionScore ||
-      0
-    );
+    const isCryptoSignal =
+      signal.assetClass === "crypto" ||
+      signal.asset_class === "crypto" ||
+      isCrypto(signal.symbol);
+    const cryptoDecisionEvidence = isCryptoSignal
+      ? buildCryptoDecisionScore(signal)
+      : null;
+    const cryptoComponent = (name) => {
+      const component = cryptoDecisionEvidence?.componentsByName?.[name];
+      if (!component || component.available !== true) {
+        return { value: 0, available: false, source: component?.source || "unavailable" };
+      }
+      return {
+        value: clampScore(component.value),
+        available: true,
+        source: component.source || name,
+      };
+    };
+    const components = {
+      base: isCryptoSignal
+        ? cryptoComponent("base")
+        : resolveDecisionScoreComponent([{ value: signal.score, source: "score" }]),
+      institutional: isCryptoSignal
+        ? { value: 0, available: false, source: "excluded_correlated_crypto_family" }
+        : resolveDecisionScoreComponent([
+          { value: signal.institutionalBrainScore, source: "institutionalBrainScore" },
+          { value: signal.fullInstitutionalAiBrain?.dynamicConvictionScore, source: "fullInstitutionalAiBrain.dynamicConvictionScore" },
+          { value: signal.fullInstitutionalAiBrain?.consensusScore, source: "fullInstitutionalAiBrain.consensusScore" },
+          { value: signal.institutionalScore, source: "institutionalScore" },
+          { value: signal.aiConfidence, source: "aiConfidence" },
+        ]),
+      execution: isCryptoSignal
+        ? cryptoComponent("execution")
+        : resolveDecisionScoreComponent([
+          { value: signal.executionConfidence, source: "executionConfidence" },
+          { value: signal.institutionalExecutionPlan?.executionConfidence, source: "institutionalExecutionPlan.executionConfidence" },
+        ]),
+      orderFlow: isCryptoSignal
+        ? { value: 0, available: false, source: "included_once_in_entry_quality" }
+        : resolveDecisionScoreComponent([
+          { value: signal.orderFlowConvictionScore, source: "orderFlowConvictionScore" },
+          { value: signal.phase59InstitutionalOrderFlow?.orderFlowConvictionScore, source: "phase59.orderFlowConvictionScore" },
+        ]),
+      runner: isCryptoSignal
+        ? cryptoComponent("runner")
+        : resolveDecisionScoreComponent([
+          { value: signal.runnerScore, source: "runnerScore" },
+          { value: signal.explosiveRunnerScore, source: "explosiveRunnerScore" },
+          { value: signal.explosiveRunnerPrediction?.explosiveRunnerScore, source: "explosiveRunnerPrediction.explosiveRunnerScore" },
+          { value: signal.adaptiveRunnerScore, source: "adaptiveRunnerScore" },
+        ]),
+      meta: isCryptoSignal
+        ? { value: 0, available: false, source: "not_used_for_crypto" }
+        : resolveDecisionScoreComponent([
+        { value: signal.metaStrategyScore, source: "metaStrategyScore" },
+        { value: signal.autonomousMetaStrategy?.metaStrategyScore, source: "autonomousMetaStrategy.metaStrategyScore" },
+      ]),
+      velocity: isCryptoSignal
+        ? { value: 0, available: false, source: "included_in_discovery" }
+        : resolveDecisionScoreComponent([
+        { value: signal.profitVelocityScore, source: "profitVelocityScore" },
+        { value: signal.profitVelocityGovernor?.finalVelocityScore, source: "profitVelocityGovernor.finalVelocityScore" },
+      ]),
+      profitAggression: isCryptoSignal
+        ? { value: 0, available: false, source: "not_used_for_crypto" }
+        : resolveDecisionScoreComponent([
+        { value: signal.profitAggressionScore, source: "profitAggressionScore" },
+        { value: signal.phase61ProfitAggression?.profitAggressionScore, source: "phase61.profitAggressionScore" },
+      ]),
+      personality: isCryptoSignal
+        ? { value: 0, available: false, source: "not_used_for_crypto" }
+        : resolveDecisionScoreComponent([
+        { value: signal.personalityFitScore, source: "personalityFitScore" },
+        { value: signal.phase62MarketPersonality?.personalityFitScore, source: "phase62.personalityFitScore" },
+      ]),
+      strategyEvolution: isCryptoSignal
+        ? cryptoComponent("strategyEvolution")
+        : resolveDecisionScoreComponent([
+        { value: signal.strategyEvolutionScore, source: "strategyEvolutionScore" },
+        { value: signal.phase63StrategyEvolution?.strategyEvolutionScore, source: "phase63.strategyEvolutionScore" },
+      ]),
+    };
+    const baseScore = components.base.value;
+    const institutionalScore = components.institutional.value;
+    const executionScore = components.execution.value;
+    const orderFlowScore = components.orderFlow.value;
+    const runnerScore = components.runner.value;
+    const metaScore = components.meta.value;
+    const velocityScore = components.velocity.value;
+    const profitAggressionScore = components.profitAggression.value;
+    const personalityScore = components.personality.value;
+    const strategyEvolutionDecisionScore = components.strategyEvolution.value;
     const riskPenalty =
       (signal.confirmations?.fakeBreakout ? 18 : 0) +
       (signal.confirmations?.gapTooHigh ? 12 : 0) +
@@ -25907,7 +26001,26 @@ function calculateCentralAutonomousDecisionCore(stockSignals = [], cryptoSignals
         metaScore,
         velocityScore,
         riskPenalty,
+        componentAvailability: Object.fromEntries(
+          Object.entries(components).map(([name, component]) => [name, component.available])
+        ),
+        componentSources: Object.fromEntries(
+          Object.entries(components).map(([name, component]) => [name, component.source])
+        ),
       });
+    const decisionScoreComponents = isCryptoSignal
+      ? archetypeDecision.decisionComponents.map((component) => ({
+        ...component,
+        semanticName:
+          cryptoDecisionEvidence?.componentsByName?.[component.name]?.semanticName ||
+          component.name,
+      }))
+      : archetypeDecision.decisionComponents;
+    const missingScoreComponents = isCryptoSignal
+      ? decisionScoreComponents
+        .filter((component) => component.available !== true)
+        .map((component) => component.semanticName)
+      : archetypeDecision.missingComponents;
     const finalDecisionScore =
       archetypeDecision.finalDecisionScore;
     const contradictionState =
@@ -25941,6 +26054,8 @@ function calculateCentralAutonomousDecisionCore(stockSignals = [], cryptoSignals
       marketStress >= 90 ||
       signal.confirmations?.fakeBreakout === true ||
       signal.confirmations?.newsRisk === true;
+    const cryptoEvidenceBlock =
+      isCryptoSignal && cryptoDecisionEvidence?.coreEvidencePass !== true;
     const softBlock =
       signal.autoTradeApproved === false ||
       signal.unifiedInstitutionalOrchestrator?.shouldBlock === true ||
@@ -25948,9 +26063,11 @@ function calculateCentralAutonomousDecisionCore(stockSignals = [], cryptoSignals
       signal.phase61ProfitAggression?.shouldBlockAggression === true ||
       signal.phase62MarketPersonality?.shouldPersonalityBlock === true ||
       signal.phase63StrategyEvolution?.shouldStrategyBlock === true ||
+      cryptoEvidenceBlock ||
       finalDecisionScore < CONFIG.minScoreToBuy;
     const shouldBlock =
       hardBlock ||
+      cryptoEvidenceBlock ||
       (softBlock && !eliteOverride.eligibleForEliteOverride);
     const aiParliamentVote =
       calculateAiParliamentVote({
@@ -25979,7 +26096,16 @@ function calculateCentralAutonomousDecisionCore(stockSignals = [], cryptoSignals
         contradictionState,
         eliteOverride,
       });
-    const shouldAccelerate =
+    const shouldAccelerate = isCryptoSignal
+      ? !shouldBlock &&
+      cryptoDecisionEvidence?.coreEvidencePass === true &&
+      cryptoDecisionEvidence?.componentsByName?.runner?.available === true &&
+      centralCoreExecution.shouldWaitForPullback !== true &&
+      finalDecisionScore >= 82 &&
+      executionScore >= 65 &&
+      runnerScore >= 65 &&
+      marketStress < 60
+      :
       !shouldBlock &&
       centralCoreExecution.shouldWaitForPullback !== true &&
       finalDecisionScore >= 82 &&
@@ -26021,6 +26147,20 @@ function calculateCentralAutonomousDecisionCore(stockSignals = [], cryptoSignals
       archetypeTrustAdjustment: archetypeDecision.archetypeTrustAdjustment,
       archetypeMemoryBonus: archetypeDecision.archetypeMemoryBonus,
       archetypeMemoryPenalty: archetypeDecision.archetypeMemoryPenalty,
+      scoreCoverage: archetypeDecision.scoreCoverage,
+      missingScoreComponents,
+      scoreComponents: decisionScoreComponents,
+      cryptoDecisionScore: isCryptoSignal ? finalDecisionScore : null,
+      cryptoDecisionEvidence: isCryptoSignal
+        ? {
+          coreEvidencePass: cryptoDecisionEvidence.coreEvidencePass,
+          missingCriticalEvidence: cryptoDecisionEvidence.missingCriticalEvidence,
+          barsFound: cryptoDecisionEvidence.barsFound,
+          spread: cryptoDecisionEvidence.spread,
+          liquidity: cryptoDecisionEvidence.liquidity,
+          contextObservations: cryptoDecisionEvidence.contextObservations,
+        }
+        : null,
       baseScore,
       institutionalScore,
       executionScore,
@@ -26106,10 +26246,10 @@ function calculateFinalMasterDecisionProfile(signal = {}) {
     "WATCH";
   const finalScore = clampScore(
     Number(
-      decision.finalDecisionScore ||
-      signal.finalAutonomousDecisionScore ||
-      signal.archetypeAdjustedScore ||
-      signal.score ||
+      decision.finalDecisionScore ??
+      signal.finalAutonomousDecisionScore ??
+      signal.archetypeAdjustedScore ??
+      signal.score ??
       0
     )
   );
@@ -28671,6 +28811,16 @@ function buildLiveStarterBuyDecision(candidate = {}, account = {}, managedPositi
   });
   const openTradeCount = sameAssetOpenPositions.length;
   const blockReasons = [];
+  const cryptoExecutionGate = cryptoAsset
+    ? evaluateCryptoTradeCandidate(candidate, {
+      minimumScore: Math.max(70, Number(CONFIG.minScoreToBuy || 70)),
+    })
+    : null;
+  if (cryptoExecutionGate && !cryptoExecutionGate.approved) {
+    blockReasons.push(
+      ...cryptoExecutionGate.reasons.map((reason) => `Crypto evidence: ${reason}`)
+    );
+  }
   const softMasterBlockRestored = isSoftMasterBlockRestorable(candidate);
   if (
     (
@@ -28792,6 +28942,7 @@ function buildLiveStarterBuyDecision(candidate = {}, account = {}, managedPositi
     remainingBudget: Number(remainingBudget.toFixed(2)),
     openTradeCount,
     liveSafety,
+    cryptoExecutionGate,
     softMasterBlockRestored,
     masterExecutionDecision:
       candidate.masterExecutionDecision ||
@@ -28821,6 +28972,11 @@ async function runLiveStarterBuyGate() {
     const candidates = (engineState.quickInstitutionalCandidates || [])
       .filter((candidate) => marketOpen || isCrypto(candidate.symbol))
       .filter((candidate) => candidate.quickInstitutionalApproved === true)
+      .map((candidate) => (
+        isCrypto(candidate.symbol)
+          ? hydrateCryptoExecutionCandidate(candidate)
+          : candidate
+      ))
       .sort((a, b) => {
         const scoreA =
           Number(a.finalLiveScore || 0) ||
@@ -28914,6 +29070,26 @@ async function runLiveStarterBuyGate() {
         )
       ) {
         continue;
+      }
+      if (isCrypto(symbol)) {
+        const refreshedCandidate = hydrateCryptoExecutionCandidate(
+          decision.candidate || { symbol }
+        );
+        const refreshedCryptoGate = evaluateCryptoTradeCandidate(
+          refreshedCandidate,
+          { minimumScore: Math.max(70, Number(CONFIG.minScoreToBuy || 70)) }
+        );
+        if (!refreshedCryptoGate.approved) {
+          recordFailedOrder(
+            "LIVE_STARTER_CRYPTO_EVIDENCE_BLOCKED",
+            symbol,
+            `Crypto evidence changed before order: ${refreshedCryptoGate.reasons.join(", ")}`,
+            { refreshedCryptoGate }
+          );
+          continue;
+        }
+        decision.candidate = refreshedCandidate;
+        decision.cryptoExecutionGate = refreshedCryptoGate;
       }
       const duplicateCheck = checkAndMarkLiveDuplicateOrder(
         symbol,

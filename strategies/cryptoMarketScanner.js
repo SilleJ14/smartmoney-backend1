@@ -1,3 +1,8 @@
+import {
+  CRYPTO_MAX_ENTRY_SPREAD_PERCENT,
+  scoreSparseCryptoMarket,
+} from "../scoring/cryptoScoring.js";
+
 export function createCryptoMarketScanner(dependencies) {
   const {
     CONFIG,
@@ -16,35 +21,62 @@ export function createCryptoMarketScanner(dependencies) {
     getRuntime,
   } = dependencies;
 
+  function firstPositiveNumber(...values) {
+    for (const value of values) {
+      if (value === null || value === undefined || value === "") continue;
+      const parsed = Number(value);
+      if (Number.isFinite(parsed) && parsed > 0) return parsed;
+    }
+    return 0;
+  }
+
+  function boundedCenteredScore(value, pointsPerPercent, maxMovePercent) {
+    const boundedValue = Math.max(
+      -maxMovePercent,
+      Math.min(maxMovePercent, Number(value) || 0)
+    );
+    return clampScore(50 + boundedValue * pointsPerPercent);
+  }
+
   function scoreCrypto(quote, bars = []) {
     const cleanBars = Array.isArray(bars)
-      ? bars
-        .map((bar) => ({
-          o: Number(bar.o || bar.open || 0),
-          h: Number(bar.h || bar.high || 0),
-          l: Number(bar.l || bar.low || 0),
-          c: Number(bar.c || bar.close || 0),
-          v: Number(bar.v || bar.volume || 0),
-        }))
+      ? bars.map((bar) => {
+        const close = firstPositiveNumber(bar.c, bar.close, bar.price);
+        const open = firstPositiveNumber(bar.o, bar.open, close);
+        const high = Math.max(
+          open,
+          close,
+          firstPositiveNumber(bar.h, bar.high, open, close)
+        );
+        const lowCandidate = firstPositiveNumber(bar.l, bar.low, open, close);
+        const low = Math.min(open, close, lowCandidate || open || close);
+        return {
+          o: open,
+          h: high,
+          l: low,
+          c: close,
+          v: firstPositiveNumber(bar.v, bar.volume),
+        };
+      })
         .filter((bar) => bar.c > 0)
       : [];
-    const current = Number(
-      quote?.current ||
-      quote?.price ||
-      quote?.last ||
-      cleanBars[cleanBars.length - 1]?.c ||
-      0
+    const current = firstPositiveNumber(
+      quote?.current,
+      quote?.price,
+      quote?.last,
+      quote?.close,
+      cleanBars[cleanBars.length - 1]?.c
     );
-    if (!current || current <= 0) return 0;
+    if (current <= 0) return 0;
     if (cleanBars.length < 3) {
-      return clampScore(Number(quote?.changePercent || quote?.percentChange || 35));
+      return scoreSparseCryptoMarket({ ...quote, current }, cleanBars.length);
     }
     const first = cleanBars[0];
     const latest = cleanBars[cleanBars.length - 1];
     const previous = cleanBars[cleanBars.length - 2];
-    const open = Number(first.o || first.c || current);
-    const high = Math.max(...cleanBars.map((bar) => Number(bar.h || bar.c || 0)));
-    const low = Math.min(...cleanBars.map((bar) => Number(bar.l || bar.c || 0)));
+    const open = firstPositiveNumber(first.o, first.c, current);
+    const high = Math.max(...cleanBars.map((bar) => firstPositiveNumber(bar.h, bar.c)));
+    const low = Math.min(...cleanBars.map((bar) => firstPositiveNumber(bar.l, bar.c)));
     const momentumPercent =
       open > 0 ? ((current - open) / open) * 100 : 0;
     const shortWindow = cleanBars.slice(-5);
@@ -53,44 +85,89 @@ export function createCryptoMarketScanner(dependencies) {
       shortFirst?.c > 0
         ? ((current - shortFirst.c) / shortFirst.c) * 100
         : 0;
-    const previousClose = Number(previous.c || current);
+    const previousClose = firstPositiveNumber(previous.c, current);
     const lastBarMomentum =
       previousClose > 0 ? ((current - previousClose) / previousClose) * 100 : 0;
     const closeNearHigh =
       high > low ? ((current - low) / (high - low)) * 100 : 50;
-    const greenBars = cleanBars.filter(
-      (bar) => Number(bar.c || 0) >= Number(bar.o || 0)
-    ).length;
-    const greenRatio = greenBars / cleanBars.length;
-    const avgVolume =
-      cleanBars.reduce((sum, bar) => sum + Number(bar.v || 0), 0) /
+    const minimumDirectionalBodyPercent = 0.02;
+    const minimumBodyToRangeRatio = 0.15;
+    let meaningfulGreenBars = 0;
+    let meaningfulRedBars = 0;
+    for (const bar of cleanBars) {
+      const body = Number(bar.c || 0) - Number(bar.o || 0);
+      const bodyPercent = bar.o > 0 ? (body / bar.o) * 100 : 0;
+      const range = Math.max(0, Number(bar.h || 0) - Number(bar.l || 0));
+      const bodyToRangeRatio = range > 0 ? Math.abs(body) / range : 0;
+      if (
+        bodyPercent >= minimumDirectionalBodyPercent &&
+        bodyToRangeRatio >= minimumBodyToRangeRatio
+      ) {
+        meaningfulGreenBars += 1;
+      } else if (
+        bodyPercent <= -minimumDirectionalBodyPercent &&
+        bodyToRangeRatio >= minimumBodyToRangeRatio
+      ) {
+        meaningfulRedBars += 1;
+      }
+    }
+    const directionalBalance =
+      (meaningfulGreenBars - meaningfulRedBars) /
       Math.max(1, cleanBars.length);
+
+    const baselineVolumes = cleanBars
+      .slice(0, -1)
+      .map((bar) => Number(bar.v || 0))
+      .filter((volume) => volume > 0);
+    const avgVolume = baselineVolumes.length > 0
+      ? baselineVolumes.reduce((sum, volume) => sum + volume, 0) /
+        baselineVolumes.length
+      : 0;
     const latestVolume = Number(latest.v || 0);
-    const volumeRatio = avgVolume > 0 ? latestVolume / avgVolume : 1;
-    let score = 50;
-    if (cleanBars.length >= 5) score += 5;
-    if (cleanBars.length >= 10) score += 5;
-    if (cleanBars.length >= 20) score += 5;
-    if (momentumPercent > 0) score += 8;
-    if (momentumPercent >= 0.15) score += 6;
-    if (momentumPercent >= 0.35) score += 6;
-    if (momentumPercent >= 0.75) score += 6;
-    if (momentumPercent >= 1.5) score += 5;
-    if (shortMomentumPercent > 0) score += 7;
-    if (shortMomentumPercent >= 0.15) score += 5;
-    if (shortMomentumPercent >= 0.35) score += 5;
-    if (lastBarMomentum > 0) score += 4;
-    if (greenRatio >= 0.5) score += 5;
-    if (greenRatio >= 0.6) score += 5;
-    if (closeNearHigh >= 45) score += 5;
-    if (closeNearHigh >= 65) score += 5;
-    if (volumeRatio >= 0.8) score += 4;
-    if (volumeRatio >= 1.1) score += 5;
-    if (volumeRatio >= 1.5) score += 5;
-    if (momentumPercent < -0.25) score -= 8;
-    if (momentumPercent < -0.75) score -= 10;
-    if (shortMomentumPercent < -0.35) score -= 8;
-    if (closeNearHigh < 25) score -= 8;
+    const volumeRatio = avgVolume > 0 && latestVolume > 0
+      ? latestVolume / avgVolume
+      : avgVolume > 0
+        ? 0
+        : 1;
+
+    // Long, short, last-bar, candle direction, and price location are correlated
+    // views of the same price path. Blend them into one bounded trend family so
+    // a tiny move cannot earn five independent bonuses.
+    const longTrendScore = boundedCenteredScore(momentumPercent, 12.5, 4);
+    const shortTrendScore = boundedCenteredScore(shortMomentumPercent, 20, 2.5);
+    const lastBarTrendScore = boundedCenteredScore(lastBarMomentum, 30, 1.67);
+    const candleDirectionScore = clampScore(50 + directionalBalance * 25);
+    const observedRangePercent = open > 0 ? ((high - low) / open) * 100 : 0;
+    const priceLocationScore = observedRangePercent >= 0.1
+      ? clampScore(closeNearHigh)
+      : 50;
+    const trendFamilyScore =
+      longTrendScore * 0.5 +
+      shortTrendScore * 0.2 +
+      lastBarTrendScore * 0.1 +
+      candleDirectionScore * 0.1 +
+      priceLocationScore * 0.1;
+
+    const trendConfidence = Math.min(1, cleanBars.length / 20);
+    const confidenceAdjustedTrend =
+      50 + (trendFamilyScore - 50) * trendConfidence;
+    const participationScore = volumeRatio >= 2
+      ? 85
+      : volumeRatio >= 1.5
+        ? 72
+        : volumeRatio >= 1.1
+          ? 60
+          : volumeRatio >= 0.75
+            ? 50
+            : volumeRatio >= 0.5
+              ? 42
+              : 32;
+    const participationConfidence = Math.min(1, baselineVolumes.length / 10);
+    const confidenceAdjustedParticipation =
+      50 + (participationScore - 50) * participationConfidence;
+    const score =
+      confidenceAdjustedTrend * 0.78 +
+      confidenceAdjustedParticipation * 0.22;
     const runnerStageProfile = calculateRunnerStageProfile({
       ...quote,
       current,
@@ -150,7 +227,8 @@ export function createCryptoMarketScanner(dependencies) {
     score = 0,
     bars = [],
     liquidityMetrics = {},
-    spreadPercent = 0,
+    spreadPercent = null,
+    spreadAvailable = false,
   }) {
     const barsFound = Array.isArray(bars) ? bars.length : 0;
     const volumeSpikeRatio = Number(
@@ -162,15 +240,19 @@ export function createCryptoMarketScanner(dependencies) {
     const volumeConfidenceScore = Number(
       liquidityMetrics.volumeConfidenceScore || 0
     );
-    const cleanSpreadPercent = Number(spreadPercent || 0);
-    const spreadPass = cleanSpreadPercent <= 0.85;
+    const cleanSpreadPercent = spreadAvailable && Number.isFinite(Number(spreadPercent))
+      ? Number(spreadPercent)
+      : null;
+    const spreadPass =
+      spreadAvailable &&
+      cleanSpreadPercent <= CRYPTO_MAX_ENTRY_SPREAD_PERCENT;
     const cleanExecutionPass =
       spreadPass &&
       cleanSpreadPercent <= 0.65 &&
       barsFound >= 10;
     const trueLiquidityPass =
       spreadPass &&
-      dollarVolume >= 50 &&
+      liquidityMetrics.liquidityPass === true &&
       (
         volumeSpikeRatio >= 0.15 ||
         volumeConfidenceScore >= 60
@@ -178,7 +260,7 @@ export function createCryptoMarketScanner(dependencies) {
     const smallCryptoProbePass =
       cleanExecutionPass &&
       Number(score || 0) >= 75 &&
-      dollarVolume >= 25 &&
+      liquidityMetrics.liquidityProbePass === true &&
       (
         volumeConfidenceScore >= 35 ||
         volumeSpikeRatio >= 0.1
@@ -192,13 +274,13 @@ export function createCryptoMarketScanner(dependencies) {
       (volumeSpikeRatio >= 0.5 ? 10 : 0) +
       (volumeSpikeRatio >= 1.2 ? 12 : 0) +
       (volumeConfidenceScore >= 60 ? 12 : 0) +
-      (cleanSpreadPercent <= 0.45 ? 10 : 0) -
-      (cleanSpreadPercent > 0.85 ? 25 : 0) -
+      (spreadAvailable && cleanSpreadPercent <= 0.45 ? 10 : 0) -
+      (!spreadAvailable ? 20 : cleanSpreadPercent > 0.85 ? 25 : 0) -
       (barsFound < 10 ? 30 : 0)
     );
     const cryptoTrapRiskScore = clampScore(
       25 +
-      (cleanSpreadPercent > 0.85 ? 25 : 0) +
+      (!spreadAvailable ? 20 : cleanSpreadPercent > 0.85 ? 25 : 0) +
       (volumeConfidenceScore < 35 ? 18 : 0) +
       (volumeSpikeRatio < 0.15 ? 12 : 0) +
       (barsFound < 10 ? 30 : 0) -
@@ -259,6 +341,7 @@ export function createCryptoMarketScanner(dependencies) {
         liquidityPass,
         macroPass,
         spreadPass,
+        spreadAvailable,
         barsFound,
         score,
         spreadPercent: cleanSpreadPercent,
@@ -272,7 +355,9 @@ export function createCryptoMarketScanner(dependencies) {
         institutionalStructurePass,
         reason: qualifiedToBuy
           ? "Crypto institutional qualification passed"
-          : "Crypto institutional qualification failed",
+          : !spreadAvailable
+            ? "Crypto institutional qualification failed: missing live spread"
+            : "Crypto institutional qualification failed",
       },
     };
   }
@@ -373,15 +458,18 @@ export function createCryptoMarketScanner(dependencies) {
         const liquidityMetrics =
           calculateCryptoLiquidityFromBars(
             bars,
-            latestPrice
+            latestPrice,
+            quote
           );
-        const spreadPercent =
+        const spreadAvailable =
           Number(quote.bid || 0) > 0 &&
-            Number(quote.ask || 0) > 0
+          Number(quote.ask || 0) >= Number(quote.bid || 0);
+        const spreadPercent =
+          spreadAvailable
             ? ((Number(quote.ask) - Number(quote.bid)) /
-              Number(quote.ask)) *
+              ((Number(quote.ask) + Number(quote.bid)) / 2)) *
             100
-            : 0;
+            : null;
         const cryptoChartBars = Array.isArray(bars)
           ? bars
             .map((bar) => {
@@ -410,6 +498,7 @@ export function createCryptoMarketScanner(dependencies) {
             bars,
             liquidityMetrics,
             spreadPercent,
+            spreadAvailable,
           });
         results.push({
           ...quote,
@@ -433,6 +522,8 @@ export function createCryptoMarketScanner(dependencies) {
           dayChangeDollars: Number(cryptoDollarChange.toFixed(2)),
           percentChange: Number(cryptoPercentChange.toFixed(2)),
           changePercent: Number(cryptoPercentChange.toFixed(2)),
+          rawCryptoScore: score,
+          scannerScore: score,
           score,
           barsFound: bars.length,
           chartBars: cryptoChartBars,
@@ -446,7 +537,15 @@ export function createCryptoMarketScanner(dependencies) {
           averageVolume: liquidityMetrics.averageVolume,
           volumeSpikeRatio: liquidityMetrics.volumeSpikeRatio,
           dollarVolume: liquidityMetrics.dollarVolume,
-          spreadPercent: Number(spreadPercent.toFixed(3)),
+          dollarVolume24h: liquidityMetrics.dollarVolume24h,
+          windowDollarVolume: liquidityMetrics.windowDollarVolume,
+          latestBarDollarVolume: liquidityMetrics.latestBarDollarVolume,
+          averageBarDollarVolume: liquidityMetrics.averageBarDollarVolume,
+          liquiditySource: liquidityMetrics.liquiditySource,
+          spreadAvailable,
+          spreadPercent: spreadPercent === null
+            ? null
+            : Number(spreadPercent.toFixed(3)),
           confirmations: {
             volumeSpikeRatio: liquidityMetrics.volumeSpikeRatio,
           },

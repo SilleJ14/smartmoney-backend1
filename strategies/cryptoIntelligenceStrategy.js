@@ -1,14 +1,36 @@
+import {
+  CRYPTO_MAX_ENTRY_SPREAD_PERCENT,
+  getCryptoBaseAsset,
+  pruneCryptoContinuationMemory,
+  resolveCryptoLiquidityEvidence,
+  updateCryptoContinuationMemoryEntry,
+} from "../scoring/cryptoScoring.js";
+
 export function createCryptoIntelligenceStrategy(dependencies) {
   const { calculateCryptoStrategySelection, clampScore, engineState, normalizeSymbol, saveEngineState } = dependencies;
 
+  function recordCryptoScoreObservation(signal, phase, adjustment, reason) {
+    signal.cryptoScoreObservations = signal.cryptoScoreObservations || {};
+    const previous = signal.cryptoScoreObservations[phase];
+    const nextAdjustment = Number(adjustment || 0);
+    const deduplicatedAdjustment = previous
+      ? previous.adjustment < 0 || nextAdjustment < 0
+        ? Math.min(previous.adjustment, nextAdjustment)
+        : Math.max(previous.adjustment, nextAdjustment)
+      : nextAdjustment;
+    signal.cryptoScoreObservations[phase] = {
+      adjustment: deduplicatedAdjustment,
+      reason,
+      appliedToDecisionScore: false,
+    };
+  }
+
   function calculateCryptoInstitutionalSignal(signal = {}) {
     const symbol = normalizeSymbol(signal.symbol);
-    const score = Number(signal.score || 0);
-    const current = Number(signal.current || signal.price || 0);
+    const score = Number(signal.rawCryptoScore ?? signal.scannerScore ?? signal.score ?? 0);
     const bid = Number(signal.bid || 0);
     const ask = Number(signal.ask || 0);
     const percentChange = Number(signal.percentChange || signal.changePercent || 0);
-    const volume = Number(signal.volume || 0);
     const volumeRatio = Number(
       signal.volumeRatio ||
       signal.relativeVolume ||
@@ -16,21 +38,32 @@ export function createCryptoIntelligenceStrategy(dependencies) {
       signal.confirmations?.volumeSpikeRatio ||
       0
     );
-    const spreadPercent =
-      bid > 0 && ask > 0 && current > 0
-        ? ((ask - bid) / current) * 100
-        : 0;
-    const isMajorCrypto =
-      symbol.includes("BTC") ||
-      symbol.includes("ETH") ||
-      symbol.includes("SOL");
+    const providedSpread = signal.spreadPercent === null || signal.spreadPercent === undefined
+      ? undefined
+      : Number(signal.spreadPercent);
+    const quoteSpreadAvailable = bid > 0 && ask >= bid;
+    const spreadAvailable = quoteSpreadAvailable || (
+      signal.spreadAvailable !== false &&
+        signal.spreadAvailable === true &&
+        Number.isFinite(providedSpread) &&
+        providedSpread >= 0
+    );
+    const spreadPercent = spreadAvailable
+      ? quoteSpreadAvailable
+        ? ((ask - bid) / ((ask + bid) / 2)) * 100
+        : providedSpread
+      : null;
+    const isMajorCrypto = new Set(["BTC", "ETH", "SOL"]).has(
+      getCryptoBaseAsset(symbol)
+    );
     const liquidityScore = clampScore(
       45 +
       (isMajorCrypto ? 15 : 0) +
       (volumeRatio >= 1.5 ? 12 : 0) +
       (volumeRatio >= 3 ? 12 : 0) -
-      (spreadPercent >= 0.35 ? 15 : 0) -
-      (spreadPercent >= 0.75 ? 25 : 0)
+      (!spreadAvailable ? 15 : 0) -
+      (spreadAvailable && spreadPercent >= 0.35 ? 15 : 0) -
+      (spreadAvailable && spreadPercent >= 0.75 ? 25 : 0)
     );
     const momentumScore = clampScore(
       50 +
@@ -62,8 +95,9 @@ export function createCryptoIntelligenceStrategy(dependencies) {
             ? 0.95
             : 0.65;
     const suppressCrypto =
+      !spreadAvailable ||
       cryptoRegime === "CRYPTO_RISK_OFF" ||
-      spreadPercent >= 0.9 ||
+      (spreadAvailable && spreadPercent > CRYPTO_MAX_ENTRY_SPREAD_PERCENT) ||
       liquidityScore < 45;
     const scoreBoost =
       cryptoInstitutionalScore >= 85
@@ -84,8 +118,9 @@ export function createCryptoIntelligenceStrategy(dependencies) {
       cryptoSizingMultiplier,
       suppressCrypto,
       scoreBoost,
-      spreadPercent: Number(spreadPercent.toFixed(4)),
-      reason: "STATE_UPDATED",
+      spreadAvailable,
+      spreadPercent: spreadPercent === null ? null : Number(spreadPercent.toFixed(4)),
+      reason: !spreadAvailable ? "MISSING_LIVE_SPREAD" : "STATE_UPDATED",
     };
   }
   
@@ -284,10 +319,10 @@ export function createCryptoIntelligenceStrategy(dependencies) {
           "Phase 43 stablecoin defense blocked weak crypto setup.";
       }
       if (rotationScore >= 82 && multiplier > 1) {
-        signal.score = clampScore(Number(signal.score || 0) + 4);
+        recordCryptoScoreObservation(signal, "phase43", 4, "elite capital rotation");
       }
       if (rotationScore < 50) {
-        signal.score = clampScore(Number(signal.score || 0) - 5);
+        recordCryptoScoreObservation(signal, "phase43", -5, "weak capital rotation");
       }
       return signal;
     });
@@ -295,38 +330,55 @@ export function createCryptoIntelligenceStrategy(dependencies) {
   
   function calculateCryptoExecutionTiming(signal = {}) {
     const symbol = normalizeSymbol(signal.symbol);
-    const current = Number(signal.current || signal.price || 0);
     const bid = Number(signal.bid || 0);
     const ask = Number(signal.ask || 0);
-    const spreadPercent = Number(
-      signal.spreadPercent ||
-      (bid > 0 && ask > 0 && current > 0
-        ? ((ask - bid) / current) * 100
-        : 0)
+    const providedSpread = signal.spreadPercent === null || signal.spreadPercent === undefined
+      ? undefined
+      : Number(signal.spreadPercent);
+    const quoteSpreadAvailable = bid > 0 && ask >= bid;
+    const spreadAvailable = quoteSpreadAvailable || (
+      signal.spreadAvailable !== false &&
+        signal.spreadAvailable === true &&
+        Number.isFinite(providedSpread) &&
+        providedSpread >= 0
     );
+    const spreadPercent = spreadAvailable
+      ? quoteSpreadAvailable
+        ? ((ask - bid) / ((ask + bid) / 2)) * 100
+        : providedSpread
+      : null;
     const volumeSpikeRatio = Number(
       signal.volumeSpikeRatio ||
       signal.confirmations?.volumeSpikeRatio ||
       signal.relativeVolume ||
       0
     );
-    const dollarVolume = Number(signal.dollarVolume || 0);
+    const liquidityEvidence = resolveCryptoLiquidityEvidence(signal);
+    const liquiditySource = liquidityEvidence.source;
+    const dollarVolume = liquidityEvidence.dollarVolume;
+    const liquidityThresholds = {
+      minimum: liquidityEvidence.minimum,
+      probeMinimum: liquidityEvidence.probeMinimum,
+    };
     const percentChange = Number(
       signal.percentChange || signal.changePercent || 0
     );
-    const spreadScore = clampScore(
-      100 -
-      spreadPercent * 120 -
-      (spreadPercent >= 0.4 ? 18 : 0) -
-      (spreadPercent >= 0.75 ? 30 : 0)
-    );
+    const spreadScore = spreadAvailable
+      ? clampScore(
+        100 -
+        spreadPercent * 120 -
+        (spreadPercent >= 0.4 ? 18 : 0) -
+        (spreadPercent >= 0.75 ? 30 : 0)
+      )
+      : 50;
     const liquidityExecutionScore = clampScore(
-      50 +
+      45 +
       (volumeSpikeRatio >= 1 ? 10 : 0) +
       (volumeSpikeRatio >= 2 ? 12 : 0) +
-      (dollarVolume >= 100 ? 8 : 0) +
-      (dollarVolume >= 1000 ? 10 : 0) -
-      (dollarVolume <= 20 ? 18 : 0)
+      (dollarVolume >= liquidityThresholds.minimum ? 20 : 0) +
+      (dollarVolume >= liquidityThresholds.probeMinimum &&
+        dollarVolume < liquidityThresholds.minimum ? 8 : 0) -
+      (dollarVolume < liquidityThresholds.probeMinimum ? 20 : 0)
     );
     const timingScore = clampScore(
       55 +
@@ -357,8 +409,10 @@ export function createCryptoIntelligenceStrategy(dependencies) {
             ? 0.55
             : 0;
     const blockExecution =
+      !spreadAvailable ||
+      dollarVolume <= 0 ||
       executionDecision === "BLOCK_BAD_CRYPTO_EXECUTION" ||
-      spreadPercent >= 1 ||
+      (spreadAvailable && spreadPercent > CRYPTO_MAX_ENTRY_SPREAD_PERCENT) ||
       spreadScore < 35;
     return {
       phase: "44_CRYPTO_EXECUTION_TIMING_SLIPPAGE_DEFENSE",
@@ -368,11 +422,18 @@ export function createCryptoIntelligenceStrategy(dependencies) {
       spreadScore,
       liquidityExecutionScore,
       timingScore,
-      spreadPercent: Number(spreadPercent.toFixed(4)),
+      spreadAvailable,
+      spreadPercent: spreadPercent === null ? null : Number(spreadPercent.toFixed(4)),
+      liquiditySource,
+      liquidityMinimumDollarVolume: liquidityThresholds.minimum,
       executionDecision,
       executionMultiplier,
       blockExecution,
-      reason: "STATE_UPDATED",
+      reason: !spreadAvailable
+        ? "MISSING_LIVE_SPREAD"
+        : dollarVolume <= 0
+          ? "MISSING_LIQUIDITY"
+          : "STATE_UPDATED",
     };
   }
   
@@ -435,10 +496,10 @@ export function createCryptoIntelligenceStrategy(dependencies) {
         signal.phase44SuppressionReason = phase44.reason;
       }
       if (phase44.executionDecision === "EXECUTE_NOW") {
-        signal.score = clampScore(Number(signal.score || 0) + 3);
+        recordCryptoScoreObservation(signal, "phase44", 3, "execute now");
       }
       if (phase44.executionDecision === "WAIT_FOR_BETTER_FILL") {
-        signal.score = clampScore(Number(signal.score || 0) - 4);
+        recordCryptoScoreObservation(signal, "phase44", -4, "wait for better fill");
       }
       return signal;
     });
@@ -585,13 +646,13 @@ export function createCryptoIntelligenceStrategy(dependencies) {
         signal.phase45SuppressionReason = phase45.reason;
       }
       if (phase45.positionSizeMode === "MAX_ELITE_CRYPTO_SIZE") {
-        signal.score = clampScore(Number(signal.score || 0) + 3);
+        recordCryptoScoreObservation(signal, "phase45", 3, "elite sizing evidence");
       }
       if (
         phase45.positionSizeMode === "MICRO_CRYPTO_PROBE" ||
         phase45.positionSizeMode === "REDUCED_CRYPTO_SIZE"
       ) {
-        signal.score = clampScore(Number(signal.score || 0) - 2);
+        recordCryptoScoreObservation(signal, "phase45", -2, "reduced sizing evidence");
       }
       return signal;
     });
@@ -743,7 +804,7 @@ export function createCryptoIntelligenceStrategy(dependencies) {
       signal.cryptoExitDecision = phase46.exitDecision;
       signal.cryptoExitUrgency = phase46.exitUrgency;
       if (phase46.exitDecision === "HOLD_CRYPTO_RUNNER") {
-        signal.score = clampScore(Number(signal.score || 0) + 3);
+        recordCryptoScoreObservation(signal, "phase46", 3, "runner hold evidence");
         signal.cryptoRunnerProtected = true;
       }
       if (phase46.exitDecision === "TRAIL_CRYPTO_RUNNER") {
@@ -753,7 +814,7 @@ export function createCryptoIntelligenceStrategy(dependencies) {
         phase46.exitDecision === "PROTECT_CRYPTO_PROFIT" ||
         phase46.exitDecision === "REDUCE_WEAK_CRYPTO"
       ) {
-        signal.score = clampScore(Number(signal.score || 0) - 3);
+        recordCryptoScoreObservation(signal, "phase46", -3, "profit protection evidence");
         signal.cryptoExitWatch = true;
       }
       if (phase46.exitDecision === "EMERGENCY_CRYPTO_EXIT") {
@@ -927,18 +988,18 @@ export function createCryptoIntelligenceStrategy(dependencies) {
         signal.qualifiedToBuy = false;
         signal.phase47Suppressed = true;
         signal.phase47SuppressionReason = phase47.reason;
-        signal.score = clampScore(Number(signal.score || 0) - 8);
+        recordCryptoScoreObservation(signal, "phase47", -8, "liquidity trap");
       }
       if (phase47.liquiditySweepDecision === "ACCUMULATION_SWEEP_CONFIRMED") {
-        signal.score = clampScore(Number(signal.score || 0) + 5);
+        recordCryptoScoreObservation(signal, "phase47", 5, "accumulation sweep");
         signal.cryptoAccumulationSweepConfirmed = true;
       }
       if (phase47.liquiditySweepDecision === "CAUTIOUS_SWEEP_ENTRY") {
-        signal.score = clampScore(Number(signal.score || 0) + 2);
+        recordCryptoScoreObservation(signal, "phase47", 2, "cautious sweep entry");
         signal.cryptoCautiousSweepEntry = true;
       }
       if (phase47.liquiditySweepDecision === "WAIT_AFTER_LIQUIDITY_SWEEP") {
-        signal.score = clampScore(Number(signal.score || 0) - 4);
+        recordCryptoScoreObservation(signal, "phase47", -4, "wait after sweep");
         signal.cryptoWaitAfterSweep = true;
       }
       return signal;
@@ -1091,17 +1152,17 @@ export function createCryptoIntelligenceStrategy(dependencies) {
         signal.phase48Suppressed = true;
         signal.phase48SuppressionReason =
           "Phase 48 blocked weak crypto during cross-market risk-off defense.";
-        signal.score = clampScore(Number(signal.score || 0) - 7);
+        recordCryptoScoreObservation(signal, "phase48", -7, "cross-market risk off");
       }
       if (
         phase48State.crossMarketMode === "CRYPTO_LEADERSHIP_RISK_ON" &&
         individualCorrelationScore >= 78
       ) {
-        signal.score = clampScore(Number(signal.score || 0) + 4);
+        recordCryptoScoreObservation(signal, "phase48", 4, "crypto leadership");
         signal.cryptoLeadershipConfirmed = true;
       }
       if (phase48State.crossMarketMode === "BALANCED_RISK_ON") {
-        signal.score = clampScore(Number(signal.score || 0) + 1);
+        recordCryptoScoreObservation(signal, "phase48", 1, "balanced risk on");
       }
       return signal;
     });
@@ -1264,17 +1325,17 @@ export function createCryptoIntelligenceStrategy(dependencies) {
         signal.phase49Suppressed = true;
         signal.phase49SuppressionReason =
           "Phase 49 blocked weak crypto during stablecoin/exchange pressure defense.";
-        signal.score = clampScore(Number(signal.score || 0) - 7);
+        recordCryptoScoreObservation(signal, "phase49", -7, "stablecoin defense");
       }
       if (
         phase49State.flowMode === "RISK_ON_CRYPTO_FLOW" &&
         stablecoinFlowSignalScore >= 75
       ) {
-        signal.score = clampScore(Number(signal.score || 0) + 4);
+        recordCryptoScoreObservation(signal, "phase49", 4, "risk-on crypto flow");
         signal.cryptoRiskOnFlowConfirmed = true;
       }
       if (phase49State.flowMode === "EXCHANGE_PRESSURE_CAUTION") {
-        signal.score = clampScore(Number(signal.score || 0) - 2);
+        recordCryptoScoreObservation(signal, "phase49", -2, "exchange pressure caution");
         signal.cryptoExchangePressureCaution = true;
       }
       return signal;
@@ -1438,18 +1499,18 @@ export function createCryptoIntelligenceStrategy(dependencies) {
         signal.qualifiedToBuy = false;
         signal.phase50Suppressed = true;
         signal.phase50SuppressionReason = phase50.reason;
-        signal.score = clampScore(Number(signal.score || 0) - 8);
+        recordCryptoScoreObservation(signal, "phase50", -8, "whale distribution trap");
       }
       if (phase50.whaleDecision === "WHALE_ACCUMULATION_CONFIRMED") {
-        signal.score = clampScore(Number(signal.score || 0) + 6);
+        recordCryptoScoreObservation(signal, "phase50", 6, "whale accumulation");
         signal.whaleAccumulationConfirmed = true;
       }
       if (phase50.whaleDecision === "SMART_MONEY_ACCUMULATION") {
-        signal.score = clampScore(Number(signal.score || 0) + 3);
+        recordCryptoScoreObservation(signal, "phase50", 3, "smart-money accumulation");
         signal.smartMoneyAccumulationConfirmed = true;
       }
       if (phase50.whaleDecision === "WEAK_WHALE_FLOW") {
-        signal.score = clampScore(Number(signal.score || 0) - 3);
+        recordCryptoScoreObservation(signal, "phase50", -3, "weak whale flow");
         signal.weakWhaleFlow = true;
       }
       return signal;
@@ -1527,9 +1588,30 @@ export function createCryptoIntelligenceStrategy(dependencies) {
   }
   
   function updateMultiTimeframeCryptoState(cryptoSignals = []) {
-    const reviewed = cryptoSignals.map((signal) =>
-      calculateMultiTimeframeCrypto(signal)
-    );
+    const now = new Date();
+    engineState.multiTimeframeCryptoMemory =
+      engineState.multiTimeframeCryptoMemory || {};
+    const reviewed = cryptoSignals.map((signal) => {
+      const phase51 = calculateMultiTimeframeCrypto(signal);
+      const symbol = normalizeSymbol(signal.symbol);
+      const previous = engineState.multiTimeframeCryptoMemory[symbol] || {};
+      const continuation = updateCryptoContinuationMemoryEntry(
+        previous,
+        signal,
+        { now }
+      );
+      engineState.multiTimeframeCryptoMemory[symbol] = {
+        ...phase51,
+        ...continuation,
+      };
+      return {
+        ...phase51,
+        continuationScore: continuation.score,
+        continuationCoverage: continuation.coverage,
+        continuationAvailable: continuation.available,
+        observedSessions: continuation.observedSessions,
+      };
+    });
     const aligned = reviewed.filter(
       (item) =>
         item.parliamentDecision === "FULL_TIMEFRAME_ALIGNMENT" ||
@@ -1573,11 +1655,10 @@ export function createCryptoIntelligenceStrategy(dependencies) {
     engineState.phase51MultiTimeframeCryptoHistory.unshift(state);
     engineState.phase51MultiTimeframeCryptoHistory =
       engineState.phase51MultiTimeframeCryptoHistory.slice(0, 200);
-    engineState.multiTimeframeCryptoMemory =
-      engineState.multiTimeframeCryptoMemory || {};
-    for (const item of reviewed) {
-      engineState.multiTimeframeCryptoMemory[normalizeSymbol(item.symbol)] = item;
-    }
+    engineState.multiTimeframeCryptoMemory = pruneCryptoContinuationMemory(
+      engineState.multiTimeframeCryptoMemory,
+      { now }
+    );
     saveEngineState("PHASE_51_MULTI_TIMEFRAME_CRYPTO_UPDATED");
     return state;
   }
@@ -1591,22 +1672,47 @@ export function createCryptoIntelligenceStrategy(dependencies) {
       signal.shortFrameCryptoScore = phase51.shortFrameScore;
       signal.midFrameCryptoScore = phase51.midFrameScore;
       signal.longFrameCryptoScore = phase51.longFrameScore;
+      const continuationMemory =
+        engineState.multiTimeframeCryptoMemory?.[normalizeSymbol(signal.symbol)];
+      if (continuationMemory) {
+        signal.continuationScorecard = {
+          score: Number(continuationMemory.score ?? 50),
+          available: continuationMemory.available === true,
+          coverage: Number(continuationMemory.coverage || 0),
+          tier: continuationMemory.tier,
+          source: continuationMemory.source || "persisted_crypto_daily_sessions",
+          observedSessions: Number(continuationMemory.observedSessions || 0),
+        };
+        signal.multiDayContinuationScore = signal.continuationScorecard.score;
+        signal.multiDayContinuationTier = signal.continuationScorecard.tier;
+        signal.multiDayAccumulation = {
+          ...(signal.multiDayAccumulation || {}),
+          seenDays: Array.isArray(continuationMemory.seenDays)
+            ? continuationMemory.seenDays
+            : [],
+          seenDaysCount: Number(continuationMemory.observedSessions || 0),
+        };
+        signal.cryptoScoreTelemetry = {
+          ...(signal.cryptoScoreTelemetry || {}),
+          continuation: signal.continuationScorecard,
+        };
+      }
       if (phase51.blockTimeframeConflict) {
         signal.qualifiedToBuy = false;
         signal.phase51Suppressed = true;
         signal.phase51SuppressionReason = phase51.reason;
-        signal.score = clampScore(Number(signal.score || 0) - 8);
+        recordCryptoScoreObservation(signal, "phase51", -8, "timeframe conflict");
       }
       if (phase51.parliamentDecision === "FULL_TIMEFRAME_ALIGNMENT") {
-        signal.score = clampScore(Number(signal.score || 0) + 6);
+        recordCryptoScoreObservation(signal, "phase51", 6, "full timeframe alignment");
         signal.fullCryptoTimeframeAlignment = true;
       }
       if (phase51.parliamentDecision === "STRONG_TIMEFRAME_ALIGNMENT") {
-        signal.score = clampScore(Number(signal.score || 0) + 3);
+        recordCryptoScoreObservation(signal, "phase51", 3, "strong timeframe alignment");
         signal.strongCryptoTimeframeAlignment = true;
       }
       if (phase51.parliamentDecision === "WAIT_FOR_TIMEFRAME_CONFIRMATION") {
-        signal.score = clampScore(Number(signal.score || 0) - 3);
+        recordCryptoScoreObservation(signal, "phase51", -3, "wait for timeframe confirmation");
         signal.waitForCryptoTimeframeConfirmation = true;
       }
       return signal;
@@ -1711,6 +1817,12 @@ export function createCryptoIntelligenceStrategy(dependencies) {
       const strategyTrust =
         strategyMemory[selectedStrategy]?.trustScore ?? 50;
       const symbolTrust = symbolMemory[symbol]?.trustScore ?? 50;
+      const strategySampleSize = Number(
+        strategyMemory[selectedStrategy]?.trades || 0
+      );
+      const symbolSampleSize = Number(symbolMemory[symbol]?.trades || 0);
+      const learningSampleSize = Math.max(strategySampleSize, symbolSampleSize);
+      const learningAvailable = learningSampleSize > 0;
       const selectorConfidence = Number(
         signal.cryptoStrategySelectorScore ||
         signal.autonomousCryptoStrategySelector?.strategyConfidence ||
@@ -1722,8 +1834,9 @@ export function createCryptoIntelligenceStrategy(dependencies) {
         strategyTrust * 0.3 +
         symbolTrust * 0.25
       );
-      const learningAdjustment =
-        reinforcementScore >= 82
+      const learningAdjustment = !learningAvailable
+        ? 0
+        : reinforcementScore >= 82
           ? 5
           : reinforcementScore >= 72
             ? 3
@@ -1732,8 +1845,9 @@ export function createCryptoIntelligenceStrategy(dependencies) {
               : reinforcementScore <= 48
                 ? -3
                 : 0;
-      const action =
-        reinforcementScore >= 82
+      const action = !learningAvailable
+        ? "OBSERVE_NO_CRYPTO_HISTORY"
+        : reinforcementScore >= 82
           ? "REINFORCE_CRYPTO_AGGRESSIVELY"
           : reinforcementScore >= 72
             ? "REINFORCE_CRYPTO_SELECTIVELY"
@@ -1746,13 +1860,19 @@ export function createCryptoIntelligenceStrategy(dependencies) {
         reinforcementScore,
         strategyTrust,
         symbolTrust,
+        strategySampleSize,
+        symbolSampleSize,
+        learningSampleSize,
+        learningAvailable,
         learningAdjustment,
         action,
         shouldSuppressCrypto:
-          action === "SUPPRESS_CRYPTO_SETUP",
+          learningAvailable && action === "SUPPRESS_CRYPTO_SETUP",
         shouldBoostCrypto:
-          action === "REINFORCE_CRYPTO_AGGRESSIVELY" ||
-          action === "REINFORCE_CRYPTO_SELECTIVELY",
+          learningAvailable && (
+            action === "REINFORCE_CRYPTO_AGGRESSIVELY" ||
+            action === "REINFORCE_CRYPTO_SELECTIVELY"
+          ),
         reason: "APPLIED",
       };
     });

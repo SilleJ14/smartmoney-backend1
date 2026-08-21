@@ -118,6 +118,15 @@ export function createEngineCycle(dependencies) {
     getRuntime,
   } = dependencies;
 
+  function recordCryptoScoreObservation(signal, phase, adjustment, reason) {
+    signal.cryptoScoreObservations = signal.cryptoScoreObservations || {};
+    signal.cryptoScoreObservations[phase] = {
+      adjustment: Number(adjustment || 0),
+      reason,
+      appliedToDecisionScore: false,
+    };
+  }
+
   async function executeEngineCycleBody() {
     const { TRADING_MODE, autoTradingEnabled, ENABLE_POLYGON_WEBSOCKET, FINNHUB_API_KEY, POLYGON_API_KEY } = getRuntime();
       const { key, secret } = getAlpacaKeys();
@@ -255,6 +264,29 @@ export function createEngineCycle(dependencies) {
                 : "NORMAL";
       });
       for (const signal of cryptoSignals) {
+        signal.rawCryptoScore = Number(
+          signal.rawCryptoScore ?? signal.scannerScore ?? signal.score ?? 0
+        );
+        signal.scannerScore = signal.rawCryptoScore;
+        const initialCryptoRealism = calculateCryptoSignalRealismEngine(signal);
+        signal.cryptoRealism = initialCryptoRealism;
+        signal.realismAdjustedScore = initialCryptoRealism.realismScore;
+        signal.cryptoEntryScore = initialCryptoRealism.entryQualityScore;
+        signal.cryptoRiskPenalty = initialCryptoRealism.cryptoRiskPenalty;
+        signal.cryptoScoreTelemetry = {
+          version: 1,
+          discovery: {
+            score: signal.rawCryptoScore,
+            source: "crypto_market_scanner",
+          },
+          entry: {
+            score: initialCryptoRealism.entryQualityScore,
+            coverage: initialCryptoRealism.coverage,
+            penalties: initialCryptoRealism.penaltyComponents,
+            missingComponents: initialCryptoRealism.missingComponents,
+            gates: initialCryptoRealism.entryBlockReasons,
+          },
+        };
         const phase42CryptoInstitutional =
           calculateCryptoInstitutionalSignal(signal);
         signal.phase42CryptoInstitutional = phase42CryptoInstitutional;
@@ -267,9 +299,11 @@ export function createEngineCycle(dependencies) {
         signal.cryptoRegime =
           phase42CryptoInstitutional.cryptoRegime;
         if (Number(phase42CryptoInstitutional.scoreBoost || 0) !== 0) {
-          signal.score = clampScore(
-            Number(signal.score || 0) +
-            Number(phase42CryptoInstitutional.scoreBoost || 0)
+          recordCryptoScoreObservation(
+            signal,
+            "phase42",
+            Number(phase42CryptoInstitutional.scoreBoost || 0),
+            "crypto institutional regime"
           );
         }
         if (phase42CryptoInstitutional.suppressCrypto) {
@@ -469,6 +503,9 @@ export function createEngineCycle(dependencies) {
         matchingSignal.centralAutonomousDecisionCore = decision;
         matchingSignal.finalAutonomousDecisionScore =
           decision.finalDecisionScore;
+        if (cryptoSignals.includes(matchingSignal)) {
+          matchingSignal.cryptoDecisionScore = decision.finalDecisionScore;
+        }
         matchingSignal.centralAutonomousAction = decision.action;
         matchingSignal.masterCapitalMultiplier =
           decision.masterCapitalMultiplier;
@@ -635,9 +672,11 @@ export function createEngineCycle(dependencies) {
         matchingSignal.selectedCryptoStrategy =
           selectedCrypto.selectedStrategy;
         if (selectedCrypto.shouldBoostCryptoScore) {
-          matchingSignal.score = clampScore(
-            Number(matchingSignal.score || 0) +
-            Number(selectedCrypto.strategyScoreBoost || 0)
+          recordCryptoScoreObservation(
+            matchingSignal,
+            "phase52",
+            Number(selectedCrypto.strategyScoreBoost || 0),
+            "crypto strategy selector"
           );
         }
         if (selectedCrypto.action === "BLOCK_WEAK_CRYPTO_STRATEGY") {
@@ -664,10 +703,14 @@ export function createEngineCycle(dependencies) {
         matchingSignal.cryptoReinforcementLearning = reinforcedCrypto;
         matchingSignal.cryptoReinforcementScore =
           reinforcedCrypto.reinforcementScore;
-        matchingSignal.score = clampScore(
-          Number(matchingSignal.score || 0) +
-          Number(reinforcedCrypto.learningAdjustment || 0)
-        );
+        if (reinforcedCrypto.learningAvailable === true) {
+          recordCryptoScoreObservation(
+            matchingSignal,
+            "cryptoReinforcement",
+            Number(reinforcedCrypto.learningAdjustment || 0),
+            "crypto reinforcement learning"
+          );
+        }
         if (reinforcedCrypto.shouldSuppressCrypto) {
           matchingSignal.autoTradeApproved = false;
           matchingSignal.decisionLevel =
@@ -1168,6 +1211,9 @@ export function createEngineCycle(dependencies) {
         matchingSignal.centralCoreSoftBlock = decision.softBlock;
         matchingSignal.finalAutonomousDecisionScore =
           decision.finalDecisionScore;
+        if (cryptoSignals.includes(matchingSignal)) {
+          matchingSignal.cryptoDecisionScore = decision.finalDecisionScore;
+        }
         matchingSignal.centralAutonomousAction = decision.action;
         const finalMasterDecisionProfile =
           calculateFinalMasterDecisionProfile(matchingSignal);
@@ -1452,6 +1498,66 @@ export function createEngineCycle(dependencies) {
         }
         return String(position.asset_class || "").toLowerCase() === "us_equity";
       });
+      // Always finalize crypto evidence, including SMART mode cycles that also
+      // contain stocks. Keep scanner, entry-realism, and master scores separate.
+      for (const signal of cryptoSignals) {
+        const cryptoRealism = calculateCryptoSignalRealismEngine(signal);
+        signal.cryptoRealism = cryptoRealism;
+        signal.realismAdjustedScore = cryptoRealism.realismScore;
+        signal.cryptoEntryScore = cryptoRealism.entryQualityScore;
+        signal.cryptoRiskPenalty = cryptoRealism.cryptoRiskPenalty;
+        signal.cryptoRealismReason = cryptoRealism.cryptoRealismReason;
+        signal.cryptoScoreTelemetry = {
+          ...(signal.cryptoScoreTelemetry || {}),
+          entry: {
+            score: cryptoRealism.entryQualityScore,
+            coverage: cryptoRealism.coverage,
+            penalties: cryptoRealism.penaltyComponents,
+            missingComponents: cryptoRealism.missingComponents,
+            gates: cryptoRealism.entryBlockReasons,
+          },
+          decision: {
+            score: Number(
+              signal.masterFinalScore ??
+              signal.finalAutonomousDecisionScore ??
+              signal.score ??
+              cryptoRealism.realismScore
+            ),
+            source: signal.masterFinalScore !== undefined
+              ? "master_final_score"
+              : "central_autonomous_decision",
+            coverage: Number(
+              signal.centralAutonomousDecisionCore?.scoreCoverage || 0
+            ),
+            components:
+              signal.centralAutonomousDecisionCore?.scoreComponents || [],
+            missingComponents:
+              signal.centralAutonomousDecisionCore?.missingScoreComponents || [],
+          },
+        };
+        const cryptoLiquidityPass = cryptoRealism.liquidityPass === true;
+        const decisionScore = Number(
+          signal.masterFinalScore ??
+          signal.finalAutonomousDecisionScore ??
+          cryptoRealism.realismScore
+        );
+        signal.qualifiedToBuy =
+          signal.qualifiedToBuy === true &&
+          cryptoLiquidityPass &&
+          cryptoRealism.spreadAvailable === true &&
+          Number(cryptoRealism.barsFound || 0) >= 10 &&
+          decisionScore >=
+          Number(
+            engineState.selfOptimizationState?.adaptiveMinScoreToBuy ||
+            CONFIG.minScoreToBuy ||
+            70
+          );
+        if (!cryptoLiquidityPass || cryptoRealism.spreadAvailable !== true) {
+          signal.autoTradeApproved = false;
+          signal.approved = false;
+          signal.decisionLevel = "Blocked By Crypto Entry Data Quality";
+        }
+      }
       const allSignalsForAnalytics =
         Array.isArray(stockSignals) && stockSignals.length > 0
           ? stockSignals
@@ -1460,37 +1566,6 @@ export function createEngineCycle(dependencies) {
             : Array.isArray(engineState.lastSignals)
               ? engineState.lastSignals
               : [];
-      for (const signal of allSignalsForAnalytics) {
-        const cryptoRealism = calculateCryptoSignalRealismEngine(signal);
-        signal.cryptoRealism = cryptoRealism;
-        signal.realismAdjustedScore = cryptoRealism.realismScore;
-        if (
-          signal.assetClass === "crypto" ||
-          signal.asset_class === "crypto" ||
-          String(signal.symbol || "").includes("/")
-        ) {
-          signal.score = cryptoRealism.realismScore;
-          signal.cryptoRiskPenalty = cryptoRealism.cryptoRiskPenalty;
-          signal.cryptoRealismReason = cryptoRealism.cryptoRealismReason;
-          const cryptoLiquidityPass =
-            cryptoRealism.missingCryptoLiquidity !== true &&
-            Number(cryptoRealism.dollarVolume || 0) >= 25000;
-          signal.qualifiedToBuy =
-            signal.qualifiedToBuy === true &&
-            cryptoLiquidityPass &&
-            Number(signal.score || 0) >=
-            Number(
-              engineState.selfOptimizationState?.adaptiveMinScoreToBuy ||
-              CONFIG.minScoreToBuy ||
-              70
-            );
-          if (!cryptoLiquidityPass) {
-            signal.autoTradeApproved = false;
-            signal.approved = false;
-            signal.decisionLevel = "Blocked By Crypto Liquidity Realism";
-          }
-        }
-      }
       const updatedInstitutionalWatchlist =
         updateInstitutionalWatchlist(allSignalsForAnalytics);
       engineState.institutionalWatchlist = updatedInstitutionalWatchlist;
