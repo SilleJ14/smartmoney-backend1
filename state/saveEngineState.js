@@ -333,11 +333,19 @@ export function createEngineStateSaver({
         premarketDominanceState: engineState.premarketDominanceState || null,
         premarketDominanceHistory:
           (engineState.premarketDominanceHistory || []).slice(0, 200),
+        boundedQuietDiscoveryState: engineState.boundedQuietDiscoveryState || null,
+        boundedQuietDiscoveryHistory:
+          (engineState.boundedQuietDiscoveryHistory || []).slice(0, 30),
 
         morningStrikeState: engineState.morningStrikeState || null,
         morningStrikeHistory: (engineState.morningStrikeHistory || []).slice(0, 200),
         morningTradesToday: engineState.morningTradesToday || 0,
         lastMorningTradeDateKey: engineState.lastMorningTradeDateKey || null,
+        liveTradeLimitState: engineState.liveTradeLimitState || {
+          dateKey: null,
+          intradayStockEntriesToday: 0,
+          positionIntents: {},
+        },
 
         continuationHoldState: engineState.continuationHoldState || null,
         continuationHoldHistory:

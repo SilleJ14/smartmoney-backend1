@@ -3,6 +3,7 @@ import cors from "cors";
 import dotenv from "dotenv";
 import path from "path";
 import fs from "fs";
+import { createAdminAuth } from "./security/adminAuth.js";
 import {
   fetchWithTimeout,
 } from "./utils/fetchWithTimeout.js";
@@ -58,6 +59,94 @@ import {
   parseEnvBoolean,
   parseEnvNumber,
 } from "./utils/env.js";
+import { createAlpacaClient } from "./execution/alpacaClient.js";
+import { createOrderService } from "./execution/orderService.js";
+import { createBrokerSnapshotService } from "./execution/brokerSnapshotService.js";
+import {
+  buildPendingExits,
+  reconcileBrokerState,
+} from "./execution/brokerReconciliation.js";
+import { createDuplicateOrderGuard } from "./execution/duplicateOrderGuard.js";
+import {
+  assertPreTradeRisk,
+  evaluatePreTradeRisk,
+} from "./risk/preTradeRiskGate.js";
+import {
+  evaluateLiveTradeLimits,
+  ensureLiveTradeLimitDay,
+  normalizeHoldCategory,
+  recordSuccessfulEntry,
+} from "./risk/liveTradeLimits.js";
+import {
+  calculateCoreExitTriggers,
+  calculateExitParliamentConsensus as calculateExitParliamentConsensusCore,
+  calculateTrendPersistenceHoldDecision as calculateTrendPersistenceHoldDecisionCore,
+  calculateTrendQualityHoldDuration as calculateTrendQualityHoldDurationCore,
+} from "./risk/exitRiskEngine.js";
+import { calculateDynamicTradeAmount } from "./risk/positionSizing.js";
+import { createPositionExitManager } from "./risk/positionExitManager.js";
+import {
+  calculateInstitutionalRiskScore,
+  calculatePortfolioFitScore,
+} from "./scoring/riskScores.js";
+import {
+  calculateInstitutionalBlend,
+  evaluateInstitutionalApproval,
+} from "./scoring/institutionalBlend.js";
+import {
+  scoreValidatedFundamentals,
+  validateFundamentalInputs,
+} from "./scoring/fundamentalValidation.js";
+import {
+  buildStrategyExecutionPlan,
+  getEnabledStrategyModes,
+  selectSmartTradingMode,
+} from "./strategies/strategyRouter.js";
+import { calculateCryptoStrategySelection } from "./strategies/cryptoStrategySelector.js";
+import { createAutoBuyStrategies } from "./strategies/autoBuyStrategies.js";
+import { createCryptoIntelligenceStrategy } from "./strategies/cryptoIntelligenceStrategy.js";
+import { createCryptoMarketScanner } from "./strategies/cryptoMarketScanner.js";
+import { createStockMarketStrategy } from "./strategies/stockMarketStrategy.js";
+import { createAlpacaCryptoMarketData } from "./market-data/alpacaCryptoMarketData.js";
+import { createTaskScheduler } from "./engine/taskScheduler.js";
+import { createDiscoveryFeatureStore } from "./discovery/featureStore.js";
+import { fetchAlpacaGroupedDaily } from "./discovery/alpacaDailyBars.js";
+import { prunePreMoverMemory } from "./discovery/preMoverMemory.js";
+import {
+  DEFAULT_DISCOVERY_BUDGETS,
+  runBoundedQuietDiscovery,
+} from "./discovery/quietDiscoveryPipeline.js";
+import { createCycleRunner } from "./engine/cycleRunner.js";
+import { createEngineCycle } from "./engine/createEngineCycle.js";
+import { startServerLifecycle } from "./bootstrap/serverLifecycle.js";
+import { registerOperationalControlRoutes } from "./routes/operationalControlRoutes.js";
+import { registerSystemRoutes } from "./routes/systemRoutes.js";
+import { registerIntelligenceRoutes } from "./routes/intelligenceRoutes.js";
+import { registerMemoryWatchlistRoutes } from "./routes/memoryWatchlistRoutes.js";
+import { registerLiveEngineRoutes } from "./routes/liveEngineRoutes.js";
+import { registerSignalObservabilityRoutes } from "./routes/signalObservabilityRoutes.js";
+import { registerSignalRoutes } from "./routes/signalRoutes.js";
+import { registerBrokerDiagnosticRoutes } from "./routes/brokerDiagnosticRoutes.js";
+import { registerQuoteDiagnosticRoutes } from "./routes/quoteDiagnosticRoutes.js";
+import { registerOperationalActionRoutes } from "./routes/operationalActionRoutes.js";
+import { registerStreamRoutes } from "./routes/streamRoutes.js";
+import { registerManualExecutionRoutes } from "./routes/manualExecutionRoutes.js";
+import { registerDiagnosticRoutes } from "./routes/diagnosticRoutes.js";
+import { registerQuietDiscoveryRoutes } from "./routes/quietDiscoveryRoutes.js";
+import { registerMorningStrikeRoutes } from "./routes/morningStrikeRoutes.js";
+import { registerConfigRoutes } from "./routes/configRoutes.js";
+import { registerLiveSignalRoutes } from "./routes/liveSignalRoutes.js";
+import { registerFrontendRoutes } from "./routes/frontendRoutes.js";
+import { registerLiveMoversRoutes } from "./routes/liveMoversRoutes.js";
+import { registerStatusRoutes } from "./routes/statusRoutes.js";
+import { resetDailySafetyState } from "./state/dailySafetyState.js";
+import { createEngineState } from "./state/createEngineState.js";
+import { createInitialEngineState } from "./state/initialEngineState.js";
+import {
+  getEffectiveTradingMode as resolveEffectiveTradingMode,
+  resolveAutoTradingEnabled as resolveConfiguredAutoTrading,
+  sanitizeRuntimeConfig,
+} from "./config/runtimePolicy.js";
 import {
   isValidStockTicker as isValidStockTickerBase,
   normalizeCryptoSymbolForPolygon as normalizeCryptoSymbolForPolygonBase,
@@ -70,6 +159,25 @@ try {
 } catch { }
 const CONFIG_FILE = path.resolve(DATA_DIR, "runtime-config.json");
 const ENGINE_STATE_FILE = path.resolve(DATA_DIR, "engine-state.json");
+const DISCOVERY_FEATURE_DIRECTORY = path.resolve(DATA_DIR, "discovery-features");
+const DISCOVERY_BUDGETS = Object.freeze({
+  maxUniverse: Math.min(5000, Number(process.env.DISCOVERY_MAX_UNIVERSE || 5000)),
+  batchSize: Math.min(250, Number(process.env.DISCOVERY_BATCH_SIZE || 200)),
+  deepCandidates: Math.min(200, Number(process.env.DISCOVERY_DEEP_CANDIDATES || 150)),
+  watchlistSize: Math.min(50, Number(process.env.DISCOVERY_WATCHLIST_SIZE || 30)),
+  liveSymbols: Math.min(20, Number(process.env.DISCOVERY_LIVE_SYMBOLS || 15)),
+  historyDays: Math.min(120, Number(process.env.DISCOVERY_HISTORY_DAYS || 60)),
+  maxCurrentMovePercent: Number(process.env.DISCOVERY_MAX_CURRENT_MOVE_PERCENT || DEFAULT_DISCOVERY_BUDGETS.maxCurrentMovePercent),
+  minPrice: Number(process.env.DISCOVERY_MIN_PRICE || DEFAULT_DISCOVERY_BUDGETS.minPrice),
+  minAverageDollarVolume: Number(process.env.DISCOVERY_MIN_AVERAGE_DOLLAR_VOLUME || DEFAULT_DISCOVERY_BUDGETS.minAverageDollarVolume),
+  maxWorkingMemoryMb: Math.min(192, Number(process.env.DISCOVERY_MAX_WORKING_MEMORY_MB || 96)),
+});
+const DISCOVERY_MAX_DOWNLOAD_BYTES = Math.min(150, Number(process.env.DISCOVERY_MAX_DAILY_DOWNLOAD_MB || 150)) * 1024 * 1024;
+const discoveryFeatureStore = createDiscoveryFeatureStore({
+  directory: DISCOVERY_FEATURE_DIRECTORY,
+  maxHistoryDays: Math.min(500, Number(process.env.DISCOVERY_MAX_HISTORY_DAYS || 120)),
+  maxDiskBytes: Math.min(500, Number(process.env.DISCOVERY_MAX_DISK_MB || 150)) * 1024 * 1024,
+});
 console.log("ENV CHECK:", {
   ALPACA_LIVE_SECRET: process.env.ALPACA_LIVE_SECRET ? "FOUND" : "MISSING",
   ALPACA_LIVE_KEY: process.env.ALPACA_LIVE_KEY ? "FOUND" : "MISSING",
@@ -107,30 +215,10 @@ const corsOptions = {
   credentials: true,
 };
 app.use(cors(corsOptions));
-app.use(express.json());
-const ADMIN_API_TOKEN = process.env.ADMIN_API_TOKEN || "";
-function requireAdmin(req, res, next) {
-  if (!ADMIN_API_TOKEN) {
-    return res.status(500).json({
-      ok: false,
-      error: "ADMIN_API_TOKEN is not set on backend",
-    });
-  }
-  const authHeader = String(req.headers.authorization || "");
-  const bearerToken = authHeader.startsWith("Bearer ")
-    ? authHeader.slice("Bearer ".length).trim()
-    : "";
-  const headerToken = String(req.headers["x-admin-token"] || "").trim();
-  const queryToken = String(req.query?.adminToken || "").trim();
-  const providedToken = bearerToken || headerToken || queryToken;
-  if (providedToken !== ADMIN_API_TOKEN) {
-    return res.status(401).json({
-      ok: false,
-      error: "Unauthorized",
-    });
-  }
-  next();
-}
+app.use(express.json({ limit: "100kb" }));
+const adminAuth = createAdminAuth({ adminToken: process.env.ADMIN_API_TOKEN || "" });
+const { requireAdmin, getClientIp } = adminAuth;
+adminAuth.registerRoutes(app);
 let alpacaCredentials = {
   liveKey: process.env.ALPACA_LIVE_KEY || "",
   liveSecret: process.env.ALPACA_LIVE_SECRET || "",
@@ -151,9 +239,9 @@ registerAlpacaRoutes({
   getAlpacaKeys,
   getTradingBaseUrl,
   fetchWithTimeout,
-  getAlpacaCredentials,
-  setAlpacaCredentials,
-  saveRuntimeConfig,
+  getRuntimeAlpacaKeys: getAlpacaCredentials,
+  setRuntimeAlpacaKeys: setAlpacaCredentials,
+  saveRuntimeConfig: (updates) => saveRuntimeConfig(CONFIG_FILE, updates),
 });
 const PORT = parseEnvNumber("PORT", 10000);
 const FINNHUB_API_KEY = process.env.FINNHUB_API_KEY;
@@ -550,29 +638,15 @@ function saveRenderMemory(reason = "RENDER_MEMORY_SAVER") {
 function resetDailySafetyStateIfNewDay(account) {
   const todayKey = getTodayKeyET();
   const equity = Number(account?.equity || 0);
-  if (!equity || equity <= 0) return false;
-  if (engineState.dailyDateKey !== todayKey) {
-    engineState.dailyDateKey = todayKey;
-    engineState.dailyStartEquity = equity;
-    engineState.dailyPeakEquity = equity;
-    engineState.profitLockFloorEquity = null;
-    engineState.dailyLossLocked = false;
-    engineState.profitLocked = false;
+  const result = resetDailySafetyState(engineState, { todayKey, equity });
+  if (result.reset) {
     recordOrder("DAILY_SAFETY_RESET", "ACCOUNT", {
       todayKey,
       equity,
     });
     saveEngineState("DAILY_SAFETY_RESET");
-    return true;
   }
-  return false;
-}
-function sanitizeRuntimeConfig(config = {}) {
-  const safe = { ...config };
-  if (safe.minScoreToBuy !== undefined) {
-    safe.minScoreToBuy = Math.max(70, Number(safe.minScoreToBuy || 70));
-  }
-  return safe;
+  return result.reset;
 }
 runtimeConfig = sanitizeRuntimeConfig(runtimeConfig);
 const persistedEngineState =
@@ -589,17 +663,10 @@ let TRADING_MODE =
 let tradingModeLocked =
   runtimeConfig.tradingModeLocked ?? false;
 function getEffectiveTradingMode(marketOpen) {
-  const selectedMode = String(TRADING_MODE || "live_stock");
-  if (selectedMode === "smart") return "smart";
-  if (selectedMode === "live_crypto") return "live_crypto";
-  if (selectedMode === "live_stock") return "live_stock";
-  return "live_stock";
+  return resolveEffectiveTradingMode(TRADING_MODE);
 }
 function resolveAutoTradingEnabled(config = {}) {
-  if (process.env.AUTO_TRADING_ENABLED !== undefined) {
-    return parseEnvBoolean("AUTO_TRADING_ENABLED", false);
-  }
-  return config.autoTradingEnabled ?? false;
+  return resolveConfiguredAutoTrading(config, process.env.AUTO_TRADING_ENABLED);
 }
 const RUN_STARTUP_ENGINE_SCAN =
   parseEnvBoolean("RUN_STARTUP_ENGINE_SCAN", false);
@@ -608,11 +675,20 @@ const ENABLE_MAIN_SWING_SCAN =
 const MAIN_SWING_SCAN_INTERVAL_MS =
   parseEnvNumber("MAIN_SWING_SCAN_INTERVAL_MS", 300000);
 let autoTradingEnabled = resolveAutoTradingEnabled(runtimeConfig);
+let emergencyStopActive =
+  runtimeConfig.emergencyStopActive ??
+  parseEnvBoolean("EMERGENCY_STOP_ACTIVE", true);
 const AI_ORDER_PREFIX = "SM_AI";
+const LIVE_TRADE_LIMITS = Object.freeze({
+  maxIntradayStockTradesPerDay: 2,
+  maxIntradayStockPositions: 2,
+  maxMultiDayStockPositions: 3,
+  maxCryptoOpenPositions: 3,
+});
 const CONFIG = {
-  maxOpenTrades: Number(process.env.MAX_OPEN_TRADES || 15),
-  maxStockOpenTrades: Number(process.env.MAX_STOCK_OPEN_TRADES || 10),
-  maxCryptoOpenTrades: Number(process.env.MAX_CRYPTO_OPEN_TRADES || 5),
+  maxOpenTrades: Number(process.env.MAX_OPEN_TRADES || 8),
+  maxStockOpenTrades: Number(process.env.MAX_STOCK_OPEN_TRADES || 5),
+  maxCryptoOpenTrades: Number(process.env.MAX_CRYPTO_OPEN_TRADES || 3),
   targetCapitalSlots: Number(process.env.TARGET_CAPITAL_SLOTS || 15),
   minAutonomousTradeAmount: Number(process.env.MIN_AUTONOMOUS_TRADE_AMOUNT || 25),
   minStockPrice: Number(process.env.MIN_STOCK_PRICE || 1),
@@ -852,9 +928,9 @@ const CONFIG = {
   ),
 };
 const NUMERIC_CONFIG_DEFAULTS = {
-  maxOpenTrades: 15,
-  maxStockOpenTrades: 10,
-  maxCryptoOpenTrades: 5,
+  maxOpenTrades: 8,
+  maxStockOpenTrades: 5,
+  maxCryptoOpenTrades: 3,
   targetCapitalSlots: 15,
   minAutonomousTradeAmount: 25,
   minStockPrice: 1,
@@ -899,390 +975,16 @@ for (const [key, fallback] of Object.entries(NUMERIC_CONFIG_DEFAULTS)) {
     CONFIG[key] = Number(CONFIG[key]);
   }
 }
-let engineState = {
-  running: false,
-  lastScanAt: null,
-  lastHeartbeatAt: null,
-  lastTickStartedAt: null,
-  lastTickDurationMs: null,
-  lastScanDurationMs: null,
-  lastSuccessfulCycleAt: null,
-  lastEngineStopReason: null,
-  engineFreezeDetected: false,
-  engineFreezeCount: 0,
-  totalEngineTicks: 0,
-  lastError: null,
-  marketOpen: false,
-  marketStressLevel: 0,
-  averageSignalScore: 0,
-  marketMomentumScore: 0,
-  marketVolatility: 0,
-  institutionalExposureMode: "NORMAL",
-  marketBreadth: {
-    advancing: 0,
-    declining: 0,
-  },
-  dailyDateKey: null,
-  lastSignals: [],
-  lastStockSignals: [],
-  lastCryptoSignals: [],
-  topSignals: [],
-  topStockSignals: [],
-  topCryptoSignals: [],
-  topAutonomousCandidates: [],
+let engineState = createInitialEngineState({
   effectiveMode: getEffectiveTradingMode(false),
-  marketRegime: null,
-  liveQuoteStreamState: null,
-  liveQuoteCache: {},
-  liveMarketMemory: {},
-  liveEarlyMoverSymbols: [],
-  liveEarlyMoverRefreshState: null,
-  preMoverDiscoveryState: null,
-  preMoverDiscoveryHistory: [],
-  preMoverDiscoveryMemory: {},
-  polygonLiveStreamState: null,
-  fastRunnerEngineState: null,
-  fastRunnerCandidates: [],
-  runnerWatchlistState: null,
-  runnerWatchlistHistory: [],
-  runnerLearningState: null,
-  runnerPredictionHistory: [],
-  runnerLearningResults: [],
-  topRunnerWatchlist: [],
-  highAlertRunnerStocks: [],
-  swingWatchlistState: null,
-  swingWatchlistHistory: [],
-  swingLearningState: null,
-  swingPredictionHistory: [],
-  swingLearningResults: [],
-  topSwingWatchlist: [],
-  highConfidenceSwingStocks: [],
-  quickInstitutionalGateState: null,
-  quickInstitutionalCandidates: [],
-  liveStarterBuyGateState: null,
-  liveStarterBuyHistory: [],
-  livePositionManagementState: null,
-  livePositionManagementHistory: [],
-  liveScaleInState: null,
-  liveScaleInHistory: [],
-  fullBrainFastSyncState: null,
-  fullBrainFastSyncHistory: [],
-  deepIntelligenceSyncState: null,
-  deepIntelligenceSyncHistory: [],
-  recentOrders: [],
-  failedOrders: [],
-  skippedSymbols: [],
-  pendingExits: [],
-  pyramidScalingState: null,
-  pyramidScalingHistory: [],
-  pyramidAddsBySymbol: {},
-  finalDashboardSignalSyncState: null,
-  finalDashboardSignalSyncHistory: [],
-  phase57EliteOverrideState: null,
-  phase57EliteOverrideHistory: [],
-  phase572EliteDiscoveryState: null,
-  phase572EliteDiscoveryHistory: [],
-  dailyStartEquity: null,
-  dailyPeakEquity: null,
-  profitLockFloorEquity: null,
-  dailyLossLocked: false,
-  profitLocked: false,
-  highWaterMarks: {},
-  tradeMemory: {},
-  aiEntryScores: {},
-  runnerPositions: {},
-  lastSoldAt: {},
-  symbolCooldowns: {},
-  cooldownMinutes: 30,
-  lastRotationDateKey: null,
-  rotationCountToday: 0,
   maxRotationsPerDay: Number(CONFIG.maxRotationsPerDay || 6),
-  peaksByMode: {},
-  cachedPositions: [],
-  cachedAccount: null,
-  aiManagedSymbols: [],
-  institutionalWatchlist: [],
-  analyticsSnapshots: [],
-  apiHealth: {},
-  apiFailureCounts: {},
-  apiCooldowns: {},
-  signalHistory: [],
-  marketRegimeHistory: [],
-  marketRegimeDominanceState: null,
-  marketRegimeDominanceHistory: [],
-  sectorStrengthHistory: [],
-  sectorRotationState: null,
-  sectorRotationHistory: [],
-  sectorDominanceState: null,
-  sectorDominanceHistory: [],
-  stockTradingStoppedForDay: false,
-  cryptoTradingStoppedForDay: false,
-  lastTradingDayKey: null,
-  lastMarketOpen: null,
-  openingBellTriggeredAt: null,
-  marketClosedAt: null,
-  capitalRedistributionState: null,
-  capitalRedistributionHistory: [],
-  institutionalRebalanceState: null,
-  institutionalRebalanceHistory: [],
-  capitalCompoundingState: null,
-  capitalCompoundingHistory: [],
-  equityCurveState: null,
-  drawdownRecoveryState: null,
-  adaptiveRiskState: null,
-  multiTimeframeState: null,
-  multiTimeframeHistory: [],
-  statisticalEdgeState: null,
-  statisticalMemoryState: {
-    updatedAt: null,
-    setupHistory: [],
-    setupPerformance: {},
-    expectancyHistory: [],
-    probabilityHistory: [],
-  },
-  probabilityReinforcementState: {
-    updatedAt: null,
-    setupTrust: {},
-  },
-  probabilityReinforcementHistory: [],
-  statisticalEdgeHistory: [],
-  technicalIntelligenceState: null,
-  technicalIntelligenceHistory: [],
-  portfolioOptimizationState: null,
-  portfolioOptimizationHistory: [],
-  earningsIntelligenceState: null,
-  earningsIntelligenceHistory: [],
-  competitiveAdvantageState: null,
-  competitiveAdvantageHistory: [],
-  dividendCompoundingState: null,
-  dividendCompoundingHistory: [],
-  dcfValuationState: null,
-  dcfValuationHistory: [],
-  institutionalOrchestratorState: null,
-  institutionalOrchestratorHistory: [],
-  autonomousTradingSystemState: null,
-  autonomousTradingSystemHistory: [],
-  phase20AutonomousOrchestrationState: null,
-  phase20AutonomousOrchestrationHistory: [],
-  crossEngineMemoryState: null,
-  crossEngineMemoryHistory: [],
-  adaptiveExecutionTimingState: null,
-  adaptiveExecutionTimingHistory: [],
-  phase42CryptoInstitutionalState: null,
-  phase42CryptoInstitutionalHistory: [],
-  cryptoInstitutionalMemory: {},
-  phase43CryptoCapitalRotationState: null,
-  phase43CryptoCapitalRotationHistory: [],
-  cryptoCapitalRotationMemory: {},
-  phase44CryptoExecutionTimingState: null,
-  phase44CryptoExecutionTimingHistory: [],
-  cryptoExecutionTimingMemory: {},
-  phase45CryptoPositionSizingState: null,
-  phase45CryptoPositionSizingHistory: [],
-  cryptoPositionSizingMemory: {},
-  phase46CryptoExitParliamentState: null,
-  phase46CryptoExitParliamentHistory: [],
-  cryptoExitParliamentMemory: {},
-  phase47CryptoLiquiditySweepState: null,
-  phase47CryptoLiquiditySweepHistory: [],
-  cryptoLiquiditySweepMemory: {},
-  phase48CrossMarketCorrelationState: null,
-  phase48CrossMarketCorrelationHistory: [],
-  crossMarketCorrelationMemory: {},
-  phase49StablecoinFlowState: null,
-  phase49StablecoinFlowHistory: [],
-  stablecoinFlowMemory: {},
-  phase50WhaleSmartMoneyState: null,
-  phase50WhaleSmartMoneyHistory: [],
-  whaleSmartMoneyMemory: {},
-  phase51MultiTimeframeCryptoState: null,
-  phase51MultiTimeframeCryptoHistory: [],
-  multiTimeframeCryptoMemory: {},
-  phase52CryptoStrategySelectorState: null,
-  phase52CryptoStrategySelectorHistory: [],
-  cryptoStrategySelectorMemory: {},
-  autonomousCryptoStrategySelectorState: null,
-  autonomousCryptoStrategySelectorHistory: [],
-  phase21AutonomousBrainState: null,
-  phase21AutonomousBrainHistory: [],
-  cryptoReinforcementLearningState: null,
-  cryptoReinforcementLearningHistory: [],
-  globalRiskOffDefenseState: null,
-  globalRiskOffDefenseHistory: [],
-  unifiedInstitutionalOrchestratorState: null,
-  unifiedInstitutionalOrchestratorHistory: [],
-  profitVelocityGovernorState: null,
-  profitVelocityGovernorHistory: [],
-  phase63StrategyEvolutionState: null,
-  phase63StrategyEvolutionHistory: [],
-  phase63StrategyEvolutionMemory: {},
-  phase62MarketPersonalityState: null,
-  phase62MarketPersonalityHistory: [],
-  phase62MarketPersonalityMemory: {},
-  phase61ProfitAggressionState: null,
-  phase61ProfitAggressionHistory: [],
-  phase61AggressionMemory: {},
-  phase60AdaptiveExecutionState: null,
-  phase60AdaptiveExecutionHistory: [],
-  phase60ExecutionMemory: {},
-  phase59InstitutionalOrderFlowState: null,
-  phase59InstitutionalOrderFlowHistory: [],
-  phase59OrderFlowMemory: {},
-  executionStyleMemoryState: {},
-  executionStyleMemoryHistory: [],
-  archetypeMemoryState: {},
-  archetypeMemoryHistory: [],
-  autonomousHedgeFundLayerState: null,
-  autonomousHedgeFundLayerHistory: [],
-  liquiditySweepTrapState: null,
-  liquiditySweepTrapHistory: [],
-  autonomousMetaReinforcementState: null,
-  autonomousMetaReinforcementHistory: [],
-  aiParliamentVotingState: null,
-  aiParliamentVotingHistory: [],
-  liveMomentumMutationState: null,
-  liveMomentumMutationHistory: [],
-  dynamicCapitalParliamentState: null,
-  dynamicCapitalParliamentHistory: [],
-  portfolioEcosystemState: null,
-  portfolioEcosystemHistory: [],
-  centralAutonomousDecisionCoreState: null,
-  centralAutonomousDecisionCoreHistory: [],
-  penaltyCompressionState: null,
-  penaltyCompressionHistory: [],
-  fullInstitutionalAiBrainState: null,
-  fullInstitutionalAiBrainHistory: [],
-  autonomousMetaStrategyState: null,
-  autonomousMetaStrategyHistory: [],
-  adaptiveSuppressionBalancerState: null,
-  adaptiveSuppressionBalancerHistory: [],
-  phase34AdaptiveAggressionBalancerState: null,
-  phase34AdaptiveAggressionBalancerHistory: [],
-  phase41InstitutionalCompressionState: null,
-  phase41InstitutionalCompressionHistory: [],
-  phase40RecursiveRealTimeLearningState: null,
-  phase40RecursiveRealTimeLearningHistory: [],
-  phase39MetaStrategyAiState: null,
-  phase39MetaStrategyAiHistory: [],
-  phase38AutonomousCapitalParliamentState: null,
-  phase38AutonomousCapitalParliamentHistory: [],
-  phase37SelfBalancingAiEcosystemState: null,
-  phase37SelfBalancingAiEcosystemHistory: [],
-  phase36PredictiveExecutionTimingState: null,
-  phase36PredictiveExecutionTimingHistory: [],
-  phase35AiGovernanceLayerState: null,
-  phase35AiGovernanceLayerHistory: [],
-  autonomousCapitalPressureState: null,
-  autonomousCapitalPressureHistory: [],
-  eliteCapitalConcentrationState: null,
-  eliteCapitalConcentrationHistory: [],
-  executionIntelligenceState: null,
-  continuationHoldState: null,
-  continuationHoldHistory: [],
-  activeContinuationHoldSymbols: [],
-  smartExitIntelligenceState: null,
-  smartExitIntelligenceHistory: [],
-  institutionalExitOrchestratorState: null,
-  institutionalExitOrchestratorHistory: [],
-  institutionalDistributionState: null,
-  institutionalDistributionHistory: [],
-  institutionalReloadState: null,
-  institutionalReloadHistory: [],
-  smartSwingConversionState: null,
-  smartSwingConversionHistory: [],
-  exitParliamentState: null,
-  exitParliamentHistory: [],
-  explosiveRunnerState: null,
-  explosiveRunnerHoldState: null,
-  explosiveRunnerHoldHistory: [],
-  explosiveRunnerHistory: [],
-  multiDayAccumulationState: null,
-  multiDayAccumulationHistory: [],
-  multiDayAccumulationMemory: {},
-  themeMomentumState: null,
-  themeMomentumHistory: [],
-  universeExpansionState: null,
-  universeExpansionHistory: [],
-  smartUniverseNarrowingState: null,
-  smartUniverseNarrowingHistory: [],
-  premarketMomentumState: null,
-  adaptiveOvernightHoldState: null,
-  adaptiveOvernightHoldHistory: [],
-  premarketMomentumHistory: [],
-  premarketDominanceState: null,
-  premarketDominanceHistory: [],
-  morningStrikeState: null,
-  morningStrikeHistory: [],
-  morningTradesToday: 0,
-  lastMorningTradeDateKey: null,
-  executionIntelligenceHistory: [],
-  institutionalExecutionLayerState: null,
-  institutionalExecutionLayerHistory: [],
-  reinforcementWeightState: null,
-  reinforcementWeightHistory: [],
-  selfOptimizationState: null,
-  selfOptimizationHistory: [],
-  marketCycleIntelligenceState: null,
-  marketCycleIntelligenceHistory: [],
-  autonomousMarketIntelligenceState: null,
-  autonomousMarketIntelligenceHistory: [],
-  marketPersonalityMemory: {},
-  recurringSetupMemory: {},
-  liquidityIntelligenceState: null,
-  liquidityIntelligenceHistory: [],
-  correlationIntelligenceState: null,
-  correlationIntelligenceHistory: [],
-  portfolioGovernorState: null,
-  portfolioGovernorHistory: [],
-  autonomousCapitalRotationState: null,
-  autonomousCapitalRotationHistory: [],
-  macroRiskState: null,
-  macroRiskHistory: [],
-  signalQualityHistory: [],
-  marketBreadthHistory: [],
-  marketMomentumHistory: [],
-  marketVolatilityHistory: [],
-  institutionalExposureHistory: [],
-  marketCrashProtectionState: null,
-  marketCrashProtectionHistory: [],
-  selfHealingScanState: null,
-  selfHealingScanHistory: [],
-  liveAiPerformanceState: null,
-  liveAiPerformanceHistory: [],
-  scanFailureCount: 0,
-  lastScanRecoveryAt: null,
-  aiDecisionHistory: [],
-  tradeJournalState: {
-    totalClosedTrades: 0,
-    winningTrades: 0,
-    losingTrades: 0,
-    breakevenTrades: 0,
-    totalProfitPercent: 0,
-    averageProfitPercent: 0,
-    winRate: 0,
-    bestTrade: null,
-    worstTrade: null,
-    lastUpdated: null,
-  },
-  tradeJournalHistory: [],
-  tradeJournalOpenEntries: {},
-  strategyPerformanceState: {},
-  regimePerformanceState: {},
-  sectorPerformanceState: {},
-  confirmationPerformanceState: {},
-};
-engineState = {
-  ...engineState,
-  ...persistedEngineState,
-  running: false,
-  cachedPositions: [],
-  cachedAccount: null,
-  lastError: null,
-};
-canonicalizeEngineStateAliases(
-  engineState,
-  CONFIG
-);
+});
+engineState = createEngineState({
+  defaults: engineState,
+  persisted: persistedEngineState,
+  canonicalize: canonicalizeEngineStateAliases,
+  config: CONFIG,
+});
 const {
   saveEngineState,
   flushStateToFile,
@@ -1331,9 +1033,16 @@ if (!WebSocketImpl) {
 const sellingNow = new Set();
 const buyingNow = new Set();
 const liveOrderDedupMap = {};
-const liveSchedulerLocks = {};
-const liveSchedulerLastRun = {};
 let liveSchedulerTimer = null;
+const liveTaskScheduler = createTaskScheduler({
+  onError: (taskName, intervalMs, err) => {
+    console.error(`Live scheduler task failed: ${taskName}`, err.message);
+    recordFailedOrder("LIVE_SCHEDULER_TASK_FAILED", taskName, err.message, {
+      taskName,
+      intervalMs,
+    });
+  },
+});
 const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
 async function processBatches(items, batchSize, worker) {
   const results = [];
@@ -13498,61 +13207,14 @@ function passesAutonomousParliamentGate(signal = {}) {
   };
 }
 function getDynamicTradeAmount(account, managedPositions = [], signalScore = 80) {
-  const cash = Number(account?.cash || 0);
-  const equity = Number(account?.equity || 0);
-  const buyingPower = Number(account?.buying_power || cash || 0);
-  if (!cash || cash <= 0 || !equity || equity <= 0) return 0;
-  const minTradeAmount = Number(
-    CONFIG.minAutonomousTradeAmount ||
-    CONFIG.eliteConcentrationMinTradeAmount ||
-    25
-  );
-  const targetCapitalSlots = Math.max(
-    1,
-    Number(CONFIG.targetCapitalSlots || 15)
-  );
-  const compoundingState =
-    engineState.capitalCompoundingState || {};
-  const maxBotBudget = Number(
-    compoundingState.compoundedBotBudget ||
-    equity * (CONFIG.maxBotExposurePercent / 100)
-  );
-  const currentBotExposure = getBotExposure(managedPositions);
-  const remainingBotBudget = Math.max(0, maxBotBudget - currentBotExposure);
-  const compoundingBudget = Number(
-    engineState.capitalCompoundingState?.remainingCompoundedBudget || 0
-  );
-  const effectiveRemainingBotBudget =
-    compoundingBudget > 0
-      ? Math.min(remainingBotBudget, compoundingBudget)
-      : remainingBotBudget;
-  const availableNow = Math.min(
-    effectiveRemainingBotBudget,
-    cash,
-    buyingPower || cash
-  );
-  if (availableNow < minTradeAmount) return 0;
-  const baseSlotAmount = maxBotBudget / targetCapitalSlots;
-  const scoreMultiplier =
-    signalScore >= 90
-      ? 1.35
-      : signalScore >= 85
-        ? 1.15
-        : signalScore >= 78
-          ? 1
-          : signalScore >= 72
-            ? 0.85
-            : signalScore >= 70
-              ? 0.7
-              : 0;
-  if (scoreMultiplier <= 0) return 0;
-  const desiredTradeAmount = baseSlotAmount * scoreMultiplier;
-  return Number(
-    Math.min(
-      Math.max(minTradeAmount, desiredTradeAmount),
-      availableNow
-    ).toFixed(2)
-  );
+  return calculateDynamicTradeAmount({
+    account,
+    positions: managedPositions,
+    signalScore,
+    config: CONFIG,
+    compoundingState: engineState.capitalCompoundingState || {},
+    getExposure: getBotExposure,
+  });
 }
 function calculateSectorDominationAllocation(signal = {}) {
   const symbol = normalizeSymbol(signal.symbol);
@@ -13804,14 +13466,6 @@ function calculateEliteCapitalConcentration({
     engineState.eliteCapitalConcentrationHistory.slice(0, 200);
   return state;
 }
-function alpacaHeaders() {
-  const { key, secret } = getAlpacaKeys();
-  return {
-    "APCA-API-KEY-ID": key,
-    "APCA-API-SECRET-KEY": secret,
-    "Content-Type": "application/json",
-  };
-}
 function updateApiHealth(name, ok, error = "") {
   engineState.apiHealth[name] = {
     ok,
@@ -13819,67 +13473,129 @@ function updateApiHealth(name, ok, error = "") {
     checkedAt: new Date().toISOString(),
   };
 }
-async function alpacaTradingRequest(path, options = {}) {
-  const baseUrl = getTradingBaseUrl();
-  const res = await fetchWithTimeout(`${baseUrl}${path}`, {
-    ...options,
-    headers: {
-      ...alpacaHeaders(),
-      ...(options.headers || {}),
-    },
-  });
-  const text = await res.text();
-  let data = {};
-  try {
-    data = text ? JSON.parse(text) : {};
-  } catch {
-    data = { raw: text };
-  }
-  if (!res.ok) {
+const alpacaClient = createAlpacaClient({
+  getKeys: getAlpacaKeys,
+  getTradingBaseUrl,
+  dataBaseUrl: ALPACA_DATA_BASE_URL,
+  fetchWithTimeout,
+  isEmergencyStopActive: () => emergencyStopActive,
+  onTradingFailure: () => {
     engineState.apiFailureCounts.alpacaTrading =
       (engineState.apiFailureCounts.alpacaTrading || 0) + 1;
     engineState.apiCooldowns.alpacaTrading =
       Date.now() + 1000 * 60 * 2;
-    updateApiHealth(
-      "alpacaTrading",
-      false,
-      data?.message ||
-      data?.error ||
-      `HTTP ${res.status}`
+  },
+  onApiHealth: updateApiHealth,
+});
+const alpacaTradingRequest = alpacaClient.tradingRequest;
+const alpacaDataRequest = alpacaClient.dataRequest;
+const alpacaCryptoMarketData = createAlpacaCryptoMarketData({
+  dataRequest: alpacaDataRequest,
+  normalizeSymbol,
+});
+const brokerSnapshotService = createBrokerSnapshotService({
+  tradingRequest: alpacaTradingRequest,
+  getCache: (key) => engineState[key],
+  setCache: (key, value) => { engineState[key] = value; },
+  onApiHealth: updateApiHealth,
+});
+const getAccount = brokerSnapshotService.getAccount;
+const getPositions = brokerSnapshotService.getPositions;
+const getOrders = brokerSnapshotService.getOrders;
+const getOpenOrders = brokerSnapshotService.getOpenOrders;
+const duplicateOrderGuard = createDuplicateOrderGuard({
+  getOpenOrders: () => alpacaTradingRequest(
+    "/v2/orders?status=open&limit=100&direction=desc"
+  ),
+  normalizeSymbol,
+  reservationTtlMs: LIVE_DUPLICATE_ORDER_WINDOW_MS,
+});
+const preTradeRiskGuard = {
+  async assertAllowed(order, options = {}) {
+    const side = String(order?.side || "").toLowerCase();
+    if (side !== "buy") {
+      return assertPreTradeRisk({ order, context: {}, options });
+    }
+    const symbol = normalizeSymbol(order.symbol);
+    const cryptoAsset = isCrypto(symbol);
+    const quote =
+      engineState.liveQuoteCache?.[symbol] ||
+      engineState.liveMarketMemory?.[symbol] ||
+      {};
+    const [account, positions, botOwnedSymbols] = await Promise.all([
+      getAccount(),
+      getPositions(),
+      getBotOwnedSymbols(),
+    ]);
+    const managedPositions = positions.filter((position) =>
+      isAiManagedOpenPosition(position, botOwnedSymbols)
     );
-    throw new Error(
-      data?.message ||
-      data?.error ||
-      `Alpaca trading error ${res.status}: ${JSON.stringify(data)}`
-    );
-  }
-  updateApiHealth("alpacaTrading", true);
-  return data;
-}
-async function alpacaDataRequest(path, options = {}) {
-  const res = await fetchWithTimeout(`${ALPACA_DATA_BASE_URL}${path}`, {
-    ...options,
-    headers: {
-      ...alpacaHeaders(),
-      ...(options.headers || {}),
-    },
-  });
-  const text = await res.text();
-  let data = {};
-  try {
-    data = text ? JSON.parse(text) : {};
-  } catch {
-    data = { raw: text };
-  }
-  if (!res.ok) {
-    throw new Error(
-      data?.message ||
-      data?.error ||
-      `Alpaca data error ${res.status}: ${JSON.stringify(data)}`
-    );
-  }
-  return data;
-}
+    const dateKey = getTodayKeyET();
+    engineState.liveTradeLimitState = ensureLiveTradeLimitDay(engineState.liveTradeLimitState, dateKey);
+    const positionsForLimitGate = positions.map((position) => ({
+      ...position,
+      isCrypto: isCrypto(normalizeSymbol(position.symbol)),
+    }));
+    const liveTradeLimitDecision = evaluateLiveTradeLimits({
+      symbol,
+      isCrypto: cryptoAsset,
+      holdCategory: options.holdCategory,
+      positions: positionsForLimitGate,
+      positionIntents: engineState.liveTradeLimitState.positionIntents,
+      intradayStockEntriesToday: engineState.liveTradeLimitState.intradayStockEntriesToday,
+      limits: LIVE_TRADE_LIMITS,
+    });
+    options.liveTradeLimitDecision = liveTradeLimitDecision;
+    const quoteSource = quote.liveQuoteSource || quote.source || "";
+    return assertPreTradeRisk({
+      order,
+      options,
+      context: {
+        emergencyStopActive,
+        realCashTradingUnlocked: CONFIG.realCashTradingUnlocked === true,
+        autoTradingEnabled,
+        dailyLossLocked: engineState.dailyLossLocked === true,
+        profitLocked: engineState.profitLocked === true,
+        isCrypto: cryptoAsset,
+        marketOpen: engineState.marketOpen === true,
+        price: Number(quote.price || quote.current || 0),
+        quoteAgeSeconds: getLiveQuoteAgeSeconds(symbol),
+        spreadPercent: Number(quote.spreadPercent || 0),
+        quoteIsLive: quote.priceIsLive === true && isLiveQuoteSource(quoteSource),
+        requireLiveProvider: LIVE_ORDER_REQUIRE_POLYGON_CONNECTED,
+        liveProviderConnected: cryptoAsset
+          ? isPolygonCryptoLiveConnected()
+          : isPolygonLiveConnected(),
+        maxQuoteAgeSeconds: LIVE_ORDER_MAX_QUOTE_AGE_SECONDS,
+        maxSpreadPercent: LIVE_ORDER_MAX_SPREAD_PERCENT,
+        maxExposurePercent: CONFIG.maxBotExposurePercent,
+        maxOpenTrades: CONFIG.maxOpenTrades,
+        account,
+        positions: managedPositions,
+        liveTradeLimitDecision,
+      },
+    });
+  },
+};
+const orderService = createOrderService({
+  tradingRequest: alpacaTradingRequest,
+  normalizeSymbol,
+  clientOrderPrefix: AI_ORDER_PREFIX,
+  duplicateOrderGuard,
+  preTradeRiskGuard,
+  onOrderSubmitted: ({ payload, options }) => {
+    if (String(payload?.side || "").toLowerCase() !== "buy") return;
+    const dateKey = getTodayKeyET();
+    engineState.liveTradeLimitState = ensureLiveTradeLimitDay(engineState.liveTradeLimitState, dateKey);
+    recordSuccessfulEntry(engineState.liveTradeLimitState, {
+      symbol: normalizeSymbol(payload.symbol),
+      category: options.holdCategory === "crypto" ? "crypto" : normalizeHoldCategory(options.holdCategory),
+      dateKey,
+      isExistingPosition: options.liveTradeLimitDecision?.isExistingPosition === true,
+    });
+    saveEngineState("LIVE_TRADE_LIMIT_ENTRY_RECORDED");
+  },
+});
 function isValidStockSymbol(symbol) {
   const s = normalizeSymbol(symbol);
   if (!s) return false;
@@ -15491,279 +15207,6 @@ function calculateRunnerHoldQuality(q = {}) {
       notOverextended,
   };
 }
-function scoreStock(q) {
-  let score = 0;
-  const runnerStageProfile = calculateRunnerStageProfile(q);
-  q.runnerStage = runnerStageProfile.runnerStage;
-  q.runnerStageProfile = runnerStageProfile;
-  q.lateChaseRisk = runnerStageProfile.lateChaseRisk;
-  const runnerHoldQuality = calculateRunnerHoldQuality(q);
-  q.runnerHoldQuality = runnerHoldQuality;
-  q.runnerHoldScore = runnerHoldQuality.runnerHoldScore;
-  if (
-    q.current >= CONFIG.minStockPrice &&
-    (CONFIG.maxStockPrice <= 0 || q.current <= CONFIG.maxStockPrice)
-  ) {
-    score += 18;
-  }
-  if (q.percentChange > 40 && q.percentChange <= CONFIG.maxPercentChange) {
-    score += 18;
-    q.explosiveMoveCandidate = true;
-    q.parabolicRunnerCandidate = true;
-  } else if (q.percentChange >= 15 && q.percentChange <= 40) {
-    score += 28;
-    q.explosiveMoveCandidate = true;
-  } else if (q.percentChange >= 5 && q.percentChange < 15) {
-    score += 22;
-  } else if (q.percentChange >= 2 && q.percentChange < 5) {
-    score += 15;
-  } else if (q.percentChange >= 1 && q.percentChange < 2) {
-    score += 8;
-  } else if (q.percentChange > 0) {
-    score += 4;
-  }
-  if (q.open > 0 && q.current > q.open) score += 15;
-  if (q.previousClose > 0 && q.current > q.previousClose) score += 15;
-  if (q.high > q.low && q.current > 0) {
-    const closeNearHigh = ((q.current - q.low) / (q.high - q.low)) * 100;
-    if (closeNearHigh >= 85) score += 10;
-    else if (closeNearHigh >= 70) score += 6;
-  }
-  if (q.volume >= CONFIG.minVolume) score += 10;
-  if (q.runnerStage === "IGNITION") {
-    score += 18;
-  } else if (q.runnerStage === "EXPANSION") {
-    score += 10;
-  } else if (q.runnerStage === "MATURE") {
-    score -= 6;
-  } else if (q.runnerStage === "EXHAUSTION") {
-    score -= 35;
-  } else if (q.runnerStage === "WATCHING") {
-    score -= 5; // Fixed: soft penalty for stagnant setups
-  }
-  const earlyTechnicalProfile =
-    q.confirmations?.earlyTechnicalProfile ||
-    q.earlyTechnicalProfile ||
-    null;
-  if (earlyTechnicalProfile) {
-    q.earlyTechnicalProfile = earlyTechnicalProfile;
-    q.earlyTechnicalScore = Number(earlyTechnicalProfile.earlyTechnicalScore || 0);
-    q.earlyTechnicalGrade = earlyTechnicalProfile.earlyTechnicalGrade;
-    let earlyTechnicalBoost = 0;
-    if (q.runnerStage === "IGNITION") {
-      earlyTechnicalBoost = q.earlyTechnicalScore * 0.25;
-    } else if (q.runnerStage === "EXPANSION") {
-      earlyTechnicalBoost = q.earlyTechnicalScore * 0.2;
-    } else if (q.runnerStage === "WATCHING") {
-      earlyTechnicalBoost = q.earlyTechnicalScore * 0.12;
-    } else if (q.runnerStage === "MATURE") {
-      earlyTechnicalBoost = q.earlyTechnicalScore * 0.05;
-    } else {
-      earlyTechnicalBoost = q.earlyTechnicalScore * 0.02;
-    }
-    q.earlyTechnicalBoost = Number(earlyTechnicalBoost.toFixed(2));
-    score += q.earlyTechnicalBoost;
-    const strongEarlyTechnical =
-      q.earlyTechnicalScore >= 70 &&
-      ["IGNITION", "EXPANSION"].includes(q.runnerStage);
-    if (strongEarlyTechnical && earlyTechnicalProfile.vwapCrossUp) score += 4;
-    if (strongEarlyTechnical && earlyTechnicalProfile.hasRelativeStrength) score += 5;
-    if (strongEarlyTechnical && earlyTechnicalProfile.atrExpansionRatio >= 1.5) score += 4;
-    if (strongEarlyTechnical && earlyTechnicalProfile.dailyAtrExpansionRatio >= 1.5) score += 4;
-  }
-  if (q.lateChaseRisk) {
-    score -= 25;
-  }
-  if (q.technicals) {
-    const rsi = Number(q.technicals.rsi || 0);
-    const ema9 = Number(q.technicals.ema9 || 0);
-    const ema20 = Number(q.technicals.ema20 || 0);
-    const macd = Number(q.technicals.macd || 0);
-    const macdSignal = Number(q.technicals.macdSignal || 0);
-    if (rsi >= 45 && rsi <= 70) score += 12;
-    else if (rsi > 70 && rsi <= 80) score += 5;
-    else if (rsi > 80) score -= 10;
-    else if (rsi < 35) score -= 10;
-    if (ema9 > ema20) score += 12;
-    if (q.current > ema9 && ema9 > ema20) score += 10;
-    if (macd > macdSignal) score += 12;
-    if (macd > 0 && macdSignal > 0) score += 6;
-  }
-  // FIX-D: pull preMoveScore from memory into scoreStock for real-time boost
-  const preMoverMem = engineState.preMoverDiscoveryMemory?.[normalizeSymbol(q.symbol || "")];
-  if (preMoverMem && !q.preMoveScore) {
-    q.preMoveScore = Number(preMoverMem.preMoveScore || 0);
-    q.preMoverCompressionScore = Number(preMoverMem.compressionScore || 0);
-    q.preMoverVolumeWakeupScore = Number(preMoverMem.volumeWakeupScore || 0);
-  }
-  if (Number(q.preMoveScore || 0) >= 82) {
-    score += 14; // ELITE_PRE_MOVER in scoreStock real-time
-    q.preMoveLabel = q.preMoveLabel || "ELITE_PRE_MOVER";
-  } else if (Number(q.preMoveScore || 0) >= 72) {
-    score += 8;
-    q.preMoveLabel = q.preMoveLabel || "STRONG_PRE_MOVER";
-  } else if (Number(q.preMoveScore || 0) >= 62) {
-    score += 4;
-    q.preMoveLabel = q.preMoveLabel || "DEVELOPING_PRE_MOVER";
-  }
-
-  const statisticalEdge =
-    calculateStatisticalEdgeEngine(q);
-  q.statisticalEdge = statisticalEdge;
-  q.statisticalScore =
-    statisticalEdge.statisticalEdgeScore;
-  if (statisticalEdge.statisticalEdgeScore >= 85) score += 12;
-  else if (statisticalEdge.statisticalEdgeScore >= 70) score += 8;
-  else if (statisticalEdge.statisticalEdgeScore < 45) score -= 12;
-  if (q.confirmations) {
-    if (q.confirmations.volumeSpike) score += 12;
-    if (q.confirmations.aboveVwap) score += 10;
-    if (q.confirmations.closeNearHigh) score += 10;
-    if (!q.confirmations.fakeBreakout) score += 8;
-    if (!q.confirmations.gapTooHigh) score += 6;
-    const premarketContinuationRelief =
-      !engineState.marketOpen &&
-      (
-        isPremarketMomentumWindow() ||
-        isMorningStrikeWindow()
-      ) &&
-      Number(
-        q.premarketContinuationScore ||
-        q.premarketDominanceScore ||
-        q.openingDriveProbability ||
-        q.continuationProbability ||
-        q.breakoutProbability ||
-        0
-      ) >= 70;
-    if (q.confirmations.fakeBreakout) score -= premarketContinuationRelief ? 8 : 25;
-    if (q.confirmations.gapTooHigh) score -= premarketContinuationRelief ? 6 : 20;
-    if (q.confirmations.newsRisk) score -= 30;
-  }
-  const premarketContinuationWindow =
-    !engineState.marketOpen &&
-    (
-      isPremarketMomentumWindow() ||
-      isMorningStrikeWindow()
-    );
-  if (premarketContinuationWindow) {
-    const premarketMomentum =
-      q.premarketMomentum ||
-      calculatePremarketMomentumEngine(q);
-    const premarketDominance =
-      q.premarketDominance ||
-      calculatePremarketDominanceEngine({
-        ...q,
-        premarketMomentum,
-      });
-    const continuationScore = Math.max(
-      Number(premarketMomentum.openingDriveProbability || 0),
-      Number(premarketMomentum.morningMomentumScore || 0),
-      Number(premarketMomentum.gapContinuation?.openingRangeBreakoutProbability || 0),
-      Number(premarketDominance.premarketDominanceScore || 0)
-    );
-    q.premarketMomentum = premarketMomentum;
-    q.premarketDominance = premarketDominance;
-    q.premarketContinuationScore = continuationScore;
-    if (continuationScore >= 85) {
-      score += 18;
-      q.premarketContinuationBoost = 18;
-    } else if (continuationScore >= 75) {
-      score += 12;
-      q.premarketContinuationBoost = 12;
-    } else if (continuationScore >= 65) {
-      score += 7;
-      q.premarketContinuationBoost = 7;
-    }
-  }
-  const phase5SignalQuality =
-    calculateSignalQuality(q);
-  q.phase5SignalQuality = phase5SignalQuality;
-  q.institutionalSignalQuality = phase5SignalQuality;
-  q.signalQualityScore = phase5SignalQuality.qualityScore;
-  q.antiChaseRisk = phase5SignalQuality.antiChaseRisk;
-  q.exhaustionRisk = phase5SignalQuality.exhaustionRisk;
-  q.vwapExtensionPenalty = phase5SignalQuality.vwapExtensionPenalty;
-  q.liquidityStabilityScore = phase5SignalQuality.liquidityStabilityScore;
-  const phase6ScoringLayers =
-    calculateScoringLayers(q, score);
-  q.phase6ScoringLayers = phase6ScoringLayers;
-  q.stockQualityScore = phase6ScoringLayers.stockQualityScore;
-  q.tacticalMomentumScore = phase6ScoringLayers.tacticalMomentumScore;
-  q.entryTimingScore = phase6ScoringLayers.entryTimingScore;
-  q.executionConfidence = phase6ScoringLayers.executionConfidence;
-  q.finalCompositeScore = phase6ScoringLayers.finalCompositeScore;
-  q.finalTradeApproval = phase6ScoringLayers.finalTradeApproval;
-  q.riskAdjustedSizingMultiplier =
-    phase6ScoringLayers.riskAdjustedSizingMultiplier;
-  applyInstitutionalArchitecture(q);
-
-  // FIX10: 700% runner engine — boosts score for explosive low-float candidates
-  const runner700 = calculateExplosiveRunnerScore700(q);
-  q.runner700 = runner700;
-  q.score700 = runner700.score700;
-  q.runner700Label = runner700.runner700Label;
-  if (runner700.score700 >= 85) {
-    score += 20; // elite explosive candidate — significant boost
-  } else if (runner700.score700 >= 72) {
-    score += 12;
-  } else if (runner700.score700 >= 58) {
-    score += 6;
-  }
-
-const rawDiscoveryScore = clampScore(
-  score + Number(phase6ScoringLayers.scoreAdjustment || 0)
-);
-
-q.discoveryScore = rawDiscoveryScore;
-q.discoveryTier =
-  rawDiscoveryScore >= 90
-    ? "ELITE_DISCOVERY"
-    : rawDiscoveryScore >= 82
-      ? "STRONG_DISCOVERY"
-      : rawDiscoveryScore >= 72
-        ? "WATCHLIST_DISCOVERY"
-        : "LOW_DISCOVERY";
-
-score = rawDiscoveryScore;
-
-  q.discoveryScore = rawDiscoveryScore;
-  q.discoveryTier =
-    rawDiscoveryScore >= 90
-      ? "ELITE_DISCOVERY"
-      : rawDiscoveryScore >= 82
-        ? "STRONG_DISCOVERY"
-        : rawDiscoveryScore >= 72
-          ? "WATCHLIST_DISCOVERY"
-          : "LOW_DISCOVERY";
-
-  score = rawDiscoveryScore;
-
-  if (q.runnerStage === "EXHAUSTION" || q.lateChaseRisk) {
-    q.blockBuying = true;
-    q.buyBlocked = true;
-    q.discoveryOnly = true;
-    q.buyBlockReason =
-      q.buyBlockReason ||
-      (q.runnerStage === "EXHAUSTION"
-        ? "Runner exhaustion risk"
-        : "Late chase risk");
-
-    score = Math.min(score, 72);
-
-    if (q.parabolicRunnerCandidate === true || q.explosiveMoveCandidate === true) {
-      q.discoveryScore = Math.max(Number(q.discoveryScore || 0), 82);
-      q.discoveryTier = "DISCOVERY_ONLY_PARABOLIC_RUNNER";
-    }
-  } else if (q.runnerStage === "MATURE") {
-    score = Math.min(score, 84);
-  } else if (q.runnerStage === "WATCHING") {
-    score = Math.min(score, 78);
-  }
-
-  q.entryScore = clampScoreFinal(score);
-  return q.entryScore;
-
-}
 function calculateStatisticalEdgeEngine(q) {
   const percentChange = Number(q.percentChange || 0);
   const volume = Number(q.volume || 0);
@@ -16386,6 +15829,7 @@ function calculateDcfValuation(q) {
   const volume = Number(q.volume || 0);
   const confirmations = q.confirmations || {};
   const baseDcf = calculateBaseDcf(q);
+  const fundamentalValidation = baseDcf.fundamentalValidation || validateFundamentalInputs(q);
   const moatScore = Number(q.moatScore || q.competitiveAdvantageScore || 50);
   const earningsScore = Number(q.earningsScore || 50);
   const riskScore = Number(q.riskScore || 50);
@@ -16463,20 +15907,32 @@ function calculateDcfValuation(q) {
     valuationLabel,
     valuationAction,
     baseDcf,
+    fundamentalScore: Number(baseDcf.fundamentalScore || 50),
+    fundamentalDataValid: fundamentalValidation.valid === true,
+    fundamentalValidation,
     dcfReason:
       `Margin ${qualityAdjustedMarginOfSafety.toFixed(2)}%`,
   };
 }
 function calculateBaseDcf(q) {
   const price = Number(q.current || q.price || 0);
-  const volume = Number(q.volume || 0);
-  const percentChange = Number(q.percentChange || 0);
+  const fundamentalValidation = validateFundamentalInputs(q);
+  const validatedScore = scoreValidatedFundamentals(fundamentalValidation, { clampScore });
+  if (!fundamentalValidation.valid) {
+    return {
+      intrinsicValue: price, valuationGapPercent: 0, valuationLabel: "Fundamental Data Unavailable",
+      valuationScore: 50, balanceSheetHealthScore: 50, cashFlowScore: 50,
+      revenueGrowthScore: 50, marginScore: 50, debtRiskScore: 50,
+      fundamentalScore: 50, fundamentalDataValid: false, fundamentalValidation,
+      reason: "FUNDAMENTALS_EXCLUDED_INVALID_INPUT",
+    };
+  }
+  const values = fundamentalValidation.values;
   const confirmations = q.confirmations || {};
-  const estimatedGrowthRate =
-    percentChange > 0 && percentChange <= 10 ? 0.08 : percentChange > 20 ? 0.02 : 0.05;
-  const discountRate = confirmations.fakeBreakout ? 0.14 : 0.10;
+  const estimatedGrowthRate = Math.max(-0.25, Math.min(0.35, Number(values.revenueGrowth || 0.03)));
+  const discountRate = Math.max(0.08, Math.min(0.2, 0.09 + Number(values.debtToEquity || 0) * 0.01 + (confirmations.fakeBreakout ? 0.02 : 0)));
   const terminalGrowthRate = 0.025;
-  const estimatedBaseCashFlow = Math.max(0.1, price * 0.08);
+  const estimatedBaseCashFlow = Math.max(0, Number(values.freeCashFlow) / Number(values.sharesOutstanding));
   let projectedCashFlowValue = 0;
   for (let year = 1; year <= 5; year += 1) {
     const projectedCashFlow =
@@ -16505,37 +15961,16 @@ function calculateBaseDcf(q) {
     (valuationGapPercent >= 20 ? 20 : 0) -
     (valuationGapPercent <= -20 ? 20 : 0)
   );
-  const balanceSheetHealthScore = clampScore(
-    50 +
-    (price >= 5 ? 10 : -10) +
-    (volume >= 25000 ? 10 : -10)
-  );
+  const balanceSheetHealthScore = clampScore(80 - Number(values.debtToEquity || 0) * 12);
   const cashFlowScore = clampScore(
     50 +
     (estimatedGrowthRate >= 0.08 ? 15 : 0) +
     (discountRate <= 0.1 ? 10 : -10)
   );
-  const revenueGrowthScore = clampScore(
-    50 + estimatedGrowthRate * 300 - (percentChange > 25 ? 15 : 0)
-  );
-  const marginScore = clampScore(
-    55 +
-    (percentChange > 0 && percentChange <= 15 ? 10 : 0) -
-    (percentChange > 25 ? 15 : 0)
-  );
-  const debtRiskScore = clampScore(
-    70 -
-    (price < 2 ? 20 : 0) -
-    (volume < 25000 ? 10 : 0)
-  );
-  const fundamentalScore = clampScore(
-    valuationScore * 0.25 +
-    balanceSheetHealthScore * 0.2 +
-    cashFlowScore * 0.2 +
-    revenueGrowthScore * 0.15 +
-    marginScore * 0.1 +
-    debtRiskScore * 0.1
-  );
+  const revenueGrowthScore = clampScore(50 + estimatedGrowthRate * 100);
+  const marginScore = clampScore(50 + Number(values.operatingMargin || 0) * 80);
+  const debtRiskScore = clampScore(80 - Number(values.debtToEquity || 0) * 12);
+  const fundamentalScore = validatedScore.fundamentalScore;
   return {
     intrinsicValue,
     valuationGapPercent,
@@ -16547,6 +15982,8 @@ function calculateBaseDcf(q) {
     marginScore,
     debtRiskScore,
     fundamentalScore,
+    fundamentalDataValid: true,
+    fundamentalValidation,
   };
 }
 function calculateStatisticalEdge(q) {
@@ -16747,1592 +16184,42 @@ function calculateRegimeDominance(regime = {}, stockSignals = []) {
     engineState.marketRegimeDominanceHistory.slice(0, 200);
   return state;
 }
-function calculateCryptoInstitutionalSignal(signal = {}) {
-  const symbol = normalizeSymbol(signal.symbol);
-  const score = Number(signal.score || 0);
-  const current = Number(signal.current || signal.price || 0);
-  const bid = Number(signal.bid || 0);
-  const ask = Number(signal.ask || 0);
-  const percentChange = Number(signal.percentChange || signal.changePercent || 0);
-  const volume = Number(signal.volume || 0);
-  const volumeRatio = Number(
-    signal.volumeRatio ||
-    signal.relativeVolume ||
-    signal.volumeSpikeRatio ||
-    signal.confirmations?.volumeSpikeRatio ||
-    0
-  );
-  const spreadPercent =
-    bid > 0 && ask > 0 && current > 0
-      ? ((ask - bid) / current) * 100
-      : 0;
-  const isMajorCrypto =
-    symbol.includes("BTC") ||
-    symbol.includes("ETH") ||
-    symbol.includes("SOL");
-  const liquidityScore = clampScore(
-    45 +
-    (isMajorCrypto ? 15 : 0) +
-    (volumeRatio >= 1.5 ? 12 : 0) +
-    (volumeRatio >= 3 ? 12 : 0) -
-    (spreadPercent >= 0.35 ? 15 : 0) -
-    (spreadPercent >= 0.75 ? 25 : 0)
-  );
-  const momentumScore = clampScore(
-    50 +
-    (percentChange > 0 ? 12 : -8) +
-    (percentChange >= 3 ? 10 : 0) +
-    (percentChange >= 7 ? 8 : 0) -
-    (percentChange <= -4 ? 18 : 0) -
-    (Math.abs(percentChange) >= 18 ? 12 : 0)
-  );
-  const cryptoInstitutionalScore = clampScore(
-    score * 0.35 +
-    liquidityScore * 0.35 +
-    momentumScore * 0.3
-  );
-  const cryptoRegime =
-    cryptoInstitutionalScore >= 85
-      ? "CRYPTO_INSTITUTIONAL_ACCUMULATION"
-      : cryptoInstitutionalScore >= 72
-        ? "CRYPTO_MOMENTUM_EXPANSION"
-        : cryptoInstitutionalScore >= 60
-          ? "CRYPTO_SELECTIVE"
-          : "CRYPTO_RISK_OFF";
-  const cryptoSizingMultiplier =
-    cryptoRegime === "CRYPTO_INSTITUTIONAL_ACCUMULATION"
-      ? 1.18
-      : cryptoRegime === "CRYPTO_MOMENTUM_EXPANSION"
-        ? 1.1
-        : cryptoRegime === "CRYPTO_SELECTIVE"
-          ? 0.95
-          : 0.65;
-  const suppressCrypto =
-    cryptoRegime === "CRYPTO_RISK_OFF" ||
-    spreadPercent >= 0.9 ||
-    liquidityScore < 45;
-  const scoreBoost =
-    cryptoInstitutionalScore >= 85
-      ? 7
-      : cryptoInstitutionalScore >= 72
-        ? 4
-        : cryptoInstitutionalScore < 45
-          ? -8
-          : 0;
-  return {
-    phase: "42_FULL_CRYPTO_INSTITUTIONAL_ARCHITECTURE",
-    updatedAt: new Date().toISOString(),
-    symbol,
-    cryptoRegime,
-    cryptoInstitutionalScore,
-    cryptoLiquidityScore: liquidityScore,
-    cryptoMomentumScore: momentumScore,
-    cryptoSizingMultiplier,
-    suppressCrypto,
-    scoreBoost,
-    spreadPercent: Number(spreadPercent.toFixed(4)),
-    reason: "STATE_UPDATED",
-  };
-}
-function updateCryptoInstitutionalState(cryptoSignals = []) {
-  const reviewed = cryptoSignals.map((signal) => {
-    const phase42 =
-      signal.phase42CryptoInstitutional ||
-      calculateCryptoInstitutionalSignal(signal);
-    return {
-      symbol: signal.symbol,
-      cryptoRegime: phase42.cryptoRegime,
-      cryptoInstitutionalScore: phase42.cryptoInstitutionalScore,
-      cryptoLiquidityScore: phase42.cryptoLiquidityScore,
-      cryptoMomentumScore: phase42.cryptoMomentumScore,
-      suppressCrypto: phase42.suppressCrypto,
-    };
-  });
-  const approved = reviewed.filter((item) => !item.suppressCrypto);
-  const blocked = reviewed.filter((item) => item.suppressCrypto);
-  const state = {
-    updatedAt: new Date().toISOString(),
-    phase: "42_FULL_CRYPTO_INSTITUTIONAL_ARCHITECTURE",
-    reviewedCount: reviewed.length,
-    approvedCount: approved.length,
-    blockedCount: blocked.length,
-    topCryptoInstitutionalSetups: approved
-      .sort(
-        (a, b) =>
-          Number(b.cryptoInstitutionalScore || 0) -
-          Number(a.cryptoInstitutionalScore || 0)
-      )
-      .slice(0, 10),
-    blockedCryptoSetups: blocked.slice(0, 10),
-    reason: "STATE_UPDATED",
-  };
-  engineState.phase42CryptoInstitutionalState = state;
-  if (!Array.isArray(engineState.phase42CryptoInstitutionalHistory)) {
-    engineState.phase42CryptoInstitutionalHistory = [];
-  }
-  engineState.phase42CryptoInstitutionalHistory.unshift(state);
-  engineState.phase42CryptoInstitutionalHistory =
-    engineState.phase42CryptoInstitutionalHistory.slice(0, 200);
-  engineState.cryptoInstitutionalMemory =
-    engineState.cryptoInstitutionalMemory || {};
-  for (const item of approved) {
-    engineState.cryptoInstitutionalMemory[normalizeSymbol(item.symbol)] = {
-      ...item,
-      updatedAt: new Date().toISOString(),
-    };
-  }
-  saveEngineState("PHASE_42_CRYPTO_INSTITUTIONAL_UPDATED");
-  return state;
-}
-function calculateCryptoCapitalRotation(cryptoSignals = []) {
-  const analyzed = Array.isArray(cryptoSignals) ? cryptoSignals : [];
-  const approved = analyzed.filter(
-    (signal) =>
-      signal.qualifiedToBuy !== false &&
-      signal.phase42Suppressed !== true
-  );
-  const topSignals = approved
-    .map((signal) => {
-      const phase42 = signal.phase42CryptoInstitutional || {};
-      const score = Number(signal.score || 0);
-      const cryptoScore = Number(
-        phase42.cryptoInstitutionalScore ||
-        signal.cryptoInstitutionalScore ||
-        score
-      );
-      const liquidity = Number(
-        phase42.cryptoLiquidityScore ||
-        signal.cryptoLiquidityScore ||
-        50
-      );
-      const momentum = Number(
-        phase42.cryptoMomentumScore ||
-        signal.cryptoMomentumScore ||
-        50
-      );
-      const rotationScore = clampScore(
-        score * 0.3 +
-        cryptoScore * 0.35 +
-        liquidity * 0.2 +
-        momentum * 0.15
-      );
-      return {
-        symbol: signal.symbol,
-        score,
-        cryptoInstitutionalScore: cryptoScore,
-        cryptoLiquidityScore: liquidity,
-        cryptoMomentumScore: momentum,
-        rotationScore,
-      };
-    })
-    .sort((a, b) => Number(b.rotationScore || 0) - Number(a.rotationScore || 0));
-  const averageRotationScore =
-    topSignals.length > 0
-      ? topSignals.reduce(
-        (sum, item) => sum + Number(item.rotationScore || 0),
-        0
-      ) / topSignals.length
-      : 0;
-  const eliteCount = topSignals.filter(
-    (item) => Number(item.rotationScore || 0) >= 82
-  ).length;
-  const weakCount = analyzed.filter(
-    (signal) =>
-      signal.qualifiedToBuy === false ||
-      signal.phase42Suppressed === true
-  ).length;
-  const cryptoCapitalMode =
-    eliteCount >= 2 && averageRotationScore >= 78
-      ? "CRYPTO_AGGRESSIVE_ROTATION"
-      : averageRotationScore >= 68
-        ? "CRYPTO_SELECTIVE_ROTATION"
-        : averageRotationScore >= 55
-          ? "CRYPTO_DEFENSIVE_ROTATION"
-          : "STABLECOIN_DEFENSE_MODE";
-  const cryptoCapitalMultiplier =
-    cryptoCapitalMode === "CRYPTO_AGGRESSIVE_ROTATION"
-      ? 1.2
-      : cryptoCapitalMode === "CRYPTO_SELECTIVE_ROTATION"
-        ? 1
-        : cryptoCapitalMode === "CRYPTO_DEFENSIVE_ROTATION"
-          ? 0.65
-          : 0.25;
-  const shouldBlockWeakCrypto =
-    cryptoCapitalMode === "STABLECOIN_DEFENSE_MODE";
-  const state = {
-    updatedAt: new Date().toISOString(),
-    phase: "43_CRYPTO_CAPITAL_ROTATION_STABLECOIN_DEFENSE",
-    reviewedCount: analyzed.length,
-    approvedCount: approved.length,
-    weakCount,
-    eliteCount,
-    averageRotationScore: Number(averageRotationScore.toFixed(2)),
-    cryptoCapitalMode,
-    cryptoCapitalMultiplier,
-    shouldBlockWeakCrypto,
-    topCryptoRotationCandidates: topSignals.slice(0, 10),
-    reason:
-      0
-  };
-  engineState.phase43CryptoCapitalRotationState = state;
-  if (!Array.isArray(engineState.phase43CryptoCapitalRotationHistory)) {
-    engineState.phase43CryptoCapitalRotationHistory = [];
-  }
-  engineState.phase43CryptoCapitalRotationHistory.unshift(state);
-  engineState.phase43CryptoCapitalRotationHistory =
-    engineState.phase43CryptoCapitalRotationHistory.slice(0, 200);
-  engineState.cryptoCapitalRotationMemory =
-    engineState.cryptoCapitalRotationMemory || {};
-  for (const item of topSignals.slice(0, 10)) {
-    engineState.cryptoCapitalRotationMemory[normalizeSymbol(item.symbol)] = {
-      ...item,
-      updatedAt: state.updatedAt,
-      cryptoCapitalMode,
-    };
-  }
-  saveEngineState("PHASE_43_CRYPTO_CAPITAL_ROTATION_UPDATED");
-  return state;
-}
-function applyCryptoCapitalRotationToSignals(
-  cryptoSignals = [],
-  phase43State = {}
-) {
-  return cryptoSignals.map((signal) => {
-    const symbol = normalizeSymbol(signal.symbol);
-    const memory =
-      engineState.cryptoCapitalRotationMemory?.[symbol] || {};
-    const rotationScore = Number(memory.rotationScore || 0);
-    const multiplier = Number(
-      phase43State.cryptoCapitalMultiplier || 1
-    );
-    signal.phase43CryptoCapitalRotation = {
-      phase: "43_CRYPTO_CAPITAL_ROTATION_STABLECOIN_DEFENSE",
-      cryptoCapitalMode:
-        phase43State.cryptoCapitalMode || "UNKNOWN",
-      rotationScore,
-      cryptoCapitalMultiplier: multiplier,
-      shouldBlockWeakCrypto:
-        phase43State.shouldBlockWeakCrypto === true,
-      reason: phase43State.reason || "",
-    };
-    signal.cryptoCapitalRotationScore = rotationScore;
-    signal.cryptoCapitalMultiplier = multiplier;
-    if (
-      phase43State.shouldBlockWeakCrypto === true &&
-      rotationScore < 65
-    ) {
-      signal.qualifiedToBuy = false;
-      signal.phase43Suppressed = true;
-      signal.phase43SuppressionReason =
-        "Phase 43 stablecoin defense blocked weak crypto setup.";
-    }
-    if (rotationScore >= 82 && multiplier > 1) {
-      signal.score = clampScore(Number(signal.score || 0) + 4);
-    }
-    if (rotationScore < 50) {
-      signal.score = clampScore(Number(signal.score || 0) - 5);
-    }
-    return signal;
-  });
-}
-function calculateCryptoExecutionTiming(signal = {}) {
-  const symbol = normalizeSymbol(signal.symbol);
-  const current = Number(signal.current || signal.price || 0);
-  const bid = Number(signal.bid || 0);
-  const ask = Number(signal.ask || 0);
-  const spreadPercent = Number(
-    signal.spreadPercent ||
-    (bid > 0 && ask > 0 && current > 0
-      ? ((ask - bid) / current) * 100
-      : 0)
-  );
-  const volumeSpikeRatio = Number(
-    signal.volumeSpikeRatio ||
-    signal.confirmations?.volumeSpikeRatio ||
-    signal.relativeVolume ||
-    0
-  );
-  const dollarVolume = Number(signal.dollarVolume || 0);
-  const percentChange = Number(
-    signal.percentChange || signal.changePercent || 0
-  );
-  const spreadScore = clampScore(
-    100 -
-    spreadPercent * 120 -
-    (spreadPercent >= 0.4 ? 18 : 0) -
-    (spreadPercent >= 0.75 ? 30 : 0)
-  );
-  const liquidityExecutionScore = clampScore(
-    50 +
-    (volumeSpikeRatio >= 1 ? 10 : 0) +
-    (volumeSpikeRatio >= 2 ? 12 : 0) +
-    (dollarVolume >= 100 ? 8 : 0) +
-    (dollarVolume >= 1000 ? 10 : 0) -
-    (dollarVolume <= 20 ? 18 : 0)
-  );
-  const timingScore = clampScore(
-    55 +
-    (percentChange > 0 ? 10 : -4) +
-    (percentChange >= 2 ? 8 : 0) +
-    (percentChange <= -4 ? -14 : 0) -
-    (Math.abs(percentChange) >= 15 ? 16 : 0)
-  );
-  const cryptoExecutionScore = clampScore(
-    spreadScore * 0.4 +
-    liquidityExecutionScore * 0.35 +
-    timingScore * 0.25
-  );
-  const executionDecision =
-    cryptoExecutionScore >= 82
-      ? "EXECUTE_NOW"
-      : cryptoExecutionScore >= 68
-        ? "EXECUTE_CAREFULLY"
-        : cryptoExecutionScore >= 55
-          ? "WAIT_FOR_BETTER_FILL"
-          : "BLOCK_BAD_CRYPTO_EXECUTION";
-  const executionMultiplier =
-    executionDecision === "EXECUTE_NOW"
-      ? 1.08
-      : executionDecision === "EXECUTE_CAREFULLY"
-        ? 0.92
-        : executionDecision === "WAIT_FOR_BETTER_FILL"
-          ? 0.55
-          : 0;
-  const blockExecution =
-    executionDecision === "BLOCK_BAD_CRYPTO_EXECUTION" ||
-    spreadPercent >= 1 ||
-    spreadScore < 35;
-  return {
-    phase: "44_CRYPTO_EXECUTION_TIMING_SLIPPAGE_DEFENSE",
-    updatedAt: new Date().toISOString(),
-    symbol,
-    cryptoExecutionScore,
-    spreadScore,
-    liquidityExecutionScore,
-    timingScore,
-    spreadPercent: Number(spreadPercent.toFixed(4)),
-    executionDecision,
-    executionMultiplier,
-    blockExecution,
-    reason: "STATE_UPDATED",
-  };
-}
-function updateCryptoExecutionTimingState(cryptoSignals = []) {
-  const reviewed = cryptoSignals.map((signal) =>
-    calculateCryptoExecutionTiming(signal)
-  );
-  const executable = reviewed.filter((item) => !item.blockExecution);
-  const blocked = reviewed.filter((item) => item.blockExecution);
-  const avgExecutionScore =
-    reviewed.length > 0
-      ? reviewed.reduce(
-        (sum, item) => sum + Number(item.cryptoExecutionScore || 0),
-        0
-      ) / reviewed.length
-      : 0;
-  const state = {
-    updatedAt: new Date().toISOString(),
-    phase: "44_CRYPTO_EXECUTION_TIMING_SLIPPAGE_DEFENSE",
-    reviewedCount: reviewed.length,
-    executableCount: executable.length,
-    blockedCount: blocked.length,
-    avgExecutionScore: Number(avgExecutionScore.toFixed(2)),
-    topExecutableCrypto: executable
-      .sort(
-        (a, b) =>
-          Number(b.cryptoExecutionScore || 0) -
-          Number(a.cryptoExecutionScore || 0)
-      )
-      .slice(0, 10),
-    blockedCryptoExecution: blocked.slice(0, 10),
-    reason: "STATE_UPDATED",
-  };
-  engineState.phase44CryptoExecutionTimingState = state;
-  if (!Array.isArray(engineState.phase44CryptoExecutionTimingHistory)) {
-    engineState.phase44CryptoExecutionTimingHistory = [];
-  }
-  engineState.phase44CryptoExecutionTimingHistory.unshift(state);
-  engineState.phase44CryptoExecutionTimingHistory =
-    engineState.phase44CryptoExecutionTimingHistory.slice(0, 200);
-  engineState.cryptoExecutionTimingMemory =
-    engineState.cryptoExecutionTimingMemory || {};
-  for (const item of reviewed) {
-    engineState.cryptoExecutionTimingMemory[normalizeSymbol(item.symbol)] = item;
-  }
-  saveEngineState("PHASE_44_CRYPTO_EXECUTION_TIMING_UPDATED");
-  return state;
-}
-function applyCryptoExecutionTimingToSignals(cryptoSignals = []) {
-  return cryptoSignals.map((signal) => {
-    const phase44 = calculateCryptoExecutionTiming(signal);
-    signal.phase44CryptoExecutionTiming = phase44;
-    signal.cryptoExecutionScore = phase44.cryptoExecutionScore;
-    signal.cryptoExecutionDecision = phase44.executionDecision;
-    signal.cryptoExecutionMultiplier = phase44.executionMultiplier;
-    if (phase44.blockExecution) {
-      signal.qualifiedToBuy = false;
-      signal.phase44Suppressed = true;
-      signal.phase44SuppressionReason = phase44.reason;
-    }
-    if (phase44.executionDecision === "EXECUTE_NOW") {
-      signal.score = clampScore(Number(signal.score || 0) + 3);
-    }
-    if (phase44.executionDecision === "WAIT_FOR_BETTER_FILL") {
-      signal.score = clampScore(Number(signal.score || 0) - 4);
-    }
-    return signal;
-  });
-}
-function calculateCryptoPositionSizing(signal = {}) {
-  const symbol = normalizeSymbol(signal.symbol);
-  const score = Number(signal.score || 0);
-  const percentChange = Number(signal.percentChange || signal.changePercent || 0);
-  const phase42Score = Number(
-    signal.cryptoInstitutionalScore ||
-    signal.phase42CryptoInstitutional?.cryptoInstitutionalScore ||
-    score
-  );
-  const phase43Score = Number(
-    signal.cryptoCapitalRotationScore ||
-    signal.phase43CryptoCapitalRotation?.rotationScore ||
-    phase42Score
-  );
-  const phase44Score = Number(
-    signal.cryptoExecutionScore ||
-    signal.phase44CryptoExecutionTiming?.cryptoExecutionScore ||
-    phase43Score
-  );
-  const volatilityPenalty =
-    Math.abs(percentChange) >= 20
-      ? 32
-      : Math.abs(percentChange) >= 12
-        ? 20
-        : Math.abs(percentChange) >= 7
-          ? 10
-          : 0;
-  const cryptoRiskScore = clampScore(
-    100 -
-    volatilityPenalty -
-    (signal.phase42Suppressed ? 25 : 0) -
-    (signal.phase43Suppressed ? 25 : 0) -
-    (signal.phase44Suppressed ? 30 : 0) -
-    (phase44Score < 55 ? 18 : 0)
-  );
-  const sizingScore = clampScore(
-    phase42Score * 0.3 +
-    phase43Score * 0.25 +
-    phase44Score * 0.25 +
-    cryptoRiskScore * 0.2
-  );
-  const positionSizeMode =
-    sizingScore >= 86 && cryptoRiskScore >= 75
-      ? "MAX_ELITE_CRYPTO_SIZE"
-      : sizingScore >= 74
-        ? "NORMAL_CRYPTO_SIZE"
-        : sizingScore >= 60
-          ? "REDUCED_CRYPTO_SIZE"
-          : sizingScore >= 45
-            ? "MICRO_CRYPTO_PROBE"
-            : "BLOCK_CRYPTO_POSITION";
-  const positionSizeMultiplier =
-    positionSizeMode === "MAX_ELITE_CRYPTO_SIZE"
-      ? 1.15
-      : positionSizeMode === "NORMAL_CRYPTO_SIZE"
-        ? 1
-        : positionSizeMode === "REDUCED_CRYPTO_SIZE"
-          ? 0.65
-          : positionSizeMode === "MICRO_CRYPTO_PROBE"
-            ? 0.3
-            : 0;
-  const blockPosition =
-    positionSizeMode === "BLOCK_CRYPTO_POSITION" ||
-    signal.qualifiedToBuy === false ||
-    cryptoRiskScore < 35;
-  return {
-    phase: "45_CRYPTO_POSITION_SIZING_VOLATILITY_RISK",
-    updatedAt: new Date().toISOString(),
-    symbol,
-    sizingScore,
-    cryptoRiskScore,
-    positionSizeMode,
-    positionSizeMultiplier,
-    volatilityPenalty,
-    blockPosition,
-    phase42Score,
-    phase43Score,
-    phase44Score,
-    reason: "STATE_UPDATED",
-  };
-}
-function updateCryptoPositionSizingState(cryptoSignals = []) {
-  const reviewed = cryptoSignals.map((signal) =>
-    calculateCryptoPositionSizing(signal)
-  );
-  const blocked = reviewed.filter((item) => item.blockPosition);
-  const tradable = reviewed.filter((item) => !item.blockPosition);
-  const avgSizingScore =
-    reviewed.length > 0
-      ? reviewed.reduce(
-        (sum, item) => sum + Number(item.sizingScore || 0),
-        0
-      ) / reviewed.length
-      : 0;
-  const state = {
-    updatedAt: new Date().toISOString(),
-    phase: "45_CRYPTO_POSITION_SIZING_VOLATILITY_RISK",
-    reviewedCount: reviewed.length,
-    tradableCount: tradable.length,
-    blockedCount: blocked.length,
-    avgSizingScore: Number(avgSizingScore.toFixed(2)),
-    topSizedCryptoSetups: tradable
-      .sort(
-        (a, b) =>
-          Number(b.sizingScore || 0) - Number(a.sizingScore || 0)
-      )
-      .slice(0, 10),
-    blockedCryptoSizing: blocked.slice(0, 10),
-    reason: "STATE_UPDATED",
-  };
-  engineState.phase45CryptoPositionSizingState = state;
-  if (!Array.isArray(engineState.phase45CryptoPositionSizingHistory)) {
-    engineState.phase45CryptoPositionSizingHistory = [];
-  }
-  engineState.phase45CryptoPositionSizingHistory.unshift(state);
-  engineState.phase45CryptoPositionSizingHistory =
-    engineState.phase45CryptoPositionSizingHistory.slice(0, 200);
-  engineState.cryptoPositionSizingMemory =
-    engineState.cryptoPositionSizingMemory || {};
-  for (const item of reviewed) {
-    engineState.cryptoPositionSizingMemory[normalizeSymbol(item.symbol)] = item;
-  }
-  saveEngineState("PHASE_45_CRYPTO_POSITION_SIZING_UPDATED");
-  return state;
-}
-function applyCryptoPositionSizingToSignals(cryptoSignals = []) {
-  return cryptoSignals.map((signal) => {
-    const phase45 = calculateCryptoPositionSizing(signal);
-    signal.phase45CryptoPositionSizing = phase45;
-    signal.cryptoPositionSizingScore = phase45.sizingScore;
-    signal.cryptoRiskScore = phase45.cryptoRiskScore;
-    signal.cryptoPositionSizeMode = phase45.positionSizeMode;
-    signal.cryptoPositionSizeMultiplier = phase45.positionSizeMultiplier;
-    if (phase45.blockPosition) {
-      signal.qualifiedToBuy = false;
-      signal.phase45Suppressed = true;
-      signal.phase45SuppressionReason = phase45.reason;
-    }
-    if (phase45.positionSizeMode === "MAX_ELITE_CRYPTO_SIZE") {
-      signal.score = clampScore(Number(signal.score || 0) + 3);
-    }
-    if (
-      phase45.positionSizeMode === "MICRO_CRYPTO_PROBE" ||
-      phase45.positionSizeMode === "REDUCED_CRYPTO_SIZE"
-    ) {
-      signal.score = clampScore(Number(signal.score || 0) - 2);
-    }
-    return signal;
-  });
-}
-function calculateCryptoExitStrategy(signal = {}) {
-  const symbol = normalizeSymbol(signal.symbol);
-  const score = Number(signal.score || 0);
-  const percentChange = Number(signal.percentChange || signal.changePercent || 0);
-  const phase42Score = Number(
-    signal.cryptoInstitutionalScore ||
-    signal.phase42CryptoInstitutional?.cryptoInstitutionalScore ||
-    score
-  );
-  const phase43Score = Number(
-    signal.cryptoCapitalRotationScore ||
-    signal.phase43CryptoCapitalRotation?.rotationScore ||
-    phase42Score
-  );
-  const phase44Score = Number(
-    signal.cryptoExecutionScore ||
-    signal.phase44CryptoExecutionTiming?.cryptoExecutionScore ||
-    phase43Score
-  );
-  const phase45RiskScore = Number(
-    signal.cryptoRiskScore ||
-
-    signal.phase45CryptoPositionSizing?.cryptoRiskScore ||
-    50
-  );
-  const runnerStrength = clampScore(
-    score * 0.25 +
-    phase42Score * 0.25 +
-    phase43Score * 0.2 +
-    phase44Score * 0.15 +
-    phase45RiskScore * 0.15
-  );
-  const profitProtectionPressure = clampScore(
-    (percentChange >= 10 ? 28 : 0) +
-    (percentChange >= 18 ? 22 : 0) +
-    (percentChange <= -4 ? 25 : 0) +
-    (percentChange <= -8 ? 25 : 0) +
-    (phase45RiskScore < 50 ? 20 : 0) +
-    (phase44Score < 55 ? 15 : 0)
-  );
-  const exitDecision =
-    percentChange <= -10 || phase45RiskScore < 35
-      ? "EMERGENCY_CRYPTO_EXIT"
-      : profitProtectionPressure >= 70
-        ? "PROTECT_CRYPTO_PROFIT"
-        : runnerStrength >= 82 && profitProtectionPressure < 45
-          ? "HOLD_CRYPTO_RUNNER"
-          : runnerStrength >= 68
-            ? "TRAIL_CRYPTO_RUNNER"
-            : "REDUCE_WEAK_CRYPTO";
-  const exitUrgency =
-    exitDecision === "EMERGENCY_CRYPTO_EXIT"
-      ? 100
-      : exitDecision === "PROTECT_CRYPTO_PROFIT"
-        ? 80
-        : exitDecision === "REDUCE_WEAK_CRYPTO"
-          ? 65
-          : exitDecision === "TRAIL_CRYPTO_RUNNER"
-            ? 35
-            : 15;
-  const shouldExit =
-    exitDecision === "EMERGENCY_CRYPTO_EXIT" ||
-    exitDecision === "PROTECT_CRYPTO_PROFIT" ||
-    exitDecision === "REDUCE_WEAK_CRYPTO";
-  return {
-    phase: "46_CRYPTO_EXIT_PARLIAMENT_RUNNER_PROTECTION",
-    updatedAt: new Date().toISOString(),
-    symbol,
-    runnerStrength,
-    profitProtectionPressure,
-    exitDecision,
-    exitUrgency,
-    shouldExit,
-    phase42Score,
-    phase43Score,
-    phase44Score,
-    phase45RiskScore,
-    reason:
-      `Urgency ${exitUrgency}/100`,
-  };
-}
-function updateCryptoExitStrategyState(cryptoSignals = []) {
-  const reviewed = cryptoSignals.map((signal) =>
-    calculateCryptoExitStrategy(signal)
-  );
-  const exitCandidates = reviewed.filter((item) => item.shouldExit);
-  const runners = reviewed.filter(
-    (item) =>
-      item.exitDecision === "HOLD_CRYPTO_RUNNER" ||
-      item.exitDecision === "TRAIL_CRYPTO_RUNNER"
-  );
-  const avgRunnerStrength =
-    reviewed.length > 0
-      ? reviewed.reduce(
-        (sum, item) => sum + Number(item.runnerStrength || 0),
-        0
-      ) / reviewed.length
-      : 0;
-  const state = {
-    updatedAt: new Date().toISOString(),
-    phase: "46_CRYPTO_EXIT_PARLIAMENT_RUNNER_PROTECTION",
-    reviewedCount: reviewed.length,
-    exitCandidateCount: exitCandidates.length,
-    runnerCount: runners.length,
-    avgRunnerStrength: Number(avgRunnerStrength.toFixed(2)),
-    protectedCryptoRunners: runners
-      .sort(
-        (a, b) =>
-          Number(b.runnerStrength || 0) - Number(a.runnerStrength || 0)
-      )
-      .slice(0, 10),
-    cryptoExitCandidates: exitCandidates
-      .sort(
-        (a, b) => Number(b.exitUrgency || 0) - Number(a.exitUrgency || 0)
-      )
-      .slice(0, 10),
-    reason:
-      `${exitCandidates.length} exit candidates`,
-  };
-  engineState.phase46CryptoExitParliamentState = state;
-  if (!Array.isArray(engineState.phase46CryptoExitParliamentHistory)) {
-    engineState.phase46CryptoExitParliamentHistory = [];
-  }
-  engineState.phase46CryptoExitParliamentHistory.unshift(state);
-  engineState.phase46CryptoExitParliamentHistory =
-    engineState.phase46CryptoExitParliamentHistory.slice(0, 200);
-  engineState.cryptoExitParliamentMemory =
-    engineState.cryptoExitParliamentMemory || {};
-  for (const item of reviewed) {
-    engineState.cryptoExitParliamentMemory[normalizeSymbol(item.symbol)] = item;
-  }
-  saveEngineState("PHASE_46_CRYPTO_EXIT_PARLIAMENT_UPDATED");
-  return state;
-}
-function applyCryptoExitStrategyToSignals(cryptoSignals = []) {
-  return cryptoSignals.map((signal) => {
-    const phase46 = calculateCryptoExitStrategy(signal);
-    signal.phase46CryptoExitParliament = phase46;
-    signal.cryptoRunnerStrength = phase46.runnerStrength;
-    signal.cryptoProfitProtectionPressure =
-      phase46.profitProtectionPressure;
-    signal.cryptoExitDecision = phase46.exitDecision;
-    signal.cryptoExitUrgency = phase46.exitUrgency;
-    if (phase46.exitDecision === "HOLD_CRYPTO_RUNNER") {
-      signal.score = clampScore(Number(signal.score || 0) + 3);
-      signal.cryptoRunnerProtected = true;
-    }
-    if (phase46.exitDecision === "TRAIL_CRYPTO_RUNNER") {
-      signal.cryptoRunnerTrailing = true;
-    }
-    if (
-      phase46.exitDecision === "PROTECT_CRYPTO_PROFIT" ||
-      phase46.exitDecision === "REDUCE_WEAK_CRYPTO"
-    ) {
-      signal.score = clampScore(Number(signal.score || 0) - 3);
-      signal.cryptoExitWatch = true;
-    }
-    if (phase46.exitDecision === "EMERGENCY_CRYPTO_EXIT") {
-      signal.qualifiedToBuy = false;
-      signal.phase46Suppressed = true;
-      signal.phase46SuppressionReason = phase46.reason;
-    }
-    return signal;
-  });
-}
-function calculateCryptoLiquiditySweep(signal = {}) {
-  const symbol = normalizeSymbol(signal.symbol);
-  const score = Number(signal.score || 0);
-  const current = Number(signal.current || signal.price || 0);
-  const high = Number(signal.high || signal.h || current);
-  const low = Number(signal.low || signal.l || current);
-  const open = Number(signal.open || signal.o || current);
-  const percentChange = Number(signal.percentChange || signal.changePercent || 0);
-  const volumeSpikeRatio = Number(
-    signal.volumeSpikeRatio ||
-    signal.relativeVolume ||
-    signal.confirmations?.volumeSpikeRatio ||
-    0
-  );
-  const rangePercent =
-    current > 0 && high > low ? ((high - low) / current) * 100 : 0;
-  const closeNearHighPercent =
-    high > low ? ((current - low) / (high - low)) * 100 : 50;
-  const closeNearLowPercent =
-    high > low ? ((high - current) / (high - low)) * 100 : 50;
-  const upperWickPercent =
-    high > low ? ((high - Math.max(current, open)) / (high - low)) * 100 : 0;
-  const lowerWickPercent =
-    high > low ? ((Math.min(current, open) - low) / (high - low)) * 100 : 0;
-  const phase42Score = Number(
-    signal.cryptoInstitutionalScore ||
-    signal.phase42CryptoInstitutional?.cryptoInstitutionalScore ||
-    score
-  );
-  const phase44Score = Number(
-    signal.cryptoExecutionScore ||
-    signal.phase44CryptoExecutionTiming?.cryptoExecutionScore ||
-    phase42Score
-  );
-  const stopHuntRisk = clampScore(
-    (rangePercent >= 4 ? 18 : 0) +
-    (rangePercent >= 8 ? 22 : 0) +
-    (volumeSpikeRatio >= 2 ? 18 : 0) +
-    (upperWickPercent >= 45 ? 22 : 0) +
-    (lowerWickPercent >= 45 ? 18 : 0) +
-    (Math.abs(percentChange) >= 10 ? 15 : 0) -
-    (phase42Score >= 80 ? 10 : 0)
-  );
-  const accumulationSweepScore = clampScore(
-    (lowerWickPercent >= 35 ? 24 : 0) +
-    (closeNearHighPercent >= 65 ? 22 : 0) +
-    (volumeSpikeRatio >= 1.5 ? 18 : 0) +
-    (percentChange >= 0 ? 12 : 0) +
-    (phase42Score >= 75 ? 18 : 0) +
-    (phase44Score >= 68 ? 10 : 0)
-  );
-  const distributionSweepScore = clampScore(
-    (upperWickPercent >= 35 ? 24 : 0) +
-    (closeNearLowPercent >= 65 ? 22 : 0) +
-    (volumeSpikeRatio >= 1.5 ? 18 : 0) +
-    (percentChange <= 0 ? 12 : 0) +
-    (phase44Score < 55 ? 14 : 0)
-  );
-  const liquiditySweepDecision =
-    distributionSweepScore >= 70 || stopHuntRisk >= 82
-      ? "BLOCK_WHALE_TRAP"
-      : accumulationSweepScore >= 75 && stopHuntRisk < 70
-        ? "ACCUMULATION_SWEEP_CONFIRMED"
-        : stopHuntRisk >= 65
-          ? "WAIT_AFTER_LIQUIDITY_SWEEP"
-          : accumulationSweepScore >= 58
-            ? "CAUTIOUS_SWEEP_ENTRY"
-            : "NO_MAJOR_SWEEP";
-  const liquiditySweepScore = clampScore(
-    accumulationSweepScore * 0.45 +
-    (100 - stopHuntRisk) * 0.35 +
-    phase44Score * 0.2 -
-    distributionSweepScore * 0.2
-  );
-  const blockLiquidityTrap =
-    liquiditySweepDecision === "BLOCK_WHALE_TRAP" ||
-    distributionSweepScore >= 78;
-  return {
-    phase: "47_CRYPTO_LIQUIDITY_SWEEP_INTELLIGENCE",
-    updatedAt: new Date().toISOString(),
-    symbol,
-    liquiditySweepDecision,
-    liquiditySweepScore,
-    stopHuntRisk,
-    accumulationSweepScore,
-    distributionSweepScore,
-    rangePercent: Number(rangePercent.toFixed(4)),
-    closeNearHighPercent: Number(closeNearHighPercent.toFixed(2)),
-    closeNearLowPercent: Number(closeNearLowPercent.toFixed(2)),
-    upperWickPercent: Number(upperWickPercent.toFixed(2)),
-    lowerWickPercent: Number(lowerWickPercent.toFixed(2)),
-    blockLiquidityTrap,
-    reason: "STATE_UPDATED",
-  };
-}
-function updateCryptoLiquiditySweepState(cryptoSignals = []) {
-  const reviewed = cryptoSignals.map((signal) =>
-    calculateCryptoLiquiditySweep(signal)
-  );
-  const blocked = reviewed.filter((item) => item.blockLiquidityTrap);
-  const confirmed = reviewed.filter(
-    (item) =>
-      item.liquiditySweepDecision === "ACCUMULATION_SWEEP_CONFIRMED" ||
-      item.liquiditySweepDecision === "CAUTIOUS_SWEEP_ENTRY"
-  );
-  const avgSweepScore =
-    reviewed.length > 0
-      ? reviewed.reduce(
-        (sum, item) => sum + Number(item.liquiditySweepScore || 0),
-        0
-      ) / reviewed.length
-      : 0;
-  const state = {
-    updatedAt: new Date().toISOString(),
-    phase: "47_CRYPTO_LIQUIDITY_SWEEP_INTELLIGENCE",
-    reviewedCount: reviewed.length,
-    confirmedSweepCount: confirmed.length,
-    blockedTrapCount: blocked.length,
-    avgSweepScore: Number(avgSweepScore.toFixed(2)),
-    confirmedLiquiditySweeps: confirmed
-      .sort(
-        (a, b) =>
-          Number(b.liquiditySweepScore || 0) -
-          Number(a.liquiditySweepScore || 0)
-      )
-      .slice(0, 10),
-    blockedWhaleTraps: blocked
-      .sort(
-        (a, b) =>
-          Number(b.stopHuntRisk || 0) - Number(a.stopHuntRisk || 0)
-      )
-      .slice(0, 10),
-    reason: "STATE_UPDATED",
-  };
-  engineState.phase47CryptoLiquiditySweepState = state;
-  if (!Array.isArray(engineState.phase47CryptoLiquiditySweepHistory)) {
-    engineState.phase47CryptoLiquiditySweepHistory = [];
-  }
-  engineState.phase47CryptoLiquiditySweepHistory.unshift(state);
-  engineState.phase47CryptoLiquiditySweepHistory =
-    engineState.phase47CryptoLiquiditySweepHistory.slice(0, 200);
-  engineState.cryptoLiquiditySweepMemory =
-    engineState.cryptoLiquiditySweepMemory || {};
-  for (const item of reviewed) {
-    engineState.cryptoLiquiditySweepMemory[normalizeSymbol(item.symbol)] = item;
-  }
-  saveEngineState("PHASE_47_CRYPTO_LIQUIDITY_SWEEP_UPDATED");
-  return state;
-}
-function applyCryptoLiquiditySweepToSignals(cryptoSignals = []) {
-  return cryptoSignals.map((signal) => {
-    const phase47 = calculateCryptoLiquiditySweep(signal);
-    signal.phase47CryptoLiquiditySweep = phase47;
-    signal.cryptoLiquiditySweepScore = phase47.liquiditySweepScore;
-    signal.cryptoStopHuntRisk = phase47.stopHuntRisk;
-    signal.cryptoLiquiditySweepDecision = phase47.liquiditySweepDecision;
-    if (phase47.blockLiquidityTrap) {
-      signal.qualifiedToBuy = false;
-      signal.phase47Suppressed = true;
-      signal.phase47SuppressionReason = phase47.reason;
-      signal.score = clampScore(Number(signal.score || 0) - 8);
-    }
-    if (phase47.liquiditySweepDecision === "ACCUMULATION_SWEEP_CONFIRMED") {
-      signal.score = clampScore(Number(signal.score || 0) + 5);
-      signal.cryptoAccumulationSweepConfirmed = true;
-    }
-    if (phase47.liquiditySweepDecision === "CAUTIOUS_SWEEP_ENTRY") {
-      signal.score = clampScore(Number(signal.score || 0) + 2);
-      signal.cryptoCautiousSweepEntry = true;
-    }
-    if (phase47.liquiditySweepDecision === "WAIT_AFTER_LIQUIDITY_SWEEP") {
-      signal.score = clampScore(Number(signal.score || 0) - 4);
-      signal.cryptoWaitAfterSweep = true;
-    }
-    return signal;
-  });
-}
-function calculateCrossMarketCorrelation(
-  stockSignals = [],
-  cryptoSignals = []
-) {
-  const stocks = Array.isArray(stockSignals) ? stockSignals : [];
-  const cryptos = Array.isArray(cryptoSignals) ? cryptoSignals : [];
-  const stockAverageScore =
-    stocks.length > 0
-      ? stocks.reduce((sum, s) => sum + Number(s.score || 0), 0) /
-      stocks.length
-      : 50;
-  const cryptoAverageScore =
-    cryptos.length > 0
-      ? cryptos.reduce((sum, s) => sum + Number(s.score || 0), 0) /
-      cryptos.length
-      : 50;
-  const stockMomentum =
-    stocks.length > 0
-      ? stocks.reduce(
-        (sum, s) =>
-          sum + Number(s.percentChange || s.changePercent || 0),
-        0
-      ) / stocks.length
-      : 0;
-  const cryptoMomentum =
-    cryptos.length > 0
-      ? cryptos.reduce(
-        (sum, s) =>
-          sum + Number(s.percentChange || s.changePercent || 0),
-        0
-      ) / cryptos.length
-      : 0;
-  const marketRegime = engineState.marketRegime || {};
-  const marketRegimeState = String(
-    marketRegime.state || marketRegime.label || "unknown"
-  ).toLowerCase();
-  const riskOffRegime =
-    marketRegimeState.includes("defensive") ||
-    marketRegimeState.includes("panic") ||
-    marketRegimeState.includes("bear") ||
-    Number(engineState.marketStressLevel || 0) >= 7;
-  const cryptoLeadershipSpread = cryptoAverageScore - stockAverageScore;
-  const momentumSpread = cryptoMomentum - stockMomentum;
-  const correlationScore = clampScore(
-    55 +
-    cryptoLeadershipSpread * 0.45 +
-    momentumSpread * 2 +
-    (cryptoAverageScore >= 75 ? 12 : 0) +
-    (stockAverageScore >= 75 ? 6 : 0) -
-    (riskOffRegime ? 18 : 0) -
-    (cryptoMomentum < -3 ? 14 : 0)
-  );
-  const crossMarketMode =
-    correlationScore >= 82 && cryptoLeadershipSpread >= 5
-      ? "CRYPTO_LEADERSHIP_RISK_ON"
-      : correlationScore >= 70
-        ? "BALANCED_RISK_ON"
-        : correlationScore >= 55
-          ? "SELECTIVE_CORRELATION"
-          : correlationScore >= 40
-            ? "CORRELATION_DEFENSE"
-            : "GLOBAL_RISK_OFF";
-  const crossMarketMultiplier =
-    crossMarketMode === "CRYPTO_LEADERSHIP_RISK_ON"
-      ? 1.15
-      : crossMarketMode === "BALANCED_RISK_ON"
-        ? 1
-        : crossMarketMode === "SELECTIVE_CORRELATION"
-          ? 0.75
-          : crossMarketMode === "CORRELATION_DEFENSE"
-            ? 0.45
-            : 0.2;
-  const blockWeakCrypto =
-    crossMarketMode === "GLOBAL_RISK_OFF" ||
-    crossMarketMode === "CORRELATION_DEFENSE";
-  const state = {
-    updatedAt: new Date().toISOString(),
-    phase: "48_CROSS_MARKET_CORRELATION_AI",
-    stockSignalCount: stocks.length,
-    cryptoSignalCount: cryptos.length,
-    stockAverageScore: Number(stockAverageScore.toFixed(2)),
-    cryptoAverageScore: Number(cryptoAverageScore.toFixed(2)),
-    stockMomentum: Number(stockMomentum.toFixed(4)),
-    cryptoMomentum: Number(cryptoMomentum.toFixed(4)),
-    cryptoLeadershipSpread: Number(cryptoLeadershipSpread.toFixed(2)),
-    momentumSpread: Number(momentumSpread.toFixed(4)),
-    riskOffRegime,
-    correlationScore: Number(correlationScore.toFixed(2)),
-    crossMarketMode,
-    crossMarketMultiplier,
-    blockWeakCrypto,
-    reason:
-      `${crossMarketMode} • Correlation ${correlationScore.toFixed(2)}/100 • ` +
-      `Momentum spread ${momentumSpread.toFixed(2)} • ` +
-      `Crypto leadership spread ${cryptoLeadershipSpread.toFixed(2)}`,
-  };
-  engineState.phase48CrossMarketCorrelationState = state;
-  if (!Array.isArray(engineState.phase48CrossMarketCorrelationHistory)) {
-    engineState.phase48CrossMarketCorrelationHistory = [];
-  }
-  engineState.phase48CrossMarketCorrelationHistory.unshift(state);
-  engineState.phase48CrossMarketCorrelationHistory =
-    engineState.phase48CrossMarketCorrelationHistory.slice(0, 200);
-  engineState.crossMarketCorrelationMemory =
-    engineState.crossMarketCorrelationMemory || {};
-  engineState.crossMarketCorrelationMemory.latest = state;
-  saveEngineState("PHASE_48_CROSS_MARKET_CORRELATION_UPDATED");
-  return state;
-}
-function applyCrossMarketCorrelationToSignals(
-  cryptoSignals = [],
-  phase48State = {}
-) {
-  return cryptoSignals.map((signal) => {
-    const score = Number(signal.score || 0);
-    const cryptoMomentum = Number(
-      signal.percentChange || signal.changePercent || 0
-    );
-    const individualCorrelationScore = clampScore(
-      score * 0.5 +
-      Number(phase48State.correlationScore || 50) * 0.35 +
-      (cryptoMomentum > 0 ? 10 : -5) +
-      (signal.phase47Suppressed ? -15 : 0)
-    );
-    signal.phase48CrossMarketCorrelation = {
-      phase: "48_CROSS_MARKET_CORRELATION_AI",
-      crossMarketMode: phase48State.crossMarketMode || "UNKNOWN",
-      correlationScore: phase48State.correlationScore || 0,
-      individualCorrelationScore,
-      crossMarketMultiplier:
-        phase48State.crossMarketMultiplier || 1,
-      blockWeakCrypto: phase48State.blockWeakCrypto === true,
-      reason: phase48State.reason || "",
-    };
-    signal.crossMarketCorrelationScore = individualCorrelationScore;
-    signal.crossMarketMultiplier =
-      phase48State.crossMarketMultiplier || 1;
-    if (
-      phase48State.blockWeakCrypto === true &&
-      individualCorrelationScore < 65
-    ) {
-      signal.qualifiedToBuy = false;
-      signal.phase48Suppressed = true;
-      signal.phase48SuppressionReason =
-        "Phase 48 blocked weak crypto during cross-market risk-off defense.";
-      signal.score = clampScore(Number(signal.score || 0) - 7);
-    }
-    if (
-      phase48State.crossMarketMode === "CRYPTO_LEADERSHIP_RISK_ON" &&
-      individualCorrelationScore >= 78
-    ) {
-      signal.score = clampScore(Number(signal.score || 0) + 4);
-      signal.cryptoLeadershipConfirmed = true;
-    }
-    if (phase48State.crossMarketMode === "BALANCED_RISK_ON") {
-      signal.score = clampScore(Number(signal.score || 0) + 1);
-    }
-    return signal;
-  });
-}
-function calculateStablecoinFlowPressure(
-  cryptoSignals = [],
-  phase48State = {}
-) {
-  const cryptos = Array.isArray(cryptoSignals) ? cryptoSignals : [];
-  const avgCryptoScore =
-    cryptos.length > 0
-      ? cryptos.reduce((sum, s) => sum + Number(s.score || 0), 0) /
-      cryptos.length
-      : 50;
-  const avgMomentum =
-    cryptos.length > 0
-      ? cryptos.reduce(
-        (sum, s) => sum + Number(s.percentChange || s.changePercent || 0),
-        0
-      ) / cryptos.length
-      : 0;
-  const avgExecution =
-    cryptos.length > 0
-      ? cryptos.reduce(
-        (sum, s) => sum + Number(s.cryptoExecutionScore || 50),
-        0
-      ) / cryptos.length
-      : 50;
-  const avgSweepRisk =
-    cryptos.length > 0
-      ? cryptos.reduce(
-        (sum, s) => sum + Number(s.cryptoStopHuntRisk || 0),
-        0
-      ) / cryptos.length
-      : 0;
-  const suppressedCount = cryptos.filter(
-    (s) =>
-      s.phase42Suppressed ||
-      s.phase43Suppressed ||
-      s.phase44Suppressed ||
-      s.phase45Suppressed ||
-      s.phase46Suppressed ||
-      s.phase47Suppressed ||
-      s.phase48Suppressed
-  ).length;
-  const advancingCount = cryptos.filter(
-    (s) => Number(s.percentChange || s.changePercent || 0) > 0
-  ).length;
-  const decliningCount = cryptos.filter(
-    (s) => Number(s.percentChange || s.changePercent || 0) < 0
-  ).length;
-  const cryptoBreadth =
-    cryptos.length > 0 ? ((advancingCount - decliningCount) / cryptos.length) * 100 : 0;
-  const exchangePressureScore = clampScore(
-    50 -
-    avgMomentum * 2 +
-    avgSweepRisk * 0.35 +
-    suppressedCount * 4 -
-    cryptoBreadth * 0.25 -
-    (avgExecution >= 70 ? 8 : 0) +
-    (Number(phase48State.correlationScore || 50) < 50 ? 12 : 0)
-  );
-  const stablecoinDemandProxy = clampScore(
-    45 +
-    exchangePressureScore * 0.35 -
-    avgCryptoScore * 0.2 -
-    avgMomentum * 2 +
-    (decliningCount > advancingCount ? 15 : 0) +
-    (Number(phase48State.crossMarketMultiplier || 1) < 0.6 ? 12 : 0)
-  );
-  const flowMode =
-    exchangePressureScore >= 78 || stablecoinDemandProxy >= 80
-      ? "STABLECOIN_DEFENSE_ROTATION"
-      : exchangePressureScore >= 62
-        ? "EXCHANGE_PRESSURE_CAUTION"
-        : stablecoinDemandProxy <= 35 && avgMomentum > 0
-          ? "RISK_ON_CRYPTO_FLOW"
-          : "NEUTRAL_STABLECOIN_FLOW";
-  const stablecoinDefenseMultiplier =
-    flowMode === "STABLECOIN_DEFENSE_ROTATION"
-      ? 0.25
-      : flowMode === "EXCHANGE_PRESSURE_CAUTION"
-        ? 0.55
-        : flowMode === "RISK_ON_CRYPTO_FLOW"
-          ? 1.08
-          : 0.85;
-  const blockWeakCrypto =
-    flowMode === "STABLECOIN_DEFENSE_ROTATION" ||
-    flowMode === "EXCHANGE_PRESSURE_CAUTION";
-  const state = {
-    updatedAt: new Date().toISOString(),
-    phase: "49_STABLECOIN_FLOW_EXCHANGE_PRESSURE",
-    cryptoSignalCount: cryptos.length,
-    advancingCount,
-    decliningCount,
-    suppressedCount,
-    avgCryptoScore: Number(avgCryptoScore.toFixed(2)),
-    avgMomentum: Number(avgMomentum.toFixed(4)),
-    avgExecution: Number(avgExecution.toFixed(2)),
-    avgSweepRisk: Number(avgSweepRisk.toFixed(2)),
-    cryptoBreadth: Number(cryptoBreadth.toFixed(2)),
-    exchangePressureScore: Number(exchangePressureScore.toFixed(2)),
-    stablecoinDemandProxy: Number(stablecoinDemandProxy.toFixed(2)),
-    flowMode,
-    stablecoinDefenseMultiplier,
-    blockWeakCrypto,
-    reason: "APPLIED",
-  };
-  engineState.phase49StablecoinFlowState = state;
-  if (!Array.isArray(engineState.phase49StablecoinFlowHistory)) {
-    engineState.phase49StablecoinFlowHistory = [];
-  }
-  engineState.phase49StablecoinFlowHistory.unshift(state);
-  engineState.phase49StablecoinFlowHistory =
-    engineState.phase49StablecoinFlowHistory.slice(0, 200);
-  engineState.stablecoinFlowMemory =
-    engineState.stablecoinFlowMemory || {};
-  engineState.stablecoinFlowMemory.latest = state;
-  saveEngineState("PHASE_49_STABLECOIN_FLOW_UPDATED");
-  return state;
-}
-function applyStablecoinFlowToSignals(
-  cryptoSignals = [],
-  phase49State = {}
-) {
-  return cryptoSignals.map((signal) => {
-    const score = Number(signal.score || 0);
-    const momentum = Number(signal.percentChange || signal.changePercent || 0);
-    const executionScore = Number(signal.cryptoExecutionScore || 50);
-    const sweepRisk = Number(signal.cryptoStopHuntRisk || 0);
-    const stablecoinFlowSignalScore = clampScore(
-      score * 0.45 +
-      executionScore * 0.25 +
-      Number(phase49State.avgCryptoScore || 50) * 0.15 +
-      (momentum > 0 ? 10 : -8) -
-      sweepRisk * 0.15 -
-      Number(phase49State.exchangePressureScore || 50) * 0.2
-    );
-    signal.phase49StablecoinFlow = {
-      phase: "49_STABLECOIN_FLOW_EXCHANGE_PRESSURE",
-      flowMode: phase49State.flowMode || "UNKNOWN",
-      stablecoinFlowSignalScore,
-      exchangePressureScore: phase49State.exchangePressureScore || 0,
-      stablecoinDemandProxy: phase49State.stablecoinDemandProxy || 0,
-      stablecoinDefenseMultiplier:
-        phase49State.stablecoinDefenseMultiplier || 1,
-      blockWeakCrypto: phase49State.blockWeakCrypto === true,
-      reason: phase49State.reason || "",
-    };
-    signal.stablecoinFlowSignalScore = stablecoinFlowSignalScore;
-    signal.stablecoinDefenseMultiplier =
-      phase49State.stablecoinDefenseMultiplier || 1;
-    if (
-      phase49State.blockWeakCrypto === true &&
-      stablecoinFlowSignalScore < 68
-    ) {
-      signal.qualifiedToBuy = false;
-      signal.phase49Suppressed = true;
-      signal.phase49SuppressionReason =
-        "Phase 49 blocked weak crypto during stablecoin/exchange pressure defense.";
-      signal.score = clampScore(Number(signal.score || 0) - 7);
-    }
-    if (
-      phase49State.flowMode === "RISK_ON_CRYPTO_FLOW" &&
-      stablecoinFlowSignalScore >= 75
-    ) {
-      signal.score = clampScore(Number(signal.score || 0) + 4);
-      signal.cryptoRiskOnFlowConfirmed = true;
-    }
-    if (phase49State.flowMode === "EXCHANGE_PRESSURE_CAUTION") {
-      signal.score = clampScore(Number(signal.score || 0) - 2);
-      signal.cryptoExchangePressureCaution = true;
-    }
-    return signal;
-  });
-}
-function calculateWhaleSmartMoney(signal = {}) {
-  const symbol = normalizeSymbol(signal.symbol);
-  const score = Number(signal.score || 0);
-  const percentChange = Number(signal.percentChange || signal.changePercent || 0);
-  const volumeSpikeRatio = Number(
-    signal.volumeSpikeRatio ||
-    signal.relativeVolume ||
-    signal.confirmations?.volumeSpikeRatio ||
-    0
-  );
-  const phase42Score = Number(
-    signal.cryptoInstitutionalScore ||
-    signal.phase42CryptoInstitutional?.cryptoInstitutionalScore ||
-    score
-  );
-  const phase44Score = Number(
-    signal.cryptoExecutionScore ||
-    signal.phase44CryptoExecutionTiming?.cryptoExecutionScore ||
-    50
-  );
-  const phase47SweepScore = Number(
-    signal.cryptoLiquiditySweepScore ||
-    signal.phase47CryptoLiquiditySweep?.liquiditySweepScore ||
-    50
-  );
-  const stopHuntRisk = Number(
-    signal.cryptoStopHuntRisk ||
-    signal.phase47CryptoLiquiditySweep?.stopHuntRisk ||
-    0
-  );
-  const stablecoinFlowScore = Number(
-    signal.stablecoinFlowSignalScore ||
-    signal.phase49StablecoinFlow?.stablecoinFlowSignalScore ||
-    50
-  );
-  const accumulationProxy = clampScore(
-    phase42Score * 0.28 +
-    phase47SweepScore * 0.24 +
-    phase44Score * 0.18 +
-    stablecoinFlowScore * 0.15 +
-    (volumeSpikeRatio >= 1.5 ? 10 : 0) +
-    (volumeSpikeRatio >= 3 ? 10 : 0) +
-    (percentChange > 0 ? 8 : -5) -
-    (stopHuntRisk >= 75 ? 12 : 0)
-  );
-  const distributionProxy = clampScore(
-    (stopHuntRisk >= 70 ? 25 : 0) +
-    (signal.phase47Suppressed ? 20 : 0) +
-    (signal.phase49Suppressed ? 15 : 0) +
-    (percentChange <= -3 ? 14 : 0) +
-    (percentChange <= -8 ? 18 : 0) +
-    (volumeSpikeRatio >= 3 && percentChange < 0 ? 18 : 0) -
-    (phase42Score >= 80 ? 10 : 0)
-  );
-  const whaleSmartMoneyScore = clampScore(
-    accumulationProxy * 0.65 +
-    phase42Score * 0.2 +
-    phase44Score * 0.15 -
-    distributionProxy * 0.35
-  );
-  const whaleDecision =
-    distributionProxy >= 75
-      ? "WHALE_DISTRIBUTION_AVOID"
-      : whaleSmartMoneyScore >= 85
-        ? "WHALE_ACCUMULATION_CONFIRMED"
-        : whaleSmartMoneyScore >= 72
-          ? "SMART_MONEY_ACCUMULATION"
-          : whaleSmartMoneyScore >= 58
-            ? "NEUTRAL_WHALE_FLOW"
-            : "WEAK_WHALE_FLOW";
-  const blockWhaleTrap =
-    whaleDecision === "WHALE_DISTRIBUTION_AVOID" ||
-    distributionProxy >= 80;
-  return {
-    phase: "50_WHALE_WALLET_SMART_MONEY_TRACKING",
-    updatedAt: new Date().toISOString(),
-    symbol,
-    whaleDecision,
-    whaleSmartMoneyScore,
-    accumulationProxy,
-    distributionProxy,
-    volumeSpikeRatio,
-    stopHuntRisk,
-    blockWhaleTrap,
-    reason: "STATE_UPDATED",
-  };
-}
-function updateWhaleSmartMoneyState(cryptoSignals = []) {
-  const reviewed = cryptoSignals.map((signal) =>
-    calculateWhaleSmartMoney(signal)
-  );
-  const accumulation = reviewed.filter(
-    (item) =>
-      item.whaleDecision === "WHALE_ACCUMULATION_CONFIRMED" ||
-      item.whaleDecision === "SMART_MONEY_ACCUMULATION"
-  );
-  const blocked = reviewed.filter((item) => item.blockWhaleTrap);
-  const avgWhaleScore =
-    reviewed.length > 0
-      ? reviewed.reduce(
-        (sum, item) => sum + Number(item.whaleSmartMoneyScore || 0),
-        0
-      ) / reviewed.length
-      : 0;
-  const state = {
-    updatedAt: new Date().toISOString(),
-    phase: "50_WHALE_WALLET_SMART_MONEY_TRACKING",
-    reviewedCount: reviewed.length,
-    accumulationCount: accumulation.length,
-    blockedDistributionCount: blocked.length,
-    avgWhaleScore: Number(avgWhaleScore.toFixed(2)),
-    whaleAccumulationSetups: accumulation
-      .sort(
-        (a, b) =>
-          Number(b.whaleSmartMoneyScore || 0) -
-          Number(a.whaleSmartMoneyScore || 0)
-      )
-      .slice(0, 10),
-    whaleDistributionAvoidList: blocked
-      .sort(
-        (a, b) =>
-          Number(b.distributionProxy || 0) -
-          Number(a.distributionProxy || 0)
-      )
-      .slice(0, 10),
-    reason:
-      `${blocked.length} distribution traps blocked`,
-  };
-  engineState.phase50WhaleSmartMoneyState = state;
-  if (!Array.isArray(engineState.phase50WhaleSmartMoneyHistory)) {
-    engineState.phase50WhaleSmartMoneyHistory = [];
-  }
-  engineState.phase50WhaleSmartMoneyHistory.unshift(state);
-  engineState.phase50WhaleSmartMoneyHistory =
-    engineState.phase50WhaleSmartMoneyHistory.slice(0, 200);
-  engineState.whaleSmartMoneyMemory =
-    engineState.whaleSmartMoneyMemory || {};
-  for (const item of reviewed) {
-    engineState.whaleSmartMoneyMemory[normalizeSymbol(item.symbol)] = item;
-  }
-  saveEngineState("PHASE_50_WHALE_SMART_MONEY_UPDATED");
-  return state;
-}
-function applyWhaleSmartMoneyToSignals(cryptoSignals = []) {
-  return cryptoSignals.map((signal) => {
-    const phase50 = calculateWhaleSmartMoney(signal);
-    signal.phase50WhaleSmartMoney = phase50;
-    signal.whaleSmartMoneyScore = phase50.whaleSmartMoneyScore;
-    signal.whaleDecision = phase50.whaleDecision;
-    signal.whaleAccumulationProxy = phase50.accumulationProxy;
-    signal.whaleDistributionProxy = phase50.distributionProxy;
-    if (phase50.blockWhaleTrap) {
-      signal.qualifiedToBuy = false;
-      signal.phase50Suppressed = true;
-      signal.phase50SuppressionReason = phase50.reason;
-      signal.score = clampScore(Number(signal.score || 0) - 8);
-    }
-    if (phase50.whaleDecision === "WHALE_ACCUMULATION_CONFIRMED") {
-      signal.score = clampScore(Number(signal.score || 0) + 6);
-      signal.whaleAccumulationConfirmed = true;
-    }
-    if (phase50.whaleDecision === "SMART_MONEY_ACCUMULATION") {
-      signal.score = clampScore(Number(signal.score || 0) + 3);
-      signal.smartMoneyAccumulationConfirmed = true;
-    }
-    if (phase50.whaleDecision === "WEAK_WHALE_FLOW") {
-      signal.score = clampScore(Number(signal.score || 0) - 3);
-      signal.weakWhaleFlow = true;
-    }
-    return signal;
-  });
-}
-function calculateMultiTimeframeCrypto(signal = {}) {
-  const symbol = normalizeSymbol(signal.symbol);
-  const score = Number(signal.score || 0);
-  const percentChange = Number(signal.percentChange || signal.changePercent || 0);
-  const shortFrameScore = clampScore(
-    score * 0.45 +
-    Number(signal.cryptoExecutionScore || 50) * 0.3 +
-    (percentChange > 0 ? 12 : -8) +
-    (Math.abs(percentChange) >= 10 ? -8 : 0)
-  );
-  const midFrameScore = clampScore(
-    Number(signal.cryptoLiquiditySweepScore || 50) * 0.3 +
-    Number(signal.whaleSmartMoneyScore || 50) * 0.35 +
-    Number(signal.cryptoCapitalRotationScore || 50) * 0.2 +
-    Number(signal.stablecoinFlowSignalScore || 50) * 0.15
-  );
-  const longFrameScore = clampScore(
-    Number(signal.cryptoInstitutionalScore || 50) * 0.35 +
-    Number(signal.crossMarketCorrelationScore || 50) * 0.25 +
-    Number(signal.cryptoRiskScore || 50) * 0.2 +
-    Number(signal.cryptoRunnerStrength || 50) * 0.2
-  );
-  const timeframeAlignmentScore = clampScore(
-    shortFrameScore * 0.34 +
-    midFrameScore * 0.33 +
-    longFrameScore * 0.33
-  );
-  const disagreementPenalty =
-    Math.max(shortFrameScore, midFrameScore, longFrameScore) -
-      Math.min(shortFrameScore, midFrameScore, longFrameScore) >=
-      35
-      ? 15
-      : Math.max(shortFrameScore, midFrameScore, longFrameScore) -
-        Math.min(shortFrameScore, midFrameScore, longFrameScore) >=
-        25
-        ? 8
-        : 0;
-  const finalParliamentScore = clampScore(
-    timeframeAlignmentScore - disagreementPenalty
-  );
-  const parliamentDecision =
-    finalParliamentScore >= 85
-      ? "FULL_TIMEFRAME_ALIGNMENT"
-      : finalParliamentScore >= 74
-        ? "STRONG_TIMEFRAME_ALIGNMENT"
-        : finalParliamentScore >= 62
-          ? "PARTIAL_TIMEFRAME_ALIGNMENT"
-          : finalParliamentScore >= 48
-            ? "WAIT_FOR_TIMEFRAME_CONFIRMATION"
-            : "BLOCK_TIMEFRAME_CONFLICT";
-  const blockTimeframeConflict =
-    parliamentDecision === "BLOCK_TIMEFRAME_CONFLICT" ||
-    (parliamentDecision === "WAIT_FOR_TIMEFRAME_CONFIRMATION" &&
-      signal.qualifiedToBuy === false);
-  return {
-    phase: "51_MULTI_TIMEFRAME_CRYPTO_PARLIAMENT",
-    updatedAt: new Date().toISOString(),
-    symbol,
-    shortFrameScore,
-    midFrameScore,
-    longFrameScore,
-    timeframeAlignmentScore,
-    disagreementPenalty,
-    finalParliamentScore,
-    parliamentDecision,
-    blockTimeframeConflict,
-    reason: "STATE_UPDATED",
-  };
-}
-function updateMultiTimeframeCryptoState(cryptoSignals = []) {
-  const reviewed = cryptoSignals.map((signal) =>
-    calculateMultiTimeframeCrypto(signal)
-  );
-  const aligned = reviewed.filter(
-    (item) =>
-      item.parliamentDecision === "FULL_TIMEFRAME_ALIGNMENT" ||
-      item.parliamentDecision === "STRONG_TIMEFRAME_ALIGNMENT"
-  );
-  const blocked = reviewed.filter((item) => item.blockTimeframeConflict);
-  const avgParliamentScore =
-    reviewed.length > 0
-      ? reviewed.reduce(
-        (sum, item) => sum + Number(item.finalParliamentScore || 0),
-        0
-      ) / reviewed.length
-      : 0;
-  const state = {
-    updatedAt: new Date().toISOString(),
-    phase: "51_MULTI_TIMEFRAME_CRYPTO_PARLIAMENT",
-    reviewedCount: reviewed.length,
-    alignedCount: aligned.length,
-    blockedConflictCount: blocked.length,
-    avgParliamentScore: Number(avgParliamentScore.toFixed(2)),
-    alignedCryptoSetups: aligned
-      .sort(
-        (a, b) =>
-          Number(b.finalParliamentScore || 0) -
-          Number(a.finalParliamentScore || 0)
-      )
-      .slice(0, 10),
-    blockedTimeframeConflicts: blocked
-      .sort(
-        (a, b) =>
-          Number(b.disagreementPenalty || 0) -
-          Number(a.disagreementPenalty || 0)
-      )
-      .slice(0, 10),
-    reason: "STATE_UPDATED",
-  };
-  engineState.phase51MultiTimeframeCryptoState = state;
-  if (!Array.isArray(engineState.phase51MultiTimeframeCryptoHistory)) {
-    engineState.phase51MultiTimeframeCryptoHistory = [];
-  }
-  engineState.phase51MultiTimeframeCryptoHistory.unshift(state);
-  engineState.phase51MultiTimeframeCryptoHistory =
-    engineState.phase51MultiTimeframeCryptoHistory.slice(0, 200);
-  engineState.multiTimeframeCryptoMemory =
-    engineState.multiTimeframeCryptoMemory || {};
-  for (const item of reviewed) {
-    engineState.multiTimeframeCryptoMemory[normalizeSymbol(item.symbol)] = item;
-  }
-  saveEngineState("PHASE_51_MULTI_TIMEFRAME_CRYPTO_UPDATED");
-  return state;
-}
-function applyMultiTimeframeCryptoToSignals(cryptoSignals = []) {
-  return cryptoSignals.map((signal) => {
-    const phase51 = calculateMultiTimeframeCrypto(signal);
-    signal.phase51MultiTimeframeCrypto = phase51;
-    signal.multiTimeframeCryptoScore = phase51.finalParliamentScore;
-    signal.multiTimeframeCryptoDecision = phase51.parliamentDecision;
-    signal.shortFrameCryptoScore = phase51.shortFrameScore;
-    signal.midFrameCryptoScore = phase51.midFrameScore;
-    signal.longFrameCryptoScore = phase51.longFrameScore;
-    if (phase51.blockTimeframeConflict) {
-      signal.qualifiedToBuy = false;
-      signal.phase51Suppressed = true;
-      signal.phase51SuppressionReason = phase51.reason;
-      signal.score = clampScore(Number(signal.score || 0) - 8);
-    }
-    if (phase51.parliamentDecision === "FULL_TIMEFRAME_ALIGNMENT") {
-      signal.score = clampScore(Number(signal.score || 0) + 6);
-      signal.fullCryptoTimeframeAlignment = true;
-    }
-    if (phase51.parliamentDecision === "STRONG_TIMEFRAME_ALIGNMENT") {
-      signal.score = clampScore(Number(signal.score || 0) + 3);
-      signal.strongCryptoTimeframeAlignment = true;
-    }
-    if (phase51.parliamentDecision === "WAIT_FOR_TIMEFRAME_CONFIRMATION") {
-      signal.score = clampScore(Number(signal.score || 0) - 3);
-      signal.waitForCryptoTimeframeConfirmation = true;
-    }
-    return signal;
-  });
-}
+const {
+  calculateCryptoInstitutionalSignal,
+  updateCryptoInstitutionalState,
+  calculateCryptoCapitalRotation,
+  applyCryptoCapitalRotationToSignals,
+  calculateCryptoExecutionTiming,
+  updateCryptoExecutionTimingState,
+  applyCryptoExecutionTimingToSignals,
+  calculateCryptoPositionSizing,
+  updateCryptoPositionSizingState,
+  applyCryptoPositionSizingToSignals,
+  calculateCryptoExitStrategy,
+  updateCryptoExitStrategyState,
+  applyCryptoExitStrategyToSignals,
+  calculateCryptoLiquiditySweep,
+  updateCryptoLiquiditySweepState,
+  applyCryptoLiquiditySweepToSignals,
+  calculateCrossMarketCorrelation,
+  applyCrossMarketCorrelationToSignals,
+  calculateStablecoinFlowPressure,
+  applyStablecoinFlowToSignals,
+  calculateWhaleSmartMoney,
+  updateWhaleSmartMoneyState,
+  applyWhaleSmartMoneyToSignals,
+  calculateMultiTimeframeCrypto,
+  updateMultiTimeframeCryptoState,
+  applyMultiTimeframeCryptoToSignals,
+  calculateCryptoReinforcementLearning,
+  calculateCryptoStrategySelector,
+} = createCryptoIntelligenceStrategy({
+  calculateCryptoStrategySelection,
+  clampScore,
+  engineState,
+  normalizeSymbol,
+  saveEngineState,
+});
 function calculateProfitVelocity(stockSignals = [], cryptoSignals = []) {
   const stocks = Array.isArray(stockSignals) ? stockSignals : [];
   const cryptos = Array.isArray(cryptoSignals) ? cryptoSignals : [];
@@ -18713,316 +16600,6 @@ function calculateGlobalRiskDefense(stockSignals = [], cryptoSignals = []) {
       `crypto exposure multiplier ${exposureMultiplier}`,
   };
 }
-function calculateCryptoReinforcementLearning(cryptoSignals = []) {
-  const signals = Array.isArray(cryptoSignals) ? cryptoSignals : [];
-  const closedTrades = Array.isArray(engineState.tradeJournalHistory)
-    ? engineState.tradeJournalHistory
-    : [];
-  const cryptoTrades = closedTrades.filter((trade) => {
-    const assetClass = String(trade.assetClass || "").toLowerCase();
-    const symbol = normalizeSymbol(trade.symbol);
-    return (
-      assetClass === "crypto" ||
-      symbol.endsWith("USD") ||
-      symbol.includes("/")
-    );
-  });
-  const strategyMemory = {};
-  const symbolMemory = {};
-  for (const trade of cryptoTrades.slice(0, 300)) {
-    const symbol = normalizeSymbol(trade.symbol);
-    const strategy =
-      trade.strategy ||
-      trade.selectedCryptoStrategy ||
-      trade.entryType ||
-      "UNKNOWN_CRYPTO_STRATEGY";
-    const profitPercent = Number(trade.profitPercent || 0);
-    if (!strategyMemory[strategy]) {
-      strategyMemory[strategy] = {
-        strategy,
-        trades: 0,
-        wins: 0,
-        losses: 0,
-        totalProfitPercent: 0,
-        averageProfitPercent: 0,
-        winRate: 0,
-        trustScore: 50,
-      };
-    }
-    strategyMemory[strategy].trades += 1;
-    strategyMemory[strategy].totalProfitPercent += profitPercent;
-    if (profitPercent > 0) {
-      strategyMemory[strategy].wins += 1;
-    } else if (profitPercent < 0) {
-      strategyMemory[strategy].losses += 1;
-    }
-    strategyMemory[strategy].averageProfitPercent =
-      strategyMemory[strategy].totalProfitPercent /
-      Math.max(1, strategyMemory[strategy].trades);
-    strategyMemory[strategy].winRate =
-      (strategyMemory[strategy].wins /
-        Math.max(1, strategyMemory[strategy].trades)) *
-      100;
-    strategyMemory[strategy].trustScore = clampScore(
-      45 +
-      strategyMemory[strategy].winRate * 0.35 +
-      strategyMemory[strategy].averageProfitPercent * 3 -
-      strategyMemory[strategy].losses * 1.5
-    );
-    if (!symbolMemory[symbol]) {
-      symbolMemory[symbol] = {
-        symbol,
-        trades: 0,
-        wins: 0,
-        losses: 0,
-        totalProfitPercent: 0,
-        averageProfitPercent: 0,
-        winRate: 0,
-        trustScore: 50,
-      };
-    }
-    symbolMemory[symbol].trades += 1;
-    symbolMemory[symbol].totalProfitPercent += profitPercent;
-    if (profitPercent > 0) {
-      symbolMemory[symbol].wins += 1;
-    } else if (profitPercent < 0) {
-      symbolMemory[symbol].losses += 1;
-    }
-    symbolMemory[symbol].averageProfitPercent =
-      symbolMemory[symbol].totalProfitPercent /
-      Math.max(1, symbolMemory[symbol].trades);
-    symbolMemory[symbol].winRate =
-      (symbolMemory[symbol].wins /
-        Math.max(1, symbolMemory[symbol].trades)) *
-      100;
-    symbolMemory[symbol].trustScore = clampScore(
-      45 +
-      symbolMemory[symbol].winRate * 0.35 +
-      symbolMemory[symbol].averageProfitPercent * 3 -
-      symbolMemory[symbol].losses * 2
-    );
-  }
-  const reinforcedSignals = signals.map((signal) => {
-    const symbol = normalizeSymbol(signal.symbol);
-    const selectedStrategy =
-      signal.selectedCryptoStrategy ||
-      signal.autonomousCryptoStrategySelector?.selectedStrategy ||
-      "UNKNOWN_CRYPTO_STRATEGY";
-    const strategyTrust =
-      strategyMemory[selectedStrategy]?.trustScore ?? 50;
-    const symbolTrust = symbolMemory[symbol]?.trustScore ?? 50;
-    const selectorConfidence = Number(
-      signal.cryptoStrategySelectorScore ||
-      signal.autonomousCryptoStrategySelector?.strategyConfidence ||
-      signal.score ||
-      50
-    );
-    const reinforcementScore = clampScore(
-      selectorConfidence * 0.45 +
-      strategyTrust * 0.3 +
-      symbolTrust * 0.25
-    );
-    const learningAdjustment =
-      reinforcementScore >= 82
-        ? 5
-        : reinforcementScore >= 72
-          ? 3
-          : reinforcementScore <= 38
-            ? -6
-            : reinforcementScore <= 48
-              ? -3
-              : 0;
-    const action =
-      reinforcementScore >= 82
-        ? "REINFORCE_CRYPTO_AGGRESSIVELY"
-        : reinforcementScore >= 72
-          ? "REINFORCE_CRYPTO_SELECTIVELY"
-          : reinforcementScore <= 38
-            ? "SUPPRESS_CRYPTO_SETUP"
-            : "OBSERVE_CRYPTO_SETUP";
-    return {
-      symbol,
-      selectedStrategy,
-      reinforcementScore,
-      strategyTrust,
-      symbolTrust,
-      learningAdjustment,
-      action,
-      shouldSuppressCrypto:
-        action === "SUPPRESS_CRYPTO_SETUP",
-      shouldBoostCrypto:
-        action === "REINFORCE_CRYPTO_AGGRESSIVELY" ||
-        action === "REINFORCE_CRYPTO_SELECTIVELY",
-      reason: "APPLIED",
-    };
-  });
-  return {
-    updatedAt: new Date().toISOString(),
-    phase: "53_CRYPTO_REINFORCEMENT_LEARNING_EXPANSION",
-    reviewedCryptoSignals: signals.length,
-    learnedCryptoTrades: cryptoTrades.length,
-    strategyMemory,
-    symbolMemory,
-    reinforcedSignals,
-    topReinforcedCryptoSignals: reinforcedSignals
-      .filter((item) => item.shouldBoostCrypto)
-      .sort(
-        (a, b) =>
-          Number(b.reinforcementScore || 0) -
-          Number(a.reinforcementScore || 0)
-      )
-      .slice(0, 10),
-    suppressedCryptoSignals: reinforcedSignals
-      .filter((item) => item.shouldSuppressCrypto)
-      .slice(0, 20),
-  };
-}
-function calculateCryptoStrategySelector(cryptoSignals = []) {
-  const signals = Array.isArray(cryptoSignals) ? cryptoSignals : [];
-  const selectedCryptoSignals = signals.map((signal) => {
-    const symbol = normalizeSymbol(signal.symbol);
-    const baseScore = Number(signal.score || signal.realismAdjustedScore || 0);
-    const liquidityScore = Number(
-      signal.liquiditySweep?.liquidityScore ||
-      signal.cryptoLiquidityScore ||
-      signal.liquidityScore ||
-      50
-    );
-    const whaleScore = Number(
-      signal.whaleSmartMoney?.whaleAccumulationScore ||
-      signal.whaleScore ||
-      signal.smartMoneyWhaleScore ||
-      50
-    );
-    const stablecoinPressureScore = Number(
-      signal.stablecoinPressure?.stablecoinFlowScore ||
-      signal.stablecoinFlowScore ||
-      signal.exchangePressureScore ||
-      50
-    );
-    const correlationScore = Number(
-      signal.crossMarketCorrelation?.cryptoCorrelationScore ||
-      signal.correlationScore ||
-      50
-    );
-    const multiTimeframeScore = Number(
-      signal.cryptoMultiTimeframeParliament?.multiTimeframeScore ||
-      signal.multiTimeframeScore ||
-      signal.timeframeScore ||
-      50
-    );
-    const executionScore = Number(
-      signal.cryptoExecutionTiming?.executionTimingScore ||
-      signal.executionTimingScore ||
-      50
-    );
-    const positionSizingScore = Number(
-      signal.cryptoPositionSizing?.positionSizingScore ||
-      signal.positionSizingScore ||
-      50
-    );
-    const exitRiskScore = Number(
-      signal.cryptoExitParliament?.exitRiskScore ||
-      signal.exitRiskScore ||
-      35
-    );
-    const momentumStrategyScore = clampScore(
-      baseScore * 0.3 +
-      liquidityScore * 0.18 +
-      multiTimeframeScore * 0.22 +
-      executionScore * 0.15 +
-      whaleScore * 0.15 -
-      exitRiskScore * 0.1
-    );
-    const accumulationStrategyScore = clampScore(
-      whaleScore * 0.3 +
-      stablecoinPressureScore * 0.2 +
-      liquidityScore * 0.2 +
-      multiTimeframeScore * 0.2 +
-      baseScore * 0.1 -
-      exitRiskScore * 0.08
-    );
-    const defensiveStrategyScore = clampScore(
-      liquidityScore * 0.28 +
-      positionSizingScore * 0.22 +
-      correlationScore * 0.2 +
-      stablecoinPressureScore * 0.15 +
-      executionScore * 0.15 -
-      exitRiskScore * 0.18
-    );
-    const breakoutStrategyScore = clampScore(
-      baseScore * 0.22 +
-      liquidityScore * 0.2 +
-      whaleScore * 0.18 +
-      multiTimeframeScore * 0.25 +
-      executionScore * 0.15 -
-      exitRiskScore * 0.12
-    );
-    const strategies = [
-      {
-        strategy: "CRYPTO_MOMENTUM_CONTINUATION",
-        score: momentumStrategyScore,
-      },
-      {
-        strategy: "WHALE_ACCUMULATION_FOLLOW_THROUGH",
-        score: accumulationStrategyScore,
-      },
-      {
-        strategy: "DEFENSIVE_LIQUIDITY_PROTECTION",
-        score: defensiveStrategyScore,
-      },
-      {
-        strategy: "MULTI_TIMEFRAME_BREAKOUT",
-        score: breakoutStrategyScore,
-      },
-    ].sort((a, b) => Number(b.score || 0) - Number(a.score || 0));
-    const selectedStrategy = strategies[0] || {
-      strategy: "NO_CRYPTO_STRATEGY_EDGE",
-      score: 0,
-    };
-    const strategyConfidence = clampScore(selectedStrategy.score);
-    const action =
-      strategyConfidence >= 82
-        ? "DEPLOY_AGGRESSIVE_CRYPTO_STRATEGY"
-        : strategyConfidence >= 72
-          ? "DEPLOY_SELECTIVE_CRYPTO_STRATEGY"
-          : strategyConfidence >= 62
-            ? "WATCH_CRYPTO_STRATEGY"
-            : "BLOCK_WEAK_CRYPTO_STRATEGY";
-    return {
-      symbol,
-      selectedStrategy: selectedStrategy.strategy,
-      strategyConfidence,
-      strategyRanking: strategies,
-      action,
-      shouldBoostCryptoScore: strategyConfidence >= 72,
-      strategyScoreBoost:
-        strategyConfidence >= 82 ? 6 : strategyConfidence >= 72 ? 3 : 0,
-      reason: "APPLIED",
-    };
-  });
-  const deployableStrategies = selectedCryptoSignals.filter(
-    (item) =>
-      item.action === "DEPLOY_AGGRESSIVE_CRYPTO_STRATEGY" ||
-      item.action === "DEPLOY_SELECTIVE_CRYPTO_STRATEGY"
-  );
-  const averageStrategyConfidence =
-    selectedCryptoSignals.reduce(
-      (sum, item) => sum + Number(item.strategyConfidence || 0),
-      0
-    ) / Math.max(1, selectedCryptoSignals.length);
-  return {
-    updatedAt: new Date().toISOString(),
-    phase: "52_AUTONOMOUS_CRYPTO_STRATEGY_SELECTOR",
-    reviewedCryptoSignals: signals.length,
-    deployableStrategyCount: deployableStrategies.length,
-    averageStrategyConfidence: Number(averageStrategyConfidence.toFixed(2)),
-    selectedCryptoSignals,
-    topCryptoStrategies: deployableStrategies.slice(0, 10),
-    reason:
-      `${deployableStrategies.length} deployable autonomous crypto strategies found.`,
-  };
-}
 function detectMarketRegime(stockSignals = []) {
   if (!CONFIG.enableMarketRegimeEngine) {
     return {
@@ -19166,176 +16743,24 @@ function calculateMarketPhase(stockSignals = [], cryptoSignals = []) {
       `FakeBreakouts ${(fakeBreakoutRatio * 100).toFixed(1)}%`,
   };
 }
+function getPremarketContinuationRelief(q = {}) {
+  return !engineState.marketOpen &&
+    (isPremarketMomentumWindow() || isMorningStrikeWindow()) &&
+    Number(q.premarketContinuationScore || q.premarketDominanceScore ||
+      q.openingDriveProbability || q.continuationProbability ||
+      q.breakoutProbability || 0) >= 70;
+}
 function calculateRiskScore(q) {
-  const price = Number(q.current || q.price || 0);
-  const volume = Number(q.volume || 0);
-  const percentChange = Number(q.percentChange || 0);
-  const confirmations = q.confirmations || {};
-  const technicals = q.technicals || {};
-  const rsi = Number(technicals.rsi || 50);
-  const volumeRatio = Number(confirmations.volumeSpikeRatio || q.volumeRatio || 0);
-  const premarketContinuationRelief =
-    !engineState.marketOpen &&
-    (
-      isPremarketMomentumWindow() ||
-      isMorningStrikeWindow()
-    ) &&
-    Number(
-      q.premarketContinuationScore ||
-      q.premarketDominanceScore ||
-      q.openingDriveProbability ||
-      q.continuationProbability ||
-      q.breakoutProbability ||
-      0
-    ) >= 70;
-  const drawdownRiskScore = clampScore(
-    80 -
-    (percentChange > 20 ? (premarketContinuationRelief ? 8 : 25) : 0) -
-    (percentChange > 40 ? (premarketContinuationRelief ? 8 : 20) : 0) -
-    (confirmations.fakeBreakout ? (premarketContinuationRelief ? 10 : 30) : 0) -
-    (confirmations.gapTooHigh ? (premarketContinuationRelief ? 6 : 20) : 0)
-  );
-  const volatilityShockScore = clampScore(
-    75 -
-    (Math.abs(percentChange) > 15 ? (premarketContinuationRelief ? 5 : 15) : 0) -
-    (Math.abs(percentChange) > 30 ? (premarketContinuationRelief ? 7 : 20) : 0) -
-    (rsi > 80 ? (premarketContinuationRelief ? 5 : 15) : 0) -
-    (volumeRatio > 5 ? 10 : 0)
-  );
-  const liquidityStressScore = clampScore(
-    40 +
-    (volume >= 1000000 ? 35 : volume >= 250000 ? 25 : volume >= 25000 ? 15 : -15) +
-    (price >= 5 ? 10 : -10)
-  );
-  const downsideExposureScore = clampScore(
-    80 -
-    (percentChange < -20 ? 20 : 0) -
-    (percentChange > 30 ? (premarketContinuationRelief ? 7 : 20) : 0) -
-    (confirmations.newsRisk ? 30 : 0) -
-    (!confirmations.aboveVwap ? (premarketContinuationRelief ? 4 : 10) : 0)
-  );
-  const crashSurvivabilityScore = clampScore(
-    50 +
-    (liquidityStressScore >= 70 ? 15 : 0) +
-    (drawdownRiskScore >= 70 ? 15 : 0) +
-    (price >= 10 ? 10 : 0) -
-    (confirmations.fakeBreakout ? (premarketContinuationRelief ? 8 : 25) : 0)
-  );
-  const institutionalRiskScore = clampScore(
-    drawdownRiskScore * 0.22 +
-    volatilityShockScore * 0.2 +
-    liquidityStressScore * 0.2 +
-    downsideExposureScore * 0.2 +
-    crashSurvivabilityScore * 0.18
-  );
-  const institutionalRiskLabel =
-    institutionalRiskScore >= 80
-      ? "Institutional Risk"
-      : institutionalRiskScore >= 65
-        ? "Controlled Risk"
-        : institutionalRiskScore >= 50
-          ? "Elevated Risk"
-          : "High Stress Risk";
-  return {
-    institutionalRiskScore,
-    drawdownRiskScore,
-    volatilityShockScore,
-    liquidityStressScore,
-    downsideExposureScore,
-    crashSurvivabilityScore,
-    institutionalRiskLabel,
-  };
+  return calculateInstitutionalRiskScore(q, {
+    clampScore,
+    premarketContinuationRelief: getPremarketContinuationRelief(q),
+  });
 }
 function calculatePortfolioScore(q) {
-  const price = Number(q.current || q.price || 0);
-  const volume = Number(q.volume || 0);
-  const percentChange = Number(q.percentChange || 0);
-  const confirmations = q.confirmations || {};
-  const technicals = q.technicals || {};
-  const rsi = Number(technicals.rsi || 50);
-  const volumeRatio = Number(confirmations.volumeSpikeRatio || q.volumeRatio || 0);
-  const premarketContinuationRelief =
-    !engineState.marketOpen &&
-    (
-      isPremarketMomentumWindow() ||
-      isMorningStrikeWindow()
-    ) &&
-    Number(
-      q.premarketContinuationScore ||
-      q.premarketDominanceScore ||
-      q.openingDriveProbability ||
-      q.continuationProbability ||
-      q.breakoutProbability ||
-      0
-    ) >= 70;
-  const liquidityFitScore = clampScore(
-    45 +
-    (volume >= 1000000 ? 25 : volume >= 250000 ? 18 : volume >= 25000 ? 10 : -20) +
-    (price >= 5 ? 10 : -10)
-  );
-  const volatilityBalanceScore = clampScore(
-    75 -
-    (Math.abs(percentChange) > 20 ? (premarketContinuationRelief ? 8 : 25) : 0) -
-    (Math.abs(percentChange) > 12 ? (premarketContinuationRelief ? 4 : 12) : 0) -
-    (confirmations.gapTooHigh ? (premarketContinuationRelief ? 5 : 15) : 0) -
-    (rsi > 80 ? (premarketContinuationRelief ? 5 : 15) : 0)
-  );
-  const diversificationFitScore = clampScore(
-    55 +
-    (price >= 5 ? 8 : -8) +
-    (volumeRatio >= 1 && volumeRatio <= 3 ? 10 : 0) -
-    (confirmations.fakeBreakout ? (premarketContinuationRelief ? 8 : 25) : 0)
-  );
-  const positionSizingQualityScore = clampScore(
-    60 +
-    (volume >= 250000 ? 10 : 0) +
-    (percentChange >= 0 && percentChange <= 15 ? 10 : 0) -
-    (confirmations.newsRisk ? 20 : 0) -
-    (confirmations.fakeBreakout ? (premarketContinuationRelief ? 8 : 25) : 0)
-  );
-  const portfolioRiskContributionScore = clampScore(
-    80 -
-    (percentChange > 20 ? (premarketContinuationRelief ? 7 : 20) : 0) -
-    (confirmations.gapTooHigh ? (premarketContinuationRelief ? 5 : 15) : 0) -
-    (confirmations.newsRisk ? 25 : 0) -
-    (volume < 25000 ? 25 : 0)
-  );
-  const portfolioConstructionScore = clampScore(
-    liquidityFitScore * 0.24 +
-    volatilityBalanceScore * 0.22 +
-    diversificationFitScore * 0.18 +
-    positionSizingQualityScore * 0.2 +
-    portfolioRiskContributionScore * 0.16
-  );
-  const portfolioRole =
-    portfolioConstructionScore >= 85
-      ? "Core Position Candidate"
-      : portfolioConstructionScore >= 75
-        ? "Strong Portfolio Fit"
-        : portfolioConstructionScore >= 65
-          ? "Satellite Position"
-          : portfolioConstructionScore >= 50
-            ? "Small Tactical Position"
-            : "Avoid Heavy Allocation";
-  const suggestedAllocationTier =
-    portfolioConstructionScore >= 85
-      ? "High"
-      : portfolioConstructionScore >= 70
-        ? "Medium"
-        : portfolioConstructionScore >= 55
-          ? "Small"
-          : "Watch Only";
-  return {
-    portfolioScore: portfolioConstructionScore,
-    portfolioConstructionScore,
-    liquidityFitScore,
-    volatilityBalanceScore,
-    diversificationFitScore,
-    positionSizingQualityScore,
-    portfolioRiskContributionScore,
-    portfolioRole,
-    suggestedAllocationTier,
-  };
+  return calculatePortfolioFitScore(q, {
+    clampScore,
+    premarketContinuationRelief: getPremarketContinuationRelief(q),
+  });
 }
 function calculateDividendCompoundingScore(q) {
   const symbol = normalizeSymbol(q.symbol);
@@ -19596,250 +17021,6 @@ function calculateMoatEngine(q) {
     competitiveAdvantageReason: "APPLIED",
   };
 }
-function calculateInstitutionalScores(q) {
-  const confirmations = q.confirmations || {};
-  const technicals = q.technicals || {};
-  const momentum = Number(q.percentChange || 0);
-  const volumeRatio = Number(confirmations.volumeSpikeRatio || q.volumeRatio || 0);
-  const premarketContinuationRelief =
-    !engineState.marketOpen &&
-    (
-      isPremarketMomentumWindow() ||
-      isMorningStrikeWindow()
-    ) &&
-    Number(
-      q.premarketContinuationScore ||
-      q.premarketDominanceScore ||
-      q.openingDriveProbability ||
-      q.continuationProbability ||
-      q.breakoutProbability ||
-      0
-    ) >= 70;
-  const rsi = Number(technicals.rsi || 50);
-  const ema9 = Number(technicals.ema9 || 0);
-  const ema20 = Number(technicals.ema20 || 0);
-  const macd = Number(technicals.macd || 0);
-  const macdSignal = Number(technicals.macdSignal || 0);
-  const institutionalDcf =
-    calculateDcfValuation(q);
-  const earnings = calculateEarningsScore(q);
-  const edge = calculateStatisticalEdge(q);
-  const citadelTechnical = calculateTechnicalIntelligence(q);
-  const moat = calculateMoatEngine(q);
-  const wealth = calculateDividendWealthEngine(q);
-  const harvardDividend =
-    calculateDividendCompoundingScore(q);
-  const portfolio = calculatePortfolioScore(q);
-  const sector = estimateSectorIntelligence(q);
-  const advancedRisk = calculateRiskScore(q);
-  const technicalScore = citadelTechnical.technicalScore;
-  const riskScore = clampScore(
-    80 -
-    (confirmations.fakeBreakout ? (premarketContinuationRelief ? 10 : 35) : 0) -
-    (confirmations.gapTooHigh ? (premarketContinuationRelief ? 6 : 20) : 0) -
-    (confirmations.newsRisk ? 30 : 0) -
-    (momentum > 25 ? (premarketContinuationRelief ? 5 : 15) : 0) -
-    (volumeRatio < 0.8 ? 10 : 0)
-  );
-  const blendedRiskScore = clampScore(
-    riskScore * 0.55 +
-    advancedRisk.institutionalRiskScore * 0.45
-  );
-  const statisticalScore = edge.statisticalEdgeScore;
-  const regime = engineState.marketRegime || detectMarketRegime([]);
-  const macroScore = clampScore(
-    regime.state === "aggressive bullish"
-      ? 85
-      : regime.state === "cautious bullish"
-        ? 70
-        : regime.state === "defensive"
-          ? 50
-          : 25
-  );
-  const fundamentalScore = institutionalDcf.fundamentalScore;
-  const dcfValuationScore = institutionalDcf.dcfValuationScore;
-  const earningsScore = earnings.earningsScore;
-  const moatScore = moat.moatScore;
-  const dividendScore = wealth.wealthBuilderScore;
-  const harvardDividendScore =
-    harvardDividend.harvardDividendCompoundingScore;
-  const portfolioScore = portfolio.portfolioScore;
-  const reinforcementWeights =
-    engineState.reinforcementWeightState?.weights || {
-      momentum: 0.18,
-      technicals: 0.25,
-      fundamentals: 0.12,
-      macro: 0.1,
-      statisticalEdge: 0.2,
-      riskQuality: 0.15,
-    };
-  const momentumScore = clampScore(
-    50 +
-    momentum * 1.5 +
-    volumeRatio * 8 -
-    (momentum > 35 ? (premarketContinuationRelief ? 5 : 15) : 0)
-  );
-  const fundamentalBlendScore = clampScore(
-    fundamentalScore * 0.45 +
-    dcfValuationScore * 0.2 +
-    earningsScore * 0.15 +
-    moatScore * 0.12 +
-    dividendScore * 0.04 +
-    harvardDividendScore * 0.04
-  );
-  const institutionalScore = clampScore(
-    momentumScore * reinforcementWeights.momentum +
-    technicalScore * reinforcementWeights.technicals +
-    fundamentalBlendScore * reinforcementWeights.fundamentals +
-    macroScore * reinforcementWeights.macro +
-    statisticalScore * reinforcementWeights.statisticalEdge +
-    blendedRiskScore * reinforcementWeights.riskQuality +
-    portfolioScore * 0.04 +
-    sector.sectorScore * 0.03
-  );
-  const hardSafetyPass =
-    confirmations.fakeBreakout !== true &&
-    confirmations.newsRisk !== true &&
-    blendedRiskScore >= 55 &&
-    citadelTechnical.exhaustionRiskScore <= 82 &&
-    Number(q.volume || 0) >= 5000 &&
-    Number(q.percentChange || 0) <= CONFIG.maxPercentChange;
-  const institutionalQualityPass =
-    institutionalScore >= CONFIG.minScoreToBuy &&
-    citadelTechnical.institutionalEntryScore >= 55;
-  const stockResearchPass =
-    TRADING_MODE === "live_crypto" ||
-    (
-      institutionalDcf.valuationRiskScore <= 90 &&
-      earnings.earningsRiskMode !== "HIGH_EARNINGS_RISK" &&
-      earnings.earningsVolatilityRiskScore <= 85 &&
-      moat.competitiveAdvantageScore >= 35
-    );
-  const autoTradeApproved =
-    hardSafetyPass &&
-    institutionalQualityPass &&
-    stockResearchPass;
-  const decisionLevel = autoTradeApproved
-    ? "Auto-Trade Approved"
-    : institutionalScore >= 55
-      ? "Qualified Setup"
-      : "Visible Stock";
-  return {
-    technicalScore,
-    momentumScore,
-    fundamentalBlendScore,
-    reinforcementWeights,
-    technicalIntelligence: citadelTechnical,
-    trendQualityScore: citadelTechnical.trendQualityScore,
-    breakoutQualityScore: citadelTechnical.breakoutQualityScore,
-    executionTimingScore: citadelTechnical.executionTimingScore,
-    exhaustionRiskScore: citadelTechnical.exhaustionRiskScore,
-    institutionalEntryGrade: citadelTechnical.institutionalEntryGrade,
-    macroScore,
-    riskScore: blendedRiskScore,
-    legacyRiskScore: riskScore,
-    institutionalRiskScore: advancedRisk.institutionalRiskScore,
-    drawdownRiskScore: advancedRisk.drawdownRiskScore,
-    volatilityShockScore: advancedRisk.volatilityShockScore,
-    liquidityStressScore: advancedRisk.liquidityStressScore,
-    downsideExposureScore: advancedRisk.downsideExposureScore,
-    crashSurvivabilityScore: advancedRisk.crashSurvivabilityScore,
-    institutionalRiskLabel: advancedRisk.institutionalRiskLabel,
-    statisticalScore,
-    ...edge,
-    fundamentalScore,
-    dcfValuation: institutionalDcf,
-    dcfValuationScore,
-    valuationRiskScore:
-      institutionalDcf.valuationRiskScore,
-    marginOfSafetyScore:
-      institutionalDcf.marginOfSafetyScore,
-    qualityAdjustedMarginOfSafety:
-      institutionalDcf.qualityAdjustedMarginOfSafety,
-    valuationLabel:
-      institutionalDcf.valuationLabel,
-    valuationAction:
-      institutionalDcf.valuationAction,
-    intrinsicValue:
-      institutionalDcf.baseDcf?.intrinsicValue || 0,
-    valuationGapPercent:
-      institutionalDcf.baseDcf?.valuationGapPercent || 0,
-    valuationScore:
-      institutionalDcf.dcfValuationScore || dcfValuationScore,
-    balanceSheetHealthScore:
-      institutionalDcf.baseDcf?.balanceSheetHealthScore || 50,
-    cashFlowScore:
-      institutionalDcf.baseDcf?.cashFlowScore || 50,
-    revenueGrowthScore:
-      institutionalDcf.baseDcf?.revenueGrowthScore || 50,
-    marginScore:
-      institutionalDcf.baseDcf?.marginScore || 50,
-    debtRiskScore:
-      institutionalDcf.baseDcf?.debtRiskScore || 50,
-    earningsScore,
-    earningsIntelligence: earnings,
-    earningsRiskMode: earnings.earningsRiskMode,
-    earningsAction: earnings.earningsAction,
-    earningsVolatilityRiskScore:
-      earnings.earningsVolatilityRiskScore,
-    revenueQualityScore: earnings.revenueQualityScore,
-    guidanceScore: earnings.guidanceScore,
-    marginExpansionScore: earnings.marginExpansionScore,
-    epsSurpriseQualityScore: earnings.epsSurpriseQualityScore,
-    institutionalEarningsSentiment: earnings.institutionalEarningsSentiment,
-    earningsCashFlowStrength: earnings.earningsCashFlowStrength,
-    moatScore,
-    competitiveAdvantageScore: moat.competitiveAdvantageScore,
-    brandStrengthScore: moat.brandStrengthScore,
-    pricingPowerScore: moat.pricingPowerScore,
-    marketPositionScore: moat.marketPositionScore,
-    durabilityScore: moat.durabilityScore,
-    reinvestmentQualityScore: moat.reinvestmentQualityScore,
-    moatLabel: moat.moatLabel,
-    dividendScore,
-    dividendSafetyScore: wealth.dividendSafetyScore,
-    dividendGrowthScore: wealth.dividendGrowthScore,
-    shareholderYieldScore: wealth.shareholderYieldScore,
-    compoundingPotentialScore: wealth.compoundingPotentialScore,
-    incomeStabilityScore: wealth.incomeStabilityScore,
-    wealthBuilderScore: wealth.wealthBuilderScore,
-    wealthProfile: wealth.wealthProfile,
-    harvardDividendCompounding: harvardDividend,
-    harvardDividendScore,
-    harvardStabilityScore:
-      harvardDividend.harvardStabilityScore,
-    endowmentQualityScore:
-      harvardDividend.endowmentQualityScore,
-    capitalPreservationScore:
-      harvardDividend.capitalPreservationScore,
-    harvardDividendProfile:
-      harvardDividend.harvardDividendProfile,
-    portfolioScore,
-    portfolioConstructionScore: portfolio.portfolioConstructionScore,
-    liquidityFitScore: portfolio.liquidityFitScore,
-    volatilityBalanceScore: portfolio.volatilityBalanceScore,
-    diversificationFitScore: portfolio.diversificationFitScore,
-    positionSizingQualityScore: portfolio.positionSizingQualityScore,
-    portfolioRiskContributionScore: portfolio.portfolioRiskContributionScore,
-    portfolioRole: portfolio.portfolioRole,
-    suggestedAllocationTier: portfolio.suggestedAllocationTier,
-    estimatedSector: sector.estimatedSector,
-    sectorScore: sector.sectorScore,
-    sectorMomentumScore: sector.sectorMomentumScore,
-    sectorRiskScore: sector.sectorRiskScore,
-    sectorLiquidityScore: sector.sectorLiquidityScore,
-    sectorLeadershipScore: sector.sectorLeadershipScore,
-    sectorRole: sector.sectorRole,
-    institutionalScore,
-    aiConfidence: institutionalScore,
-    riskLevel: getRiskLevel(riskScore),
-    tradeQuality: getTradeQuality(institutionalScore),
-    marketRegime: regime.label || "Unknown",
-    suggestedHoldTime: getSuggestedHoldTime(institutionalScore),
-    decisionLevel,
-    autoTradeApproved,
-  };
-}
 function computeEma(values = [], period = 9) {
   if (values.length < period) return 0;
   const multiplier = 2 / (period + 1);
@@ -19892,309 +17073,6 @@ function computeTechnicals(bars = []) {
     macdSignal: macdData.signal,
   };
 }
-function passesFilters(q) {
-  const price = Number(q.current || q.price || 0);
-  const volume = Number(q.volume || q.barVolume || 0);
-  const relativeVolume = Number(
-    q.relativeVolume ||
-    q.volumeRatio ||
-    q.volumeSpikeRatio ||
-    q.confirmations?.volumeSpikeRatio ||
-    0
-  );
-  const floatShares = Number(
-    q.floatShares ||
-    q.freeFloat ||
-    q.shareFloat ||
-    q.sharesFloat ||
-    0
-  );
-  const marketCap = Number(
-    q.marketCap ||
-    q.marketCapitalization ||
-    0
-  );
-  const percentChange = Number(q.percentChange || 0);
-  const spreadPercent = Number(
-    q.spreadPercent ||
-    q.liveSpreadPercent ||
-    q.confirmations?.spreadPercent ||
-    0
-  );
-  const pullbackFromHighPercent = Number(
-    q.confirmations?.pullbackFromHighPercent ||
-    q.pullbackFromHighPercent ||
-    0
-  );
-
-  const hasNews =
-    q.hasNews === true ||
-    Number(q.newsScore || 0) > 0 ||
-    Number(q.catalystScore || 0) > 0 ||
-    Number(q.catalystRanking?.catalystScore || 0) > 0 ||
-    (Array.isArray(q.news) && q.news.length > 0);
-
-  const hasMomentum =
-    percentChange > 0 ||
-    Number(q.momentumScore || 0) >= 60 ||
-    Number(q.breakoutScore || 0) >= 60 ||
-    q.runnerStage === "IGNITION" ||
-    q.runnerStage === "EXPANSION" ||
-    q.confirmations?.volumeSpike === true;
-
-  const preMoverScore = Number(
-    q.preMoveScore ||
-    engineState.preMoverDiscoveryMemory?.[normalizeSymbol(q.symbol || "")]?.preMoveScore ||
-    0
-  );
-
-  const premarketContinuationScore = Math.max(
-    Number(q.premarketContinuationScore || 0),
-    Number(q.premarketDominanceScore || 0),
-    Number(q.morningMomentumScore || 0),
-    Number(q.openingDriveProbability || 0),
-    Number(q.continuationProbability || 0),
-    Number(q.breakoutProbability || 0)
-  );
-
-  const premarketContinuationWindow =
-    !engineState.marketOpen &&
-    (
-      isPremarketMomentumWindow() ||
-      isMorningStrikeWindow()
-    );
-
-  const strongPremarketContinuation =
-    premarketContinuationWindow &&
-    premarketContinuationScore >= 70;
-
-  const explosiveRunnerRescue =
-    percentChange >= 40 &&
-    percentChange <= Number(CONFIG.maxPercentChange || 300) &&
-    (
-      relativeVolume >= 2 ||
-      volume >= Number(CONFIG.minScanVolume || 300000) * 2 ||
-      q.confirmations?.volumeSpike === true ||
-      q.explosiveMoveCandidate === true ||
-      q.parabolicRunnerCandidate === true
-    );
-
-  const discoveryRescue =
-    explosiveRunnerRescue ||
-    strongPremarketContinuation ||
-    preMoverScore >= 75;
-
-  const allowRiskDisplay =
-    explosiveRunnerRescue ||
-    strongPremarketContinuation;
-
-  function discoveryOnly(reason, extra = {}) {
-    q.discoveryOnly = true;
-    q.buyBlocked = true;
-    q.blockBuying = true;
-    q.displayOnly = true;
-    q.buyBlockReason = reason;
-    q.displayOnlyReason = reason;
-
-    return {
-      ok: true,
-      discoveryOnly: true,
-      buyBlocked: true,
-      blockBuying: true,
-      displayOnly: true,
-      reason,
-      ...extra,
-    };
-  }
-
-  if (!price || price <= 0) {
-    return { ok: false, reason: "No valid price" };
-  }
-
-  if (price < CONFIG.minStockPrice) {
-    return { ok: false, reason: `Price below $${CONFIG.minStockPrice}` };
-  }
-
-  if (CONFIG.maxStockPrice > 0 && price > CONFIG.maxStockPrice) {
-    return { ok: false, reason: `Price above max: $${price}` };
-  }
-
-  if (volume < CONFIG.minScanVolume && !discoveryRescue) {
-    return { ok: false, reason: `Volume below ${CONFIG.minScanVolume}` };
-  }
-
-  if (volume < CONFIG.minScanVolume && discoveryRescue) {
-    return discoveryOnly(
-      `Discovery only: volume below ${CONFIG.minScanVolume}, but runner/continuation rescue passed`
-    );
-  }
-
-  if (
-    relativeVolume < Number(CONFIG.minRunnerRelativeVolume || 5) &&
-    !discoveryRescue
-  ) {
-    return {
-      ok: false,
-      reason: `RVOL below ${CONFIG.minRunnerRelativeVolume || 5}x`,
-    };
-  }
-
-  if (floatShares > 0 && floatShares > Number(CONFIG.maxRunnerFloatShares || 20000000)) {
-    if (allowRiskDisplay) {
-      return discoveryOnly(`Discovery only: float too high ${floatShares}`);
-    }
-
-    return { ok: false, reason: `Float too high: ${floatShares}` };
-  }
-
-  if (marketCap > 0 && marketCap > Number(CONFIG.maxRunnerMarketCap || 1000000000)) {
-    if (allowRiskDisplay) {
-      return discoveryOnly(`Discovery only: market cap too high ${marketCap}`);
-    }
-
-    return { ok: false, reason: `Market cap too high: ${marketCap}` };
-  }
-
-  if (!hasNews && !hasMomentum && !discoveryRescue) {
-    return { ok: false, reason: "No news or strong momentum" };
-  }
-
-  if (percentChange > CONFIG.maxPercentChange) {
-    return discoveryOnly(
-      `Dangerously extended: ${percentChange.toFixed(2)}%`
-    );
-  }
-
-  if (spreadPercent > Number(CONFIG.maxRunnerSpreadPercent || 3)) {
-    if (allowRiskDisplay) {
-      return discoveryOnly(
-        `Spread too wide: ${spreadPercent.toFixed(2)}%`
-      );
-    }
-
-    return {
-      ok: false,
-      reason: `Spread too wide: ${spreadPercent.toFixed(2)}%`,
-    };
-  }
-
-  if (pullbackFromHighPercent >= Number(CONFIG.maxRunnerPullbackFromHighPercent || 18)) {
-    if (allowRiskDisplay || strongPremarketContinuation) {
-      return discoveryOnly(
-        `Too far from high: ${pullbackFromHighPercent.toFixed(2)}%`
-      );
-    }
-
-    return {
-      ok: false,
-      reason: `Too far from high: ${pullbackFromHighPercent.toFixed(2)}%`,
-    };
-  }
-
-  if (CONFIG.enableAdvancedFilters && q.confirmations) {
-    if (q.confirmations.fakeBreakout) {
-      if (allowRiskDisplay || strongPremarketContinuation) {
-        return discoveryOnly(
-          `Fake breakout risk. Pulled back ${pullbackFromHighPercent}% from high`
-        );
-      }
-
-      return {
-        ok: false,
-        reason: `Fake breakout risk. Pulled back ${pullbackFromHighPercent}% from high`,
-      };
-    }
-
-    if (q.confirmations.newsRisk) {
-      if (allowRiskDisplay) {
-        return discoveryOnly(
-          `News risk: ${q.confirmations.newsRiskReason}`
-        );
-      }
-
-      return {
-        ok: false,
-        reason: `News risk: ${q.confirmations.newsRiskReason}`,
-      };
-    }
-  }
-
-  return {
-    ok: true,
-    discoveryOnly: false,
-    buyBlocked: false,
-    blockBuying: false,
-    displayOnly: false,
-  };
-}
-async function getAccount() {
-  try {
-    const account = await alpacaTradingRequest("/v2/account");
-    engineState.cachedAccount = account;
-    updateApiHealth("alpacaAccount", true);
-    return account;
-  } catch (err) {
-    updateApiHealth("alpacaAccount", false, err.message);
-    if (engineState.cachedAccount) {
-      return {
-        ...engineState.cachedAccount,
-        stale: true,
-        staleReason: err.message,
-      };
-    }
-    return {
-      equity: 0,
-      cash: 0,
-      buying_power: 0,
-      status: "alpaca_account_unavailable",
-      stale: true,
-      staleReason: err.message,
-    };
-  }
-}
-async function getPositions() {
-  try {
-    const positions = await alpacaTradingRequest("/v2/positions");
-    engineState.cachedPositions = Array.isArray(positions) ? positions : [];
-    updateApiHealth("alpacaPositions", true);
-    return engineState.cachedPositions;
-  } catch (err) {
-    updateApiHealth("alpacaPositions", false, err.message);
-    return Array.isArray(engineState.cachedPositions)
-      ? engineState.cachedPositions
-      : [];
-  }
-}
-async function getOrders() {
-  try {
-    const orders = await alpacaTradingRequest(
-      "/v2/orders?status=all&limit=100&direction=desc"
-    );
-    engineState.cachedOrders = Array.isArray(orders) ? orders : [];
-    updateApiHealth("alpacaOrders", true);
-    return engineState.cachedOrders;
-  } catch (err) {
-    updateApiHealth("alpacaOrders", false, err.message);
-    return Array.isArray(engineState.cachedOrders)
-      ? engineState.cachedOrders
-      : [];
-  }
-}
-async function getOpenOrders() {
-  try {
-    const orders = await alpacaTradingRequest(
-      "/v2/orders?status=open&limit=100&direction=desc"
-    );
-    engineState.cachedOpenOrders = Array.isArray(orders) ? orders : [];
-    updateApiHealth("alpacaOpenOrders", true);
-    return engineState.cachedOpenOrders;
-  } catch (err) {
-    updateApiHealth("alpacaOpenOrders", false, err.message);
-    return Array.isArray(engineState.cachedOpenOrders)
-      ? engineState.cachedOpenOrders
-      : [];
-  }
-}
 async function getCryptoAssets() {
   const assets = await alpacaTradingRequest(
     "/v2/assets?status=active&asset_class=crypto"
@@ -20234,219 +17112,32 @@ function getFreshLiveCryptoQuote(symbol, maxAgeSeconds = 8) {
   return null;
 }
 async function getCryptoLatestQuote(symbol) {
-  const cleanSymbol = normalizeSymbol(symbol);
-  try {
-    const data = await alpacaDataRequest(
-      `/v1beta3/crypto/us/latest/quotes?symbols=${encodeURIComponent(cleanSymbol)}`
-    );
-    const quote =
-      data?.quotes?.[cleanSymbol] ||
-      data?.quotes?.[cleanSymbol.replace("/", "")] ||
-      null;
-    const bid = Number(quote?.bp || quote?.bid_price || quote?.bid || 0);
-    const ask = Number(quote?.ap || quote?.ask_price || quote?.ask || 0);
-    let price =
-      bid > 0 && ask > 0
-        ? (bid + ask) / 2
-        : bid > 0
-          ? bid
-          : ask > 0
-            ? ask
-            : 0;
-    if (!price || price <= 0) {
-      const tradeData = await alpacaDataRequest(
-        `/v1beta3/crypto/us/latest/trades?symbols=${encodeURIComponent(cleanSymbol)}`
-      );
-      const trade =
-        tradeData?.trades?.[cleanSymbol] ||
-        tradeData?.trades?.[cleanSymbol.replace("/", "")] ||
-        null;
-      price = Number(trade?.p || trade?.price || 0);
-    }
-    if (!price || price <= 0) {
-      throw new Error(`Invalid Alpaca crypto price for ${symbol}`);
-    }
-    return {
-      symbol,
-      current: price,
-      price,
-      bid,
-      ask,
-      previousClose: 0,
-      changePercent: 0,
-      percentChange: 0,
-      assetClass: "crypto",
-      liveQuoteSource: "alpaca_crypto_latest",
-      source: "alpaca_crypto_latest",
-      quoteFetchedAt: new Date().toISOString(),
-      priceIsLive: true,
-      priceStale: false,
-      raw: quote,
-    };
-  } catch (alpacaErr) {
-    throw new Error(
-      `Alpaca crypto quote failed for ${symbol}: ${alpacaErr.message}`
-    );
-  }
+  return alpacaCryptoMarketData.getLatestQuote(symbol);
 }
 async function getCryptoRecentBars(symbol, timeframe = "5Min", limit = 30) {
-  const cleanSymbol = normalizeSymbol(symbol);
   try {
-    const data = await alpacaDataRequest(
-      `/v1beta3/crypto/us/bars?symbols=${encodeURIComponent(
-        cleanSymbol
-      )}&timeframe=${encodeURIComponent(timeframe)}&limit=${limit}`
-    );
-    const bars =
-      data?.bars?.[cleanSymbol] ||
-      data?.bars?.[cleanSymbol.replace("/", "")] ||
-      [];
-    return Array.isArray(bars)
-      ? bars
-        .map((bar) => ({
-          t: bar.t,
-          o: Number(bar.o || 0),
-          h: Number(bar.h || 0),
-          l: Number(bar.l || 0),
-          c: Number(bar.c || 0),
-          v: Number(bar.v || 0),
-          source: "alpaca_crypto_bars",
-        }))
-        .filter((bar) => bar.c > 0)
-      : [];
+    return await alpacaCryptoMarketData.getRecentBars(symbol, timeframe, limit);
   } catch (err) {
     console.warn(`Alpaca crypto bars failed for ${symbol}:`, err.message);
     return [];
   }
 }
-function scoreCrypto(quote, bars = []) {
-  const cleanBars = Array.isArray(bars)
-    ? bars
-      .map((bar) => ({
-        o: Number(bar.o || bar.open || 0),
-        h: Number(bar.h || bar.high || 0),
-        l: Number(bar.l || bar.low || 0),
-        c: Number(bar.c || bar.close || 0),
-        v: Number(bar.v || bar.volume || 0),
-      }))
-      .filter((bar) => bar.c > 0)
-    : [];
-  const current = Number(
-    quote?.current ||
-    quote?.price ||
-    quote?.last ||
-    cleanBars[cleanBars.length - 1]?.c ||
-    0
-  );
-  if (!current || current <= 0) return 0;
-  if (cleanBars.length < 3) {
-    return clampScore(Number(quote?.changePercent || quote?.percentChange || 35));
-  }
-  const first = cleanBars[0];
-  const latest = cleanBars[cleanBars.length - 1];
-  const previous = cleanBars[cleanBars.length - 2];
-  const open = Number(first.o || first.c || current);
-  const high = Math.max(...cleanBars.map((bar) => Number(bar.h || bar.c || 0)));
-  const low = Math.min(...cleanBars.map((bar) => Number(bar.l || bar.c || 0)));
-  const momentumPercent =
-    open > 0 ? ((current - open) / open) * 100 : 0;
-  const shortWindow = cleanBars.slice(-5);
-  const shortFirst = shortWindow[0];
-  const shortMomentumPercent =
-    shortFirst?.c > 0
-      ? ((current - shortFirst.c) / shortFirst.c) * 100
-      : 0;
-  const previousClose = Number(previous.c || current);
-  const lastBarMomentum =
-    previousClose > 0 ? ((current - previousClose) / previousClose) * 100 : 0;
-  const closeNearHigh =
-    high > low ? ((current - low) / (high - low)) * 100 : 50;
-  const greenBars = cleanBars.filter(
-    (bar) => Number(bar.c || 0) >= Number(bar.o || 0)
-  ).length;
-  const greenRatio = greenBars / cleanBars.length;
-  const avgVolume =
-    cleanBars.reduce((sum, bar) => sum + Number(bar.v || 0), 0) /
-    Math.max(1, cleanBars.length);
-  const latestVolume = Number(latest.v || 0);
-  const volumeRatio = avgVolume > 0 ? latestVolume / avgVolume : 1;
-  let score = 50;
-  if (cleanBars.length >= 5) score += 5;
-  if (cleanBars.length >= 10) score += 5;
-  if (cleanBars.length >= 20) score += 5;
-  if (momentumPercent > 0) score += 8;
-  if (momentumPercent >= 0.15) score += 6;
-  if (momentumPercent >= 0.35) score += 6;
-  if (momentumPercent >= 0.75) score += 6;
-  if (momentumPercent >= 1.5) score += 5;
-  if (shortMomentumPercent > 0) score += 7;
-  if (shortMomentumPercent >= 0.15) score += 5;
-  if (shortMomentumPercent >= 0.35) score += 5;
-  if (lastBarMomentum > 0) score += 4;
-  if (greenRatio >= 0.5) score += 5;
-  if (greenRatio >= 0.6) score += 5;
-  if (closeNearHigh >= 45) score += 5;
-  if (closeNearHigh >= 65) score += 5;
-  if (volumeRatio >= 0.8) score += 4;
-  if (volumeRatio >= 1.1) score += 5;
-  if (volumeRatio >= 1.5) score += 5;
-  if (momentumPercent < -0.25) score -= 8;
-  if (momentumPercent < -0.75) score -= 10;
-  if (shortMomentumPercent < -0.35) score -= 8;
-  if (closeNearHigh < 25) score -= 8;
-  const runnerStageProfile = calculateRunnerStageProfile({
-    ...quote,
-    current,
-    price: current,
-    open,
-    high,
-    low,
-    percentChange: momentumPercent,
-    volumeSpikeRatio: volumeRatio,
-    confirmations: {
-      volumeSpikeRatio: volumeRatio,
-      aboveVwap: current >= open,
-    },
-    technicals: {
-      rsi: 55,
-    },
-  });
-  const runnerHoldQuality = calculateRunnerHoldQuality({
-    ...quote,
-    current,
-    price: current,
-    open,
-    high,
-    low,
-    percentChange: momentumPercent,
-    volumeSpikeRatio: volumeRatio,
-    runnerStageProfile,
-    confirmations: {
-      volumeSpikeRatio: volumeRatio,
-      aboveVwap: current >= open,
-    },
-    technicals: {
-      rsi: 55,
-    },
-  });
-  let finalScore = clampScore(score);
-  if (!runnerHoldQuality.runnerHoldApproved) {
-    finalScore = Math.min(finalScore, 86);
-  }
-  if (runnerHoldQuality.runnerHoldScore < 70) {
-    finalScore = Math.min(finalScore, 82);
-  }
-  if (runnerStageProfile.runnerStage === "MATURE") {
-    finalScore = Math.min(finalScore, 84);
-  }
-  if (
-    runnerStageProfile.runnerStage === "EXHAUSTION" ||
-    runnerStageProfile.lateChaseRisk === true
-  ) {
-    finalScore = Math.min(finalScore, 76);
-  }
-  return finalScore;
-}
+const { scoreCrypto, calculateCryptoInstitutionalQualification, scanCryptoMarket } = createCryptoMarketScanner({
+  CONFIG,
+  calculateCryptoLiquidityFromBars,
+  calculateRunnerHoldQuality,
+  calculateRunnerStageProfile,
+  clampScore,
+  engineState,
+  getBestCryptoBars,
+  getCryptoAssets,
+  getCryptoLatestQuote,
+  getFreshLiveCryptoQuote,
+  isCrypto,
+  recordSkippedSymbol,
+  updateQuoteCache,
+  getRuntime: () => ({ TRADING_MODE, LIVE_ORDER_MAX_QUOTE_AGE_SECONDS }),
+});
 async function getBestCryptoBars(symbol) {
   const attempts = [
     ["5Min", 30],
@@ -20553,342 +17244,7 @@ function calculateCryptoLiquidityFromBars(
     volumeConfidenceScore: Number(volumeConfidenceScore.toFixed(2)),
   };
 }
-function calculateCryptoInstitutionalQualification({
-  quote = {},
-  score = 0,
-  bars = [],
-  liquidityMetrics = {},
-  spreadPercent = 0,
-}) {
-  const barsFound = Array.isArray(bars) ? bars.length : 0;
-  const volumeSpikeRatio = Number(
-    liquidityMetrics.volumeSpikeRatio || 0
-  );
-  const dollarVolume = Number(
-    liquidityMetrics.dollarVolume || 0
-  );
-  const volumeConfidenceScore = Number(
-    liquidityMetrics.volumeConfidenceScore || 0
-  );
-  const cleanSpreadPercent = Number(spreadPercent || 0);
-  const spreadPass = cleanSpreadPercent <= 0.85;
-  const cleanExecutionPass =
-    spreadPass &&
-    cleanSpreadPercent <= 0.65 &&
-    barsFound >= 10;
-  const trueLiquidityPass =
-    spreadPass &&
-    dollarVolume >= 50 &&
-    (
-      volumeSpikeRatio >= 0.15 ||
-      volumeConfidenceScore >= 60
-    );
-  const smallCryptoProbePass =
-    cleanExecutionPass &&
-    Number(score || 0) >= 75 &&
-    dollarVolume >= 25 &&
-    (
-      volumeConfidenceScore >= 35 ||
-      volumeSpikeRatio >= 0.1
-    );
-  const liquidityPass =
-    trueLiquidityPass || smallCryptoProbePass;
-  const trendStructureScore = clampScore(
-    45 +
-    (Number(score || 0) >= 65 ? 10 : 0) +
-    (Number(score || 0) >= 75 ? 12 : 0) +
-    (volumeSpikeRatio >= 0.5 ? 10 : 0) +
-    (volumeSpikeRatio >= 1.2 ? 12 : 0) +
-    (volumeConfidenceScore >= 60 ? 12 : 0) +
-    (cleanSpreadPercent <= 0.45 ? 10 : 0) -
-    (cleanSpreadPercent > 0.85 ? 25 : 0) -
-    (barsFound < 10 ? 30 : 0)
-  );
-  const cryptoTrapRiskScore = clampScore(
-    25 +
-    (cleanSpreadPercent > 0.85 ? 25 : 0) +
-    (volumeConfidenceScore < 35 ? 18 : 0) +
-    (volumeSpikeRatio < 0.15 ? 12 : 0) +
-    (barsFound < 10 ? 30 : 0) -
-    (Number(score || 0) >= 75 ? 10 : 0) -
-    (volumeConfidenceScore >= 65 ? 12 : 0)
-  );
-  const institutionalCryptoScore = clampScore(
-    Number(score || 0) * 0.45 +
-    trendStructureScore * 0.25 +
-    volumeConfidenceScore * 0.2 +
-    (100 - cryptoTrapRiskScore) * 0.1
-  );
-  const institutionalCryptoGrade =
-    institutionalCryptoScore >= 85 && cryptoTrapRiskScore <= 35
-      ? "A_CRYPTO_INSTITUTIONAL"
-      : institutionalCryptoScore >= 75 && cryptoTrapRiskScore <= 45
-        ? "B_CRYPTO_STRONG"
-        : institutionalCryptoScore >= 65 && cryptoTrapRiskScore <= 55
-          ? "C_CRYPTO_PROBE"
-          : "D_CRYPTO_AVOID";
-  const momentumPass =
-    Number(score || 0) >=
-    Math.max(
-      70,
-      Number(CONFIG.minScoreToBuy || 70),
-      Number(engineState.selfOptimizationState?.adaptiveMinScoreToBuy || 0)
-    );
-  const dataPass =
-    barsFound >= 10 &&
-    Number(quote.current || 0) > 0;
-  const cryptoMacroOverride =
-    engineState.marketCycleIntelligenceState?.marketCyclePhase === "ACCUMULATION" &&
-    engineState.autonomousTradingSystemState?.shouldBlockNewTrades !== true &&
-    engineState.phase21AutonomousBrainState?.shouldBlockNewTrades !== true;
-  const macroPass =
-    cryptoMacroOverride ||
-    (
-      engineState.macroRiskState?.shouldBlockNewTrades !== true &&
-      engineState.marketCrashProtectionState?.shouldBlockNewTrades !== true
-    );
-  const institutionalStructurePass =
-    institutionalCryptoScore >= 65 &&
-    cryptoTrapRiskScore <= 60 &&
-    institutionalCryptoGrade !== "D_CRYPTO_AVOID";
-  const qualifiedToBuy =
-    dataPass &&
-    momentumPass &&
-    liquidityPass &&
-    macroPass &&
-    institutionalStructurePass;
-  return {
-    qualifiedToBuy,
-    cryptoInstitutionalQualification: {
-      passed: qualifiedToBuy,
-      approved: qualifiedToBuy,
-      dataPass,
-      momentumPass,
-      liquidityPass,
-      macroPass,
-      spreadPass,
-      barsFound,
-      score,
-      spreadPercent: cleanSpreadPercent,
-      dollarVolume,
-      volumeSpikeRatio,
-      volumeConfidenceScore,
-      institutionalCryptoScore,
-      institutionalCryptoGrade,
-      cryptoTrapRiskScore,
-      trendStructureScore,
-      institutionalStructurePass,
-      reason: qualifiedToBuy
-        ? "Crypto institutional qualification passed"
-        : "Crypto institutional qualification failed",
-    },
-  };
-}
-async function scanCryptoMarket() {
-  if (!["live_crypto", "smart"].includes(TRADING_MODE)) {
-    throw new Error("Crypto scanner is only available in live modes");
-  }
-  const symbols = await getCryptoAssets();
-  const cryptoSkipped = [];
-  const results = [];
-  console.log("CRYPTO SCAN START", {
-    totalCryptoAssets: symbols.length,
-    sampleAssets: symbols.slice(0, 10),
-    usdPairs: symbols.filter((s) => String(s || "").endsWith("/USD")).length,
-  });
-  engineState.skippedSymbols = [];
-  engineState.lastCryptoScanStartedAt = new Date().toISOString();
-  engineState.topCryptoSignals = [];
-  for (const symbol of symbols) {
-    const institutionalUsdPair = String(symbol || "").endsWith("/USD");
-    if (!institutionalUsdPair) {
-      continue;
-    }
-    try {
-      const liveCryptoQuote = getFreshLiveCryptoQuote(
-        symbol,
-        LIVE_ORDER_MAX_QUOTE_AGE_SECONDS
-      );
-      const quote = liveCryptoQuote || await getCryptoLatestQuote(symbol);
-      const bars = await getBestCryptoBars(symbol);
-      const score = scoreCrypto(quote, bars);
-      const validBars = Array.isArray(bars)
-        ? bars.filter((bar) => Number(bar.c || bar.close || 0) > 0)
-        : [];
-      const firstBarClose = Number(
-        validBars[0]?.c ||
-        validBars[0]?.close ||
-        0
-      );
-      const lastBarClose = Number(
-        validBars[validBars.length - 1]?.c ||
-        validBars[validBars.length - 1]?.close ||
-        0
-      );
-      const latestPrice = Number(
-        quote.current ||
-        quote.price ||
-        quote.last ||
-        quote.close ||
-        0
-      );
-      const changeBasePrice =
-        firstBarClose > 0 && firstBarClose !== latestPrice
-          ? firstBarClose
-          : lastBarClose > 0 && lastBarClose !== latestPrice
-            ? lastBarClose
-            : Number(
-              quote.previousClose ||
-              quote.prevClose ||
-              quote.open ||
-              quote.o ||
-              0
-            );
-      const cryptoPercentChange =
-        changeBasePrice > 0 && latestPrice > 0
-          ? ((latestPrice - changeBasePrice) / changeBasePrice) * 100
-          : Number(
-            quote.changePercent ||
-            quote.percentChange ||
-            quote.change_percent ||
-            quote.dp ||
-            0
-          );
-      const cryptoDollarChange =
-        changeBasePrice > 0 && latestPrice > 0
-          ? latestPrice - changeBasePrice
-          : cryptoPercentChange !== 0 && latestPrice > 0
-            ? latestPrice * (cryptoPercentChange / 100)
-            : Number(
-              quote.change ||
-              quote.changeDollars ||
-              quote.dollarChange ||
-              0
-            );
-      const cachedCryptoQuote = updateQuoteCache(symbol, {
-        price: latestPrice,
-        current: latestPrice,
-        bid: quote.bid,
-        ask: quote.ask,
-        source: quote.liveQuoteSource || "polygon_crypto_snapshot",
-        liveQuoteSource: quote.liveQuoteSource || "polygon_crypto_snapshot",
-        quoteFetchedAt: quote.quoteFetchedAt,
-        priceIsLive: quote.priceIsLive === true,
-        raw: quote,
-      });
-      const liquidityMetrics =
-        calculateCryptoLiquidityFromBars(
-          bars,
-          latestPrice
-        );
-      const spreadPercent =
-        Number(quote.bid || 0) > 0 &&
-          Number(quote.ask || 0) > 0
-          ? ((Number(quote.ask) - Number(quote.bid)) /
-            Number(quote.ask)) *
-          100
-          : 0;
-      const cryptoChartBars = Array.isArray(bars)
-        ? bars
-          .map((bar) => {
-            const close = Number(bar.c || bar.close || 0);
-            const open = Number(bar.o || bar.open || close || 0);
-            const high = Number(bar.h || bar.high || close || 0);
-            const low = Number(bar.l || bar.low || close || 0);
-            const volume = Number(bar.v || bar.volume || 0);
-            return {
-              time: bar.t || bar.timestamp || bar.time || null,
-              open,
-              high,
-              low,
-              close,
-              price: close,
-              volume,
-            };
-          })
-          .filter((bar) => Number.isFinite(bar.close) && bar.close > 0)
-        : [];
-      const cryptoSparkline = cryptoChartBars.map((bar) => bar.close);
-      const cryptoQualification =
-        calculateCryptoInstitutionalQualification({
-          quote,
-          score,
-          bars,
-          liquidityMetrics,
-          spreadPercent,
-        });
-      results.push({
-        ...quote,
-        assetClass: "crypto",
-        asset_class: "crypto",
-        livePrice: latestPrice,
-        displayPrice: latestPrice,
-        price: latestPrice,
-        current: latestPrice,
-        liveQuoteUpdatedAt:
-          quote.quoteFetchedAt || cachedCryptoQuote?.updatedAt || new Date().toISOString(),
-        liveQuoteSource:
-          quote.liveQuoteSource || cachedCryptoQuote?.source || "polygon_crypto_snapshot",
-        priceIsLive:
-          cachedCryptoQuote?.priceIsLive === true ||
-          quote.priceIsLive === true,
-        priceStale:
-          cachedCryptoQuote?.priceIsLive !== true &&
-          quote.priceIsLive !== true,
-        dayChangePercent: Number(cryptoPercentChange.toFixed(2)),
-        dayChangeDollars: Number(cryptoDollarChange.toFixed(2)),
-        percentChange: Number(cryptoPercentChange.toFixed(2)),
-        changePercent: Number(cryptoPercentChange.toFixed(2)),
-        score,
-        barsFound: bars.length,
-        chartBars: cryptoChartBars,
-        historicalBars: cryptoChartBars,
-        sparkline: cryptoSparkline,
-        chartSource: "polygon_crypto_aggs",
-        chartTimeframe: "best_available_live_crypto",
-        latestChartClose:
-          cryptoSparkline[cryptoSparkline.length - 1] || latestPrice,
-        volume: liquidityMetrics.volume,
-        averageVolume: liquidityMetrics.averageVolume,
-        volumeSpikeRatio: liquidityMetrics.volumeSpikeRatio,
-        dollarVolume: liquidityMetrics.dollarVolume,
-        spreadPercent: Number(spreadPercent.toFixed(3)),
-        confirmations: {
-          volumeSpikeRatio: liquidityMetrics.volumeSpikeRatio,
-        },
-        autoTradeApproved:
-          cryptoQualification.qualifiedToBuy === true,
-        approved:
-          cryptoQualification.qualifiedToBuy === true,
-        decisionLevel:
-          cryptoQualification.qualifiedToBuy === true
-            ? "Auto-Trade Approved"
-            : "Watchlist",
-        ...cryptoQualification,
-      });
-    } catch (err) {
-      cryptoSkipped.push({
-        symbol,
-        reason: err.message,
-      });
-      recordSkippedSymbol(symbol, err.message);
-    }
-  }
-  console.log("CRYPTO SCAN DEBUG", {
-    totalCryptoAssets: symbols.length,
-    usdPairs: symbols.filter((s) => String(s || "").endsWith("/USD")).length,
-    results: results.length,
-    skipped: cryptoSkipped.slice(0, 20),
-  });
-  console.log("SCAN DEBUG", {
-    totalResults: results.length,
-    stockResults: results.filter((s) => !isCrypto(s.symbol)).length,
-    cryptoResults: results.filter((s) => isCrypto(s.symbol)).length,
-    topSymbols: results.slice(0, 10).map((s) => s.symbol),
-  });
-  return results.sort((a, b) => b.score - a.score);
-}
-async function placeCryptoMarketBuy(symbol, dollars) {
+async function placeCryptoMarketBuy(symbol, dollars, options = {}) {
   if (CONFIG.realCashTradingUnlocked !== true) {
     throw new Error("Real cash trading locked: set REAL_CASH_TRADING_UNLOCKED=true only after paper validation");
   }
@@ -20901,18 +17257,10 @@ async function placeCryptoMarketBuy(symbol, dollars) {
       `Crypto live order blocked for ${symbol}: ${liveSafety.blockReasons.join("; ")}`
     );
   }
-  return alpacaTradingRequest("/v2/orders", {
-    method: "POST",
-    body: JSON.stringify({
-      symbol: normalizeSymbol(symbol),
-      notional: Number(dollars.toFixed(2)),
-      side: "buy",
-      type: "market",
-      time_in_force: "gtc",
-      client_order_id: `${AI_ORDER_PREFIX}_CRYPTO_BUY_${normalizeSymbol(
-        symbol
-      )}_${Date.now()}`,
-    }),
+  return orderService.cryptoMarketBuy({
+    symbol,
+    dollars,
+    allowExistingOpenOrder: options.allowExistingOpenOrder === true,
   });
 }
 async function placeCryptoMarketSell(symbol, qty, reason = "CRYPTO_EXIT") {
@@ -20925,19 +17273,7 @@ async function placeCryptoMarketSell(symbol, qty, reason = "CRYPTO_EXIT") {
       `Crypto live sell blocked for ${symbol}: ${liveSafety.blockReasons.join("; ")}`
     );
   }
-  return alpacaTradingRequest("/v2/orders", {
-    method: "POST",
-    body: JSON.stringify({
-      symbol: normalizeSymbol(symbol),
-      qty: String(qty),
-      side: "sell",
-      type: "market",
-      time_in_force: "gtc",
-      client_order_id: `${AI_ORDER_PREFIX}_${reason}_${normalizeSymbol(
-        symbol
-      )}_${Date.now()}`,
-    }),
-  });
+  return orderService.cryptoMarketSell({ symbol, qty, reason });
 }
 async function getClock() {
   try {
@@ -21479,6 +17815,108 @@ async function getPreMoverSeedSymbols({
     .filter(isValidStockSymbol)
     .slice(0, broadLimit);
 }
+function getEasternSessionClock() {
+  const parts = Object.fromEntries(new Intl.DateTimeFormat("en-US", {
+    timeZone: "America/New_York",
+    weekday: "short",
+    hour: "2-digit",
+    minute: "2-digit",
+    hour12: false,
+  }).formatToParts(new Date()).filter((part) => part.type !== "literal").map((part) => [part.type, part.value]));
+  return { weekday: parts.weekday, hour: Number(parts.hour || 0), minute: Number(parts.minute || 0) };
+}
+
+async function runBoundedQuietDiscoveryScan({ force = false } = {}) {
+  const dateKey = getTodayKeyET();
+  if (engineState.boundedQuietDiscoveryState?.dateKey === dateKey && engineState.boundedQuietDiscoveryState?.ok === true) {
+    return engineState.boundedQuietDiscoveryState;
+  }
+  const clock = getEasternSessionClock();
+  const afterClose = clock.hour > 16 || (clock.hour === 16 && clock.minute >= 10);
+  if (!force && (!afterClose || ["Sat", "Sun"].includes(clock.weekday))) {
+    return { ok: false, skipped: true, dateKey, reason: "Quiet discovery runs once after 4:10 PM ET on trading weekdays." };
+  }
+  let provider = "polygon_grouped_daily";
+  let groupedResults = [];
+  let downloadedBytes = 0;
+  let providerTelemetry = {};
+  let polygonFailure = "";
+  if (ENABLE_POLYGON && POLYGON_API_KEY) {
+    try {
+      const url = `https://api.polygon.io/v2/aggs/grouped/locale/us/market/stocks/${dateKey}?adjusted=true&apiKey=${POLYGON_API_KEY}`;
+      const response = await fetchWithTimeout(url, {}, 30000);
+      if (response.status === 429) {
+        throttlePolygon(15);
+        throw new Error("Polygon grouped daily rate limit");
+      }
+      if (!response.ok) throw new Error(`Polygon grouped daily HTTP ${response.status}`);
+      const declaredBytes = Number(response.headers.get("content-length") || 0);
+      if (declaredBytes > DISCOVERY_MAX_DOWNLOAD_BYTES) throw new Error(`Discovery download budget exceeded before download: ${declaredBytes} bytes`);
+      const body = await response.text();
+      downloadedBytes = Buffer.byteLength(body);
+      if (downloadedBytes > DISCOVERY_MAX_DOWNLOAD_BYTES) throw new Error(`Discovery download budget exceeded: ${downloadedBytes} bytes`);
+      const payload = JSON.parse(body);
+      groupedResults = Array.isArray(payload.results) ? payload.results : [];
+      if (!groupedResults.length) throw new Error("Polygon grouped daily returned no rows");
+    } catch (error) {
+      polygonFailure = error.message;
+    }
+  } else {
+    polygonFailure = "Polygon disabled or API key missing";
+  }
+  if (polygonFailure) {
+    const symbols = await getPreMoverAssetUniverse(DISCOVERY_BUDGETS.maxUniverse);
+    const alpaca = await fetchAlpacaGroupedDaily({
+      symbols,
+      dateKey,
+      dataRequest: alpacaDataRequest,
+      batchSize: DISCOVERY_BUDGETS.batchSize,
+      maxDownloadBytes: DISCOVERY_MAX_DOWNLOAD_BYTES,
+      feed: process.env.DISCOVERY_ALPACA_FEED || "iex",
+    });
+    provider = "alpaca_multi_symbol_daily_fallback";
+    groupedResults = alpaca.groupedResults;
+    downloadedBytes = alpaca.downloadedBytes;
+    providerTelemetry = {
+      fallbackReason: polygonFailure,
+      requestCount: alpaca.requestCount,
+      pageCount: alpaca.pageCount,
+      requestedSymbols: alpaca.requestedSymbols,
+      returnedSymbols: alpaca.returnedSymbols,
+      feed: alpaca.feed,
+    };
+  }
+  const result = await runBoundedQuietDiscovery({ groupedResults, dateKey, featureStore: discoveryFeatureStore, budgets: DISCOVERY_BUDGETS, downloadedBytes });
+  const state = { ...result, ok: true, provider, providerTelemetry, resourceUsage: { ...result.resourceUsage, downloadedBytes, maxDownloadBytes: DISCOVERY_MAX_DOWNLOAD_BYTES } };
+  engineState.boundedQuietDiscoveryState = state;
+  engineState.boundedQuietDiscoveryHistory = [state, ...(engineState.boundedQuietDiscoveryHistory || [])].slice(0, 30);
+  engineState.preMoverDiscoveryState = {
+    ok: true,
+    updatedAt: state.updatedAt,
+    phase: "BOUNDED_QUIET_DISCOVERY_ENGINE",
+    reviewedCount: state.universeRows,
+    selectedCount: state.watchlistCount,
+    topCandidates: state.watchlist,
+    reason: state.watchlistCount ? "Bounded broad-universe scan found quiet pre-mover candidates." : "Feature store is warming or no quiet candidates qualified.",
+  };
+  if (!engineState.preMoverDiscoveryMemory) engineState.preMoverDiscoveryMemory = {};
+  for (const item of state.watchlist) {
+    engineState.preMoverDiscoveryMemory[item.symbol] = {
+      ...(engineState.preMoverDiscoveryMemory[item.symbol] || {}),
+      ...item,
+      preMoveLabel: item.preMoveScore >= 82 ? "ELITE_PRE_MOVER" : item.preMoveScore >= 74 ? "STRONG_PRE_MOVER" : "DEVELOPING_PRE_MOVER",
+      lastSeenAt: state.updatedAt,
+      seenCount: Number(engineState.preMoverDiscoveryMemory[item.symbol]?.seenCount || 0) + 1,
+      source: "bounded_quiet_discovery",
+    };
+  }
+  engineState.preMoverDiscoveryMemory = prunePreMoverMemory(
+    engineState.preMoverDiscoveryMemory,
+    Number(process.env.PRE_MOVER_MEMORY_MAX_ENTRIES || 500)
+  ).memory;
+  saveEngineState("BOUNDED_QUIET_DISCOVERY_UPDATED");
+  return state;
+}
 async function discoverPreMovers(seedSymbols = []) {
   const maxReview = Number(process.env.PRE_MOVER_DISCOVERY_REVIEW_LIMIT || 80);
   const maxReturn = Number(process.env.PRE_MOVER_DISCOVERY_SYMBOL_LIMIT || 40);
@@ -21540,6 +17978,10 @@ async function discoverPreMovers(seedSymbols = []) {
       lastSeenAt: new Date().toISOString(),
     };
   }
+  engineState.preMoverDiscoveryMemory = prunePreMoverMemory(
+    engineState.preMoverDiscoveryMemory,
+    Number(process.env.PRE_MOVER_MEMORY_MAX_ENTRIES || 500)
+  ).memory;
   const state = {
     ok: true,
     updatedAt: new Date().toISOString(),
@@ -21855,1146 +18297,111 @@ function getBotEntryScores() {
   }
   return engineState.aiEntryScores;
 }
-async function scanMarket() {
-  if (activeScanLocks.scanMarket) {
-    console.warn("scanMarket skipped: scan already running");
-    return Array.isArray(engineState.lastStockSignals)
-      ? engineState.lastStockSignals
-      : [];
+const { calculateInstitutionalScores, passesFilters, scoreStock, scanMarket } = createStockMarketStrategy({
+  CONFIG,
+  activeScanLocks,
+  applyAutonomousCapitalRotation,
+  applyFastRunnerOverride,
+  applyInstitutionalArchitecture,
+  applySmallCapRunnerExecutionRelaxation,
+  applyThemeMomentumBoost,
+  broadcastTapeEvent,
+  calculateAccumulationEngine,
+  calculateAdaptiveRunnerLearning,
+  calculateAiPortfolioManagerDecision,
+  calculateCatalystRankingEngine,
+  calculateDcfValuation,
+  calculateDividendCompoundingScore,
+  calculateDividendWealthEngine,
+  calculateEarlyStrengthProjection,
+  calculateEarningsScore,
+  calculateExplosiveRunnerPrediction,
+  calculateExplosiveRunnerScore700,
+  calculateInstitutionalBlend,
+  calculateInstitutionalExecutionPlan,
+  calculateInstitutionalGrade,
+  calculateMoatEngine,
+  calculateMultiDayProbability,
+  calculatePhase10RunnerFingerprint,
+  calculatePhase11MetaStrategyMutation,
+  calculatePhase12MacroCorrelationSignal,
+  calculatePhase13HedgeFundBrain,
+  calculatePhase14ProfitAccelerationGovernor,
+  calculatePhase15AutonomousExecutionDominance,
+  calculatePhase7ReinforcementLearning,
+  calculatePhase9LiquidityIntelligence,
+  calculatePortfolioScore,
+  calculatePremarketDominanceEngine,
+  calculatePremarketMomentumEngine,
+  calculateRiskScore,
+  calculateRunnerHoldQuality,
+  calculateRunnerStageProfile,
+  calculateScoringLayers,
+  calculateSignalQuality,
+  calculateStatisticalEdge,
+  calculateStatisticalEdgeEngine,
+  calculateTechnicalIntelligence,
+  calculateThemeMomentumEngine,
+  calculateVolatilityCompressionEngine,
+  checkAssetEligibility,
+  clampScore,
+  clampScoreFinal,
+  computeTechnicals,
+  detectMarketRegime,
+  engineState,
+  estimateSectorIntelligence,
+  evaluateInstitutionalApproval,
+  executePyramidScalingAdds,
+  getAccount,
+  getAdvancedConfirmations,
+  getBotOwnedSymbols,
+  getPositions,
+  getRiskLevel,
+  getStockIdentity,
+  getStockQuote,
+  getSuggestedHoldTime,
+  getTopMovers,
+  getTradeQuality,
+  isMorningStrikeWindow,
+  isPremarketMomentumWindow,
+  narrowScanUniverse,
+  normalizeSymbol,
+  processBatches,
+  recordFailedOrder,
+  recordOrder,
+  recordSkippedSymbol,
+  updateAdaptiveRunnerLearningState,
+  updateAutonomousCapitalRotationState,
+  updateAutonomousMarketIntelligenceState,
+  updateContinuationHoldState,
+  updateExplosiveRunnerState,
+  updateFullInstitutionalAiBrainState,
+  updateInstitutionalExecutionLayerState,
+  updateMultiDayAccumulationState,
+  updatePhase10RunnerMemoryState,
+  updatePhase11MetaStrategyState,
+  updatePhase12MacroCorrelationState,
+  updatePhase13HedgeFundBrainState,
+  updatePhase14GovernorState,
+  updatePhase15ExecutionDominanceState,
+  updatePhase7ReinforcementLearningState,
+  updatePhase9LiquidityIntelligenceState,
+  updatePremarketDominanceState,
+  updatePremarketMomentumState,
+  updateSwingWatchlistState,
+  getTradingMode: () => TRADING_MODE,
+});
+function getSignalHoldCategory(signal = {}) {
+  const explicit = signal.holdCategory || signal.positionIntent;
+  if (explicit) return normalizeHoldCategory(explicit);
+  const holdText = String(signal.suggestedHoldTime || signal.holdTime || "").toLowerCase();
+  if (/multi|swing|overnight|day[s]?|week/.test(holdText) || Number(signal.multiDayContinuationScore || signal.multiDayScore || 0) >= 60) {
+    return "multi_day";
   }
-  activeScanLocks.scanMarket = true;
-  try {
-    const scanCycleId = `STOCK_SCAN_${Date.now()}`;
-    engineState.currentStockScanCycleId = scanCycleId;
-    engineState.lastStockScanStartedAt = new Date().toISOString();
-    const account = await getAccount();
-    const positions = await getPositions();
-    const aiOwnedSymbols = await getBotOwnedSymbols();
-    const managedPositions = positions.filter((position) =>
-      aiOwnedSymbols.has(normalizeSymbol(position.symbol)) ||
-      engineState.aiManagedSymbols?.includes(normalizeSymbol(position.symbol))
-    );
-    engineState.cachedAccount = account;
-    engineState.cachedPositions = positions;
-    engineState.staleSnapshotClearReason =
-      "NEW_STOCK_SCAN_STARTED_KEEP_LAST_GOOD_DASHBOARD";
-    engineState.lastStockScanPreservedDashboardAt =
-      new Date().toISOString();
-    const symbols = await getTopMovers();
-    const limitedSymbols = narrowScanUniverse(symbols);
-    engineState.skippedSymbols = [];
-    console.log(`Scanning ${limitedSymbols.length} of ${symbols.length} symbols...`);
-    console.log("Advanced filters enabled:", CONFIG.enableAdvancedFilters);
-    const batchSize = 2;
-    const rawResults = await processBatches(limitedSymbols, batchSize, async (symbol) => {
-      try {
-        const assetCheck = await checkAssetEligibility(symbol);
-        if (!assetCheck.ok) {
-          recordSkippedSymbol(symbol, assetCheck.reason);
-          return null;
-        }
-        const quote = await getStockQuote(symbol);
-        const stockIdentity = await getStockIdentity(
-          symbol,
-          assetCheck.asset || {}
-        );
-        if (!quote || typeof quote !== "object") {
-          recordSkippedSymbol(
-            symbol,
-            `No valid quote object returned for ${symbol}`
-          );
-          return null;
-        }
-        Object.assign(quote, {
-          companyName: stockIdentity.companyName || "",
-          displayName: stockIdentity.displayName || "",
-          assetName: stockIdentity.assetName || "",
-          name: stockIdentity.name || "",
-          tickerName: stockIdentity.tickerName || "",
-          securityName: stockIdentity.securityName || "",
-          nameSource: stockIdentity.nameSource || "not_found",
-        });
-        const technicalBars =
-          Array.isArray(quote.stockChartBars) &&
-            quote.stockChartBars.length > 0
-            ? quote.stockChartBars.map((bar) => ({
-              c: Number(bar.close || 0),
-              h: Number(bar.high || 0),
-              l: Number(bar.low || 0),
-              o: Number(bar.open || 0),
-              v: Number(bar.volume || 0),
-              t: bar.time,
-            }))
-            : [];
-        quote.technicals = computeTechnicals(technicalBars);
-        if (CONFIG.enableAdvancedFilters) {
-          quote.confirmations = await getAdvancedConfirmations(quote);
-        }
-        const premarketContinuationWindow =
-          !engineState.marketOpen &&
-          (
-            isPremarketMomentumWindow() ||
-            isMorningStrikeWindow()
-          );
-        if (premarketContinuationWindow) {
-          quote.premarketMomentum =
-            calculatePremarketMomentumEngine(quote);
-          quote.premarketDominance =
-            calculatePremarketDominanceEngine(quote);
-          quote.premarketDominanceScore =
-            Number(quote.premarketDominance?.premarketDominanceScore || 0);
-          quote.morningMomentumScore =
-            Number(quote.premarketMomentum?.morningMomentumScore || 0);
-          quote.openingDriveProbability =
-            Number(quote.premarketMomentum?.openingDriveProbability || 0);
-          quote.continuationProbability = Math.max(
-            Number(quote.continuationProbability || 0),
-            Number(quote.premarketMomentum?.gapContinuation?.openingRangeBreakoutProbability || 0),
-            Number(quote.premarketMomentum?.openingDriveProbability || 0)
-          );
-          quote.breakoutProbability = Math.max(
-            Number(quote.breakoutProbability || 0),
-            Number(quote.premarketMomentum?.gapContinuation?.openingRangeBreakoutProbability || 0)
-          );
-        }
-        const quality = passesFilters(quote);
-        if (!quality.ok) {
-          const premarketContinuationScore = Math.max(
-            Number(quote.premarketContinuationScore || 0),
-            Number(quote.premarketDominanceScore || 0),
-            Number(quote.morningMomentumScore || 0),
-            Number(quote.openingDriveProbability || 0),
-            Number(quote.continuationProbability || 0),
-            Number(quote.breakoutProbability || 0)
-          );
-          const allowPremarketDisplay =
-            premarketContinuationWindow &&
-            premarketContinuationScore >= 70 &&
-            /fake|breakout|gap|vwap|extended|chase/i.test(String(quality.reason || ""));
-          if (!allowPremarketDisplay) {
-            recordSkippedSymbol(symbol, quality.reason);
-            return null;
-          }
-          quote.displayOnly = true;
-          quote.blockBuying = true;
-          quote.displayOnlyReason =
-            `PREMARKET_CONTINUATION_DISPLAY_ONLY: ${quality.reason || "quality filter"}`;
-        }
-        quote.displayOnly = quote.displayOnly === true || quality.displayOnly === true;
-        quote.blockBuying =
-          quote.blockBuying === true ||
-          quality.blockBuying === true ||
-          quality.buyBlocked === true;
-
-        quote.buyBlocked =
-          quote.buyBlocked === true ||
-          quality.buyBlocked === true;
-
-        quote.discoveryOnly =
-          quote.discoveryOnly === true ||
-          quality.discoveryOnly === true;
-        quote.displayOnlyReason = quote.displayOnlyReason || quality.reason || "";
-
-        const score = scoreStock(quote);
-        const statisticalEdge = quote.statisticalEdge || null;
-        const statisticalScore = Number(quote.statisticalScore || 0);
-        const institutional = calculateInstitutionalScores({
-          ...quote,
-          score,
-        });
-        const accumulationIntelligence =
-          calculateAccumulationEngine({
-            ...quote,
-            score: institutional.institutionalScore,
-            statisticalScore,
-            statisticalEdge,
-            ...institutional,
-          });
-        const volatilityCompression =
-          calculateVolatilityCompressionEngine({
-            ...quote,
-            score: institutional.institutionalScore,
-            statisticalScore,
-            statisticalEdge,
-            ...institutional,
-          });
-        const catalystRanking =
-          calculateCatalystRankingEngine({
-            ...quote,
-            score: institutional.institutionalScore,
-            statisticalScore,
-            statisticalEdge,
-            ...institutional,
-          });
-        const explosiveRunnerPrediction =
-          calculateExplosiveRunnerPrediction({
-            ...quote,
-            score: institutional.institutionalScore,
-            statisticalScore,
-            statisticalEdge,
-            ...institutional,
-            accumulationIntelligence,
-            volatilityCompression,
-            catalystRanking,
-          });
-        const earlyStrengthProjection =
-          calculateEarlyStrengthProjection({
-            ...quote,
-            score: institutional.institutionalScore,
-            momentumScore: institutional.momentumScore || score,
-            statisticalScore,
-            statisticalEdge,
-            ...institutional,
-            accumulationIntelligence,
-            volatilityCompression,
-            catalystRanking,
-            explosiveRunnerPrediction,
-          });
-        const portfolioManagerInput = {
-          ...quote,
-          score: institutional.institutionalScore,
-          legacyMomentumScore: score,
-          momentumScore:
-            institutional.momentumScore || score,
-          fundamentalBlendScore:
-            institutional.fundamentalBlendScore || 0,
-          reinforcementWeights:
-            institutional.reinforcementWeights ||
-            engineState.reinforcementWeightState?.weights ||
-            {},
-          statisticalScore,
-          statisticalEdge,
-          accumulationIntelligence,
-          volatilityCompression,
-          catalystRanking,
-          explosiveRunnerPrediction,
-          explosiveRunnerScore:
-            explosiveRunnerPrediction.explosiveRunnerScore,
-          explosiveRunnerLabel:
-            explosiveRunnerPrediction.runnerLabel,
-          earlyStrengthProjection,
-          earlyProjectionScore:
-            earlyStrengthProjection.earlyProjectionScore,
-          earlyProjectionTier:
-            earlyStrengthProjection.earlyProjectionTier,
-          ...institutional,
-        };
-        const portfolioManager =
-          typeof calculateAiPortfolioManagerDecision === "function"
-            ? calculateAiPortfolioManagerDecision(
-              portfolioManagerInput,
-              engineState.cachedAccount || {},
-              engineState.cachedPositions || [],
-              engineState.marketRegime || detectMarketRegime([])
-            )
-            : {
-              approved: true,
-              autoTradeApproved: true,
-              aiPortfolioAction: "ALLOW",
-              portfolioAction: "ALLOW",
-              portfolioScore: 50,
-              recommendedTradeAmount: 0,
-              aiAllocationPercentOfBotBudget: 0,
-              portfolioManagerReason:
-                "AI_PORTFOLIO_MANAGER_UNAVAILABLE",
-            };
-        if (!engineState.previousSignalApprovals) {
-          engineState.previousSignalApprovals = {};
-        }
-        const previousApproval =
-          engineState.previousSignalApprovals[
-          normalizeSymbol(quote.symbol)
-          ];
-        const currentApproval =
-          quote.phase6ScoringLayers?.finalTradeApproval ||
-          "UNKNOWN";
-        if (
-          previousApproval &&
-          previousApproval !== currentApproval
-        ) {
-          broadcastTapeEvent("APPROVAL_CHANGED", {
-            symbol: quote.symbol,
-            previousApproval,
-            currentApproval,
-            score,
-            executionConfidence: quote.executionConfidence || 0,
-          });
-        }
-        engineState.previousSignalApprovals[
-          normalizeSymbol(quote.symbol)
-        ] = currentApproval;
-        return {
-          ...quote,
-          scanCycleId,
-          scanBuiltAt: new Date().toISOString(),
-          quoteFetchedAt: quote.quoteFetchedAt || new Date().toISOString(),
-          score: institutional.institutionalScore,
-          legacyMomentumScore: score,
-          momentumScore:
-            institutional.momentumScore || score,
-          fundamentalBlendScore:
-            institutional.fundamentalBlendScore || 0,
-          reinforcementWeights:
-            institutional.reinforcementWeights ||
-            engineState.reinforcementWeightState?.weights ||
-            {},
-          statisticalScore,
-          statisticalEdge,
-          phase5SignalQuality: quote.phase5SignalQuality || null,
-          institutionalSignalQuality:
-            quote.institutionalSignalQuality || null,
-          signalQualityScore:
-            Number(quote.signalQualityScore || 0),
-          antiChaseRisk:
-            Number(quote.antiChaseRisk || 0),
-          exhaustionRisk:
-            Number(quote.exhaustionRisk || 0),
-          vwapExtensionPenalty:
-            Number(quote.vwapExtensionPenalty || 0),
-          liquidityStabilityScore:
-            Number(quote.liquidityStabilityScore || 0),
-          phase6ScoringLayers:
-            quote.phase6ScoringLayers || null,
-          stockQualityScore:
-            Number(quote.stockQualityScore || 0),
-          tacticalMomentumScore:
-            Number(quote.tacticalMomentumScore || 0),
-          entryTimingScore:
-            Number(quote.entryTimingScore || 0),
-          executionConfidence:
-            Number(quote.executionConfidence || 0),
-          finalCompositeScore:
-            Number(quote.finalCompositeScore || 0),
-          finalTradeApproval:
-            quote.finalTradeApproval || "UNKNOWN",
-          riskAdjustedSizingMultiplier:
-            Number(quote.riskAdjustedSizingMultiplier || 0),
-          accumulationIntelligence,
-          volatilityCompression,
-          catalystRanking,
-          explosiveRunnerPrediction,
-          explosiveRunnerScore:
-            explosiveRunnerPrediction.explosiveRunnerScore,
-          explosiveRunnerLabel:
-            explosiveRunnerPrediction.runnerLabel,
-          earlyStrengthProjection,
-          earlyProjectionScore:
-            earlyStrengthProjection.earlyProjectionScore,
-          earlyProjectionTier:
-            earlyStrengthProjection.earlyProjectionTier,
-          ...institutional,
-          ...portfolioManager,
-          qualifiedToBuy:
-            quote.blockBuying === true
-              ? false
-              : (
-                institutional.autoTradeApproved === true ||
-                portfolioManager.autoTradeApproved === true ||
-                portfolioManager.approved === true ||
-                portfolioManager.aiPortfolioAction === "ALLOW" ||
-                portfolioManager.portfolioAction === "ALLOW"
-              ) &&
-              institutional.decisionLevel !== "Visible Stock" &&
-              quote.phase6ScoringLayers?.hardReject !== true &&
-              quote.phase6ScoringLayers?.finalTradeApproval !== "REJECT_WEAK_TIMING" &&
-              quote.phase6ScoringLayers?.finalTradeApproval !== "BLOCK" &&
-              engineState.phase20AutonomousOrchestrationState?.shouldBlockNewTrades !== true &&
-              engineState.phase21AutonomousBrainState?.shouldBlockNewTrades !== true,
-          autoTradeApproved:
-            quote.blockBuying === true
-              ? false
-              : portfolioManager.autoTradeApproved,
-          displayOnly: quote.displayOnly === true,
-          displayOnlyReason: quote.displayOnlyReason || "",
-        };
-      } catch (err) {
-        recordSkippedSymbol(symbol, err.message);
-        return null;
-      }
-    });
-    const results = rawResults.filter(Boolean);
-    const skipReasonCounts = (engineState.skippedSymbols || []).reduce(
-      (acc, item) => {
-        const reason = item.reason || "Unknown";
-        acc[reason] = (acc[reason] || 0) + 1;
-        return acc;
-      },
-      {}
-    );
-    console.log("SCAN DEEP DEBUG", {
-      scannedUniverse: limitedSymbols.length,
-      rawResults: rawResults.length,
-      finalResults: results.length,
-      skippedCount: engineState.skippedSymbols.length,
-      skipReasonCounts,
-      topSkipped: engineState.skippedSymbols.slice(0, 10),
-    });
-    console.log(`Scan finished. Found ${results.length} stocks.`);
-
-    results.forEach((s) => {
-      console.log("APPROVAL DEBUG", s.symbol, {
-        approved: s.approved,
-        autoTradeApproved: s.autoTradeApproved,
-
-        institutionalScore: s.institutionalScore,
-        score: s.score,
-
-        decisionLevel: s.decisionLevel,
-
-        blockBuying: s.blockBuying,
-
-        finalTradeApproval:
-          s.phase6ScoringLayers?.finalTradeApproval,
-
-        hardReject:
-          s.phase6ScoringLayers?.hardReject,
-
-        recommendedTradeAmount:
-          s.recommendedTradeAmount,
-
-        portfolioAction:
-          s.portfolioAction,
-
-        aiPortfolioAction:
-          s.aiPortfolioAction,
-
-        displayOnly:
-          s.displayOnly,
-
-        displayOnlyReason:
-          s.displayOnlyReason,
-      });
-    });
-
-    console.log(
-      "APPROVED COUNT:",
-      results.filter(
-        (s) => s.approved === true || s.autoTradeApproved === true
-      ).length
-    );
-    let multiDayAccumulationState = {
-      reviewedCount: 0,
-      preBreakoutCount: 0,
-      topTwoSymbols: [],
-    };
-
-    try {
-      if (
-        typeof updateMultiDayAccumulationState === "function" &&
-        Array.isArray(results) &&
-        results.length > 0
-      ) {
-        multiDayAccumulationState =
-          updateMultiDayAccumulationState(results);
-      } else {
-        engineState.multiDayAccumulationState = {
-          updatedAt: new Date().toISOString(),
-          phase: "27_MULTI_DAY_ACCUMULATION_MEMORY",
-          reviewedCount: 0,
-          memorySymbolCount: Object.keys(
-            engineState.multiDayAccumulationMemory || {}
-          ).length,
-          preBreakoutCount: 0,
-          preBreakoutCandidates: [],
-          topTwoSymbols: [],
-          reason: "No scan results to review.",
-        };
-      }
-
-      if (typeof recordOrder === "function") {
-        recordOrder("MULTI_DAY_ACCUMULATION_UPDATED", "STOCK", {
-          reviewedCount: multiDayAccumulationState.reviewedCount,
-          preBreakoutCount: multiDayAccumulationState.preBreakoutCount,
-          topTwoSymbols: multiDayAccumulationState.topTwoSymbols,
-        });
-      }
-    } catch (err) {
-      console.error("MULTI_DAY_ACCUMULATION_ERROR", {
-        message: err.message,
-        stack: err.stack,
-      });
-
-      engineState.multiDayAccumulationState = {
-        updatedAt: new Date().toISOString(),
-        phase: "27_MULTI_DAY_ACCUMULATION_MEMORY",
-        reviewedCount: 0,
-        preBreakoutCount: 0,
-        topTwoSymbols: [],
-        error: err.message,
-        reason: "Multi-day accumulation failed safely.",
-      };
-    }
-    for (const signal of results) {
-      const sym = normalizeSymbol(signal.symbol);
-
-      // FIX-A1: Attach multiDayAccumulation (pre-breakout multi-day memory)
-      const accumMemory = engineState.multiDayAccumulationMemory?.[sym];
-      if (accumMemory) {
-        signal.multiDayAccumulation = accumMemory;
-        signal.multiDayAccumulationScore = Number(accumMemory.preBreakoutScore || 0);
-        // Upgraded: scale boost by how strong the pre-breakout signal is
-        if (signal.multiDayAccumulationScore >= 85) {
-          signal.score = clampScore(Number(signal.score || 0) + 14);
-          signal.multiDayAccumulationBoost = 14;
-        } else if (signal.multiDayAccumulationScore >= 75) {
-          signal.score = clampScore(Number(signal.score || 0) + 9);
-          signal.multiDayAccumulationBoost = 9;
-        } else if (signal.multiDayAccumulationScore >= 65) {
-          signal.score = clampScore(Number(signal.score || 0) + 5);
-          signal.multiDayAccumulationBoost = 5;
-        }
-      }
-
-      // FIX-A2: Attach preMoveScore and use it as a score boost
-      // This was computed but NEVER fed into signal scoring — now it does
-      const preMoverMemory = engineState.preMoverDiscoveryMemory?.[sym];
-      if (preMoverMemory) {
-        signal.preMoverDiscovery = preMoverMemory;
-        signal.preMoveScore = Number(preMoverMemory.preMoveScore || 0);
-        signal.preMoverCompressionScore = Number(preMoverMemory.compressionScore || 0);
-        signal.preMoverAccumulationScore = Number(preMoverMemory.accumulationScore || 0);
-        signal.preMoverVolumeWakeupScore = Number(preMoverMemory.volumeWakeupScore || 0);
-        // Strong pre-move fingerprint = before-the-move detection bonus
-        if (signal.preMoveScore >= 82) {
-          signal.score = clampScore(Number(signal.score || 0) + 16);
-          signal.preMoveBoost = 16;
-          signal.preMoveLabel = "ELITE_PRE_MOVER";
-        } else if (signal.preMoveScore >= 74) {
-          signal.score = clampScore(Number(signal.score || 0) + 10);
-          signal.preMoveBoost = 10;
-          signal.preMoveLabel = "STRONG_PRE_MOVER";
-        } else if (signal.preMoveScore >= 65) {
-          signal.score = clampScore(Number(signal.score || 0) + 5);
-          signal.preMoveBoost = 5;
-          signal.preMoveLabel = "DEVELOPING_PRE_MOVER";
-        }
-      }
-    }
-    try {
-      const latestAccountForPyramids = await getAccount();
-      const latestPositionsForPyramids = await getPositions();
-      const aiOwnedSymbolsForPyramids = await getBotOwnedSymbols();
-      const openAiPositionsForPyramids =
-        latestPositionsForPyramids.filter((position) =>
-          aiOwnedSymbolsForPyramids.has(normalizeSymbol(position.symbol))
-        );
-      const pyramidAdds = await executePyramidScalingAdds(
-        results,
-        latestAccountForPyramids,
-        openAiPositionsForPyramids
-      );
-      if (pyramidAdds.length > 0) {
-        recordOrder("PYRAMID_ENGINE_COMPLETED", "PORTFOLIO", {
-          executedAdds: pyramidAdds.length,
-          symbols: pyramidAdds.map((item) => item.symbol),
-        });
-      }
-    } catch (err) {
-      recordFailedOrder(
-        "PYRAMID_ENGINE_FAILED",
-        "PORTFOLIO",
-        err.message
-      );
-    }
-    const adaptiveRunnerLearningState =
-      updateAdaptiveRunnerLearningState(results);
-    recordOrder("ADAPTIVE_RUNNER_LEARNING_UPDATED", "STOCK", {
-      reviewedCount: adaptiveRunnerLearningState.reviewedCount,
-      learnedRunnerCount:
-        adaptiveRunnerLearningState.learnedRunnerCount,
-      topTwoSymbols: adaptiveRunnerLearningState.topTwoSymbols,
-    });
-    for (const signal of results) {
-      const adaptiveRunnerLearning =
-        calculateAdaptiveRunnerLearning(signal);
-      signal.adaptiveRunnerLearning = adaptiveRunnerLearning;
-      signal.adaptiveRunnerScore =
-        adaptiveRunnerLearning.breakoutProbability;
-      signal.runnerScore =
-        Number(
-          signal.explosiveRunnerScore ||
-          signal.explosiveRunnerPrediction?.explosiveRunnerScore ||
-          signal.adaptiveRunnerScore ||
-          adaptiveRunnerLearning.breakoutProbability ||
-          0
-        );
-      if (
-        Number(adaptiveRunnerLearning.adaptiveRunnerBoost || 0) !== 0
-      ) {
-        signal.score = clampScore(
-          Number(signal.score || 0) +
-          Number(adaptiveRunnerLearning.adaptiveRunnerBoost || 0)
-        );
-      }
-    }
-    applyFastRunnerOverride(results);
-    const explosiveRunnerState =
-      updateExplosiveRunnerState(results);
-    recordOrder("EXPLOSIVE_RUNNER_UPDATED", "STOCK", {
-      reviewedCount: explosiveRunnerState.reviewedCount,
-      topEarlyRunnerCount: explosiveRunnerState.topEarlyRunnerCount,
-      topTwoSymbols: explosiveRunnerState.topTwoSymbols,
-    });
-
-    const swingWatchlistState =
-      updateSwingWatchlistState(results);
-
-    recordOrder("SWING_WATCHLIST_UPDATED", "STOCK", {
-      reviewedCount: swingWatchlistState.reviewedCount,
-      topSwingCount: swingWatchlistState.top25.length,
-      highConfidenceCount: swingWatchlistState.highConfidenceStocks.length,
-      topTwoSymbols: swingWatchlistState.top10
-        .slice(0, 2)
-        .map((item) => item.symbol),
-    });
-    const autonomousCapitalRotationState =
-      updateAutonomousCapitalRotationState(results);
-    recordOrder(
-      "AUTONOMOUS_CAPITAL_ROTATION_UPDATED",
-      "PORTFOLIO",
-      {
-        stockAllocation:
-          autonomousCapitalRotationState.stockAllocation,
-        cryptoAllocation:
-          autonomousCapitalRotationState.cryptoAllocation,
-        cashReserve:
-          autonomousCapitalRotationState.cashReserve,
-        dominantAllocator:
-          autonomousCapitalRotationState.dominantAllocator,
-      }
-    );
-    const allocationAdjustedResults =
-      results.map((signal) =>
-        applyAutonomousCapitalRotation(signal)
-      );
-    results.length = 0;
-    results.push(...allocationAdjustedResults);
-    const institutionalExecutionLayerState =
-      updateInstitutionalExecutionLayerState(results);
-    recordOrder("INSTITUTIONAL_EXECUTION_LAYER_UPDATED", "EXECUTION", {
-      reviewedCount:
-        institutionalExecutionLayerState.reviewedCount,
-      executableCount:
-        institutionalExecutionLayerState.executableCount,
-      averageExecutionConfidence:
-        institutionalExecutionLayerState.averageExecutionConfidence,
-    });
-    for (const signal of results) {
-      const executionPlan =
-        calculateInstitutionalExecutionPlan(signal, 0);
-      const relaxedExecutionPlan =
-        applySmallCapRunnerExecutionRelaxation(
-          signal,
-          executionPlan
-        );
-      signal.institutionalExecutionPlan = relaxedExecutionPlan;
-      signal.executionConfidence =
-        relaxedExecutionPlan.executionConfidence;
-      if (relaxedExecutionPlan.executionMode === "AVOID_WEAK_EXECUTION") {
-        signal.score = clampScore(Number(signal.score || 0) - 6);
-        signal.executionPenalty = 6;
-      }
-      if (relaxedExecutionPlan.executionConfidence >= 68) {
-        signal.score = clampScore(Number(signal.score || 0) + 3);
-        signal.executionQualityBoost = 3;
-      }
-    }
-    for (const signal of results) {
-      const phase15ExecutionDominance =
-        calculatePhase15AutonomousExecutionDominance(signal, 0);
-      signal.phase15ExecutionDominance =
-        phase15ExecutionDominance;
-      signal.executionDominanceScore =
-        phase15ExecutionDominance.executionDominanceScore;
-      if (phase15ExecutionDominance.blockExecution) {
-        signal.qualifiedToBuy = false;
-        signal.phase15ExecutionBlocked = true;
-        signal.phase15ExecutionBlockReason =
-          phase15ExecutionDominance.reason;
-      }
-      if (
-        phase15ExecutionDominance.executionDominanceScore >= 72 &&
-        !phase15ExecutionDominance.blockExecution
-      ) {
-        signal.score = clampScore(Number(signal.score || 0) + 2);
-        signal.phase15ExecutionBoost = 2;
-      }
-    }
-    const phase15ExecutionDominanceState =
-      updatePhase15ExecutionDominanceState(results);
-    recordOrder("PHASE_15_EXECUTION_DOMINANCE_UPDATED", "EXECUTION", {
-      reviewedCount:
-        phase15ExecutionDominanceState.reviewedCount,
-      dominantExecutionCount:
-        phase15ExecutionDominanceState.dominantExecutionCount,
-      blockedExecutionCount:
-        phase15ExecutionDominanceState.blockedExecutionCount,
-      averageExecutionDominance:
-        phase15ExecutionDominanceState.averageExecutionDominance,
-    });
-    const autonomousMarketIntelligenceState =
-      updateAutonomousMarketIntelligenceState(
-        results
-      );
-    recordOrder(
-      "AUTONOMOUS_MARKET_INTELLIGENCE_UPDATED",
-      "MARKET",
-      {
-        marketAdaptationLevel:
-          autonomousMarketIntelligenceState.marketAdaptationLevel,
-        marketPersonality:
-          autonomousMarketIntelligenceState
-            .marketPersonality?.personality,
-        selfOptimizationReadiness:
-          autonomousMarketIntelligenceState
-            .selfOptimizationReadiness,
-      }
-    );
-    const fullInstitutionalAiBrainState =
-      updateFullInstitutionalAiBrainState(results);
-    recordOrder(
-      "FULL_INSTITUTIONAL_AI_BRAIN_UPDATED",
-      "BRAIN",
-      {
-        reviewedCount:
-          fullInstitutionalAiBrainState.reviewedCount,
-        masterOpportunityCount:
-          fullInstitutionalAiBrainState.masterOpportunityCount,
-        topTwoSymbols:
-          fullInstitutionalAiBrainState.topTwoSymbols,
-      }
-    );
-    for (const signal of results) {
-      const rankedSignal =
-        fullInstitutionalAiBrainState.rankedOpportunities.find(
-          (item) => normalizeSymbol(item.symbol) === normalizeSymbol(signal.symbol)
-        );
-      if (rankedSignal?.fullInstitutionalAiBrain) {
-        signal.fullInstitutionalAiBrain =
-          rankedSignal.fullInstitutionalAiBrain;
-        signal.institutionalBrainScore =
-          rankedSignal.institutionalBrainScore;
-        if (
-          rankedSignal.fullInstitutionalAiBrain.brainAction === "PRIORITIZE"
-        ) {
-          signal.score = clampScore(Number(signal.score || 0) + 5);
-          signal.fullBrainBoost = 5;
-        }
-      }
-    }
-    const themeMomentumState =
-      calculateThemeMomentumEngine(results);
-    recordOrder("THEME_MOMENTUM_UPDATED", "STOCK", {
-      reviewedCount: themeMomentumState.reviewedCount,
-      leadingThemeCount: themeMomentumState.leadingThemeCount,
-      leadingThemes: themeMomentumState.leadingThemes?.map(
-        (theme) => theme.theme
-      ),
-    });
-    const themeBoostedResults =
-      results.map((signal) => applyThemeMomentumBoost(signal));
-    results.length = 0;
-    results.push(...themeBoostedResults);
-    const refreshedFullInstitutionalAiBrainState =
-      updateFullInstitutionalAiBrainState(results);
-    for (const signal of results) {
-      const rankedSignal =
-        refreshedFullInstitutionalAiBrainState.rankedOpportunities.find(
-          (item) => normalizeSymbol(item.symbol) === normalizeSymbol(signal.symbol)
-        );
-      if (rankedSignal?.fullInstitutionalAiBrain) {
-        signal.fullInstitutionalAiBrain =
-          rankedSignal.fullInstitutionalAiBrain;
-        signal.institutionalBrainScore =
-          Number(rankedSignal.institutionalBrainScore || 0);
-      }
-    }
-    const statisticalEdgeSignals = results.filter(
-      (signal) => Number(signal.statisticalScore || 0) >= 70
-    );
-    const averageStatisticalEdge =
-      statisticalEdgeSignals.length > 0
-        ? statisticalEdgeSignals.reduce(
-          (sum, signal) => sum + Number(signal.statisticalScore || 0),
-          0
-        ) / statisticalEdgeSignals.length
-        : 0;
-    engineState.statisticalMemoryState =
-      engineState.statisticalMemoryState || {
-        updatedAt: null,
-        setupHistory: [],
-        setupPerformance: {},
-        expectancyHistory: [],
-        probabilityHistory: [],
-      };
-    engineState.statisticalEdgeState = {
-      updatedAt: new Date().toISOString(),
-      qualifyingSignals: statisticalEdgeSignals.length,
-      averageStatisticalEdge: Number(averageStatisticalEdge.toFixed(2)),
-      strongestSignals: statisticalEdgeSignals.slice(0, 5).map((signal) => ({
-        symbol: signal.symbol,
-        score: signal.score,
-        statisticalScore: signal.statisticalScore,
-      })),
-    };
-    if (!Array.isArray(engineState.statisticalEdgeHistory)) {
-      engineState.statisticalEdgeHistory = [];
-    }
-    engineState.statisticalEdgeHistory.unshift({
-      updatedAt: new Date().toISOString(),
-      qualifyingSignals: statisticalEdgeSignals.length,
-      averageStatisticalEdge: Number(averageStatisticalEdge.toFixed(2)),
-    });
-    engineState.statisticalEdgeHistory = engineState.statisticalEdgeHistory.slice(
-      0,
-      200
-    );
-    const continuationHoldState =
-      updateContinuationHoldState(results);
-    recordOrder("CONTINUATION_HOLD_UPDATED", "STOCK", {
-      reviewedCount: continuationHoldState.reviewedCount,
-      qualifiedHoldCount: continuationHoldState.qualifiedHoldCount,
-      selectedHoldSymbol: continuationHoldState.selectedHoldSymbol,
-    });
-    const premarketMomentumState =
-      updatePremarketMomentumState(results);
-    recordOrder("PREMARKET_MOMENTUM_UPDATED", "STOCK", {
-      reviewedCount: premarketMomentumState.reviewedCount,
-      eliteCount: premarketMomentumState.eliteCount,
-      topTwoSymbols: premarketMomentumState.topTwoSymbols,
-    });
-    const premarketDominanceState =
-      updatePremarketDominanceState(results);
-    recordOrder("PREMARKET_DOMINANCE_UPDATED", "STOCK", {
-      reviewedCount: premarketDominanceState.reviewedCount,
-      sniperCount: premarketDominanceState.sniperCount,
-      topTwoSymbols: premarketDominanceState.topTwoSymbols,
-    });
-    for (const signal of results) {
-      signal.premarketDominance =
-        calculatePremarketDominanceEngine(signal);
-      signal.premarketDominanceScore =
-        Number(signal.premarketDominance?.premarketDominanceScore || 0);
-      if (
-        Number(signal.premarketDominance.premarketDominanceScore || 0) >= 75
-      ) {
-        signal.score = clampScore(Number(signal.score || 0) + 5);
-        signal.premarketDominanceBoost = 5;
-      }
-    }
-    const finalFullInstitutionalAiBrainState =
-      updateFullInstitutionalAiBrainState(results);
-    for (const signal of results) {
-      const rankedSignal =
-        finalFullInstitutionalAiBrainState.rankedOpportunities.find(
-          (item) =>
-            normalizeSymbol(item.symbol) === normalizeSymbol(signal.symbol)
-        );
-      if (rankedSignal?.fullInstitutionalAiBrain) {
-        signal.fullInstitutionalAiBrain =
-          rankedSignal.fullInstitutionalAiBrain;
-        signal.institutionalBrainScore =
-          Number(rankedSignal.institutionalBrainScore || 0);
-      }
-      signal.runnerScore =
-        Number(
-          signal.explosiveRunnerScore ||
-          signal.explosiveRunnerPrediction?.explosiveRunnerScore ||
-          signal.adaptiveRunnerScore ||
-          0
-        );
-      signal.premarketDominanceScore =
-        Number(
-          signal.premarketDominance?.premarketDominanceScore ||
-          signal.premarketDominanceScore ||
-          signal.explosiveRunnerPrediction?.premarket?.openingDriveProbability ||
-          signal.explosiveRunnerPrediction?.premarket?.morningMomentumScore ||
-          0
-        );
-    }
-    for (const signal of results) {
-      const phase7Reinforcement =
-        calculatePhase7ReinforcementLearning(signal);
-      signal.phase7Reinforcement = phase7Reinforcement;
-      signal.setupTrustScore = phase7Reinforcement.setupTrustScore;
-      signal.setupTrustLabel = phase7Reinforcement.trustLabel;
-      signal.phase7ProbabilityAdjustment =
-        phase7Reinforcement.probabilityAdjustment;
-      signal.phase7SizingMultiplier =
-        phase7Reinforcement.learnedSizingMultiplier;
-      if (Number(phase7Reinforcement.probabilityAdjustment || 0) !== 0) {
-        signal.score = clampScore(
-          Number(signal.score || 0) +
-          Number(phase7Reinforcement.probabilityAdjustment || 0)
-        );
-      }
-      const phase9LiquidityIntelligence =
-        signal.phase9LiquidityIntelligence ||
-        calculatePhase9LiquidityIntelligence(signal);
-      if (
-        phase9LiquidityIntelligence.liquidityLabel === "WEAK_LIQUIDITY_TRAP" &&
-        Number(signal.score || 0) < 82
-      ) {
-        recordOrder(
-          "AUTO_STOCK_BUY_SKIPPED_PHASE_9_WEAK_LIQUIDITY",
-          signal.symbol,
-          {
-            score: signal.score,
-            phase9LiquidityIntelligence,
-            reason:
-              "Phase 9 blocked entry because liquidity quality is weak.",
-          }
-        );
-        continue;
-      }
-      if (phase7Reinforcement.suppressEntry) {
-        signal.qualifiedToBuy = false;
-        signal.phase7Suppressed = true;
-        signal.phase7SuppressionReason = phase7Reinforcement.reason;
-      }
-    }
-    const phase7ReinforcementLearningState =
-      updatePhase7ReinforcementLearningState(results);
-    recordOrder(
-      "PHASE_7_REINFORCEMENT_LEARNING_UPDATED",
-      "STOCK",
-      {
-        reviewedCount: phase7ReinforcementLearningState.reviewedCount,
-        trustedSetupCount: phase7ReinforcementLearningState.trustedSetupCount,
-        suppressedSetupCount: phase7ReinforcementLearningState.suppressedSetupCount,
-        averageSetupTrust: phase7ReinforcementLearningState.averageSetupTrust,
-      }
-    );
-    for (const signal of results) {
-      const phase9LiquidityIntelligence =
-        calculatePhase9LiquidityIntelligence(signal);
-      signal.phase9LiquidityIntelligence = phase9LiquidityIntelligence;
-      signal.liquidityScore = phase9LiquidityIntelligence.liquidityScore;
-      signal.liquidityLabel = phase9LiquidityIntelligence.liquidityLabel;
-      if (Number(phase9LiquidityIntelligence.scoreBoost || 0) !== 0) {
-        signal.score = clampScore(
-          Number(signal.score || 0) +
-          Number(phase9LiquidityIntelligence.scoreBoost || 0)
-        );
-      }
-      if (
-        phase9LiquidityIntelligence.liquidityLabel === "WEAK_LIQUIDITY_TRAP" &&
-        Number(signal.score || 0) < 82
-      ) {
-        signal.qualifiedToBuy = false;
-        signal.phase9LiquiditySuppressed = true;
-        signal.phase9SuppressionReason =
-          phase9LiquidityIntelligence.reason;
-      }
-    }
-    const phase9LiquidityIntelligenceState =
-      updatePhase9LiquidityIntelligenceState(results);
-    recordOrder("PHASE_9_LIQUIDITY_INTELLIGENCE_UPDATED", "STOCK", {
-      reviewedCount: phase9LiquidityIntelligenceState.reviewedCount,
-      strongLiquidityCount:
-        phase9LiquidityIntelligenceState.strongLiquidityCount,
-      weakLiquidityCount:
-        phase9LiquidityIntelligenceState.weakLiquidityCount,
-      averageLiquidityScore:
-        phase9LiquidityIntelligenceState.averageLiquidityScore,
-    });
-    for (const signal of results) {
-      const phase10RunnerMemory =
-        calculatePhase10RunnerFingerprint(signal);
-      signal.phase10RunnerMemory = phase10RunnerMemory;
-      signal.continuationProbability =
-        phase10RunnerMemory.continuationProbability;
-      signal.breakoutSimilarityScore =
-        phase10RunnerMemory.breakoutSimilarityScore;
-      signal.runnerFingerprintScore =
-        phase10RunnerMemory.runnerFingerprintScore;
-      signal.runnerType =
-        phase10RunnerMemory.runnerType;
-      const multiDayProbability =
-        calculateMultiDayProbability(signal);
-      signal.multiDayProbability =
-        multiDayProbability.multiDayProbability;
-      signal.multiDayScore =
-        multiDayProbability.multiDayScore;
-      signal.multiDayLabel =
-        multiDayProbability.multiDayLabel;
-      signal.multiDayContinuation =
-        multiDayProbability;
-      if (Number(phase10RunnerMemory.scoreBoost || 0) !== 0) {
-        signal.score = clampScore(
-          Number(signal.score || 0) +
-          Number(phase10RunnerMemory.scoreBoost || 0)
-        );
-      }
-    }
-    const phase10RunnerMemoryState =
-      updatePhase10RunnerMemoryState(results);
-    recordOrder("PHASE_10_RUNNER_MEMORY_UPDATED", "STOCK", {
-      reviewedCount: phase10RunnerMemoryState.reviewedCount,
-      eliteRunnerCount:
-        phase10RunnerMemoryState.eliteRunnerCount,
-      explosiveRunnerCount:
-        phase10RunnerMemoryState.explosiveRunnerCount,
-    });
-    for (const signal of results) {
-      const phase11MetaStrategy =
-        calculatePhase11MetaStrategyMutation(signal);
-      signal.phase11MetaStrategy = phase11MetaStrategy;
-      signal.metaStrategyPreference =
-        phase11MetaStrategy.strategyPreference;
-      signal.metaAggressionScore =
-        phase11MetaStrategy.aggressionScore;
-      if (Number(phase11MetaStrategy.scoreAdjustment || 0) !== 0) {
-        signal.score = clampScore(
-          Number(signal.score || 0) +
-          Number(phase11MetaStrategy.scoreAdjustment || 0)
-        );
-      }
-      if (phase11MetaStrategy.suppressByMetaStrategy) {
-        signal.qualifiedToBuy = false;
-        signal.phase11Suppressed = true;
-        signal.phase11SuppressionReason =
-          phase11MetaStrategy.reason;
-      }
-    }
-    const phase11MetaStrategyState =
-      updatePhase11MetaStrategyState(results);
-    recordOrder("PHASE_11_META_STRATEGY_UPDATED", "STOCK", {
-      reviewedCount: phase11MetaStrategyState.reviewedCount,
-      aggressiveSetupCount:
-        phase11MetaStrategyState.aggressiveSetupCount,
-      suppressedSetupCount:
-        phase11MetaStrategyState.suppressedSetupCount,
-    });
-    for (const signal of results) {
-      const phase12MacroCorrelation =
-        calculatePhase12MacroCorrelationSignal(signal);
-      signal.phase12MacroCorrelation = phase12MacroCorrelation;
-      signal.macroCorrelationScore =
-        phase12MacroCorrelation.macroCorrelationScore;
-      signal.macroPressureScore =
-        phase12MacroCorrelation.macroPressureScore;
-      signal.sectorContagionRisk =
-        phase12MacroCorrelation.sectorContagionRisk;
-      if (Number(phase12MacroCorrelation.scoreAdjustment || 0) !== 0) {
-        signal.score = clampScore(
-          Number(signal.score || 0) +
-          Number(phase12MacroCorrelation.scoreAdjustment || 0)
-        );
-      }
-      if (phase12MacroCorrelation.suppressByMacroCorrelation) {
-        signal.qualifiedToBuy = false;
-        signal.phase12Suppressed = true;
-        signal.phase12SuppressionReason =
-          phase12MacroCorrelation.reason;
-      }
-    }
-    const phase12MacroCorrelationState =
-      updatePhase12MacroCorrelationState(results);
-    recordOrder("PHASE_12_MACRO_CORRELATION_UPDATED", "MARKET", {
-      reviewedCount: phase12MacroCorrelationState.reviewedCount,
-      macroStressScore: phase12MacroCorrelationState.macroStressScore,
-      hiddenExposureRiskScore:
-        phase12MacroCorrelationState.hiddenExposureRiskScore,
-      shouldReduceExposure:
-        phase12MacroCorrelationState.shouldReduceExposure,
-    });
-    for (const signal of results) {
-      const phase13HedgeFundBrain =
-        calculatePhase13HedgeFundBrain(signal);
-      signal.phase13HedgeFundBrain = phase13HedgeFundBrain;
-      signal.hedgeFundConvictionScore =
-        phase13HedgeFundBrain.hedgeFundConvictionScore;
-      signal.hedgeFundCapitalDecision =
-        phase13HedgeFundBrain.capitalDecision;
-      if (Number(phase13HedgeFundBrain.scoreAdjustment || 0) !== 0) {
-        signal.score = clampScore(
-          Number(signal.score || 0) +
-          Number(phase13HedgeFundBrain.scoreAdjustment || 0)
-        );
-      }
-      if (phase13HedgeFundBrain.suppressByHedgeFundBrain) {
-        signal.qualifiedToBuy = false;
-        signal.phase13Suppressed = true;
-        signal.phase13SuppressionReason =
-          phase13HedgeFundBrain.reason;
-      }
-    }
-    const phase13HedgeFundBrainState =
-      updatePhase13HedgeFundBrainState(results);
-    recordOrder("PHASE_13_HEDGE_FUND_BRAIN_UPDATED", "BRAIN", {
-      reviewedCount: phase13HedgeFundBrainState.reviewedCount,
-      deployableCount: phase13HedgeFundBrainState.deployableCount,
-      blockedCount: phase13HedgeFundBrainState.blockedCount,
-    });
-    for (const signal of results) {
-      const phase14Governor =
-        calculatePhase14ProfitAccelerationGovernor(signal);
-      signal.phase14Governor = phase14Governor;
-      signal.governorApprovalScore =
-        phase14Governor.governorApprovalScore;
-      signal.eliteConsensus =
-        phase14Governor.eliteConsensus;
-      if (phase14Governor.suppressByGovernor) {
-        signal.qualifiedToBuy = false;
-        signal.phase14Suppressed = true;
-        signal.phase14SuppressionReason =
-          phase14Governor.reason;
-      }
-    }
-    const phase14GovernorState =
-      updatePhase14GovernorState(results);
-    recordOrder("PHASE_14_GOVERNOR_UPDATED", "GOVERNOR", {
-      reviewedCount: phase14GovernorState.reviewedCount,
-      eliteConsensusCount:
-        phase14GovernorState.eliteConsensusCount,
-      blockedCount:
-        phase14GovernorState.blockedCount,
-    });
-    for (const signal of results) {
-      const finalGrade =
-        calculateInstitutionalGrade(signal);
-      signal.finalInstitutionalGrade =
-        finalGrade.finalInstitutionalGrade;
-      signal.finalInstitutionalGradeLabel =
-        finalGrade.finalInstitutionalGradeLabel;
-      signal.finalInstitutionalEliteScore =
-        finalGrade.eliteScore;
-      signal.finalInstitutionalPassedChecks =
-        finalGrade.passedChecks;
-      signal.finalInstitutionalFailedChecks =
-        finalGrade.failedChecks;
-      signal.finalInstitutionalGradeMultiplier =
-        finalGrade.gradeMultiplier;
-      signal.finalInstitutionalGradeChecks =
-        finalGrade.gradeChecks;
-      signal.finalInstitutionalRawGradeInputs =
-        finalGrade.rawGradeInputs;
-      signal.finalInstitutionalGradeReason =
-        finalGrade.reason;
-    }
-    const finalResults = results;
-    return finalResults
-      .sort((a, b) => {
-        const rankA =
-          Number(a.score || 0) * 0.35 +
-          Number(a.explosiveRunnerScore || a.runnerScore || 0) * 0.30 +
-          Number(a.earlyProjectionScore || 0) * 0.20 +
-          Number(a.aiConfidence || a.autonomousConfidenceScore || 0) * 0.15;
-        const rankB =
-          Number(b.score || 0) * 0.35 +
-          Number(b.explosiveRunnerScore || b.runnerScore || 0) * 0.30 +
-          Number(b.earlyProjectionScore || 0) * 0.20 +
-          Number(b.aiConfidence || b.autonomousConfidenceScore || 0) * 0.15;
-        if (rankB !== rankA) return rankB - rankA;
-        return Number(b.percentChange || 0) - Number(a.percentChange || 0);
-      })
-      .slice(0, CONFIG.maxSignalsToReturn);
-  } finally {
-    activeScanLocks.scanMarket = false;
-  }
+  return "intraday";
 }
-async function placeMarketBuy(symbol, dollars, score = 0) {
+
+async function placeMarketBuy(symbol, dollars, score = 0, options = {}) {
   if (CONFIG.realCashTradingUnlocked !== true) {
     throw new Error("Real cash trading locked: set REAL_CASH_TRADING_UNLOCKED=true only after paper validation");
   }
@@ -23023,7 +18430,6 @@ async function placeMarketBuy(symbol, dollars, score = 0) {
         `${normalizedSymbol} stock auto-buy blocked because market is closed`
       );
     }
-    const cleanNotional = Math.max(1, Number(Number(dollars).toFixed(2)));
     const quote = await getStockQuote(normalizedSymbol);
     const referencePrice = Number(
       quote.ask || quote.current || quote.price || 0
@@ -23031,43 +18437,15 @@ async function placeMarketBuy(symbol, dollars, score = 0) {
     if (!referencePrice || referencePrice <= 0) {
       throw new Error(`No valid buy price for ${normalizedSymbol}`);
     }
-    let orderPayload = {
+    return await orderService.stockBuy({
       symbol: normalizedSymbol,
-      side: "buy",
-      time_in_force: "day",
-      client_order_id: `${AI_ORDER_PREFIX}_BUY_${normalizedSymbol}_${Math.round(score)}_${Date.now()}`,
-    };
-    if (marketOpen && fractionable) {
-      orderPayload = {
-        ...orderPayload,
-        notional: cleanNotional,
-        type: "market",
-      };
-    } else {
-      const buyPrice = marketOpen
-        ? referencePrice
-        : Number((referencePrice * 1.01).toFixed(2));
-      const qty = Math.floor(cleanNotional / buyPrice);
-      if (!qty || qty < 1) {
-        throw new Error(
-          `${normalizedSymbol} is not fractionable or requires whole-share buying. $${cleanNotional} is not enough for 1 share at about $${buyPrice}.`
-        );
-      }
-      orderPayload = {
-        ...orderPayload,
-        qty: String(qty),
-        type: marketOpen ? "market" : "limit",
-        ...(marketOpen
-          ? {}
-          : {
-            limit_price: String(buyPrice),
-            extended_hours: true,
-          }),
-      };
-    }
-    return await alpacaTradingRequest("/v2/orders", {
-      method: "POST",
-      body: JSON.stringify(orderPayload),
+      dollars,
+      score,
+      marketOpen,
+      fractionable,
+      referencePrice,
+      allowExistingOpenOrder: options.allowExistingOpenOrder === true,
+      holdCategory: normalizeHoldCategory(options.holdCategory),
     });
   } finally {
     buyingNow.delete(normalizedSymbol);
@@ -23209,8 +18587,13 @@ async function executeAdaptiveBuyOrder({
     for (let i = 0; i < slices; i += 1) {
       const order =
         assetClass === "crypto"
-          ? await placeCryptoMarketBuy(symbol, sliceAmount)
-          : await placeMarketBuy(symbol, sliceAmount, signal.score);
+          ? await placeCryptoMarketBuy(symbol, sliceAmount, {
+            allowExistingOpenOrder: i > 0,
+          })
+          : await placeMarketBuy(symbol, sliceAmount, signal.score, {
+            allowExistingOpenOrder: i > 0,
+            holdCategory: getSignalHoldCategory(signal),
+          });
       orders.push(order);
       if (i < slices - 1 && delayMs > 0) {
         recordOrder("ADAPTIVE_EXECUTION_SLICE_WAIT", symbol, {
@@ -23266,26 +18649,12 @@ async function placeMarketSell(symbol, qty, reason = "AI_EXIT") {
     }
     const asset = assetCheck.asset || {};
     const fractionable = asset.fractionable === true;
-    const cleanQty = fractionable
-      ? Number(rawQty.toFixed(8))
-      : Math.floor(rawQty);
-    if (!cleanQty || cleanQty <= 0) {
-      throw new Error(`Invalid sell quantity for ${normalizedSymbol}`);
-    }
     const clock = await getClock();
     const marketOpen = Boolean(clock?.is_open);
-    const orderPayload = {
-      symbol: normalizedSymbol,
-      qty: String(cleanQty),
-      side: "sell",
-      time_in_force: "day",
-      client_order_id: `${AI_ORDER_PREFIX}_SELL_${normalizedSymbol}_${reason}_${Date.now()}`,
-    };
-    if (marketOpen) {
-      orderPayload.type = "market";
-    } else {
+    let referencePrice;
+    if (!marketOpen) {
       const latestQuote = await getStockQuote(normalizedSymbol);
-      const referencePrice = Number(
+      referencePrice = Number(
         latestQuote.bid ||
         latestQuote.current ||
         latestQuote.price ||
@@ -23295,13 +18664,14 @@ async function placeMarketSell(symbol, qty, reason = "AI_EXIT") {
       if (!referencePrice || referencePrice <= 0) {
         throw new Error(`No valid after-hours limit price for ${normalizedSymbol}`);
       }
-      orderPayload.type = "limit";
-      orderPayload.limit_price = String(Number((referencePrice * 0.99).toFixed(2)));
-      orderPayload.extended_hours = true;
     }
-    return await alpacaTradingRequest("/v2/orders", {
-      method: "POST",
-      body: JSON.stringify(orderPayload),
+    return await orderService.stockSell({
+      symbol: normalizedSymbol,
+      qty: rawQty,
+      reason,
+      marketOpen,
+      fractionable,
+      referencePrice,
     });
   } finally {
     setTimeout(
@@ -23316,79 +18686,13 @@ async function closePosition(symbol) {
   if (!assetCheck.ok) {
     throw new Error(assetCheck.reason);
   }
-  return alpacaTradingRequest(`/v2/positions/${normalizedSymbol}`, {
-    method: "DELETE",
-  });
-}
-function isExitOrder(order = {}) {
-  const side = String(order.side || "").toLowerCase();
-  if (side !== "sell") return false;
-  const status = String(order.status || "").toLowerCase();
-  return [
-    "new",
-    "accepted",
-    "pending_new",
-    "partially_filled",
-    "held",
-    "open",
-    "pending_replace",
-  ].includes(status);
-}
-function classifyExitOrder(order = {}) {
-  const type = String(order.type || "").toLowerCase();
-  const orderClass = String(order.order_class || "").toLowerCase();
-  if (type === "trailing_stop") return "TRAILING_STOP_EXIT";
-  if (type === "stop" || type === "stop_limit") return "STOP_EXIT";
-  if (type === "limit") return "LIMIT_EXIT";
-  if (orderClass === "bracket" || orderClass === "oto" || orderClass === "oco") {
-    return "BRACKET_EXIT";
-  }
-  return "OPEN_SELL_EXIT";
+  return orderService.closePosition(normalizedSymbol);
 }
 function buildPendingExitsFromAlpacaOrders(openOrders = []) {
-  const safeOpenOrders = Array.isArray(openOrders) ? openOrders : [];
-  const alpacaPendingExits = safeOpenOrders
-    .filter(isExitOrder)
-    .map((order) => {
-      const filledQty = Number(order.filled_qty || 0);
-      const totalQty = Number(order.qty || order.notional || 0);
-      const remainingQty = Math.max(0, totalQty - filledQty);
-      return {
-        source: "alpaca_open_order",
-        symbol: normalizeSymbol(order.symbol),
-        qty: remainingQty || totalQty,
-        originalQty: totalQty,
-        filledQty,
-        reason: classifyExitOrder(order),
-        orderId: order.id,
-        clientOrderId: order.client_order_id || null,
-        orderType: order.type || null,
-        orderClass: order.order_class || null,
-        status: order.status || null,
-        limitPrice: order.limit_price || null,
-        stopPrice: order.stop_price || null,
-        trailPrice: order.trail_price || null,
-        trailPercent: order.trail_percent || null,
-        createdAt: order.created_at || null,
-        updatedAt: order.updated_at || null,
-        submittedAt: order.submitted_at || null,
-      };
-    })
-    .filter((exit) => exit.symbol && Number(exit.qty || 0) > 0);
-  const pdtProtectedExits = (engineState.pendingExits || []).map((exit) => ({
-    source: "engine_pdt_or_ai_pending",
-    symbol: normalizeSymbol(exit.symbol),
-    qty: Number(exit.qty || 0),
-    reason: exit.reason || "ENGINE_PENDING_EXIT",
-    at: exit.at || null,
-    ...exit,
-  }));
-  const seen = new Set();
-  return [...alpacaPendingExits, ...pdtProtectedExits].filter((exit) => {
-    const key = `${exit.source}_${exit.orderId || exit.symbol}_${exit.reason}`;
-    if (seen.has(key)) return false;
-    seen.add(key);
-    return true;
+  return buildPendingExits({
+    openOrders,
+    enginePendingExits: engineState.pendingExits || [],
+    normalizeSymbol,
   });
 }
 function addPendingExit(symbol, qty, reason, extra = {}) {
@@ -23945,37 +19249,7 @@ function calculateExplosiveRunnerHoldDecision({
   return decision;
 }
 function calculateTrendQualityHoldDuration(signal = {}) {
-  const score = Number(signal.score || 0);
-  const technicalScore = Number(signal.technicalScore || 0);
-  const statisticalScore = Number(signal.statisticalScore || 0);
-  const trendPersistenceScore = Number(signal.trendPersistenceScore || 0);
-  const unrealizedPercent = Number(signal.unrealizedPercent || 0);
-  const dropFromHigh = Number(signal.dropFromHigh || 0);
-  const trendQualityScore = clampScore(
-    score * 0.3 +
-    technicalScore * 0.25 +
-    statisticalScore * 0.2 +
-    trendPersistenceScore * 0.25
-  );
-  const holdMode =
-    trendQualityScore >= 80 && unrealizedPercent > 0 && dropFromHigh <= 2
-      ? "EXTENDED_SWING_HOLD"
-      : trendQualityScore >= 65 && dropFromHigh <= 1.5
-        ? "NORMAL_SWING_HOLD"
-        : "STANDARD_EXIT_RULES";
-  const suggestedHoldDays =
-    holdMode === "EXTENDED_SWING_HOLD"
-      ? 5
-      : holdMode === "NORMAL_SWING_HOLD"
-        ? 3
-        : 1;
-  return {
-    trendQualityScore,
-    holdMode,
-    suggestedHoldDays,
-    shouldExtendHold:
-      holdMode !== "STANDARD_EXIT_RULES",
-  };
+  return calculateTrendQualityHoldDurationCore(signal, clampScore);
 }
 function calculateMorningProfitLockDecision({
   symbol,
@@ -24558,118 +19832,8 @@ function calculateSmartSwingConversionEngine({
     reason: "STATE_UPDATED",
   };
 }
-function calculateExitParliamentConsensus({
-  symbol,
-  unrealizedPercent = 0,
-  dropFromHigh = 0,
-  shouldStopLoss = false,
-  shouldProtectProfit = false,
-  shouldNormalTrailingExit = false,
-  shouldRunnerTrailingExit = false,
-  smartExitDecision = {},
-  institutionalExitDecision = {},
-  distributionClimaxDecision = {},
-  adaptiveOvernightHoldDecision = {},
-  smartSwingConversionDecision = {},
-  explosiveRunnerHoldDecision = {},
-  phase7Reinforcement = {},
-}) {
-  const cleanSymbol = normalizeSymbol(symbol);
-  const exitVotes = [];
-  const holdVotes = [];
-  const trimVotes = [];
-  if (shouldStopLoss) exitVotes.push("STOP_LOSS");
-  if (shouldProtectProfit) exitVotes.push("PROFIT_PROTECTION");
-  if (shouldNormalTrailingExit) exitVotes.push("TRAILING_STOP");
-  if (shouldRunnerTrailingExit) exitVotes.push("RUNNER_TRAILING_STOP");
-  if (smartExitDecision.shouldForceExit) exitVotes.push("SMART_EXIT");
-  if (institutionalExitDecision.shouldForceExit) exitVotes.push("INSTITUTIONAL_EXIT");
-  if (distributionClimaxDecision.shouldExitClimax) exitVotes.push("CLIMAX_EXIT");
-  if (adaptiveOvernightHoldDecision.shouldExitBeforeClose) exitVotes.push("OVERNIGHT_RISK_EXIT");
-  if (smartExitDecision.shouldExtendHold) holdVotes.push("SMART_EXTEND_HOLD");
-  if (institutionalExitDecision.shouldHold) holdVotes.push("INSTITUTIONAL_HOLD");
-  if (adaptiveOvernightHoldDecision.shouldHoldOvernight) holdVotes.push("OVERNIGHT_HOLD");
-  if (smartSwingConversionDecision.shouldProtectSwing) holdVotes.push("SWING_CONVERSION_HOLD");
-  if (explosiveRunnerHoldDecision.shouldHold) holdVotes.push("EXPLOSIVE_RUNNER_HOLD");
-  if (
-    unrealizedPercent >= 8 &&
-    dropFromHigh >= 1.2 &&
-    dropFromHigh <= 3.5 &&
-    !shouldStopLoss
-  ) {
-    trimVotes.push("SMART_PARTIAL_TRIM");
-  }
-  const climaxTopDetected =
-    Number(distributionClimaxDecision.distributionRiskScore || 0) >= 85 ||
-    Number(distributionClimaxDecision.climaxScore || 0) >= 85;
-  const institutionalDistributionDetected =
-    distributionClimaxDecision.shouldExitClimax === true ||
-    Number(distributionClimaxDecision.distributionRiskScore || 0) >= 75;
-  const emergencyExit =
-    shouldStopLoss ||
-    smartExitDecision.continuationFailure ||
-    smartExitDecision.runnerFailure ||
-    climaxTopDetected;
-  const phase7TrustScore =
-    Number(phase7Reinforcement.setupTrustScore || 50);
-  const exitScore = clampScore(
-    exitVotes.length * 18 +
-    (unrealizedPercent <= -2 ? 20 : 0) +
-    (dropFromHigh >= 3 ? 18 : 0) +
-    (institutionalDistributionDetected ? 18 : 0) +
-    (climaxTopDetected ? 25 : 0) -
-    (phase7TrustScore >= 75 ? 8 : 0)
-  );
-  const holdScore = clampScore(
-    holdVotes.length * 18 +
-    (unrealizedPercent > 0 ? 10 : 0) +
-    (smartSwingConversionDecision.swingConversionScore >= 75 ? 18 : 0) +
-    (institutionalExitDecision.runnerProtectionScore >= 70 ? 15 : 0) +
-    (explosiveRunnerHoldDecision.shouldHold ? 22 : 0) +
-    (phase7TrustScore >= 75 ? 10 : 0)
-  );
-  const trimScore = clampScore(
-    trimVotes.length * 22 +
-    (unrealizedPercent >= 10 ? 15 : 0) +
-    (dropFromHigh >= 1.5 && dropFromHigh <= 4 ? 12 : 0) -
-    (explosiveRunnerHoldDecision.shouldHold ? 8 : 0)
-  );
-  const shouldPartialTrim =
-    !emergencyExit &&
-    trimScore >= 35 &&
-    holdScore >= exitScore - 10;
-  const shouldConsensusExit =
-    emergencyExit || exitScore >= holdScore + 15;
-  const shouldConsensusHold =
-    !emergencyExit && !shouldPartialTrim && holdScore > exitScore;
-  const parliamentMode =
-    emergencyExit
-      ? "EMERGENCY_EXIT_APPROVED"
-      : shouldConsensusExit
-        ? "CONSENSUS_EXIT"
-        : shouldPartialTrim
-          ? "PARTIAL_TRIM_APPROVED"
-          : shouldConsensusHold
-            ? "CONSENSUS_HOLD"
-            : "MIXED_EXIT_SIGNALS";
-  return {
-    symbol: cleanSymbol,
-    phase: "8_INSTITUTIONAL_EXIT_PARLIAMENT_V2",
-    parliamentMode,
-    exitScore,
-    holdScore,
-    trimScore,
-    exitVotes,
-    holdVotes,
-    trimVotes,
-    emergencyExit,
-    climaxTopDetected,
-    institutionalDistributionDetected,
-    shouldConsensusExit,
-    shouldConsensusHold,
-    shouldPartialTrim,
-    reason: "STATE_UPDATED",
-  };
+function calculateExitParliamentConsensus(input) {
+  return calculateExitParliamentConsensusCore(input, { normalizeSymbol, clampScore });
 }
 function calculatePdtExitProtection({
   symbol,
@@ -24731,1000 +19895,54 @@ function calculateTrendPersistenceHoldDecision({
   highWater = 0,
   currentPrice = 0,
 }) {
-  const priceStillNearHigh =
-    highWater > 0 && currentPrice > 0
-      ? currentPrice >= highWater * 0.985
-      : false;
-  const strongRunner =
-    isRunner &&
-    unrealizedPercent >= 4 &&
-    dropFromHigh <= 2.5 &&
-    priceStillNearHigh;
-  if (strongRunner) {
-    return {
-      shouldHold: true,
-      mode: "STRONG_TREND_HOLD",
-      runnerTrailingStopPercent: 1.5,
-      reason: "Runner trend remains healthy. Avoiding premature exit.",
-    };
-  }
-  return {
-    shouldHold: false,
-    mode: "NORMAL_EXIT_RULES",
-    runnerTrailingStopPercent: CONFIG.runnerTrailingStopPercent,
-    reason: "Normal exit rules apply.",
-  };
+  return calculateTrendPersistenceHoldDecisionCore({
+    unrealizedPercent,
+    dropFromHigh,
+    isRunner,
+    highWater,
+    currentPrice,
+  }, CONFIG.runnerTrailingStopPercent);
 }
-async function autoExitPositions(marketOpen) {
-  const positions = engineState.cachedPositions || (await getPositions());
-  const aiOwnedSymbols = await getBotOwnedSymbols();
-  for (const pos of positions) {
-    const symbol = normalizeSymbol(pos.symbol);
-    if (symbol.includes("/") || symbol.endsWith("USD")) continue;
-    if (!isAiManagedOpenPosition(pos, aiOwnedSymbols)) continue;
-    const qty = Number(pos.qty);
-    const currentPrice = Number(pos.current_price);
-    const unrealizedPercent = Number(pos.unrealized_plpc) * 100;
-    if (!qty || !currentPrice) continue;
-    const previousHigh = Number(engineState.highWaterMarks[symbol] || 0);
-    const highWater = Math.max(previousHigh, currentPrice);
-    engineState.highWaterMarks[symbol] = highWater;
-    const dropFromHigh =
-      highWater > 0 ? ((highWater - currentPrice) / highWater) * 100 : 0;
-    const adaptiveSwingRisk = calculateSwingRisk(
-      {
-        symbol,
-        current: currentPrice,
-        price: currentPrice,
-        high: highWater,
-        low: Number(pos.avg_entry_price || currentPrice),
-        score: engineState.aiEntryScores?.[symbol]?.score || 0,
-        technicalScore:
-          engineState.aiEntryScores?.[symbol]?.technicalScore || 0,
-        statisticalScore:
-          engineState.aiEntryScores?.[symbol]?.statisticalScore || 0,
-        trendPersistenceScore:
-          engineState.trendPersistenceState?.heldSymbols?.[symbol]
-            ?.trendPersistenceScore || 0,
-        percentChange: unrealizedPercent,
-        assetType: "stock",
-      },
-      { assetType: "stock" }
-    );
-    const alreadyRunner = Boolean(engineState.runnerPositions[symbol]);
-    const shouldActivateRunner =
-      unrealizedPercent >=
-      Math.max(
-        CONFIG.runnerTriggerPercent,
-        adaptiveSwingRisk.takeProfitPercent * 0.7
-      );
-    if (shouldActivateRunner && !alreadyRunner) {
-      engineState.runnerPositions[symbol] = {
-        activatedAt: new Date().toISOString(),
-        activatedProfitPercent: unrealizedPercent,
-        activatedPrice: currentPrice,
-        highWater,
-      };
-      recordOrder("RUNNER_ACTIVATED", symbol, {
-        dynamicRunnerTrailingStopPercent:
-          unrealizedPercent >= 15
-            ? 2
-            : unrealizedPercent >= 10
-              ? 1.5
-              : CONFIG.runnerTrailingStopPercent,
-        qty,
-        price: currentPrice,
-        profitPercent: unrealizedPercent,
-        runnerTriggerPercent: CONFIG.runnerTriggerPercent,
-        runnerTrailingStopPercent: CONFIG.runnerTrailingStopPercent,
-      });
-    }
-    const isRunner = Boolean(engineState.runnerPositions[symbol]);
-    const profitExtraction =
-      calculateInstitutionalProfitExtraction({
-        symbol,
-        unrealizedPercent,
-        dropFromHigh,
-        isRunner,
-        highWater,
-        currentPrice,
-      });
-    engineState.institutionalExitOrchestratorState = {
-      ...(engineState.institutionalExitOrchestratorState || {}),
-      latestProfitExtraction: profitExtraction,
-      updatedAt: new Date().toISOString(),
-    };
-    const shouldStopLoss = unrealizedPercent <= adaptiveSwingRisk.stopLossPercent;
-    const continuationHoldExitDecision =
-      calculateContinuationHoldExitDecision({
-        symbol,
-        unrealizedPercent,
-        dropFromHigh,
-      });
-    const isMorningStrikePosition =
-      engineState.aiEntryScores?.[symbol]?.entryType === "MORNING_STRIKE" ||
-      engineState.aiEntryScores?.[symbol]?.morningStrike === true ||
-      engineState.morningStrikeState?.selectedSymbols?.some(
-        (selectedSymbol) =>
-          normalizeSymbol(selectedSymbol) === symbol
-      );
-    const morningProfitLockDecision =
-      calculateMorningProfitLockDecision({
-        symbol,
-        unrealizedPercent,
-        dropFromHigh,
-        isMorningStrike: isMorningStrikePosition,
-      });
-    const shouldProtectProfit =
-      unrealizedPercent >= 2 &&
-      dropFromHigh >= 0.8;
-    const shouldNormalTrailingExit =
-      !isRunner &&
-      unrealizedPercent > 0 &&
-      dropFromHigh >= Math.abs(adaptiveSwingRisk.trailingStopPercent);
-    const trendQualityHold =
-      calculateTrendQualityHoldDuration({
-        symbol,
-        score: engineState.aiEntryScores?.[symbol]?.score || 0,
-        technicalScore:
-          engineState.aiEntryScores?.[symbol]?.technicalScore || 0,
-        statisticalScore:
-          engineState.aiEntryScores?.[symbol]?.statisticalScore || 0,
-        trendPersistenceScore:
-          engineState.trendPersistenceState?.heldSymbols?.[symbol]
-            ?.trendPersistenceScore || 0,
-        unrealizedPercent,
-        dropFromHigh,
-      });
-    const trendHoldDecision =
-      calculateTrendPersistenceHoldDecision({
-        unrealizedPercent,
-        dropFromHigh,
-        isRunner,
-        highWater,
-        currentPrice,
-      });
-    const dynamicRunnerTrailingStopPercent = Math.max(
-      Number(
-        trendHoldDecision.runnerTrailingStopPercent ||
-        CONFIG.runnerTrailingStopPercent
-      ),
-      Number(
-        profitExtraction.dynamicRunnerTrailingStopPercent ||
-        CONFIG.runnerTrailingStopPercent
-      )
-    );
-    const smartExitDecision =
-      calculateSmartExitIntelligence({
-        symbol,
-        unrealizedPercent,
-        dropFromHigh,
-        isRunner,
-        isContinuationHold:
-          normalizeSymbol(engineState.activeContinuationHoldSymbol) === symbol,
-        trendQualityHold,
-        trendHoldDecision,
-        adaptiveSwingRisk,
-      });
-    engineState.smartExitIntelligenceState = smartExitDecision;
-    engineState.smartExitIntelligenceHistory.unshift({
-      ...smartExitDecision,
-      updatedAt: new Date().toISOString(),
-    });
-    engineState.smartExitIntelligenceHistory =
-      engineState.smartExitIntelligenceHistory.slice(0, 200);
-    const institutionalExitDecision =
-      calculateInstitutionalExitOrchestrator({
-        symbol,
-        qty,
-        unrealizedPercent,
-        dropFromHigh,
-        isRunner,
-        smartExitDecision,
-        trendHoldDecision,
-        continuationHoldExitDecision,
-        adaptiveSwingRisk,
-      });
-    engineState.institutionalExitOrchestratorState =
-      institutionalExitDecision;
-    engineState.institutionalExitOrchestratorHistory.unshift({
-      ...institutionalExitDecision,
-      updatedAt: new Date().toISOString(),
-    });
-    engineState.institutionalExitOrchestratorHistory =
-      engineState.institutionalExitOrchestratorHistory.slice(0, 200);
-    const distributionClimaxDecision =
-      calculateInstitutionalDistributionClimax({
-        symbol,
-        unrealizedPercent,
-        dropFromHigh,
-        isRunner,
-        smartExitDecision,
-        institutionalExitDecision,
-      });
-    engineState.institutionalDistributionState =
-      distributionClimaxDecision;
-    engineState.institutionalDistributionHistory.unshift({
-      ...distributionClimaxDecision,
-      updatedAt: new Date().toISOString(),
-    });
-    engineState.institutionalDistributionHistory =
-      engineState.institutionalDistributionHistory.slice(0, 200);
-    const institutionalReloadDecision =
-      calculateInstitutionalReloadIntelligence({
-        symbol,
-        unrealizedPercent,
-        dropFromHigh,
-        distributionClimaxDecision,
-        institutionalExitDecision,
-      });
-    engineState.institutionalReloadState =
-      institutionalReloadDecision;
-    engineState.institutionalReloadHistory.unshift({
-      ...institutionalReloadDecision,
-      updatedAt: new Date().toISOString(),
-    });
-    engineState.institutionalReloadHistory =
-      engineState.institutionalReloadHistory.slice(0, 200);
-    const adaptiveOvernightHoldDecision =
-      calculateAdaptiveOvernightHoldIntelligence({
-        symbol,
-        unrealizedPercent,
-        dropFromHigh,
-        isRunner,
-        smartExitDecision,
-        institutionalExitDecision,
-        distributionClimaxDecision,
-        institutionalReloadDecision,
-      });
-    engineState.adaptiveOvernightHoldState =
-      adaptiveOvernightHoldDecision;
-    engineState.adaptiveOvernightHoldHistory.unshift({
-      ...adaptiveOvernightHoldDecision,
-      updatedAt: new Date().toISOString(),
-    });
-    engineState.adaptiveOvernightHoldHistory =
-      engineState.adaptiveOvernightHoldHistory.slice(0, 200);
-    const smartSwingConversionDecision =
-      calculateSmartSwingConversionEngine({
-        symbol,
-        unrealizedPercent,
-        dropFromHigh,
-        isRunner,
-        smartExitDecision,
-        institutionalExitDecision,
-        distributionClimaxDecision,
-        institutionalReloadDecision,
-        adaptiveOvernightHoldDecision,
-      });
-    engineState.smartSwingConversionState =
-      smartSwingConversionDecision;
-    engineState.smartSwingConversionHistory.unshift({
-      ...smartSwingConversionDecision,
-      updatedAt: new Date().toISOString(),
-    });
-    engineState.smartSwingConversionHistory =
-      engineState.smartSwingConversionHistory.slice(0, 200);
-    const latestSignalForRunnerHold =
-      (engineState.lastSignals || []).find(
-        (signal) => normalizeSymbol(signal.symbol) === symbol
-      ) || {};
-    const explosiveRunnerHoldDecision =
-      calculateExplosiveRunnerHoldDecision({
-        symbol,
-        position: pos,
-        signal: {
-          ...latestSignalForRunnerHold,
-          ...(engineState.aiEntryScores?.[symbol] || {}),
-          price: currentPrice,
-          currentPrice,
-          score:
-            latestSignalForRunnerHold.score ||
-            engineState.aiEntryScores?.[symbol]?.score ||
-            0,
-          runnerScore:
-            latestSignalForRunnerHold.runnerScore ||
-            latestSignalForRunnerHold.explosiveRunnerScore ||
-            latestSignalForRunnerHold.explosiveRunnerPrediction?.explosiveRunnerScore ||
-            engineState.aiEntryScores?.[symbol]?.runnerScore ||
-            engineState.aiEntryScores?.[symbol]?.explosiveRunnerScore ||
-            0,
-          trendPersistenceScore:
-            latestSignalForRunnerHold.trendPersistenceScore ||
-            engineState.trendPersistenceState?.heldSymbols?.[symbol]
-              ?.trendPersistenceScore ||
-            0,
-        },
-      });
-    const shouldRunnerTrailingExit =
-      isRunner &&
-      !explosiveRunnerHoldDecision.shouldHold &&
-      dropFromHigh >= dynamicRunnerTrailingStopPercent;
-    const exitParliamentDecision =
-      calculateExitParliamentConsensus({
-        symbol,
-        unrealizedPercent,
-        dropFromHigh,
-        shouldStopLoss,
-        shouldProtectProfit,
-        shouldNormalTrailingExit,
-        shouldRunnerTrailingExit,
-        smartExitDecision,
-        institutionalExitDecision,
-        distributionClimaxDecision,
-        adaptiveOvernightHoldDecision,
-        smartSwingConversionDecision,
-        explosiveRunnerHoldDecision,
-        phase7Reinforcement:
-          engineState.aiEntryScores?.[symbol]?.phase7Reinforcement || {},
-      });
-    engineState.exitParliamentState = exitParliamentDecision;
-    engineState.exitParliamentHistory.unshift({
-      ...exitParliamentDecision,
-      updatedAt: new Date().toISOString(),
-    });
-    engineState.exitParliamentHistory =
-      engineState.exitParliamentHistory.slice(0, 200);
-    if (
-      (
-        trendHoldDecision.shouldHold ||
-        trendQualityHold.shouldExtendHold ||
-        continuationHoldExitDecision.shouldProtectHold ||
-        smartExitDecision.shouldExtendHold ||
-        institutionalExitDecision.shouldHold ||
-        adaptiveOvernightHoldDecision.shouldHoldOvernight ||
-        smartSwingConversionDecision.shouldProtectSwing ||
-        explosiveRunnerHoldDecision.shouldHold ||
-        exitParliamentDecision.shouldConsensusHold
-      ) &&
-      !shouldStopLoss &&
-      !continuationHoldExitDecision.shouldExit &&
-      !smartExitDecision.shouldForceExit &&
-      !institutionalExitDecision.shouldForceExit &&
-      !distributionClimaxDecision.shouldExitClimax &&
-      !adaptiveOvernightHoldDecision.shouldExitBeforeClose &&
-      !(
-        smartSwingConversionDecision.shouldProtectSwing &&
-        !shouldStopLoss
-      ) &&
-      !exitParliamentDecision.shouldConsensusExit
-    ) {
-      recordOrder("SMART_EXIT_HOLD", symbol, {
-        qty,
-        price: currentPrice,
-        highWater,
-        dropFromHigh,
-        profitPercent: unrealizedPercent,
-        isRunner,
-        smartExitDecision,
-        exitParliamentDecision,
-        explosiveRunnerHoldDecision,
-        profitExtraction,
-        trendHoldMode: trendHoldDecision.mode,
-        trendHoldReason: trendHoldDecision.reason,
-        dynamicRunnerTrailingStopPercent,
-      });
-      continue;
-    }
-    const pdtTrimProtection =
-      calculatePdtExitProtection({
-        symbol,
-        account: engineState.cachedAccount || {},
-        reason: "PARTIAL_TRIM",
-        qty,
-        exitType: "PARTIAL_TRIM",
-        shouldStopLoss,
-        exitParliamentDecision,
-      });
-    if (pdtTrimProtection.shouldDeferExit) {
-      addPendingExit(symbol, qty, "PDT_DEFERRED_TRIM", {
-        price: currentPrice,
-        highWater,
-        dropFromHigh,
-        profitPercent: unrealizedPercent,
-        pdtTrimProtection,
-      });
-      recordOrder("PDT_TRIM_DEFERRED", symbol, {
-        qty,
-        price: currentPrice,
-        profitPercent: unrealizedPercent,
-        pdtTrimProtection,
-      });
-      saveEngineState("PDT_TRIM_DEFERRED");
-      continue;
-    }
-    if (
-      adaptiveOvernightHoldDecision.shouldTrimBeforeClose &&
-      marketOpen &&
-      qty >= 2
-    ) {
-      try {
-        const overnightTrimQty = Math.max(1, Math.floor(qty * 0.25));
-        const overnightTrimOrder = await placeMarketSell(
-          symbol,
-          overnightTrimQty,
-          "OVERNIGHT_RISK_TRIM"
-        );
-        recordOrder("OVERNIGHT_RISK_TRIM", symbol, {
-          overnightTrimQty,
-          remainingQty: qty - overnightTrimQty,
-          price: currentPrice,
-          profitPercent: unrealizedPercent,
-          dropFromHigh,
-          adaptiveOvernightHoldDecision,
-          overnightTrimOrder,
-        });
-        saveEngineState("OVERNIGHT_RISK_TRIM");
-        continue;
-      } catch (err) {
-        recordFailedOrder("OVERNIGHT_RISK_TRIM_FAILED", symbol, err.message, {
-          qty,
-          price: currentPrice,
-          profitPercent: unrealizedPercent,
-          adaptiveOvernightHoldDecision,
-        });
-      }
-    }
-    if (
-      distributionClimaxDecision.shouldTrimClimax &&
-      marketOpen &&
-      qty >= 2
-    ) {
-      try {
-        const trimQty = Math.max(1, Math.floor(qty * 0.25));
-        const trimOrder = await placeMarketSell(
-          symbol,
-          trimQty,
-          "CLIMAX_TRIM_PROFIT"
-        );
-        recordOrder("CLIMAX_TRIM_PROFIT", symbol, {
-          trimQty,
-          remainingQty: qty - trimQty,
-          price: currentPrice,
-          profitPercent: unrealizedPercent,
-          dropFromHigh,
-          distributionClimaxDecision,
-          institutionalReloadDecision,
-          trimOrder,
-        });
-        saveEngineState("CLIMAX_TRIM_PROFIT");
-        continue;
-      } catch (err) {
-        recordFailedOrder("CLIMAX_TRIM_FAILED", symbol, err.message, {
-          qty,
-          price: currentPrice,
-          profitPercent: unrealizedPercent,
-          distributionClimaxDecision,
-        });
-      }
-    }
-    if (
-      institutionalExitDecision.shouldScaleProfit &&
-      marketOpen &&
-      qty >= 2
-    ) {
-      try {
-        const scaleQty = Math.max(
-          1,
-          Math.floor(qty * institutionalExitDecision.scalePercent)
-        );
-        const scaleOrder = await placeMarketSell(
-          symbol,
-          scaleQty,
-          institutionalExitDecision.scaleLevel
-        );
-        engineState.runnerPositions[symbol] = {
-          ...(engineState.runnerPositions[symbol] || {}),
-          institutionalExitLadder: {
-            ...(engineState.runnerPositions[symbol]?.institutionalExitLadder || {}),
-            firstScaleTaken:
-              institutionalExitDecision.scaleLevel === "FIRST_SCALE"
-                ? true
-                : engineState.runnerPositions[symbol]?.institutionalExitLadder?.firstScaleTaken || false,
-            secondScaleTaken:
-              institutionalExitDecision.scaleLevel === "SECOND_SCALE"
-                ? true
-                : engineState.runnerPositions[symbol]?.institutionalExitLadder?.secondScaleTaken || false,
-            lastScaleTakenAt: new Date().toISOString(),
-            lastScaleProfitPercent: unrealizedPercent,
-            lastScaleQty: scaleQty,
-          },
-        };
-        recordOrder("INSTITUTIONAL_PROFIT_SCALE_OUT", symbol, {
-          scaleQty,
-          remainingQty: qty - scaleQty,
-          price: currentPrice,
-          profitPercent: unrealizedPercent,
-          dropFromHigh,
-          institutionalExitDecision,
-          scaleOrder,
-        });
-        saveEngineState("INSTITUTIONAL_PROFIT_SCALE_OUT");
-        continue;
-      } catch (err) {
-        recordFailedOrder("INSTITUTIONAL_PROFIT_SCALE_FAILED", symbol, err.message, {
-          qty,
-          price: currentPrice,
-          profitPercent: unrealizedPercent,
-          dropFromHigh,
-          institutionalExitDecision,
-        });
-      }
-    }
-    if (
-      smartExitDecision.shouldPartialProfit &&
-      marketOpen &&
-      qty >= 2
-    ) {
-      try {
-        const partialQty = Math.max(1, Math.floor(qty * 0.5));
-        const partialOrder = await placeMarketSell(
-          symbol,
-          partialQty,
-          "SMART_PARTIAL_PROFIT"
-        );
-        engineState.runnerPositions[symbol] = {
-          ...(engineState.runnerPositions[symbol] || {}),
-          partialProfitTaken: true,
-          partialProfitTakenAt: new Date().toISOString(),
-          partialProfitPercent: unrealizedPercent,
-          partialProfitQty: partialQty,
-        };
-        recordOrder("SMART_PARTIAL_PROFIT_TAKEN", symbol, {
-          partialQty,
-          remainingQty: qty - partialQty,
-          price: currentPrice,
-          profitPercent: unrealizedPercent,
-          dropFromHigh,
-          smartExitDecision,
-          partialOrder,
-        });
-        saveEngineState("SMART_PARTIAL_PROFIT_TAKEN");
-        continue;
-      } catch (err) {
-        recordFailedOrder("SMART_PARTIAL_PROFIT_FAILED", symbol, err.message, {
-          qty,
-          price: currentPrice,
-          profitPercent: unrealizedPercent,
-          dropFromHigh,
-          smartExitDecision,
-        });
-      }
-    }
-    if (
-      !shouldStopLoss &&
-      !shouldProtectProfit &&
-      !shouldNormalTrailingExit &&
-      !shouldRunnerTrailingExit &&
-      !continuationHoldExitDecision.shouldExit &&
-      !smartExitDecision.shouldForceExit &&
-      !institutionalExitDecision.shouldForceExit &&
-      !distributionClimaxDecision.shouldExitClimax &&
-      !adaptiveOvernightHoldDecision.shouldExitBeforeClose &&
-      !smartSwingConversionDecision.shouldProtectSwing &&
-      !exitParliamentDecision.shouldConsensusExit
-    ) {
-      continue;
-    }
-    let reason = "AI_EXIT";
-    if (shouldStopLoss) reason = "STOP_LOSS";
-    else if (exitParliamentDecision.emergencyExit) reason = "EXIT_PARLIAMENT_EMERGENCY_EXIT";
-    else if (exitParliamentDecision.shouldConsensusExit) reason = "EXIT_PARLIAMENT_CONSENSUS_EXIT";
-    else if (smartExitDecision.continuationFailure) reason = "CONTINUATION_FAILURE_EXIT";
-    else if (smartExitDecision.runnerFailure) reason = "RUNNER_FAILURE_EXIT";
-    else if (smartExitDecision.shouldForceExit) reason = "SMART_FORCE_EXIT";
-    else if (institutionalExitDecision.shouldForceExit) reason = "INSTITUTIONAL_FORCE_EXIT";
-    else if (distributionClimaxDecision.shouldExitClimax) reason = "CLIMAX_DISTRIBUTION_EXIT";
-    else if (adaptiveOvernightHoldDecision.shouldExitBeforeClose) reason = "OVERNIGHT_RISK_EXIT";
-    else if (continuationHoldExitDecision.shouldExit) reason = "NON_SELECTED_CONTINUATION_EXIT";
-    else if (shouldRunnerTrailingExit) reason = "RUNNER_TRAILING_STOP";
-    else if (shouldProtectProfit) reason = "PROFIT_PROTECTION";
-    else if (shouldNormalTrailingExit) reason = "TRAILING_STOP";
-    const exitLearningAdjustment =
-      getExitReinforcementAdjustment(reason, "stock");
-    const runnerExitDelayGate =
-      calculateRunnerExitDelayGate({
-        symbol,
-        reason,
-        isRunner,
-        unrealizedPercent,
-        dropFromHigh,
-        trendQualityHold,
-        trendHoldDecision,
-        exitLearningAdjustment,
-      });
-    if (runnerExitDelayGate.shouldDelayExit) {
-      recordOrder("RUNNER_EXIT_DELAYED_BY_LEARNING", symbol, {
-        reason,
-        qty,
-        price: currentPrice,
-        profitPercent: unrealizedPercent,
-        dropFromHigh,
-        exitLearningAdjustment,
-        runnerExitDelayGate,
-      });
-      updateExitDashboardState({
-        symbol,
-        action: "RUNNER_EXIT_DELAYED",
-        reason,
-        profitPercent: unrealizedPercent,
-        runnerExitDelayGate,
-        exitLearningAdjustment,
-      });
-      continue;
-    }
-    const weakSetupFastExitGate =
-      calculateWeakSetupFastExitGate({
-        symbol,
-        unrealizedPercent,
-        dropFromHigh,
-        isRunner,
-      });
-    if (weakSetupFastExitGate.shouldFastExit) {
-      reason = "WEAK_SETUP_FAST_EXIT";
-    }
-    const overnightHoldRiskGate =
-      calculateOvernightHoldRiskGate({
-        symbol,
-        unrealizedPercent,
-        isRunner,
-      });
-    if (
-      overnightHoldRiskGate.shouldProtectBeforeClose &&
-      reason === "AI_EXIT"
-    ) {
-      reason = "OVERNIGHT_PROTECTION_EXIT";
-    }
-    const smartTrimDecision =
-      calculateSmartTrimDecision({
-        symbol,
-        qty,
-        unrealizedPercent,
-        dropFromHigh,
-        isRunner,
-      });
-    if (
-      smartTrimDecision.shouldTrim &&
-      !shouldStopLoss &&
-      !exitParliamentDecision.emergencyExit
-    ) {
-      try {
-        const trimOrder = await placeMarketSell(
-          symbol,
-          smartTrimDecision.trimQty,
-          "SMART_RUNNER_TRIM"
-        );
-        recordOrder("SMART_RUNNER_TRIM_EXECUTED", symbol, {
-          trimQty: smartTrimDecision.trimQty,
-          originalQty: qty,
-          price: currentPrice,
-          profitPercent: unrealizedPercent,
-          dropFromHigh,
-          smartTrimDecision,
-          trimOrder,
-        });
-        updateExitDashboardState({
-          symbol,
-          action: "SMART_RUNNER_TRIM",
-          profitPercent: unrealizedPercent,
-          smartTrimDecision,
-        });
-        saveEngineState("SMART_RUNNER_TRIM_EXECUTED");
-        continue;
-      } catch (err) {
-        recordFailedOrder("SMART_RUNNER_TRIM_FAILED", symbol, err.message, {
-          smartTrimDecision,
-          qty,
-          price: currentPrice,
-          profitPercent: unrealizedPercent,
-        });
-      }
-    }
-    updateExitDashboardState({
-      symbol,
-      action: "FULL_EXIT_REVIEWED",
-      reason,
-      profitPercent: unrealizedPercent,
-      dropFromHigh,
-      isRunner,
-      exitLearningAdjustment,
-      weakSetupFastExitGate,
-      overnightHoldRiskGate,
-    });
-    const pdtFullExitProtection =
-      calculatePdtExitProtection({
-        symbol,
-        account: engineState.cachedAccount || {},
-        reason,
-        qty,
-        exitType: "FULL_EXIT",
-        shouldStopLoss,
-        exitParliamentDecision,
-      });
-    if (pdtFullExitProtection.shouldDeferExit) {
-      addPendingExit(symbol, qty, "PDT_DEFERRED_EXIT", {
-        price: currentPrice,
-        highWater,
-        dropFromHigh,
-        profitPercent: unrealizedPercent,
-        originalReason: reason,
-        pdtFullExitProtection,
-      });
-      recordOrder("PDT_EXIT_DEFERRED", symbol, {
-        qty,
-        price: currentPrice,
-        profitPercent: unrealizedPercent,
-        originalReason: reason,
-        pdtFullExitProtection,
-      });
-      saveEngineState("PDT_EXIT_DEFERRED");
-      continue;
-    }
-    if (!marketOpen) {
-      addPendingExit(symbol, qty, reason, {
-        price: currentPrice,
-        highWater,
-        dropFromHigh,
-        profitPercent: unrealizedPercent,
-        isRunner,
-      });
-      recordOrder("EXIT_PENDING_MARKET_CLOSED", symbol, {
-        dynamicRunnerTrailingStopPercent,
-        trendHoldMode: trendHoldDecision.mode,
-        trendHoldReason: trendHoldDecision.reason,
-        qty,
-        price: currentPrice,
-        highWater,
-        dropFromHigh,
-        profitPercent: unrealizedPercent,
-        reason,
-        isRunner,
-      });
-      continue;
-    }
-    try {
-      const order = await placeMarketSell(symbol, qty, reason);
-      if (
-        unrealizedPercent >=
-        Number(CONFIG.runnerTriggerPercent || 6)
-      ) {
-        if (!engineState.statisticalMemoryState) {
-          engineState.statisticalMemoryState = {
-            updatedAt: new Date().toISOString(),
-            setupHistory: [],
-            setupPerformance: {},
-            expectancyHistory: [],
-            probabilityHistory: [],
-          };
-        }
-        const reinforcementSetupType =
-          engineState.aiEntryScores?.[symbol]
-            ?.setupType || "UNKNOWN_SETUP";
-        engineState.statisticalMemoryState.setupHistory.unshift({
-          symbol,
-          setupType: reinforcementSetupType,
-          timestamp: new Date().toISOString(),
-          profitPercent: Number(
-            unrealizedPercent.toFixed(2)
-          ),
-          reinforcementSource: "LIVE_RUNNER_EXIT",
-        });
-        engineState.statisticalMemoryState.setupHistory =
-          engineState.statisticalMemoryState.setupHistory.slice(
-            0,
-            500
-          );
-      }
-      if (
-        unrealizedPercent <=
-        -Number(CONFIG.stopLossPercent || 1)
-      ) {
-        if (!engineState.statisticalMemoryState) {
-          engineState.statisticalMemoryState = {
-            updatedAt: new Date().toISOString(),
-            setupHistory: [],
-            setupPerformance: {},
-            expectancyHistory: [],
-            probabilityHistory: [],
-          };
-        }
-        const weakeningSetupType =
-          engineState.aiEntryScores?.[symbol]
-            ?.setupType || "UNKNOWN_SETUP";
-        engineState.statisticalMemoryState.setupHistory.unshift({
-          symbol,
-          setupType: weakeningSetupType,
-          timestamp: new Date().toISOString(),
-          profitPercent: Number(
-            unrealizedPercent.toFixed(2)
-          ),
-          reinforcementSource: "LIVE_STOP_LOSS",
-        });
-        engineState.statisticalMemoryState.setupHistory =
-          engineState.statisticalMemoryState.setupHistory.slice(
-            0,
-            500
-          );
-      }
-      recordOrder(reason, symbol, {
-        dynamicRunnerTrailingStopPercent,
-        trendHoldMode: trendHoldDecision.mode,
-        trendHoldReason: trendHoldDecision.reason,
-        qty,
-        price: currentPrice,
-        highWater,
-        dropFromHigh,
-        profitPercent: unrealizedPercent,
-        smartExitDecision,
-        institutionalExitDecision,
-        distributionClimaxDecision,
-        institutionalReloadDecision,
-        adaptiveOvernightHoldDecision,
-        smartSwingConversionDecision,
-        exitParliamentDecision,
-        isRunner,
-        order,
-      });
-      const reloadReentryMemory =
-        updateReloadReentryMemory({
-          symbol,
-          reason,
-          unrealizedPercent,
-          isRunner,
-        });
-      updateExitDashboardState({
-        symbol,
-        action: "FULL_EXIT_EXECUTED",
-        reason,
-        profitPercent: unrealizedPercent,
-        isRunner,
-        reloadReentryMemory,
-      });
-      saveEngineState("PROBABILITY_REINFORCEMENT_UPDATED");
-      rememberTradeResult(symbol, {
-        profitPercent: unrealizedPercent,
-        reason,
-      });
-      saveEngineState("CRYPTO_PROBABILITY_REINFORCEMENT_UPDATED");
-      journalTradeExit(symbol, {
-        assetClass: "stock",
-        exitType: "AUTO_STOCK_EXIT",
-        exitPrice: currentPrice,
-        profitPercent: unrealizedPercent,
-        exitReason: reason,
-      });
-      delete engineState.highWaterMarks[symbol];
-      engineState.lastSoldAt[symbol] = Date.now();
-      delete engineState.aiEntryScores[symbol];
-      delete engineState.runnerPositions[symbol];
-    } catch (err) {
-      recordFailedOrder(`${reason}_FAILED`, symbol, err.message, {
-        dynamicRunnerTrailingStopPercent,
-        trendHoldMode: trendHoldDecision.mode,
-        trendHoldReason: trendHoldDecision.reason,
-        qty,
-        price: currentPrice,
-        highWater,
-        dropFromHigh,
-        profitPercent: unrealizedPercent,
-        isRunner,
-      });
-    }
-  }
-}
-async function autoExitCryptoPositions() {
-  if (!["live_crypto", "live_stock", "smart"].includes(TRADING_MODE)) return;
-  const positions = await getPositions();
-  const aiOwnedSymbols = await getBotOwnedSymbols();
-  for (const pos of positions) {
-    const symbol = normalizeSymbol(pos.symbol);
-    if (!symbol.endsWith("USD")) continue;
-    if (!isAiManagedOpenPosition(pos, aiOwnedSymbols)) continue;
-    const qty = Number(pos.qty);
-    const currentPrice = Number(pos.current_price);
-    const profitPercent = Number(pos.unrealized_plpc) * 100;
-    if (!qty || qty <= 0 || !currentPrice) continue;
-    const previousHigh = Number(engineState.highWaterMarks[symbol] || 0);
-    const highWater = Math.max(previousHigh, currentPrice);
-    engineState.highWaterMarks[symbol] = highWater;
-    const dropFromHigh =
-      highWater > 0 ? ((highWater - currentPrice) / highWater) * 100 : 0;
-    const adaptiveSwingRisk = calculateSwingRisk(
-      {
-        symbol,
-        current: currentPrice,
-        price: currentPrice,
-        high: highWater,
-        low: Number(pos.avg_entry_price || currentPrice),
-        score: engineState.aiEntryScores?.[symbol]?.score || 0,
-        technicalScore:
-          engineState.aiEntryScores?.[symbol]?.technicalScore || 0,
-        statisticalScore:
-          engineState.aiEntryScores?.[symbol]?.statisticalScore || 0,
-        trendPersistenceScore:
-          engineState.trendPersistenceState?.heldSymbols?.[symbol]
-            ?.trendPersistenceScore || 0,
-        percentChange: profitPercent,
-        assetType: "crypto",
-      },
-      { assetType: "crypto" }
-    );
-    const trendQualityHold =
-      calculateTrendQualityHoldDuration({
-        symbol,
-        score: engineState.aiEntryScores?.[symbol]?.score || 0,
-        technicalScore:
-          engineState.aiEntryScores?.[symbol]?.technicalScore || 0,
-        statisticalScore:
-          engineState.aiEntryScores?.[symbol]?.statisticalScore || 0,
-        trendPersistenceScore:
-          engineState.trendPersistenceState?.heldSymbols?.[symbol]
-            ?.trendPersistenceScore || 0,
-        unrealizedPercent: profitPercent,
-        dropFromHigh,
-      });
-    const trailingActive =
-      profitPercent >= adaptiveSwingRisk.takeProfitPercent * 0.5;
-    const shouldStopLoss =
-      profitPercent <= adaptiveSwingRisk.stopLossPercent;
-    const shouldTrailingStop =
-      trailingActive &&
-      profitPercent >= 1.5 &&
-      dropFromHigh >=
-      Math.abs(adaptiveSwingRisk.trailingStopPercent);
-    if (
-      trendQualityHold.shouldExtendHold &&
-      !shouldStopLoss
-    ) {
-      recordOrder("CRYPTO_TREND_QUALITY_HOLD", symbol, {
-        qty,
-        currentPrice,
-        profitPercent,
-        highWater,
-        dropFromHigh,
-        trendQualityHold,
-        adaptiveSwingRisk,
-      });
-      continue;
-    }
-    if (!shouldStopLoss && !shouldTrailingStop) continue;
-    let reason = "CRYPTO_EXIT";
-    if (shouldStopLoss) reason = "CRYPTO_STOP_LOSS";
-    else if (shouldTrailingStop) reason = "CRYPTO_TRAILING_STOP";
-    try {
-      const order = await placeCryptoMarketSell(symbol, qty, reason);
-      recordOrder("AUTO_CRYPTO_SELL", symbol, {
-        qty,
-        currentPrice,
-        profitPercent,
-        highWater,
-        dropFromHigh,
-        reason,
-        order,
-      });
-      journalTradeExit(symbol, {
-        assetClass: "crypto",
-        exitType: "AUTO_CRYPTO_EXIT",
-        exitPrice: currentPrice,
-        profitPercent,
-        exitReason: reason,
-      });
-      rememberTradeResult(symbol, {
-        profitPercent,
-        reason,
-      });
-      delete engineState.highWaterMarks[symbol];
-      engineState.lastSoldAt[symbol] = Date.now();
-    } catch (err) {
-      recordFailedOrder("AUTO_CRYPTO_SELL_FAILED", symbol, err.message, {
-        qty,
-        currentPrice,
-        profitPercent,
-        reason,
-      });
-    }
-  }
-}
+const { autoExitPositions, autoExitCryptoPositions } = createPositionExitManager({
+  CONFIG,
+  addPendingExit,
+  calculateAdaptiveOvernightHoldIntelligence,
+  calculateContinuationHoldExitDecision,
+  calculateCoreExitTriggers,
+  calculateExitParliamentConsensus,
+  calculateExplosiveRunnerHoldDecision,
+  calculateInstitutionalDistributionClimax,
+  calculateInstitutionalExitOrchestrator,
+  calculateInstitutionalProfitExtraction,
+  calculateInstitutionalReloadIntelligence,
+  calculateMorningProfitLockDecision,
+  calculateOvernightHoldRiskGate,
+  calculatePdtExitProtection,
+  calculateRunnerExitDelayGate,
+  calculateSmartExitIntelligence,
+  calculateSmartSwingConversionEngine,
+  calculateSmartTrimDecision,
+  calculateSwingRisk,
+  calculateTrendPersistenceHoldDecision,
+  calculateTrendQualityHoldDuration,
+  calculateWeakSetupFastExitGate,
+  engineState,
+  getBotOwnedSymbols,
+  getExitReinforcementAdjustment,
+  getPositions,
+  isAiManagedOpenPosition,
+  journalTradeExit,
+  normalizeSymbol,
+  placeCryptoMarketSell,
+  placeMarketSell,
+  recordFailedOrder,
+  recordOrder,
+  rememberTradeResult,
+  saveEngineState,
+  updateExitDashboardState,
+  updateReloadReentryMemory,
+  getTradingMode: () => TRADING_MODE,
+});
 async function replaceWeakestIfBetter(signals, positions, aiOwnedSymbols) {
   const aiEntryScores = await getBotEntryScores();
   const aiPositions = positions.filter((p) => {
@@ -28208,1125 +22426,72 @@ function calculatePhase41InstitutionalCompressionIntelligence({
     engineState.phase41InstitutionalCompressionHistory.slice(0, 200);
   return state;
 }
-async function autoBuySignals(signals = []) {
-  if (!["live_stock", "smart"].includes(TRADING_MODE)) return;
-  resetDailyMorningTradeCounter();
-  if (!canTakeMoreMorningTrades()) {
-    recordOrder("AUTO_STOCK_BUY_SKIPPED_DAILY_LIMIT", "STOCK", {
-      morningTradesToday: engineState.morningTradesToday,
-      maxMorningTradesPerDay: CONFIG.maxMorningTradesPerDay,
-    });
-    return;
-  }
-  const clock = await getClock();
-  const allowClosedMarketStockBuying = false;
-  if (!clock.is_open && !allowClosedMarketStockBuying) {
-    recordOrder("AUTO_STOCK_BUY_SKIPPED", "STOCK", {
-      reason: "Market closed",
-    });
-    return;
-  }
-  if (!clock.is_open && allowClosedMarketStockBuying) {
-    recordOrder("AUTO_STOCK_AFTER_HOURS_ALLOWED", "STOCK", {
-      reason: "Temporary override: stock buying allowed while market is closed",
-    });
-  }
-  const account = await getAccount();
-  const positions = await getPositions();
-  const aiOwnedSymbols = await getBotOwnedSymbols();
-  const aiPositions = positions.filter((position) => {
-    const symbol = normalizeSymbol(position.symbol);
-    return (
-      aiOwnedSymbols.has(symbol) ||
-      engineState.aiManagedSymbols?.includes(symbol)
-    );
-  });
-  const aiStockPositions = aiPositions.filter((position) => {
-    const symbol = normalizeSymbol(position.symbol);
-    return (
-      !symbol.includes("/") &&
-      position.asset_class !== "crypto"
-    );
-  });
-  const managedPositions = aiPositions;
-  const maxBotBudget =
-    Number(account.equity || 0) *
-    (Number(CONFIG.maxBotExposurePercent || 0) / 100);
-  const currentBotExposure = getBotExposure(aiPositions);
-  const remainingBotBudget = Math.max(
-    0,
-    maxBotBudget - currentBotExposure
-  );
-  if (remainingBotBudget <= 0) {
-    if (CONFIG.enableWeakestReplacement) {
-      const rotated = await replaceWeakestIfBetter(
-        signals,
-        positions,
-        aiOwnedSymbols
-      );
-      if (rotated) {
-        return;
-      }
-    }
-    recordOrder("AUTO_STOCK_BUY_SKIPPED_EXPOSURE_FULL", "STOCK", {
-      reason: "Max bot exposure reached",
-      maxBotExposurePercent: CONFIG.maxBotExposurePercent,
-      maxBotBudget: Number(maxBotBudget.toFixed(2)),
-      currentBotExposure: Number(currentBotExposure.toFixed(2)),
-      remainingBotBudget: Number(remainingBotBudget.toFixed(2)),
-      openStockPositions: aiStockPositions.length,
-      totalAiPositions: aiPositions.length,
-    });
-    return;
-  }
-  const openSlots = Math.min(
-    CONFIG.maxOpenTrades - aiPositions.length,
-    CONFIG.maxStockOpenTrades - aiStockPositions.length
-  );
-  if (openSlots <= 0) {
-    if (CONFIG.enableWeakestReplacement) {
-      const rotated = await replaceWeakestIfBetter(
-        signals,
-        positions,
-        aiOwnedSymbols
-      );
-      if (rotated) {
-        return;
-      }
-    }
-    recordOrder("AUTO_STOCK_BUY_SKIPPED", "STOCK", {
-      reason: "Max stock or total AI positions reached",
-      stockOpen: aiStockPositions.length,
-      totalOpen: aiPositions.length,
-      maxStockOpenTrades: CONFIG.maxStockOpenTrades,
-      maxOpenTrades: CONFIG.maxOpenTrades,
-    });
-    return;
-  }
-  const frozenOpenSlots = openSlots;
-  const effectiveBuyThreshold = getEffectiveBuyThreshold(signals);
-  const adaptiveMinScoreToBuy = Math.max(
-    70,
-    effectiveBuyThreshold,
-    Number(CONFIG.minScoreToBuy || 70),
-    Number(engineState.selfOptimizationState?.adaptiveMinScoreToBuy || 0)
-  );
-  engineState.effectiveBuyThreshold = {
-    updatedAt: new Date().toISOString(),
-    hardFloor: 70,
-    configMinScoreToBuy: CONFIG.minScoreToBuy,
-    effectiveBuyScore: adaptiveMinScoreToBuy,
-    reason:
-      adaptiveMinScoreToBuy > 70
-        ? "Buy threshold raised above 70 by risk/adaptive conditions."
-        : "Hard floor active. Buy threshold cannot go below 70.",
-  };
-  const frozenApprovedSignals = signals
-    .filter(
-      (signal) =>
-        signal.qualifiedToBuy === true &&
-        signal.autoTradeApproved === true &&
-        Number(signal.score || 0) >= adaptiveMinScoreToBuy
-    )
-    .sort(
-      (a, b) =>
-        Number(b.masterFinalScore || b.score || 0) -
-        Number(a.masterFinalScore || a.score || 0)
-    )
-    .slice(
-      0,
-      Math.max(
-        frozenOpenSlots * 5,
-        Number(CONFIG.topAutoTradeCandidates || 15)
-      )
-    );
-  const executableSymbols = new Set(
-    (
-      engineState.executionIntelligenceState?.topExecutableSignals || []
-    ).map((signal) => normalizeSymbol(signal.symbol))
-  );
-  const baseCandidates = frozenApprovedSignals
-    .filter((signal) => {
-      const symbol = normalizeSymbol(signal.symbol);
-      const score = Number(signal.score || 0);
-      const adaptiveMinScore = Number(
-        engineState.selfOptimizationState?.adaptiveMinScoreToBuy ||
-        CONFIG.minScoreToBuy
-      );
-      const executionApproved = executableSymbols.has(symbol);
-      const normalQualified = signal.qualifiedToBuy === true;
-      return (
-        normalQualified ||
-        (
-          executionApproved &&
-          score >= adaptiveMinScore &&
-          signal.confirmations?.fakeBreakout !== true &&
-          engineState.phase21AutonomousBrainState?.shouldBlockNewTrades !== true &&
-          engineState.phase20AutonomousOrchestrationState?.shouldBlockNewTrades !== true
-        )
-      );
-    })
-    .filter((signal) => Number(signal.score || 0) >= adaptiveMinScoreToBuy)
-    .filter((signal) => {
-      const symbol = normalizeSymbol(signal.symbol);
-      const lastSold = engineState.lastSoldAt[symbol] || 0;
-      return (
-        !aiOwnedSymbols.has(symbol) &&
-        !positions.some((p) => normalizeSymbol(p.symbol) === symbol) &&
-        Date.now() - lastSold > 120000
-      );
-    })
-    .filter((signal) => {
-      // FIX8: deepIntelligenceBias gate — block RISKY signals
-      const bias = signal.deepIntelligenceBias ||
-        signal.deepIntelligence?.deepIntelligenceBias || "";
-      if (bias === "RISKY") {
-        recordOrder("STOCK_SKIPPED_DEEP_INTEL_RISKY", normalizeSymbol(signal.symbol), {
-          deepIntelligenceScore: signal.deepIntelligenceScore,
-          bias,
-        });
-        return false;
-      }
-      return true;
-    });
-  const morningStrikeSymbols = new Set(
-    (
-      engineState.premarketMomentumState?.eliteCandidates || []
-    ).map((signal) => normalizeSymbol(signal.symbol))
-  );
-  const morningStrikeCandidates = baseCandidates
-    .filter((signal) =>
-      morningStrikeSymbols.has(normalizeSymbol(signal.symbol))
-    )
-    .sort(
-      (a, b) =>
-        Number(b.morningMomentumScore || b.premarketMomentum?.morningMomentumScore || b.score || 0) -
-        Number(a.morningMomentumScore || a.premarketMomentum?.morningMomentumScore || a.score || 0)
-    )
-    .slice(0, Math.min(openSlots, Number(CONFIG.eliteMorningStrikeLimit || 10)));
-  const fallbackCandidates = baseCandidates
-    .filter(
-      (signal) =>
-        !morningStrikeSymbols.has(normalizeSymbol(signal.symbol))
-    )
-    .sort((a, b) => Number(b.score || 0) - Number(a.score || 0))
-    .slice(0, Math.max(0, openSlots - morningStrikeCandidates.length));
-  const remainingMorningTrades = Math.max(
-    0,
-    Number(CONFIG.maxMorningTradesPerDay || 10) -
-    Number(engineState.morningTradesToday || 0)
-  );
-  const effectiveOpenSlots = Math.min(
-    openSlots,
-    remainingMorningTrades
-  );
-  const candidates = [
-    ...morningStrikeCandidates,
-    ...fallbackCandidates,
-  ].slice(0, effectiveOpenSlots);
-  engineState.morningStrikeState = {
-    updatedAt: new Date().toISOString(),
-    phase: "16.3_TOP_TWO_MORNING_STRIKE_SELECTOR",
-    isMorningStrikeWindow: isMorningStrikeWindow(),
-    openSlots,
-    baseCandidateCount: baseCandidates.length,
-    morningStrikeCandidateCount: morningStrikeCandidates.length,
-    fallbackCandidateCount: fallbackCandidates.length,
-    selectedSymbols: candidates.map((signal) => signal.symbol),
-    topMorningStrikeSymbols: Array.from(morningStrikeSymbols).slice(0, 5),
-    reason:
-      `${morningStrikeCandidates.length} from elite morning strike list`,
-  };
-  engineState.morningStrikeHistory.unshift(engineState.morningStrikeState);
-  engineState.morningStrikeHistory =
-    engineState.morningStrikeHistory.slice(0, 200);
-  let successfulStockBuysThisCycle = 0;
-  let stockBudgetReservedThisCycle = 0;
-  for (const candidate of candidates) {
-    const symbol = normalizeSymbol(candidate.symbol);
-    if (shouldSkipFromTradeMemory(symbol)) {
-      recordOrder("STOCK_SKIPPED_TRADE_MEMORY", symbol, {
-        memory: engineState.tradeMemory?.[symbol],
-      });
-      continue;
-    }
-    const orchestratorGate =
-      passesInstitutionalOrchestratorBuyGate(candidate);
-    if (!orchestratorGate.allowed) {
-      recordOrder("STOCK_SKIPPED_ORCHESTRATOR", symbol, {
-        reason: orchestratorGate.reason,
-      });
-      continue;
-    }
-    let parliamentGate =
-      passesAutonomousParliamentGate(candidate);
-    const morningStrikeOverrideGate =
-      calculateMorningStrikeOverrideGate(
-        candidate,
-        new Set([
-          ...Array.from(aiOwnedSymbols || []),
-          ...positions.map((p) => normalizeSymbol(p.symbol)),
-        ])
-      );
-    const eliteMomentumExceptionGate =
-      calculateEliteMomentumExceptionGate(
-        candidate,
-        new Set([
-          ...Array.from(aiOwnedSymbols || []),
-          ...positions.map((p) => normalizeSymbol(p.symbol)),
-        ])
-      );
-    if (!parliamentGate.allowed && morningStrikeOverrideGate.allowed) {
-      parliamentGate = {
-        allowed: true,
-        multiplier: morningStrikeOverrideGate.multiplier,
-        reason: morningStrikeOverrideGate.reason,
-        morningStrikeOverride: morningStrikeOverrideGate,
-      };
-      recordOrder("MORNING_STRIKE_OVERRIDE_APPROVED", symbol, {
-        reason: morningStrikeOverrideGate.reason,
-        premarket: morningStrikeOverrideGate.premarket,
-      });
-    }
-    if (
-      !parliamentGate.allowed &&
-      !morningStrikeOverrideGate.allowed &&
-      eliteMomentumExceptionGate.allowed
-    ) {
-      parliamentGate = {
-        allowed: true,
-        multiplier: eliteMomentumExceptionGate.multiplier,
-        reason: eliteMomentumExceptionGate.reason,
-        eliteMomentumException: eliteMomentumExceptionGate,
-      };
-      recordOrder("ELITE_MOMENTUM_EXCEPTION_APPROVED", symbol, {
-        reason: eliteMomentumExceptionGate.reason,
-        checks: eliteMomentumExceptionGate.checks,
-        premarket: eliteMomentumExceptionGate.premarket,
-      });
-    }
-    if (!parliamentGate.allowed) {
-      recordOrder("STOCK_SKIPPED_PARLIAMENT", symbol, {
-        reason: parliamentGate.reason,
-      });
-      continue;
-    }
-    const provisionalTradeAmount =
-      getDynamicTradeAmount(account, aiPositions, candidate.score);
-    const institutionalExecutionPlan =
-      calculateInstitutionalExecutionPlan(
-        candidate,
-        provisionalTradeAmount
-      );
-    candidate.institutionalExecutionPlan =
-      institutionalExecutionPlan;
-    candidate.executionConfidence =
-      institutionalExecutionPlan.executionConfidence;
-    candidate.runnerScore =
-      Number(
-        candidate.explosiveRunnerScore ||
-        candidate.explosiveRunnerPrediction
-          ?.explosiveRunnerScore ||
-        candidate.adaptiveRunnerScore ||
-        0
-      );
-    candidate.premarketDominanceScore =
-      Number(
-        candidate.premarketDominance
-          ?.premarketDominanceScore ||
-        candidate.explosiveRunnerPrediction
-          ?.premarket
-          ?.openingDriveProbability ||
-        candidate.explosiveRunnerPrediction
-          ?.premarket
-          ?.morningMomentumScore ||
-        candidate.premarketDominanceScore ||
-        0
-      );
-    candidate.institutionalBrainScore =
-      Number(
-        candidate.fullInstitutionalAiBrain
-          ?.consensusScore ||
-        candidate.fullInstitutionalAiBrain
-          ?.dynamicConvictionScore ||
-        candidate.institutionalBrainScore ||
-        50
-      );
-    const portfolioManager =
-      typeof calculateAiPortfolioManagerDecision === "function"
-        ? calculateAiPortfolioManagerDecision(
-          candidate,
-          account,
-          aiPositions,
-          engineState.marketRegime || detectMarketRegime([])
-        )
-        : {
-          approved: true,
-          autoTradeApproved: true,
-          aiPortfolioAction: "ALLOW",
-          portfolioAction: "ALLOW",
-          portfolioScore: 50,
-          recommendedTradeAmount: 0,
-          aiAllocationPercentOfBotBudget: 0,
-          portfolioManagerReason:
-            "AI_PORTFOLIO_MANAGER_UNAVAILABLE",
-        };
-    const baseTradeAmount =
-      Number(portfolioManager.recommendedTradeAmount || 0) ||
-      provisionalTradeAmount;
-    if (
-      institutionalExecutionPlan.executionMode ===
-      "AVOID_WEAK_EXECUTION"
-    ) {
-      recordOrder(
-        "AUTO_STOCK_BUY_SKIPPED_WEAK_EXECUTION",
-        symbol,
-        {
-          institutionalExecutionPlan,
-          candidateScore: candidate.score,
-        }
-      );
-      continue;
-    }
-    const institutionalGrade = String(
-      candidate.institutionalEntryGrade ||
-      candidate.technicalIntelligence?.institutionalEntryGrade ||
-      ""
-    );
-    const hasStrongEnoughGrade =
-      institutionalGrade.includes("A") ||
-      institutionalGrade.includes("B") ||
-      Number(candidate.technicalScore || 0) >= 65;
-    const eliteRecognition =
-      calculateSetupRecognitionScore(candidate);
-    candidate.eliteSetupRecognition = eliteRecognition;
-    candidate.eliteRecognitionScore =
-      eliteRecognition.eliteRecognitionScore;
-    candidate.eliteRecognitionTier =
-      eliteRecognition.eliteRecognitionTier;
-    const eliteCapitalBoost =
-      eliteRecognition.eliteRecognitionTier === "S_TIER_ELITE" &&
-        hasStrongEnoughGrade &&
-        Number(candidate.breakoutProbability || 0) >= 88 &&
-        Number(candidate.continuationProbability || 0) >= 85 &&
-        candidate.confirmations?.aboveVwap === true &&
-        Number(candidate.confirmations?.pullbackFromHighPercent || 0) <= 1.5 &&
-        Number(institutionalExecutionPlan.executionConfidence || 0) >= 82 &&
-        candidate.confirmations?.fakeBreakout !== true
-        ? 3.2
-        : eliteRecognition.eliteRecognitionTier === "A_TIER_ELITE" &&
-          hasStrongEnoughGrade &&
-          Number(candidate.breakoutProbability || 0) >= 80 &&
-          Number(candidate.continuationProbability || 0) >= 75 &&
-          candidate.confirmations?.aboveVwap === true &&
-          Number(candidate.confirmations?.pullbackFromHighPercent || 0) <= 2 &&
-          Number(institutionalExecutionPlan.executionConfidence || 0) >= 70 &&
-          candidate.confirmations?.fakeBreakout !== true
-          ? 2.2
-          : eliteRecognition.eliteRecognitionTier === "HIGH_QUALITY" &&
-            hasStrongEnoughGrade &&
-            Number(candidate.breakoutProbability || 0) >= 72 &&
-            Number(candidate.continuationProbability || 0) >= 68 &&
-            candidate.confirmations?.aboveVwap === true &&
-            candidate.confirmations?.fakeBreakout !== true
-            ? 1.45
-            : 0.85;
-    const executionAdjustedBaseTradeAmount =
-      Number(
-        (
-          Number(baseTradeAmount || 0) *
-          Number(
-            institutionalExecutionPlan.executionSizeMultiplier || 1
-          ) *
-          eliteCapitalBoost
-        ).toFixed(2)
-      );
-    const entryTiming =
-      calculateInstitutionalEntryTiming({
-        ...candidate,
-        institutionalExecutionPlan,
-      });
-    candidate.entryTiming = entryTiming;
-    if (entryTiming.entryMode === "WAIT_FOR_BETTER_ENTRY") {
-      recordOrder("AUTO_STOCK_BUY_SKIPPED_ENTRY_TIMING", symbol, {
-        score: candidate.score,
-        entryTiming,
-        reason: "Entry timing engine says wait for better entry.",
-      });
-      continue;
-    }
-    const eliteRunnerHeatOverride =
-      calculateEliteRunnerHeatOverride(candidate);
-    candidate.eliteRunnerHeatOverride =
-      eliteRunnerHeatOverride;
-    const adaptiveAggression =
-      calculateAdaptiveAggressionRebalancer(candidate);
-    candidate.adaptiveAggression =
-      adaptiveAggression;
-    const liquiditySweepTrap =
-      calculateLiquiditySweepTrapDetection({
-        ...candidate,
-        institutionalExecutionPlan,
-      });
-    candidate.liquiditySweepTrap = liquiditySweepTrap;
-    if (liquiditySweepTrap.shouldRejectEntry) {
-      recordOrder("AUTO_STOCK_BUY_SKIPPED_LIQUIDITY_TRAP", symbol, {
-        score: candidate.score,
-        liquiditySweepTrap,
-        reason: "Liquidity sweep/trap engine rejected entry.",
-      });
-      continue;
-    }
-    const autonomousConfidenceScore = clampScore(
-      Number(candidate.score || 0) * 0.22 +
-      Number(candidate.institutionalBrainScore || 0) * 0.2 +
-      Number(candidate.statisticalScore || 0) * 0.16 +
-      Number(
-        candidate.explosiveRunnerScore ||
-        candidate.explosiveRunnerPrediction?.explosiveRunnerScore ||
-        candidate.adaptiveRunnerScore ||
-        0
-      ) * 0.18 +
-      Number(
-        candidate.premarketDominance?.premarketDominanceScore ||
-        candidate.premarketDominanceScore ||
-        0
-      ) * 0.14 +
-      Number(
-        institutionalExecutionPlan.executionConfidence || 0
-      ) * 0.1
-    );
-    const autonomousConfidenceMultiplier =
-      autonomousConfidenceScore >= 85
-        ? 1.25
-        : autonomousConfidenceScore >= 75
-          ? 1.12
-          : autonomousConfidenceScore >= 65
-            ? 1
-            : 0.82;
-    const regimeProtectionMultiplier =
-      Number(engineState.marketStressLevel || 0) >= 75
-        ? 0.75
-        : Number(engineState.marketStressLevel || 0) >= 60
-          ? 0.85
-          : 1;
-    const reinforcementSizing =
-      getReinforcementLearnedMultiplier(
-        autonomousConfidenceScore
-      );
-    const phase7Reinforcement =
-      candidate.phase7Reinforcement ||
-      calculatePhase7ReinforcementLearning(candidate);
-    if (phase7Reinforcement.suppressEntry) {
-      recordOrder("AUTO_STOCK_BUY_SKIPPED_PHASE_7_SUPPRESSION", symbol, {
-        score: candidate.score,
-        phase7Reinforcement,
-        reason:
-          "Phase 7 learned this setup is low-trust and suppressed the entry.",
-      });
-      continue;
-    }
-    const phase7SizingMultiplier =
-      Number(phase7Reinforcement.learnedSizingMultiplier || 1);
-    const phase9LiquidityIntelligence =
-      candidate.phase9LiquidityIntelligence ||
-      calculatePhase9LiquidityIntelligence(candidate);
-    candidate.phase9LiquidityIntelligence =
-      phase9LiquidityIntelligence;
-    if (
-      phase9LiquidityIntelligence.liquidityLabel === "WEAK_LIQUIDITY_TRAP" &&
-      Number(candidate.score || 0) < 82
-    ) {
-      recordOrder(
-        "AUTO_STOCK_BUY_SKIPPED_PHASE_9_WEAK_LIQUIDITY",
-        symbol,
-        {
-          score: candidate.score,
-          phase9LiquidityIntelligence,
-          reason:
-            "Phase 9 blocked entry because liquidity quality is weak.",
-        }
-      );
-      continue;
-    }
-    const phase10RunnerMemory =
-      candidate.phase10RunnerMemory ||
-      calculatePhase10RunnerFingerprint(candidate);
-    const phase11MetaStrategy =
-      candidate.phase11MetaStrategy ||
-      calculatePhase11MetaStrategyMutation(candidate);
-    const phase12MacroCorrelation =
-      candidate.phase12MacroCorrelation ||
-      calculatePhase12MacroCorrelationSignal(candidate);
-    const phase13HedgeFundBrain =
-      candidate.phase13HedgeFundBrain ||
-      calculatePhase13HedgeFundBrain(candidate);
-    const phase14Governor =
-      candidate.phase14Governor ||
-      calculatePhase14ProfitAccelerationGovernor(candidate);
-    const phase15ExecutionDominance =
-      candidate.phase15ExecutionDominance ||
-      calculatePhase15AutonomousExecutionDominance(
-        candidate,
-        executionAdjustedBaseTradeAmount
-      );
-    if (phase15ExecutionDominance.blockExecution) {
-      recordOrder(
-        "AUTO_STOCK_BUY_SKIPPED_PHASE_15_EXECUTION",
-        symbol,
-        {
-          score: candidate.score,
-          phase15ExecutionDominance,
-          reason:
-            "Phase 15 blocked entry because execution quality is too weak.",
-        }
-      );
-      continue;
-    }
-    if (phase14Governor.suppressByGovernor) {
-      recordOrder(
-        "AUTO_STOCK_BUY_SKIPPED_PHASE_14_GOVERNOR",
-        symbol,
-        {
-          score: candidate.score,
-          phase14Governor,
-          reason:
-            "Phase 14 governor blocked aggressive deployment.",
-        }
-      );
-      continue;
-    }
-    if (phase13HedgeFundBrain.suppressByHedgeFundBrain) {
-      recordOrder("AUTO_STOCK_BUY_SKIPPED_PHASE_13_HEDGE_FUND_BRAIN", symbol, {
-        score: candidate.score,
-        phase13HedgeFundBrain,
-        reason:
-          "Phase 13 blocked entry because hedge-fund brain rejected deployment.",
-      });
-      continue;
-    }
-    if (phase12MacroCorrelation.suppressByMacroCorrelation) {
-      recordOrder("AUTO_STOCK_BUY_SKIPPED_PHASE_12_MACRO_CORRELATION", symbol, {
-        score: candidate.score,
-        phase12MacroCorrelation,
-        reason:
-          "Phase 12 blocked entry because macro/correlation risk is too high.",
-      });
-      continue;
-    }
-    if (phase11MetaStrategy.suppressByMetaStrategy) {
-      recordOrder("AUTO_STOCK_BUY_SKIPPED_PHASE_11_META_STRATEGY", symbol, {
-        score: candidate.score,
-        phase11MetaStrategy,
-        reason:
-          "Phase 11 blocked entry because meta-strategy aggression is too weak.",
-      });
-      continue;
-    }
-    const phase9LiquiditySizingMultiplier =
-      phase9LiquidityIntelligence.liquidityScore >= 82
-        ? 1.12
-        : phase9LiquidityIntelligence.liquidityScore >= 70
-          ? 1.06
-          : phase9LiquidityIntelligence.liquidityScore <= 40
-            ? 0.8
-            : 1;
-    const phase11MetaStrategySizingMultiplier =
-      Number(phase11MetaStrategy.metaStrategyMultiplier || 1);
-    const phase12MacroSizingMultiplier =
-      Number(phase12MacroCorrelation.macroSizingMultiplier || 1);
-    const phase13HedgeFundSizingMultiplier =
-      Number(phase13HedgeFundBrain.hedgeFundSizingMultiplier || 1);
-    const phase14GovernorSizingMultiplier =
-      Number(
-        phase14Governor.governorSizingMultiplier || 1);
-    const phase15ExecutionSizingMultiplier =
-      Number(
-        phase15ExecutionDominance.executionSizingMultiplier || 1
-      );
-    const phase10RunnerSizingMultiplier =
-      phase10RunnerMemory.continuationProbability >= 85
-        ? 1.18
-        : phase10RunnerMemory.continuationProbability >= 72
-          ? 1.1
-          : phase10RunnerMemory.continuationProbability >= 60
-            ? 1.04
-            : 1;
-    const weakSetupPenalty =
-      Number(candidate.score || 0) < 70
-        ? 0.55
-        : Number(candidate.score || 0) < 75
-          ? 0.72
-          : 1;
-    const marketPhaseSizingMultiplier =
-      Number(
-        engineState.marketCycleIntelligenceState?.buyAggressionMultiplier || 1
-      );
-    const sectorDominanceMultiplier =
-      Number(candidate.sectorDominance?.dominanceMultiplier || 1);
-    const eliteHeatMultiplier =
-      Number(
-        candidate.eliteRunnerHeatOverride?.heatOverrideMultiplier || 1
-      );
-    const adaptiveAggressionMultiplier =
-      Number(
-        candidate.adaptiveAggression?.aggressionMultiplier || 1
-      );
-    const liquidityTrapMultiplier =
-      Number(candidate.liquiditySweepTrap?.liquidityTimingMultiplier || 1);
-    const entryTimingMultiplier =
-      Number(candidate.entryTiming?.timingMultiplier || 1);
-    const phase16PortfolioParliament =
-      calculatePhase16InstitutionalPortfolioParliament({
-        signal: candidate,
-        account,
-        managedPositions,
-        proposedTradeAmount: executionAdjustedBaseTradeAmount,
-        portfolioManager,
-      });
-    if (phase16PortfolioParliament.blockByPortfolioParliament) {
-      recordOrder(
-        "AUTO_STOCK_BUY_SKIPPED_PHASE_16_PORTFOLIO_PARLIAMENT",
-        symbol,
-        {
-          score: candidate.score,
-          phase16PortfolioParliament,
-          reason:
-            "Phase 16 blocked entry because portfolio heat/correlation risk is too high.",
-        }
-      );
-      continue;
-    }
-    const phase16PortfolioParliamentSizingMultiplier =
-      Number(
-        phase16PortfolioParliament.portfolioParliamentMultiplier || 1
-      );
-    const capitalPressure =
-      calculateAutonomousCapitalPressure({
-        signal: candidate,
-        account,
-        managedPositions,
-        baseTradeAmount: executionAdjustedBaseTradeAmount,
-        portfolioManager,
-        parliamentGate,
-        institutionalExecutionPlan,
-        reinforcementSizing,
-      });
-    const suppressionBalancer =
-      calculateAdaptiveSuppressionBalancer({
-        candidate,
-        capitalPressure,
-        orchestratorGate,
-        parliamentGate,
-        autonomousConfidenceMultiplier,
-        regimeProtectionMultiplier,
-        reinforcementSizing,
-        weakSetupPenalty,
-        eliteHeatMultiplier,
-        adaptiveAggressionMultiplier,
-        marketPhaseSizingMultiplier,
-        sectorDominanceMultiplier,
-        liquidityTrapMultiplier,
-        entryTimingMultiplier,
-      });
-    const phase34AdaptiveAggressionBalancer =
-      calculatePhase34AdaptiveAggressionBalancer({
-        candidate,
-        account,
-        managedPositions,
-        portfolioManager,
-        institutionalExecutionPlan,
-        phase14Governor,
-        phase15ExecutionDominance,
-        phase16PortfolioParliament,
-        capitalPressure,
-        suppressionBalancer,
-      });
-    const phase34AggressionSizingMultiplier =
-      Number(phase34AdaptiveAggressionBalancer.aggressionMultiplier || 1);
-    const phase35AiGovernanceLayer =
-      calculatePhase35AiGovernanceLayer({
-        candidate,
-        account,
-        managedPositions,
-        portfolioManager,
-        institutionalExecutionPlan,
-        phase14Governor,
-        phase15ExecutionDominance,
-        phase16PortfolioParliament,
-        phase34AdaptiveAggressionBalancer,
-        capitalPressure,
-        suppressionBalancer,
-      });
-    if (
-      phase35AiGovernanceLayer.governanceAction === "BLOCK" ||
-      phase35AiGovernanceLayer.governanceAction === "WATCHLIST_ONLY"
-    ) {
-      recordOrder(
-        "AUTO_STOCK_BUY_SKIPPED_PHASE_35_AI_GOVERNANCE",
-        symbol,
-        {
-          score: candidate.score,
-          phase35AiGovernanceLayer,
-          reason:
-            "Phase 35 AI Governance Layer blocked or watchlisted this trade.",
-        }
-      );
-      continue;
-    }
-    const phase35GovernanceSizingMultiplier =
-      Number(phase35AiGovernanceLayer.governanceMultiplier || 1);
-    const phase36PredictiveExecutionTiming =
-      calculatePhase36PredictiveExecutionTiming({
-        candidate,
-        institutionalExecutionPlan,
-        phase15ExecutionDominance,
-        phase35AiGovernanceLayer,
-      });
-    if (
-      phase36PredictiveExecutionTiming.timingAction === "AVOID_EXHAUSTION_ENTRY" ||
-      phase36PredictiveExecutionTiming.timingAction === "RESPECT_GOVERNANCE_BLOCK"
-    ) {
-      recordOrder(
-        "AUTO_STOCK_BUY_SKIPPED_PHASE_36_PREDICTIVE_TIMING",
-        symbol,
-        {
-          score: candidate.score,
-          phase36PredictiveExecutionTiming,
-          reason:
-            "Phase 36 predictive timing avoided this entry due to exhaustion, liquidity, spread, or governance risk.",
-        }
-      );
-      continue;
-    }
-    const phase36PredictiveTimingMultiplier =
-      Number(phase36PredictiveExecutionTiming.timingMultiplier || 1);
-    const phase37SelfBalancingAiEcosystem =
-      calculatePhase37SelfBalancingAiEcosystem({
-        candidate,
-        phase14Governor,
-        phase15ExecutionDominance,
-        phase16PortfolioParliament,
-        phase34AdaptiveAggressionBalancer,
-        phase35AiGovernanceLayer,
-        phase36PredictiveExecutionTiming,
-        suppressionBalancer,
-        capitalPressure,
-      });
-    const phase37EcosystemSizingMultiplier =
-      Number(phase37SelfBalancingAiEcosystem.ecosystemMultiplier || 1);
-    const phase38AutonomousCapitalParliament =
-      calculatePhase38AutonomousCapitalParliament({
-        candidate,
-        account,
-        managedPositions,
-        portfolioManager,
-        institutionalExecutionPlan,
-        phase14Governor,
-        phase15ExecutionDominance,
-        phase16PortfolioParliament,
-        phase34AdaptiveAggressionBalancer,
-        phase35AiGovernanceLayer,
-        phase36PredictiveExecutionTiming,
-        phase37SelfBalancingAiEcosystem,
-        capitalPressure,
-      });
-    if (phase38AutonomousCapitalParliament.parliamentDecision === "BLOCK_CAPITAL") {
-      recordOrder(
-        "AUTO_STOCK_BUY_SKIPPED_PHASE_38_CAPITAL_PARLIAMENT",
-        symbol,
-        {
-          score: candidate.score,
-          phase38AutonomousCapitalParliament,
-          reason:
-            "Phase 38 Autonomous Capital Parliament blocked capital authority for this trade.",
-        }
-      );
-      continue;
-    }
-    const phase38CapitalParliamentSizingMultiplier =
-      Number(phase38AutonomousCapitalParliament.capitalParliamentMultiplier || 1);
-    const phase39MetaStrategyAi =
-      calculatePhase39MetaStrategyAi({
-        candidate,
-        institutionalExecutionPlan,
-        phase35AiGovernanceLayer,
-        phase36PredictiveExecutionTiming,
-        phase37SelfBalancingAiEcosystem,
-        phase38AutonomousCapitalParliament,
-      });
-    const phase39MetaStrategySizingMultiplier =
-      Number(phase39MetaStrategyAi.metaStrategyMultiplier || 1);
-    const phase40RecursiveRealTimeLearning =
-      calculatePhase40RecursiveRealTimeLearning({
-        candidate,
-        phase34AdaptiveAggressionBalancer,
-        phase35AiGovernanceLayer,
-        phase36PredictiveExecutionTiming,
-        phase37SelfBalancingAiEcosystem,
-        phase38AutonomousCapitalParliament,
-        phase39MetaStrategyAi,
-      });
-    const phase40RecursiveLearningSizingMultiplier =
-      Number(phase40RecursiveRealTimeLearning.recursiveLearningMultiplier || 1);
-    const phase41InstitutionalCompression =
-      calculatePhase41InstitutionalCompressionIntelligence({
-        candidate,
-        institutionalExecutionPlan,
-        phase36PredictiveExecutionTiming,
-        phase39MetaStrategyAi,
-        phase40RecursiveRealTimeLearning,
-      });
-    const phase41CompressionSizingMultiplier =
-      Number(phase41InstitutionalCompression.compressionMultiplier || 1);
-    const capitalPressureSizingMultiplier =
-      Number(capitalPressure.pressureMultiplier || 1);
-    const finalMasterDecisionProfile =
-      calculateFinalMasterDecisionProfile(candidate);
-    candidate.finalMasterDecisionProfile =
-      finalMasterDecisionProfile;
-    candidate.masterFinalScore =
-      finalMasterDecisionProfile.finalScore;
-    candidate.masterFinalSizingMultiplier =
-      finalMasterDecisionProfile.finalSizingMultiplier;
-    candidate.masterExecutionDecision =
-      finalMasterDecisionProfile.executionDecision;
-    candidate.finalExitProfile =
-      finalMasterDecisionProfile.finalExitProfile;
-    if (finalMasterDecisionProfile.suppressEntry) {
-      recordOrder(
-        "AUTO_STOCK_BUY_SKIPPED_FINAL_MASTER_DECISION",
-        symbol,
-        {
-          score: candidate.score,
-          finalMasterDecisionProfile,
-          reason:
-            "Final master decision profile blocked this stock before sizing/execution.",
-        }
-      );
-      continue;
-    }
-    const finalMasterDecisionSizingMultiplier =
-      Number(finalMasterDecisionProfile.finalSizingMultiplier || 1);
-    const rawSizingMultiplier =
-      capitalPressureSizingMultiplier *
-      finalMasterDecisionSizingMultiplier *
-      autonomousConfidenceMultiplier *
-      regimeProtectionMultiplier *
-      Number(reinforcementSizing.learnedMultiplier || 1) *
-      phase7SizingMultiplier *
-      phase9LiquiditySizingMultiplier *
-      phase10RunnerSizingMultiplier *
-      phase11MetaStrategySizingMultiplier *
-      phase12MacroSizingMultiplier *
-      phase13HedgeFundSizingMultiplier *
-      phase14GovernorSizingMultiplier *
-      phase15ExecutionSizingMultiplier *
-      phase16PortfolioParliamentSizingMultiplier *
-      weakSetupPenalty *
-      eliteHeatMultiplier *
-      adaptiveAggressionMultiplier *
-      marketPhaseSizingMultiplier *
-      sectorDominanceMultiplier *
-      liquidityTrapMultiplier *
-      entryTimingMultiplier *
-      suppressionBalancer.balancedMultiplier *
-      phase34AggressionSizingMultiplier *
-      phase35GovernanceSizingMultiplier *
-      phase36PredictiveTimingMultiplier *
-      phase37EcosystemSizingMultiplier *
-      phase38CapitalParliamentSizingMultiplier *
-      phase39MetaStrategySizingMultiplier *
-      phase40RecursiveLearningSizingMultiplier *
-      phase41CompressionSizingMultiplier;
-    const finalInstitutionalNormalization =
-      calculatePhase14FinalInstitutionalNormalization({
-        candidate,
-        account,
-        managedPositions,
-        rawSizingMultiplier,
-        phase14Governor,
-        phase16PortfolioParliament,
-        capitalPressure,
-        suppressionBalancer,
-      });
-    const phase20FinalExecutionGate =
-      calculatePhase20FinalMasterExecutionGate({
-        candidate,
-        account,
-        managedPositions,
-        finalInstitutionalNormalization,
-        phase14Governor,
-        phase15ExecutionDominance,
-        phase16PortfolioParliament,
-        capitalPressure,
-        suppressionBalancer,
-      });
-    if (
-      phase20FinalExecutionGate.action === "BLOCK" ||
-      phase20FinalExecutionGate.action === "WATCHLIST_ONLY"
-    ) {
-      recordOrder(
-        "AUTO_STOCK_BUY_SKIPPED_PHASE_20_FINAL_MASTER_GATE",
-        symbol,
-        {
-          score: candidate.score,
-          phase20FinalExecutionGate,
-          reason:
-            "Phase 20 final master gate blocked or watchlisted this trade before execution.",
-        }
-      );
-      continue;
-    }
-    const finalSizingMultiplier =
-      phase20FinalExecutionGate.masterFinalSizingMultiplier;
-    const uncappedTradeAmount = Number(
-      (
-        executionAdjustedBaseTradeAmount *
-        finalSizingMultiplier
-      ).toFixed(2)
-    );
-    const finalTradeAmount = Number(
-      Math.min(
-        uncappedTradeAmount,
-        Number(capitalPressure.capitalPressureAmount || uncappedTradeAmount),
-        Math.max(0, remainingBotBudget - stockBudgetReservedThisCycle),
-        Number(account.cash || 0),
-        Number(account.buying_power || account.cash || 0)
-      ).toFixed(2)
-    );
-    if (!finalTradeAmount || finalTradeAmount <= 0) {
-      recordOrder("AUTO_STOCK_BUY_SKIPPED_SIZE_ZERO", symbol, {
-        score: candidate.score,
-        baseTradeAmount,
-        portfolioManager,
-        parliamentGate,
-        institutionalExecutionPlan,
-        autonomousConfidenceScore,
-        autonomousConfidenceMultiplier,
-        regimeProtectionMultiplier,
-        reinforcementSizing,
-        capitalPressure,
-        suppressionBalancer,
-      });
-      continue;
-    }
-    try {
-      const adaptiveExecution =
-        await executeAdaptiveBuyOrder({
-          signal: candidate,
-          totalAmount: finalTradeAmount,
-          assetClass: "stock",
-        });
-      markAiManagedSymbol(symbol);
-      engineState.aiEntryScores[symbol] = {
-        score: candidate.score,
-        institutionalScore: candidate.institutionalScore,
-        entryType: morningStrikeOverrideGate.allowed
-          ? "MORNING_STRIKE"
-          : eliteMomentumExceptionGate.allowed
-            ? "ELITE_MOMENTUM_EXCEPTION"
-            : "AUTO_STOCK_ENTRY",
-        morningStrike: morningStrikeOverrideGate.allowed,
-        eliteMomentumException: eliteMomentumExceptionGate.allowed,
-        technicalScore: candidate.technicalScore,
-        autonomousConfidenceScore,
-        autonomousConfidenceMultiplier,
-        regimeProtectionMultiplier,
-        institutionalExecutionPlan,
-        reinforcementSizing,
-        phase7Reinforcement,
-        phase7SizingMultiplier,
-        phase9LiquidityIntelligence,
-        phase9LiquiditySizingMultiplier,
-        phase10RunnerMemory,
-        phase10RunnerSizingMultiplier,
-        phase11MetaStrategy,
-        phase11MetaStrategySizingMultiplier,
-        phase12MacroCorrelation,
-        phase12MacroSizingMultiplier,
-        phase13HedgeFundBrain,
-        phase13HedgeFundSizingMultiplier,
-        phase14Governor,
-        phase14GovernorSizingMultiplier,
-        phase15ExecutionDominance,
-        phase15ExecutionSizingMultiplier,
-        phase16PortfolioParliament,
-        phase16PortfolioParliamentSizingMultiplier,
-        phase34AdaptiveAggressionBalancer,
-        phase34AggressionSizingMultiplier,
-        phase35AiGovernanceLayer,
-        phase35GovernanceSizingMultiplier,
-        phase36PredictiveExecutionTiming,
-        phase36PredictiveTimingMultiplier,
-        phase37SelfBalancingAiEcosystem,
-        phase37EcosystemSizingMultiplier,
-        phase38AutonomousCapitalParliament,
-        phase38CapitalParliamentSizingMultiplier,
-        phase39MetaStrategyAi,
-        phase39MetaStrategySizingMultiplier,
-        phase40RecursiveRealTimeLearning,
-        phase40RecursiveLearningSizingMultiplier,
-        phase41InstitutionalCompression,
-        phase41CompressionSizingMultiplier,
-        statisticalScore: candidate.statisticalScore,
-        setupType:
-          classifyInstitutionalSetup({
-            symbol,
-            score: candidate.score,
-            assetClass: "stock",
-            marketRegime: engineState.marketRegime?.state,
-            confirmations: candidate.confirmations || {},
-            portfolioManager,
-          }),
-        enteredAt: new Date().toISOString(),
-      };
-      journalTradeEntry(symbol, {
-        assetClass: "stock",
-        entryType: "AUTO_STOCK_ENTRY",
-        entryPrice: candidate.current || candidate.price,
-        score: candidate.score,
-        sector: candidate.estimatedSector || "General Market",
-        marketRegime: engineState.marketRegime?.state,
-        confirmations: candidate.confirmations || {},
-        portfolioManager,
-        institutionalExecutionPlan,
-        autonomousConfidenceScore,
-        autonomousConfidenceMultiplier,
-        regimeProtectionMultiplier,
-        tradeAmount: finalTradeAmount,
-        reinforcementSizing,
-        phase7Reinforcement,
-        phase7SizingMultiplier,
-      });
-      recordOrder("AUTO_STOCK_BUY", symbol, {
-        price: candidate.current || candidate.price,
-        score: candidate.score,
-        tradeAmount: finalTradeAmount,
-        portfolioManager,
-        orchestratorGate,
-        parliamentGate,
-        institutionalExecutionPlan,
-        autonomousConfidenceScore,
-        autonomousConfidenceMultiplier,
-        regimeProtectionMultiplier,
-        adaptiveExecution,
-        reinforcementSizing,
-      });
-      stockBudgetReservedThisCycle += finalTradeAmount;
-      markMorningTradeUsed(symbol);
-      successfulStockBuysThisCycle += 1;
-      if (successfulStockBuysThisCycle >= openSlots) {
-        break;
-      }
-    } catch (err) {
-      recordFailedOrder("AUTO_STOCK_BUY_FAILED", symbol, err.message, {
-        score: candidate.score,
-        finalTradeAmount,
-      });
-    }
-  }
-}
+const { autoBuySignals, autoBuyCryptoSignals } = createAutoBuyStrategies({
+  CONFIG,
+  calculateAdaptiveAggressionRebalancer,
+  calculateAdaptiveCryptoPositionSize,
+  calculateAdaptiveSuppressionBalancer,
+  calculateAiPortfolioManagerDecision,
+  calculateAutonomousCapitalPressure,
+  calculateEliteMomentumExceptionGate,
+  calculateEliteRunnerHeatOverride,
+  calculateFinalMasterDecisionProfile,
+  calculateInstitutionalEntryTiming,
+  calculateInstitutionalExecutionPlan,
+  calculateLiquiditySweepTrapDetection,
+  calculateMorningStrikeOverrideGate,
+  calculatePhase10RunnerFingerprint,
+  calculatePhase11MetaStrategyMutation,
+  calculatePhase12MacroCorrelationSignal,
+  calculatePhase13HedgeFundBrain,
+  calculatePhase14FinalInstitutionalNormalization,
+  calculatePhase14ProfitAccelerationGovernor,
+  calculatePhase15AutonomousExecutionDominance,
+  calculatePhase16InstitutionalPortfolioParliament,
+  calculatePhase20FinalMasterExecutionGate,
+  calculatePhase34AdaptiveAggressionBalancer,
+  calculatePhase35AiGovernanceLayer,
+  calculatePhase36PredictiveExecutionTiming,
+  calculatePhase37SelfBalancingAiEcosystem,
+  calculatePhase38AutonomousCapitalParliament,
+  calculatePhase39MetaStrategyAi,
+  calculatePhase40RecursiveRealTimeLearning,
+  calculatePhase41InstitutionalCompressionIntelligence,
+  calculatePhase7ReinforcementLearning,
+  calculatePhase9LiquidityIntelligence,
+  calculateSetupRecognitionScore,
+  canTakeMoreMorningTrades,
+  clampScore,
+  classifyInstitutionalSetup,
+  detectMarketRegime,
+  engineState,
+  executeAdaptiveBuyOrder,
+  getAccount,
+  getBotExposure,
+  getBotOwnedSymbols,
+  getClock,
+  getCryptoAvailableBuyingPower,
+  getDynamicTradeAmount,
+  getEffectiveBuyThreshold,
+  getPositions,
+  getReinforcementLearnedMultiplier,
+  isAiManagedOpenPosition,
+  isCrypto,
+  isMorningStrikeWindow,
+  journalTradeEntry,
+  markAiManagedSymbol,
+  markMorningTradeUsed,
+  normalizeSymbol,
+  passesAutonomousParliamentGate,
+  passesInstitutionalOrchestratorBuyGate,
+  recordFailedOrder,
+  recordOrder,
+  replaceWeakestIfBetter,
+  resetDailyMorningTradeCounter,
+  rotateWeakCryptoIfBetter,
+  shouldSkipFromTradeMemory,
+  getTradingMode: () => TRADING_MODE,
+});
 async function rotateWeakCryptoIfBetter(signals, positions) {
   if (!["live_crypto", "smart"].includes(TRADING_MODE)) return false;
   const cryptoPositions = positions.filter((p) => {
@@ -29609,2907 +22774,135 @@ function calculateAdaptiveCryptoPositionSize(signal = {}, account = {}) {
       `macro x${macroMultiplier}`,
   };
 }
-async function autoBuyCryptoSignals(signals) {
-  if (!["live_crypto", "smart"].includes(TRADING_MODE)) return;
-  const account = await getAccount();
-  const positions = await getPositions();
-  const aiOwnedSymbols = await getBotOwnedSymbols();
-  const aiPositions = positions.filter((position) =>
-    isAiManagedOpenPosition(position, aiOwnedSymbols)
-  );
-  const aiCryptoPositions = aiPositions.filter((position) => {
-    const symbol = normalizeSymbol(position.symbol);
-    return symbol.includes("/") || position.asset_class === "crypto";
-  });
-  const managedPositions = aiPositions;
-  const maxCryptoPositions = CONFIG.maxCryptoOpenTrades;
-  const cryptoPositions = aiCryptoPositions;
-  if (aiPositions.length >= CONFIG.maxOpenTrades) {
-    if (aiCryptoPositions.length >= maxCryptoPositions) {
-      const rotated = await rotateWeakCryptoIfBetter(signals, cryptoPositions);
-      if (rotated) {
-        return;
-      }
-    }
-    recordOrder("AUTO_CRYPTO_BUY_SKIPPED", "CRYPTO", {
-      reason: "Max crypto or total AI positions reached",
-      cryptoOpen: aiCryptoPositions.length,
-      totalOpen: aiPositions.length,
-      maxCryptoOpenTrades: CONFIG.maxCryptoOpenTrades,
-      maxOpenTrades: CONFIG.maxOpenTrades,
-    });
-    return;
-  }
-  const openSymbols = new Set(positions.map((p) => normalizeSymbol(p.symbol)));
-  const cash = Number(account.cash || 0);
-  if (cryptoPositions.length >= maxCryptoPositions) {
-    const rotated = await rotateWeakCryptoIfBetter(signals, cryptoPositions);
-    if (!rotated) {
-      recordOrder("AUTO_CRYPTO_BUY_SKIPPED", "CRYPTO", {
-        reason: "Max crypto positions reached, no stronger rotation found",
-        maxCryptoPositions,
-      });
-    }
-    return;
-  }
-  const openSlots = Math.min(
-    CONFIG.maxOpenTrades - aiPositions.length,
-    CONFIG.maxCryptoOpenTrades - aiCryptoPositions.length
-  );
-  if (openSlots <= 0) {
-    recordOrder("AUTO_CRYPTO_BUY_SKIPPED", "CRYPTO", {
-      reason: "Max crypto or total AI positions reached",
-      cryptoOpen: aiCryptoPositions.length,
-      totalOpen: aiPositions.length,
-      maxCryptoOpenTrades: CONFIG.maxCryptoOpenTrades,
-      maxOpenTrades: CONFIG.maxOpenTrades,
-    });
-    return;
-  }
-  const baseTradeAmount = getDynamicTradeAmount(account, cryptoPositions);
-  const bestCandidateScore = Math.max(
-    0,
-    ...signals
-      .filter((s) => s.qualifiedToBuy === true)
-      .map((s) => Number(s.score || 0))
-  );
-  let scoreMultiplier = 0.5;
-  if (bestCandidateScore >= 95) scoreMultiplier = 1;
-  else if (bestCandidateScore >= 90) scoreMultiplier = 0.85;
-  else if (bestCandidateScore >= 85) scoreMultiplier = 0.7;
-  else if (bestCandidateScore >= 75) scoreMultiplier = 0.55;
-  const tradeAmount = baseTradeAmount * scoreMultiplier;
-  const effectiveCryptoBuyThreshold = Math.max(
-    70,
-    getEffectiveBuyThreshold(signals),
-    Number(CONFIG.minScoreToBuy || 70)
-  );
-  if (tradeAmount < 1) {
-    recordFailedOrder("AUTO_CRYPTO_BUY_SKIPPED", "CRYPTO", "Not enough budget");
-    return;
-  }
-  const buyCandidates = signals
-    .filter((s) => {
-      const score = Number(s.score || 0);
-      const spread = Number(s.spreadPercent || 0);
-      const institutionalPassed =
-        s.qualifiedToBuy === true ||
-        s.cryptoInstitutionalQualification?.momentumPass === true;
-      const autoTradeAllowed = s.autoTradeApproved !== false;
-      return (
-        institutionalPassed &&
-        autoTradeAllowed &&
-        score >= effectiveCryptoBuyThreshold &&
-        spread <= 0.85
-      );
-    })
-    .filter((s) => {
-      const sym = normalizeSymbol(s.symbol);
-      const lastSold = engineState.lastSoldAt[sym] || 0;
-      return !openSymbols.has(sym) && Date.now() - lastSold > 120000;
-    })
-    .sort(
-      (a, b) =>
-        Number(b.masterFinalScore || b.score || 0) -
-        Number(a.masterFinalScore || a.score || 0)
-    )
-    .slice(0, openSlots);
-  let cryptoBudgetReservedThisCycle = 0;
-  for (const crypto of buyCandidates) {
-    const symbol = normalizeSymbol(crypto.symbol);
-    const cryptoInstitutionalScore = Number(
-      crypto.institutionalScore ||
-      crypto.score ||
-      0
-    );
-    const cryptoTechnicalScore = Number(
-      crypto.technicalScore ||
-      crypto.technicalIntelligence?.institutionalEntryScore ||
-      0
-    );
-    const cryptoStatisticalScore = Number(
-      crypto.statisticalScore ||
-      crypto.statisticalEdge?.statisticalEdgeScore ||
-      0
-    );
-    const cryptoBarsFound = Number(crypto.barsFound || 0);
-    const cryptoQualified =
-      crypto.qualifiedToBuy === true &&
-      Number(crypto.score || 0) >= effectiveCryptoBuyThreshold &&
-      Number(crypto.spreadPercent || 0) <= 0.85 &&
-      cryptoBarsFound >= 10;
-    if (!cryptoQualified) {
-      recordOrder("CRYPTO_SKIPPED_INSTITUTIONAL_FILTER", symbol, {
-        score: crypto.score,
-        spreadPercent: crypto.spreadPercent,
-        barsFound: cryptoBarsFound,
-        qualifiedToBuy: crypto.qualifiedToBuy,
-      });
-      continue;
-    }
-    const cryptoOrchestratorGate =
-      passesInstitutionalOrchestratorBuyGate({
-        ...crypto,
-        assetClass: "crypto",
-        asset_class: "crypto",
-      });
-    if (!cryptoOrchestratorGate.allowed) {
-      recordOrder("CRYPTO_SKIPPED_ORCHESTRATOR", symbol, {
-        reason: cryptoOrchestratorGate.reason,
-      });
-      continue;
-    }
-    const cryptoParliamentGate =
-      passesAutonomousParliamentGate({
-        ...crypto,
-        assetClass: "crypto",
-        asset_class: "crypto",
-      });
-    if (!cryptoParliamentGate.allowed) {
-      recordOrder("CRYPTO_SKIPPED_PARLIAMENT", symbol, {
-        reason: cryptoParliamentGate.reason,
-      });
-      continue;
-    }
-    if (shouldSkipFromTradeMemory(symbol)) {
-      recordOrder("CRYPTO_SKIPPED_TRADE_MEMORY", symbol, {
-        memory: engineState.tradeMemory?.[symbol],
-      });
-      continue;
-    }
-    try {
-      const adaptiveCryptoSizing =
-        calculateAdaptiveCryptoPositionSize(
-          crypto,
-          account
-        );
-      crypto.adaptiveCryptoSizing = adaptiveCryptoSizing;
-      crypto.cryptoPositionSizing = adaptiveCryptoSizing;
-      crypto.positionSizing = {
-        ...adaptiveCryptoSizing,
-        recommendedTradeAmount: Number(adaptiveCryptoSizing.recommendedAmount || 0),
-        recommendedSize: Number(adaptiveCryptoSizing.recommendedAmount || 0),
-      };
-      crypto.recommendedTradeAmount = Number(adaptiveCryptoSizing.recommendedAmount || 0);
-      crypto.rawRecommendedTradeAmount = Number(adaptiveCryptoSizing.recommendedAmount || 0);
-      crypto.displayTradeAmount = Number(adaptiveCryptoSizing.recommendedAmount || 0);
-      const cryptoConvictionMultiplier =
-        cryptoInstitutionalScore >= 88 &&
-          cryptoTechnicalScore >= 82 &&
-          cryptoStatisticalScore >= 75
-          ? 2.6
-          : cryptoInstitutionalScore >= 80 &&
-            cryptoTechnicalScore >= 72
-            ? 1.9
-            : cryptoInstitutionalScore >= 72
-              ? 1.35
-              : 0.65;
-      const finalMasterDecisionProfile =
-        calculateFinalMasterDecisionProfile({
-          ...crypto,
-          assetClass: "crypto",
-          asset_class: "crypto",
-        });
-      crypto.finalMasterDecisionProfile =
-        finalMasterDecisionProfile;
-      crypto.masterFinalScore =
-        finalMasterDecisionProfile.finalScore;
-      crypto.masterFinalSizingMultiplier =
-        finalMasterDecisionProfile.finalSizingMultiplier;
-      crypto.masterExecutionDecision =
-        finalMasterDecisionProfile.executionDecision;
-      crypto.finalExitProfile =
-        finalMasterDecisionProfile.finalExitProfile;
-      if (finalMasterDecisionProfile.suppressEntry) {
-        recordOrder(
-          "AUTO_CRYPTO_BUY_SKIPPED_FINAL_MASTER_DECISION",
-          symbol,
-          {
-            score: crypto.score,
-            finalMasterDecisionProfile,
-            reason:
-              "Final master decision profile blocked this crypto before sizing/execution.",
-          }
-        );
-        continue;
-      }
-      const finalMasterCryptoSizingMultiplier =
-        Number(finalMasterDecisionProfile.finalSizingMultiplier || 1);
-      const availableCryptoBuyingPower =
-        getCryptoAvailableBuyingPower(account);
-      const totalBotExposure = getBotExposure(managedPositions);
-      const totalMaxBotBudget =
-        Number(account?.equity || 0) *
-        (Number(CONFIG.maxBotExposurePercent || 80) / 100);
-      const remainingTotalBotBudget = Math.max(
-        0,
-        totalMaxBotBudget - totalBotExposure - cryptoBudgetReservedThisCycle
-      );
-      const cryptoExposure = managedPositions.reduce((sum, position) => {
-        const positionSymbol = normalizeSymbol(position.symbol);
-        return isCrypto(positionSymbol)
-          ? sum + Math.abs(Number(position.market_value || 0))
-          : sum;
-      }, 0);
-      const cryptoMaxBudget =
-        Number(account?.equity || 0) *
-        (Number(CONFIG.maxBotExposurePercent || 0) / 100) *
-        (Number(CONFIG.cryptoMaxExposureShareOfBotExposure || 30) / 100);
-      const remainingCryptoBudget = Math.max(
-        0,
-        cryptoMaxBudget - cryptoExposure - cryptoBudgetReservedThisCycle
-      );
-      const rawFinalTradeAmount =
-        adaptiveCryptoSizing.recommendedAmount *
-        cryptoConvictionMultiplier *
-        finalMasterCryptoSizingMultiplier *
-        Number(cryptoParliamentGate.multiplier || 1);
-      let finalTradeAmount = Number(
-        Math.min(
-          rawFinalTradeAmount,
-          availableCryptoBuyingPower,
-          remainingCryptoBudget,
-          remainingTotalBotBudget
-        ).toFixed(2)
-      );
-      const minCryptoTradeAmount = Number(
-        CONFIG.minCryptoTradeAmount || CONFIG.minAutonomousTradeAmount || 25
-      );
-      if (finalTradeAmount > 0 && finalTradeAmount < minCryptoTradeAmount) {
-        finalTradeAmount =
-          availableCryptoBuyingPower >= minCryptoTradeAmount &&
-            remainingCryptoBudget >= minCryptoTradeAmount &&
-            remainingTotalBotBudget >= minCryptoTradeAmount
-            ? minCryptoTradeAmount
-            : 0;
-      }
-      crypto.finalApprovedTradeAmount = Number(finalTradeAmount || 0);
-      crypto.finalTradeAmount = Number(finalTradeAmount || 0);
-      crypto.displayTradeAmount = Number(finalTradeAmount || crypto.displayTradeAmount || 0);
-      crypto.recommendedTradeAmount = Number(finalTradeAmount || crypto.recommendedTradeAmount || 0);
-      crypto.rawRecommendedTradeAmount = Number(rawFinalTradeAmount || crypto.rawRecommendedTradeAmount || 0);
-      crypto.finalSizingReconciliation = {
-        rawFinalTradeAmount,
-        finalTradeAmount,
-        adaptiveRecommendedAmount: adaptiveCryptoSizing.recommendedAmount,
-        cryptoConvictionMultiplier,
-        finalMasterCryptoSizingMultiplier,
-        parliamentMultiplier: Number(cryptoParliamentGate.multiplier || 1),
-        availableCryptoBuyingPower,
-        remainingCryptoBudget,
-        remainingTotalBotBudget,
-        minCryptoTradeAmount,
-      };
-      if (!finalTradeAmount || finalTradeAmount <= 0) {
-        recordOrder(
-          "AUTO_CRYPTO_BUY_SKIPPED_SIZE_ZERO",
-          crypto.symbol,
-          {
-            score: crypto.score,
-            adaptiveCryptoSizing,
-            finalSizingReconciliation: crypto.finalSizingReconciliation,
-          }
-        );
-        continue;
-      }
-      const adaptiveExecution =
-        await executeAdaptiveBuyOrder({
-          signal: crypto,
-          totalAmount: finalTradeAmount,
-          assetClass: "crypto",
-        });
-      cryptoBudgetReservedThisCycle += finalTradeAmount;
-      markAiManagedSymbol(symbol);
-      journalTradeEntry(symbol, {
-        assetClass: "crypto",
-        entryType: "AUTO_CRYPTO_ENTRY",
-        entryPrice: crypto.current || crypto.price,
-        score: crypto.score,
-        sector: "Crypto",
-        confirmations: crypto.confirmations || {},
-        tradeAmount: finalTradeAmount,
-      });
-      recordOrder("AUTO_CRYPTO_BUY", crypto.symbol, {
-        price: crypto.current,
-        tradeAmount: finalTradeAmount,
-        adaptiveCryptoSizing,
-        cryptoOrchestratorGate,
-        cryptoParliamentGate,
-        adaptiveExecution,
-      });
-    } catch (err) {
-      recordFailedOrder("AUTO_CRYPTO_BUY_FAILED", crypto.symbol, err.message);
-    }
-  }
-}
+const engineCycleRunner = createCycleRunner({
+  state: engineState,
+  saveState: saveEngineState,
+  onError: (err) => console.error("ENGINE_ERROR_FULL", {
+    message: err?.message,
+    stack: err?.stack,
+  }),
+});
 async function runEngineCycle() {
-  if (engineState.running) return;
-  engineState.running = true;
-  engineState.engineFreezeDetected = false;
-  engineState.lastHeartbeatAt = new Date().toISOString();
-  engineState.totalEngineTicks =
-    (engineState.totalEngineTicks || 0) + 1;
-  engineState.lastTickStartedAt = Date.now();
-  engineState.lastError = null;
-  try {
-    const { key, secret } = getAlpacaKeys();
-    if (!key || !secret) {
-      throw new Error("Missing Alpaca API keys in environment variables");
-    }
-    if (!POLYGON_API_KEY && !FINNHUB_API_KEY) {
-      throw new Error("Missing market data API key: set POLYGON_API_KEY or FINNHUB_API_KEY");
-    }
-    const account = await getAccount();
-    resetDailySafetyStateIfNewDay(account);
-    const positions = await getPositions();
-    const aiOwnedSymbols = await getBotOwnedSymbols();
-    const managedPositions = positions.filter((position) =>
-      aiOwnedSymbols.has(normalizeSymbol(position.symbol)) ||
-      engineState.aiManagedSymbols?.includes(normalizeSymbol(position.symbol))
-    );
-    engineState.cachedAccount = account;
-    engineState.cachedPositions = positions;
-    const clock = await getClock();
-    const marketOpen = Boolean(clock.is_open);
-    let effectiveMode = getEffectiveTradingMode(marketOpen);
-    const todayKey = new Date().toISOString().slice(0, 10);
-    if (engineState.lastTradingDayKey !== todayKey) {
-      engineState.lastTradingDayKey = todayKey;
-      engineState.stockTradingStoppedForDay = false;
-      engineState.cryptoTradingStoppedForDay = false;
-      recordOrder("TRADING_FLAGS_RESET_FOR_NEW_DAY", "SYSTEM", {
-        todayKey,
-      });
-    }
-    engineState.effectiveMode = effectiveMode;
-    engineState.marketOpen = marketOpen;
-    const openingBellJustTriggered =
-      engineState.lastMarketOpen === false && marketOpen === true;
-    if (openingBellJustTriggered) {
-      engineState.openingBellTriggeredAt = Date.now();
-      recordOrder("OPENING_BELL_TRIGGER_DETECTED", "MARKET", {
-        openingBellTriggeredAt: new Date(
-          engineState.openingBellTriggeredAt
-        ).toISOString(),
-        preparedFastRunnerCount:
-          engineState.fastRunnerCandidates?.length || 0,
-        preparedQuickGateCount:
-          engineState.quickInstitutionalCandidates?.length || 0,
-      });
-      await runFastRunnerEngine();
-      await runQuickInstitutionalGate();
-      await runFullBrainFastSync();
-      await runLiveStarterBuyGate();
-      saveEngineState("OPENING_BELL_FAST_BUY_TRIGGER");
-    }
-    if (engineState.lastMarketOpen === true && marketOpen === false) {
-      engineState.marketClosedAt = Date.now();
-      engineState.cryptoTradingStoppedForDay = false;
-      recordOrder("MARKET_CLOSED_DETECTED", "MARKET", {
-        marketClosedAt: new Date(engineState.marketClosedAt).toISOString(),
-        cryptoTradingStoppedForDay: false,
-      });
-    }
-    engineState.lastMarketOpen = marketOpen;
-    console.log("SMART MODE:", {
-      selected: TRADING_MODE,
-      effective: effectiveMode,
-      marketOpen,
-    });
-    const riskLocked = await checkDailyLossAndProfitLock(account, marketOpen);
-    if (marketOpen) {
-      await executePendingExits();
-    }
-    const tradingStoppedForDay =
-      await flattenStocksAndCryptoBeforeMarketClose(clock);
-    await autoCloseCryptoBeforeMarketOpen(clock);
-    await autoExitPositions(marketOpen);
-    const stockModeEnabled =
-      effectiveMode === "live_stock" || effectiveMode === "smart";
-    const cryptoModeEnabled =
-      effectiveMode === "live_crypto" || effectiveMode === "smart";
-    if (cryptoModeEnabled) {
-      await autoExitCryptoPositions();
-    }
-    let stockSignals = [];
-    let cryptoSignals = [];
-    const scanStartedAt = Date.now();
-    if (cryptoModeEnabled) {
-      cryptoSignals = await scanCryptoMarket();
-    }
-    if (stockModeEnabled) {
-      stockSignals = await scanMarket();
-    }
-    recordOrder("PIPELINE_SCAN_COMPLETED", "ALL", {
-      tradingMode: TRADING_MODE,
-      effectiveMode,
-      stockModeEnabled,
-      scannedStockSignals: stockSignals.length,
-      cryptoModeEnabled,
-      scannedCryptoSignals: cryptoSignals.length,
-    });
-    engineState.marketBreadth = {
-      advancing: stockSignals.filter(
-        (s) => Number(s.percentChange || 0) > 0
-      ).length,
-      declining: stockSignals.filter(
-        (s) => Number(s.percentChange || 0) < 0
-      ).length,
-    };
-    engineState.marketStressLevel =
-      stockSignals.filter(
-        (s) => Number(s.percentChange || 0) <= -10
-      ).length;
-    engineState.marketMomentumScore =
-      stockSignals.reduce(
-        (sum, s) =>
-          sum + Number(s.percentChange || 0),
-        0
-      ) / Math.max(1, stockSignals.length);
-    engineState.marketVolatility =
-      stockSignals.reduce(
-        (sum, s) =>
-          sum + Math.abs(Number(s.percentChange || 0)),
-        0
-      ) / Math.max(1, stockSignals.length);
-    engineState.institutionalExposureMode =
-      engineState.marketVolatility >= 12
-        ? "DEFENSIVE"
-        : engineState.marketMomentumScore >= 8
-          ? "AGGRESSIVE"
-          : "NORMAL";
-    stockSignals.forEach((signal) => {
-      signal.institutionalGrade =
-        signal.score >= 95
-          ? "ELITE"
-          : signal.score >= 90
-            ? "HIGH"
-            : signal.score >= 85
-              ? "GOOD"
-              : "NORMAL";
-    });
-    for (const signal of cryptoSignals) {
-      const phase42CryptoInstitutional =
-        calculateCryptoInstitutionalSignal(signal);
-      signal.phase42CryptoInstitutional = phase42CryptoInstitutional;
-      signal.cryptoInstitutionalScore =
-        phase42CryptoInstitutional.cryptoInstitutionalScore;
-      signal.cryptoLiquidityScore =
-        phase42CryptoInstitutional.cryptoLiquidityScore;
-      signal.cryptoMomentumScore =
-        phase42CryptoInstitutional.cryptoMomentumScore;
-      signal.cryptoRegime =
-        phase42CryptoInstitutional.cryptoRegime;
-      if (Number(phase42CryptoInstitutional.scoreBoost || 0) !== 0) {
-        signal.score = clampScore(
-          Number(signal.score || 0) +
-          Number(phase42CryptoInstitutional.scoreBoost || 0)
-        );
-      }
-      if (phase42CryptoInstitutional.suppressCrypto) {
-        signal.qualifiedToBuy = false;
-        signal.phase42Suppressed = true;
-        signal.phase42SuppressionReason =
-          phase42CryptoInstitutional.reason;
-      }
-    }
-    const phase42CryptoInstitutionalState =
-      updateCryptoInstitutionalState(cryptoSignals);
-    recordOrder("PHASE_42_CRYPTO_INSTITUTIONAL_UPDATED", "CRYPTO", {
-      reviewedCount: phase42CryptoInstitutionalState.reviewedCount,
-      approvedCount: phase42CryptoInstitutionalState.approvedCount,
-      blockedCount: phase42CryptoInstitutionalState.blockedCount,
-    });
-    const phase43CryptoCapitalRotationState =
-      calculateCryptoCapitalRotation(cryptoSignals);
-    cryptoSignals = applyCryptoCapitalRotationToSignals(
-      cryptoSignals,
-      phase43CryptoCapitalRotationState
-    );
-    recordOrder("PHASE_43_CRYPTO_CAPITAL_ROTATION_UPDATED", "CRYPTO", {
-      reviewedCount: phase43CryptoCapitalRotationState.reviewedCount,
-      approvedCount: phase43CryptoCapitalRotationState.approvedCount,
-      cryptoCapitalMode:
-        phase43CryptoCapitalRotationState.cryptoCapitalMode,
-      cryptoCapitalMultiplier:
-        phase43CryptoCapitalRotationState.cryptoCapitalMultiplier,
-    });
-    const phase44CryptoExecutionTimingState =
-      updateCryptoExecutionTimingState(cryptoSignals);
-    cryptoSignals = applyCryptoExecutionTimingToSignals(cryptoSignals);
-    recordOrder("PHASE_44_CRYPTO_EXECUTION_TIMING_UPDATED", "CRYPTO", {
-      reviewedCount: phase44CryptoExecutionTimingState.reviewedCount,
-      executableCount: phase44CryptoExecutionTimingState.executableCount,
-      blockedCount: phase44CryptoExecutionTimingState.blockedCount,
-      avgExecutionScore:
-        phase44CryptoExecutionTimingState.avgExecutionScore,
-    });
-    const phase45CryptoPositionSizingState =
-      updateCryptoPositionSizingState(cryptoSignals);
-    cryptoSignals = applyCryptoPositionSizingToSignals(cryptoSignals);
-    recordOrder("PHASE_45_CRYPTO_POSITION_SIZING_UPDATED", "CRYPTO", {
-      reviewedCount: phase45CryptoPositionSizingState.reviewedCount,
-      tradableCount: phase45CryptoPositionSizingState.tradableCount,
-      blockedCount: phase45CryptoPositionSizingState.blockedCount,
-      avgSizingScore: phase45CryptoPositionSizingState.avgSizingScore,
-    });
-    const phase46CryptoExitParliamentState =
-      updateCryptoExitStrategyState(cryptoSignals);
-    cryptoSignals = applyCryptoExitStrategyToSignals(cryptoSignals);
-    recordOrder("PHASE_46_CRYPTO_EXIT_PARLIAMENT_UPDATED", "CRYPTO", {
-      reviewedCount: phase46CryptoExitParliamentState.reviewedCount,
-      runnerCount: phase46CryptoExitParliamentState.runnerCount,
-      exitCandidateCount:
-        phase46CryptoExitParliamentState.exitCandidateCount,
-      avgRunnerStrength:
-        phase46CryptoExitParliamentState.avgRunnerStrength,
-    });
-    const phase47CryptoLiquiditySweepState =
-      updateCryptoLiquiditySweepState(cryptoSignals);
-    cryptoSignals = applyCryptoLiquiditySweepToSignals(cryptoSignals);
-    recordOrder("PHASE_47_CRYPTO_LIQUIDITY_SWEEP_UPDATED", "CRYPTO", {
-      reviewedCount: phase47CryptoLiquiditySweepState.reviewedCount,
-      confirmedSweepCount:
-        phase47CryptoLiquiditySweepState.confirmedSweepCount,
-      blockedTrapCount:
-        phase47CryptoLiquiditySweepState.blockedTrapCount,
-      avgSweepScore: phase47CryptoLiquiditySweepState.avgSweepScore,
-    });
-    const phase48CrossMarketCorrelationState =
-      calculateCrossMarketCorrelation(stockSignals, cryptoSignals);
-    cryptoSignals = applyCrossMarketCorrelationToSignals(
-      cryptoSignals,
-      phase48CrossMarketCorrelationState
-    );
-    recordOrder("PHASE_48_CROSS_MARKET_CORRELATION_UPDATED", "CRYPTO", {
-      stockSignalCount:
-        phase48CrossMarketCorrelationState.stockSignalCount,
-      cryptoSignalCount:
-        phase48CrossMarketCorrelationState.cryptoSignalCount,
-      crossMarketMode:
-        phase48CrossMarketCorrelationState.crossMarketMode,
-      correlationScore:
-        phase48CrossMarketCorrelationState.correlationScore,
-    });
-    const phase49StablecoinFlowState =
-      calculateStablecoinFlowPressure(
-        cryptoSignals,
-        phase48CrossMarketCorrelationState
-      );
-    cryptoSignals = applyStablecoinFlowToSignals(
-      cryptoSignals,
-      phase49StablecoinFlowState
-    );
-    recordOrder("PHASE_49_STABLECOIN_FLOW_UPDATED", "CRYPTO", {
-      cryptoSignalCount: phase49StablecoinFlowState.cryptoSignalCount,
-      flowMode: phase49StablecoinFlowState.flowMode,
-      exchangePressureScore:
-        phase49StablecoinFlowState.exchangePressureScore,
-      stablecoinDemandProxy:
-        phase49StablecoinFlowState.stablecoinDemandProxy,
-    });
-    const phase50WhaleSmartMoneyState =
-      updateWhaleSmartMoneyState(cryptoSignals);
-    cryptoSignals = applyWhaleSmartMoneyToSignals(cryptoSignals);
-    recordOrder("PHASE_50_WHALE_SMART_MONEY_UPDATED", "CRYPTO", {
-      reviewedCount: phase50WhaleSmartMoneyState.reviewedCount,
-      accumulationCount: phase50WhaleSmartMoneyState.accumulationCount,
-      blockedDistributionCount:
-        phase50WhaleSmartMoneyState.blockedDistributionCount,
-      avgWhaleScore: phase50WhaleSmartMoneyState.avgWhaleScore,
-    });
-    const phase51MultiTimeframeCryptoState =
-      updateMultiTimeframeCryptoState(cryptoSignals);
-    cryptoSignals = applyMultiTimeframeCryptoToSignals(cryptoSignals);
-    recordOrder("PHASE_51_MULTI_TIMEFRAME_CRYPTO_UPDATED", "CRYPTO", {
-      reviewedCount: phase51MultiTimeframeCryptoState.reviewedCount,
-      alignedCount: phase51MultiTimeframeCryptoState.alignedCount,
-      blockedConflictCount:
-        phase51MultiTimeframeCryptoState.blockedConflictCount,
-      avgParliamentScore:
-        phase51MultiTimeframeCryptoState.avgParliamentScore,
-    });
-    let signals = [...stockSignals, ...cryptoSignals];
-    const phase59InstitutionalOrderFlow =
-      calculatePhase59InstitutionalOrderFlowIntelligence(stockSignals, cryptoSignals);
-    engineState.phase59InstitutionalOrderFlowState =
-      phase59InstitutionalOrderFlow.state;
-    engineState.phase59InstitutionalOrderFlowHistory.unshift(
-      phase59InstitutionalOrderFlow.state
-    );
-    engineState.phase59InstitutionalOrderFlowHistory =
-      engineState.phase59InstitutionalOrderFlowHistory.slice(0, 200);
-    for (const orderFlow of phase59InstitutionalOrderFlow.analyzedSignals) {
-      const matchingSignal = signals.find(
-        (signal) =>
-          normalizeSymbol(signal.symbol) === normalizeSymbol(orderFlow.symbol)
-      );
-      if (!matchingSignal) continue;
-      matchingSignal.phase59InstitutionalOrderFlow = orderFlow;
-      matchingSignal.orderFlowConvictionScore =
-        orderFlow.orderFlowConvictionScore;
-      matchingSignal.liquidityTrapScore = orderFlow.liquidityTrapScore;
-      matchingSignal.exhaustionRiskScore = orderFlow.exhaustionRiskScore;
-      matchingSignal.spreadPercent = orderFlow.spreadPercent;
-      matchingSignal.score = clampScore(
-        Number(matchingSignal.score || 0) *
-        Number(orderFlow.orderFlowMultiplier || 1)
-      );
-      if (orderFlow.shouldBlock) {
-        matchingSignal.autoTradeApproved = false;
-        matchingSignal.approved = false;
-        matchingSignal.decisionLevel =
-          "Blocked By Phase 59 Institutional Order Flow";
-      }
-    }
-    recordOrder("PHASE_59_ORDER_FLOW_UPDATED", "MARKET", {
-      reviewedCount: phase59InstitutionalOrderFlow.state.reviewedCount,
-      eliteFlowCount: phase59InstitutionalOrderFlow.state.eliteFlowCount,
-      blockedFlowCount: phase59InstitutionalOrderFlow.state.blockedFlowCount,
-      averageOrderFlowScore:
-        phase59InstitutionalOrderFlow.state.averageOrderFlowScore,
-    });
-    for (const signal of signals) {
-      const phase60AdaptiveExecution =
-        calculatePhase60AdaptiveExecutionAlgorithms(
-          signal,
-          Number(
-            signal.recommendedTradeAmount ||
-            signal.recommendedDollarAmount ||
-            signal.tradeAmount ||
-            0
-          )
-        );
-      signal.phase60AdaptiveExecution = phase60AdaptiveExecution;
-      signal.adaptiveExecutionScore =
-        phase60AdaptiveExecution.adaptiveExecutionScore;
-      signal.executionStyle = phase60AdaptiveExecution.executionStyle;
-      signal.executionMultiplier = phase60AdaptiveExecution.executionMultiplier;
-      if (phase60AdaptiveExecution.shouldBlockExecution) {
-        signal.autoTradeApproved = false;
-        signal.approved = false;
-        signal.decisionLevel =
-          "Blocked By Phase 60 Adaptive Execution";
-      }
-    }
-    const earlyCentralAutonomousDecisionCore =
-      calculateCentralAutonomousDecisionCore(stockSignals, cryptoSignals);
-    for (const decision of earlyCentralAutonomousDecisionCore.rankedDecisions) {
-      const matchingSignal = signals.find(
-        (signal) =>
-          normalizeSymbol(signal.symbol) === normalizeSymbol(decision.symbol)
-      );
-      if (!matchingSignal) continue;
-      matchingSignal.centralAutonomousDecisionCore = decision;
-      matchingSignal.finalAutonomousDecisionScore =
-        decision.finalDecisionScore;
-      matchingSignal.centralAutonomousAction = decision.action;
-      matchingSignal.masterCapitalMultiplier =
-        decision.masterCapitalMultiplier;
-      matchingSignal.centralCoreExecution = decision.centralCoreExecution;
-      matchingSignal.executionSizeMultiplier =
-        decision.executionSizeMultiplier;
-      matchingSignal.executionStyleTrustAdjustment =
-        decision.executionStyleTrustAdjustment;
-      matchingSignal.executionStyleTrustMultiplier =
-        decision.executionStyleTrustMultiplier;
-      matchingSignal.shouldWaitForPullback =
-        decision.shouldWaitForPullback;
-    }
-    const phase61ProfitAggression =
-      calculatePhase61ProfitAggressionAI(signals);
-    engineState.phase61ProfitAggressionState =
-      phase61ProfitAggression.state;
-    engineState.phase61ProfitAggressionHistory.unshift(
-      phase61ProfitAggression.state
-    );
-    engineState.phase61ProfitAggressionHistory =
-      engineState.phase61ProfitAggressionHistory.slice(0, 200);
-    for (const aggression of phase61ProfitAggression.analyzedSignals) {
-      const matchingSignal = signals.find(
-        (signal) =>
-          normalizeSymbol(signal.symbol) === normalizeSymbol(aggression.symbol)
-      );
-      if (!matchingSignal) continue;
-      matchingSignal.phase61ProfitAggression = aggression;
-      matchingSignal.profitAggressionScore =
-        aggression.profitAggressionScore;
-      matchingSignal.profitAggressionMultiplier =
-        aggression.aggressionMultiplier;
-      matchingSignal.maxAllowedExposurePercent =
-        aggression.maxAllowedExposurePercent;
-      matchingSignal.allocationMultiplier = Number(
-        (
-          Number(matchingSignal.allocationMultiplier || 1) *
-          Number(aggression.aggressionMultiplier || 1)
-        ).toFixed(2)
-      );
-      if (aggression.shouldBlockAggression) {
-        matchingSignal.autoTradeApproved = false;
-        matchingSignal.approved = false;
-        matchingSignal.decisionLevel =
-          "Blocked By Phase 61 Profit Aggression";
-      }
-    }
-    recordOrder("PHASE_61_PROFIT_AGGRESSION_UPDATED", "MARKET", {
-      reviewedCount: phase61ProfitAggression.state.reviewedCount,
-      aggressiveCount: phase61ProfitAggression.state.aggressiveCount,
-      defensiveCount: phase61ProfitAggression.state.defensiveCount,
-      averageAggressionScore:
-        phase61ProfitAggression.state.averageAggressionScore,
-    });
-    const phase62MarketPersonality =
-      calculatePhase62MarketPersonalityMemory(signals);
-    engineState.phase62MarketPersonalityState =
-      phase62MarketPersonality.state;
-    engineState.phase62MarketPersonalityHistory.unshift(
-      phase62MarketPersonality.state
-    );
-    engineState.phase62MarketPersonalityHistory =
-      engineState.phase62MarketPersonalityHistory.slice(0, 200);
-    for (const personality of phase62MarketPersonality.analyzedSignals) {
-      const matchingSignal = signals.find(
-        (signal) =>
-          normalizeSymbol(signal.symbol) === normalizeSymbol(personality.symbol)
-      );
-      if (!matchingSignal) continue;
-      matchingSignal.phase62MarketPersonality = personality;
-      matchingSignal.personalityFitScore =
-        personality.personalityFitScore;
-      matchingSignal.personalityMultiplier =
-        personality.personalityMultiplier;
-      matchingSignal.allocationMultiplier = Number(
-        (
-          Number(matchingSignal.allocationMultiplier || 1) *
-          Number(personality.personalityMultiplier || 1)
-        ).toFixed(2)
-      );
-      if (personality.shouldPersonalityBlock) {
-        matchingSignal.autoTradeApproved = false;
-        matchingSignal.approved = false;
-        matchingSignal.decisionLevel =
-          "Blocked By Phase 62 Market Personality";
-      }
-    }
-    recordOrder("PHASE_62_MARKET_PERSONALITY_UPDATED", "MARKET", {
-      reviewedCount: phase62MarketPersonality.state.reviewedCount,
-      eliteMatchCount: phase62MarketPersonality.state.eliteMatchCount,
-      blockedCount: phase62MarketPersonality.state.blockedCount,
-      averagePersonalityFit:
-        phase62MarketPersonality.state.averagePersonalityFit,
-    });
-    const phase63StrategyEvolution =
-      calculatePhase63StrategyEvolutionEngine(signals);
-    engineState.phase63StrategyEvolutionState =
-      phase63StrategyEvolution.state;
-    engineState.phase63StrategyEvolutionHistory.unshift(
-      phase63StrategyEvolution.state
-    );
-    engineState.phase63StrategyEvolutionHistory =
-      engineState.phase63StrategyEvolutionHistory.slice(0, 200);
-    for (const evolution of phase63StrategyEvolution.analyzedSignals) {
-      const matchingSignal = signals.find(
-        (signal) =>
-          normalizeSymbol(signal.symbol) === normalizeSymbol(evolution.symbol)
-      );
-      if (!matchingSignal) continue;
-      matchingSignal.phase63StrategyEvolution = evolution;
-      matchingSignal.strategyEvolutionScore =
-        evolution.strategyEvolutionScore;
-      matchingSignal.strategyEvolutionMultiplier =
-        evolution.strategyEvolutionMultiplier;
-      matchingSignal.evolvedMinScoreOffset =
-        evolution.evolvedMinScoreOffset;
-      matchingSignal.allocationMultiplier = Number(
-        (
-          Number(matchingSignal.allocationMultiplier || 1) *
-          Number(evolution.strategyEvolutionMultiplier || 1)
-        ).toFixed(2)
-      );
-      if (evolution.shouldStrategyBlock) {
-        matchingSignal.autoTradeApproved = false;
-        matchingSignal.approved = false;
-        matchingSignal.decisionLevel =
-          "Blocked By Phase 63 Strategy Evolution";
-      }
-    }
-    recordOrder("PHASE_63_STRATEGY_EVOLUTION_UPDATED", "MARKET", {
-      reviewedCount: phase63StrategyEvolution.state.reviewedCount,
-      amplifiedCount: phase63StrategyEvolution.state.amplifiedCount,
-      suppressedCount: phase63StrategyEvolution.state.suppressedCount,
-      averageStrategyEvolution:
-        phase63StrategyEvolution.state.averageStrategyEvolution,
-    });
-    const autonomousCryptoStrategySelector =
-      calculateCryptoStrategySelector(cryptoSignals);
-    engineState.autonomousCryptoStrategySelectorState =
-      autonomousCryptoStrategySelector;
-    engineState.phase52CryptoStrategySelectorState =
-      autonomousCryptoStrategySelector;
-    engineState.autonomousCryptoStrategySelectorHistory.unshift(
-      autonomousCryptoStrategySelector
-    );
-    engineState.phase52CryptoStrategySelectorHistory.unshift(
-      autonomousCryptoStrategySelector
-    );
-    engineState.phase52CryptoStrategySelectorHistory =
-      engineState.phase52CryptoStrategySelectorHistory.slice(0, 200);
-    engineState.autonomousCryptoStrategySelectorHistory =
-      engineState.autonomousCryptoStrategySelectorHistory.slice(0, 200);
-    for (const selectedCrypto of autonomousCryptoStrategySelector.selectedCryptoSignals) {
-      const matchingSignal = cryptoSignals.find(
-        (signal) =>
-          normalizeSymbol(signal.symbol) ===
-          normalizeSymbol(selectedCrypto.symbol)
-      );
-      if (!matchingSignal) continue;
-      matchingSignal.autonomousCryptoStrategySelector = selectedCrypto;
-      matchingSignal.cryptoStrategySelectorScore =
-        selectedCrypto.strategyConfidence;
-      matchingSignal.selectedCryptoStrategy =
-        selectedCrypto.selectedStrategy;
-      if (selectedCrypto.shouldBoostCryptoScore) {
-        matchingSignal.score = clampScore(
-          Number(matchingSignal.score || 0) +
-          Number(selectedCrypto.strategyScoreBoost || 0)
-        );
-      }
-      if (selectedCrypto.action === "BLOCK_WEAK_CRYPTO_STRATEGY") {
-        matchingSignal.autoTradeApproved = false;
-        matchingSignal.decisionLevel = "Blocked Weak Crypto Strategy";
-      }
-    }
-    const cryptoReinforcementLearning =
-      calculateCryptoReinforcementLearning(cryptoSignals);
-    engineState.cryptoReinforcementLearningState =
-      cryptoReinforcementLearning;
-    engineState.cryptoReinforcementLearningHistory.unshift(
-      cryptoReinforcementLearning
-    );
-    engineState.cryptoReinforcementLearningHistory =
-      engineState.cryptoReinforcementLearningHistory.slice(0, 200);
-    for (const reinforcedCrypto of cryptoReinforcementLearning.reinforcedSignals) {
-      const matchingSignal = cryptoSignals.find(
-        (signal) =>
-          normalizeSymbol(signal.symbol) ===
-          normalizeSymbol(reinforcedCrypto.symbol)
-      );
-      if (!matchingSignal) continue;
-      matchingSignal.cryptoReinforcementLearning = reinforcedCrypto;
-      matchingSignal.cryptoReinforcementScore =
-        reinforcedCrypto.reinforcementScore;
-      matchingSignal.score = clampScore(
-        Number(matchingSignal.score || 0) +
-        Number(reinforcedCrypto.learningAdjustment || 0)
-      );
-      if (reinforcedCrypto.shouldSuppressCrypto) {
-        matchingSignal.autoTradeApproved = false;
-        matchingSignal.decisionLevel =
-          "Blocked By Crypto Reinforcement Learning";
-      }
-    }
-    const globalRiskOffDefense =
-      calculateGlobalRiskDefense(stockSignals, cryptoSignals);
-    engineState.globalRiskOffDefenseState = globalRiskOffDefense;
-    engineState.globalRiskOffDefenseHistory.unshift(globalRiskOffDefense);
-    engineState.globalRiskOffDefenseHistory =
-      engineState.globalRiskOffDefenseHistory.slice(0, 200);
-    engineState.globalRiskOffDefenseMode =
-      globalRiskOffDefense.defenseMode;
-    engineState.globalRiskOffExposureMultiplier =
-      globalRiskOffDefense.exposureMultiplier;
-    for (const protectedCrypto of globalRiskOffDefense.protectedCryptoSignals) {
-      const matchingSignal = cryptoSignals.find(
-        (signal) =>
-          normalizeSymbol(signal.symbol) === normalizeSymbol(protectedCrypto.symbol)
-      );
-      if (!matchingSignal) continue;
-      matchingSignal.globalRiskOffDefense = protectedCrypto;
-      matchingSignal.globalRiskOffScore =
-        protectedCrypto.individualRiskScore;
-      matchingSignal.globalRiskOffDefenseMode =
-        globalRiskOffDefense.defenseMode;
-      matchingSignal.globalRiskOffExposureMultiplier =
-        globalRiskOffDefense.exposureMultiplier;
-      matchingSignal.score = clampScore(
-        Number(matchingSignal.score || 0) +
-        Number(protectedCrypto.scorePenalty || 0)
-      );
-      if (protectedCrypto.shouldReduceSize) {
-        matchingSignal.cryptoRiskAdjustedSizeMultiplier =
-          globalRiskOffDefense.exposureMultiplier;
-      }
-      if (protectedCrypto.shouldBlock) {
-        matchingSignal.autoTradeApproved = false;
-        matchingSignal.decisionLevel =
-          "Blocked By Global Risk-Off Defense";
-      }
-    }
-    const unifiedInstitutionalOrchestrator =
-      calculateUnifiedOrchestrator(stockSignals, cryptoSignals);
-    engineState.unifiedInstitutionalOrchestratorState =
-      unifiedInstitutionalOrchestrator;
-    engineState.unifiedInstitutionalOrchestratorHistory.unshift(
-      unifiedInstitutionalOrchestrator
-    );
-    engineState.unifiedInstitutionalOrchestratorHistory =
-      engineState.unifiedInstitutionalOrchestratorHistory.slice(0, 200);
-    engineState.unifiedInstitutionalMode =
-      unifiedInstitutionalOrchestrator.orchestratorMode;
-    engineState.unifiedInstitutionalCapitalMultiplier =
-      unifiedInstitutionalOrchestrator.finalCapitalMultiplier;
-    for (const orchestrated of unifiedInstitutionalOrchestrator.orchestratedSignals) {
-      const matchingSignal = [...stockSignals, ...cryptoSignals].find(
-        (signal) =>
-          normalizeSymbol(signal.symbol) === normalizeSymbol(orchestrated.symbol)
-      );
-      if (!matchingSignal) continue;
-      matchingSignal.unifiedInstitutionalOrchestrator = orchestrated;
-      matchingSignal.finalOrchestratedScore =
-        orchestrated.finalOrchestratedScore;
-      matchingSignal.unifiedInstitutionalMode =
-        unifiedInstitutionalOrchestrator.orchestratorMode;
-      matchingSignal.finalCapitalMultiplier =
-        unifiedInstitutionalOrchestrator.finalCapitalMultiplier;
-      matchingSignal.score = clampScore(
-        Number(matchingSignal.score || 0) * 0.85 +
-        Number(orchestrated.finalOrchestratedScore || 0) * 0.15
-      );
-      if (orchestrated.shouldBlock) {
-        matchingSignal.autoTradeApproved = false;
-        matchingSignal.decisionLevel =
-          "Blocked By Unified Institutional Orchestrator";
-      }
-      if (
-        orchestrated.action === "PRIORITY_INSTITUTIONAL_BUY" ||
-        orchestrated.action === "APPROVED_INSTITUTIONAL_BUY"
-      ) {
-        matchingSignal.decisionLevel = orchestrated.action;
-      }
-    }
-    const profitVelocityGovernor =
-      calculateProfitVelocity(stockSignals, cryptoSignals);
-    engineState.profitVelocityGovernorState = profitVelocityGovernor;
-    engineState.profitVelocityGovernorHistory.unshift(profitVelocityGovernor);
-    engineState.profitVelocityGovernorHistory =
-      engineState.profitVelocityGovernorHistory.slice(0, 200);
-    engineState.profitVelocityMode = profitVelocityGovernor.velocityMode;
-    engineState.profitVelocityCapitalMultiplier =
-      profitVelocityGovernor.velocityCapitalMultiplier;
-    for (const governed of profitVelocityGovernor.governedSignals) {
-      const matchingSignal = [...stockSignals, ...cryptoSignals].find(
-        (signal) =>
-          normalizeSymbol(signal.symbol) === normalizeSymbol(governed.symbol)
-      );
-      if (!matchingSignal) continue;
-      matchingSignal.profitVelocityGovernor = governed;
-      matchingSignal.profitVelocityScore = governed.finalVelocityScore;
-      matchingSignal.profitVelocityMode = profitVelocityGovernor.velocityMode;
-      matchingSignal.profitVelocityCapitalMultiplier =
-        profitVelocityGovernor.velocityCapitalMultiplier;
-      if (governed.shouldReduceSpeed) {
-        matchingSignal.autoTradeApproved = false;
-        matchingSignal.decisionLevel = "Reduced By Profit Velocity Governor";
-      }
-      if (governed.shouldAccelerate) {
-        matchingSignal.score = clampScore(Number(matchingSignal.score || 0) + 2);
-      }
-    }
-    const portfolioEcosystem =
-      calculatePortfolioEcosystemIntelligence(
-        signals,
-        engineState.cachedPositions || []
-      );
-    engineState.portfolioEcosystemState =
-      portfolioEcosystem.state;
-    engineState.portfolioEcosystemHistory.unshift(
-      portfolioEcosystem.state
-    );
-    engineState.portfolioEcosystemHistory =
-      engineState.portfolioEcosystemHistory.slice(0, 300);
-    for (const ecosystem of portfolioEcosystem.adjustedSignals) {
-      const matchingSignal = signals.find(
-        (signal) =>
-          normalizeSymbol(signal.symbol) === normalizeSymbol(ecosystem.symbol)
-      );
-      if (!matchingSignal) continue;
-      matchingSignal.portfolioEcosystem = ecosystem;
-      matchingSignal.portfolioEcosystemMultiplier =
-        ecosystem.ecosystemMultiplier;
-      matchingSignal.portfolioPressureScore =
-        ecosystem.portfolioPressureScore;
-      matchingSignal.portfolioEcosystemMode =
-        ecosystem.ecosystemMode;
-      matchingSignal.allocationMultiplier = Number(
-        (
-          Number(matchingSignal.allocationMultiplier || 1) *
-          Number(ecosystem.ecosystemMultiplier || 1)
-        ).toFixed(2)
-      );
-      if (ecosystem.blockNewTrade) {
-        matchingSignal.autoTradeApproved = false;
-        matchingSignal.approved = false;
-        matchingSignal.decisionLevel =
-          "Blocked By Portfolio Ecosystem Intelligence";
-      }
-      if (ecosystem.reduceSize && !ecosystem.blockNewTrade) {
-        matchingSignal.decisionLevel =
-          "Reduced By Portfolio Ecosystem Intelligence";
-      }
-    }
-    recordOrder("PHASE_71_PORTFOLIO_ECOSYSTEM_UPDATED", "MARKET", {
-      reviewedSignals: portfolioEcosystem.state.reviewedSignals,
-      ecosystemMode: portfolioEcosystem.state.ecosystemMode,
-      portfolioPressureScore:
-        portfolioEcosystem.state.portfolioPressureScore,
-      dominantArchetype:
-        portfolioEcosystem.state.dominantArchetype,
-      dominantSector:
-        portfolioEcosystem.state.dominantSector,
-    });
-    const liveMomentumMutation =
-      calculateLiveMomentumMutation(signals);
-    engineState.liveMomentumMutationState =
-      liveMomentumMutation.state;
-    engineState.liveMomentumMutationHistory.unshift(
-      liveMomentumMutation.state
-    );
-    engineState.liveMomentumMutationHistory =
-      engineState.liveMomentumMutationHistory.slice(0, 300);
-    for (const mutation of liveMomentumMutation.mutatedSignals) {
-      const matchingSignal = signals.find(
-        (signal) =>
-          normalizeSymbol(signal.symbol) === normalizeSymbol(mutation.symbol)
-      );
-      if (!matchingSignal) continue;
-      matchingSignal.liveMomentumMutation = mutation;
-      matchingSignal.liveMutatedScore = mutation.liveMutatedScore;
-      matchingSignal.liveMutationMode = mutation.mutationMode;
-      matchingSignal.liveMovePercent = mutation.liveMovePercent;
-      matchingSignal.livePrice = Number(
-        mutation.livePrice ||
-        mutation.price ||
-        matchingSignal.livePrice ||
-        matchingSignal.price ||
-        0
-      );
-      matchingSignal.displayPrice =
-        matchingSignal.livePrice || matchingSignal.price;
-      matchingSignal.liveQuoteUpdatedAt =
-        mutation.liveQuoteUpdatedAt ||
-        mutation.updatedAt ||
-        new Date().toISOString();
-      matchingSignal.liveQuoteSource =
-        mutation.liveQuoteSource ||
-        mutation.source ||
-        "polygon_live";
-      matchingSignal.priceIsLive =
-        matchingSignal.livePrice > 0;
-      matchingSignal.displayPrice = matchingSignal.livePrice || matchingSignal.price;
-      matchingSignal.liveQuoteUpdatedAt = new Date().toISOString();
-      matchingSignal.liveQuoteSource =
-        mutation.liveQuoteSource ||
-        mutation.source ||
-        matchingSignal.liveQuoteSource ||
-        "live_momentum_mutation";
-      matchingSignal.priceIsLive = true;
-      matchingSignal.score = clampScore(
-        Number(matchingSignal.score || 0) * 0.82 +
-        Number(mutation.liveMutatedScore || 0) * 0.18
-      );
-      if (mutation.liveFade) {
-        matchingSignal.autoTradeApproved = false;
-        matchingSignal.decisionLevel = "Live Momentum Fade Warning";
-      }
-      if (mutation.liveIgnition) {
-        matchingSignal.decisionLevel = "Live Runner Ignition Detected";
-        matchingSignal.allocationMultiplier = Number(
-          (
-            Number(matchingSignal.allocationMultiplier || 1) * 1.08
-          ).toFixed(2)
-        );
-      }
-    }
-    recordOrder("PHASE_73_LIVE_MOMENTUM_MUTATION_UPDATED", "MARKET", {
-      reviewedCount: liveMomentumMutation.state.reviewedCount,
-      ignitionCount: liveMomentumMutation.state.ignitionCount,
-      fadeCount: liveMomentumMutation.state.fadeCount,
-      staleCount: liveMomentumMutation.state.staleCount,
-    });
-    const dynamicCapitalParliament =
-      calculateDynamicCapitalParliament(
-        signals,
-        engineState.portfolioEcosystemState
-      );
-    engineState.dynamicCapitalParliamentState =
-      dynamicCapitalParliament.state;
-    engineState.dynamicCapitalParliamentHistory.unshift(
-      dynamicCapitalParliament.state
-    );
-    engineState.dynamicCapitalParliamentHistory =
-      engineState.dynamicCapitalParliamentHistory.slice(0, 300);
-    for (const capitalVote of dynamicCapitalParliament.adjustedSignals) {
-      const matchingSignal = signals.find(
-        (signal) =>
-          normalizeSymbol(signal.symbol) === normalizeSymbol(capitalVote.symbol)
-      );
-      if (!matchingSignal) continue;
-      matchingSignal.dynamicCapitalParliament = capitalVote;
-      matchingSignal.capitalVoteScore = capitalVote.capitalVoteScore;
-      matchingSignal.capitalPriority = capitalVote.capitalPriority;
-      matchingSignal.capitalParliamentAction =
-        capitalVote.capitalParliamentAction;
-      matchingSignal.capitalParliamentMultiplier =
-        capitalVote.capitalParliamentMultiplier;
-      matchingSignal.capitalMode = capitalVote.capitalMode;
-      matchingSignal.allocationMultiplier = Number(
-        (
-          Number(matchingSignal.allocationMultiplier || 1) *
-          Number(capitalVote.capitalParliamentMultiplier || 1)
-        ).toFixed(2)
-      );
-      if (capitalVote.capitalParliamentAction === "NO_CAPITAL") {
-        matchingSignal.autoTradeApproved = false;
-        matchingSignal.approved = false;
-        matchingSignal.decisionLevel =
-          "No Capital From Dynamic Capital Parliament";
-      }
-      if (
-        capitalVote.capitalParliamentAction === "ROUTE_ELITE_CAPITAL" ||
-        capitalVote.capitalParliamentAction === "ROUTE_PRIORITY_CAPITAL"
-      ) {
-        matchingSignal.decisionLevel =
-          capitalVote.capitalParliamentAction;
-      }
-    }
-    recordOrder("PHASE_72_DYNAMIC_CAPITAL_PARLIAMENT_UPDATED", "MARKET", {
-      reviewedCount: dynamicCapitalParliament.state.reviewedCount,
-      approvedVoteCount:
-        dynamicCapitalParliament.state.approvedVoteCount,
-      capitalMode:
-        dynamicCapitalParliament.state.capitalMode,
-      dominantCapitalArchetype:
-        dynamicCapitalParliament.state.dominantCapitalArchetype,
-    });
-    const liquiditySweepTrap =
-      calculateLiquiditySweepTrapIntelligence(signals);
-    engineState.liquiditySweepTrapState =
-      liquiditySweepTrap.state;
-    engineState.liquiditySweepTrapHistory.unshift(
-      liquiditySweepTrap.state
-    );
-    engineState.liquiditySweepTrapHistory =
-      engineState.liquiditySweepTrapHistory.slice(0, 300);
-    for (const trap of liquiditySweepTrap.reviewedSignals) {
-      const matchingSignal = signals.find(
-        (signal) =>
-          normalizeSymbol(signal.symbol) === normalizeSymbol(trap.symbol)
-      );
-      if (!matchingSignal) continue;
-      matchingSignal.liquiditySweepTrap = trap;
-      matchingSignal.liquiditySweepMode =
-        trap.liquiditySweepMode;
-      matchingSignal.trapRiskScore =
-        trap.trapRiskScore;
-      matchingSignal.squeezeIgnition =
-        trap.squeezeIgnition;
-      matchingSignal.allocationMultiplier = Number(
-        (
-          Number(matchingSignal.allocationMultiplier || 1) *
-          Number(trap.liquidityTrapMultiplier || 1)
-        ).toFixed(2)
-      );
-      if (trap.shouldBlockForTrap) {
-        matchingSignal.autoTradeApproved = false;
-        matchingSignal.approved = false;
-        matchingSignal.decisionLevel =
-          "Blocked By Liquidity Sweep Trap Intelligence";
-      }
-      if (trap.shouldReduceForTrap && !trap.shouldBlockForTrap) {
-        matchingSignal.decisionLevel =
-          "Reduced By Liquidity Sweep Trap Intelligence";
-      }
-      if (trap.squeezeIgnition) {
-        matchingSignal.decisionLevel =
-          "Squeeze Ignition Confirmed";
-      }
-    }
-    recordOrder("PHASE_77_LIQUIDITY_SWEEP_TRAP_UPDATED", "MARKET", {
-      reviewedCount: liquiditySweepTrap.state.reviewedCount,
-      trapCount: liquiditySweepTrap.state.trapCount,
-      squeezeIgnitionCount:
-        liquiditySweepTrap.state.squeezeIgnitionCount,
-    });
-    const autonomousHedgeFundLayer =
-      calculateAutonomousHedgeFundLayer(signals);
-    engineState.autonomousHedgeFundLayerState =
-      autonomousHedgeFundLayer.state;
-    engineState.autonomousHedgeFundLayerHistory.unshift(
-      autonomousHedgeFundLayer.state
-    );
-    engineState.autonomousHedgeFundLayerHistory =
-      engineState.autonomousHedgeFundLayerHistory.slice(0, 300);
-    for (const hedge of autonomousHedgeFundLayer.adjustedSignals) {
-      const matchingSignal = signals.find(
-        (signal) =>
-          normalizeSymbol(signal.symbol) === normalizeSymbol(hedge.symbol)
-      );
-      if (!matchingSignal) continue;
-      matchingSignal.autonomousHedgeFundLayer = hedge;
-      matchingSignal.hedgeFundMode = hedge.hedgeFundMode;
-      matchingSignal.hedgeFundAction = hedge.hedgeFundAction;
-      matchingSignal.hedgeFundSignalMultiplier =
-        hedge.hedgeFundSignalMultiplier;
-      matchingSignal.allocationMultiplier = Number(
-        (
-          Number(matchingSignal.allocationMultiplier || 1) *
-          Number(hedge.hedgeFundSignalMultiplier || 1)
-        ).toFixed(2)
-      );
-      if (
-        hedge.hedgeFundAction === "DEFEND_CAPITAL_REDUCE" ||
-        hedge.hedgeFundAction === "DECONCENTRATE_REDUCE"
-      ) {
-        matchingSignal.decisionLevel = hedge.hedgeFundAction;
-      }
-      if (hedge.hedgeFundAction === "EXPAND_RUNNER_CAPITAL") {
-        matchingSignal.decisionLevel =
-          "Autonomous Hedge Fund Expanding Runner Capital";
-      }
-    }
-    recordOrder("PHASE_78_AUTONOMOUS_HEDGE_FUND_LAYER_UPDATED", "MARKET", {
-      reviewedCount: autonomousHedgeFundLayer.state.reviewedCount,
-      hedgeFundMode: autonomousHedgeFundLayer.state.hedgeFundMode,
-      globalCapitalMultiplier:
-        autonomousHedgeFundLayer.state.globalCapitalMultiplier,
-      eliteCandidateCount:
-        autonomousHedgeFundLayer.state.eliteCandidateCount,
-    });
-    const autonomousMetaReinforcement =
-      calculateAutonomousMetaReinforcement(signals);
-    engineState.autonomousMetaReinforcementState =
-      autonomousMetaReinforcement.state;
-    engineState.autonomousMetaReinforcementHistory.unshift(
-      autonomousMetaReinforcement.state
-    );
-    engineState.autonomousMetaReinforcementHistory =
-      engineState.autonomousMetaReinforcementHistory.slice(0, 300);
-    for (const meta of autonomousMetaReinforcement.adjustedSignals) {
-      const matchingSignal = signals.find(
-        (signal) =>
-          normalizeSymbol(signal.symbol) === normalizeSymbol(meta.symbol)
-      );
-      if (!matchingSignal) continue;
-      matchingSignal.autonomousMetaReinforcement = meta;
-      matchingSignal.metaAggressionMultiplier =
-        meta.metaAggressionMultiplier;
-      matchingSignal.metaThresholdAdjustment =
-        meta.metaThresholdAdjustment;
-      matchingSignal.metaScoreAdjustment =
-        meta.metaScoreAdjustment;
-      matchingSignal.metaAggressionMode =
-        meta.aggressionMode;
-      matchingSignal.score = clampScore(
-        Number(matchingSignal.score || 0) +
-        Number(meta.metaScoreAdjustment || 0)
-      );
-      matchingSignal.allocationMultiplier = Number(
-        (
-          Number(matchingSignal.allocationMultiplier || 1) *
-          Number(meta.metaAggressionMultiplier || 1)
-        ).toFixed(2)
-      );
-      if (meta.blockedButStrong) {
-        matchingSignal.decisionLevel =
-          "Meta Reinforcement Suppression Relief Candidate";
-      }
-    }
-    recordOrder("PHASE_76_AUTONOMOUS_META_REINFORCEMENT_UPDATED", "MARKET", {
-      reviewedCount:
-        autonomousMetaReinforcement.state.reviewedCount,
-      aggressionMode:
-        autonomousMetaReinforcement.state.aggressionMode,
-      approvalRate:
-        autonomousMetaReinforcement.state.approvalRate,
-      blockRate:
-        autonomousMetaReinforcement.state.blockRate,
-    });
-    const centralAutonomousDecisionCore =
-      calculateCentralAutonomousDecisionCore(stockSignals, cryptoSignals);
-    engineState.aiParliamentVotingState = {
-      updatedAt: new Date().toISOString(),
-      phase: "75_AI_PARLIAMENT_VOTING_SYSTEM",
-      reviewedCount:
-        centralAutonomousDecisionCore.rankedDecisions?.length || 0,
-      topVotes:
-        (centralAutonomousDecisionCore.rankedDecisions || [])
-          .map((decision) => ({
-            symbol: decision.symbol,
-            tradeArchetype: decision.tradeArchetype,
-            parliamentDecision: decision.parliamentDecision,
-            parliamentConfidence: decision.parliamentConfidence,
-            action: decision.action,
-          }))
-          .slice(0, 15),
-    };
-    engineState.aiParliamentVotingHistory.unshift(
-      engineState.aiParliamentVotingState
-    );
-    engineState.aiParliamentVotingHistory =
-      engineState.aiParliamentVotingHistory.slice(0, 300);
-    engineState.centralAutonomousDecisionCoreState =
-      centralAutonomousDecisionCore.state;
-    engineState.centralAutonomousDecisionCoreHistory.unshift(
-      centralAutonomousDecisionCore.state
-    );
-    engineState.centralAutonomousDecisionCoreHistory =
-      engineState.centralAutonomousDecisionCoreHistory.slice(0, 200);
-    recordOrder("CENTRAL_AUTONOMOUS_DECISION_CORE_UPDATED", "MARKET", {
-      reviewedCount: centralAutonomousDecisionCore.state.reviewedCount,
-      approvedCount: centralAutonomousDecisionCore.state.approvedCount,
-      blockedCount: centralAutonomousDecisionCore.state.blockedCount,
-      masterCapitalMultiplier:
-        centralAutonomousDecisionCore.state.masterCapitalMultiplier,
-    });
-    broadcastTapeEvent(
-      "TOP_AI_BRAIN_UPDATE",
-      {
-        topBrains: buildTopAiBrains(),
-      }
-    );
-    for (const decision of centralAutonomousDecisionCore.rankedDecisions) {
-      const matchingSignal = signals.find(
-        (signal) =>
-          normalizeSymbol(signal.symbol) === normalizeSymbol(decision.symbol)
-      );
-      if (!matchingSignal) continue;
-      matchingSignal.centralAutonomousDecisionCore = decision;
-      matchingSignal.tradeArchetype = decision.tradeArchetype;
-      matchingSignal.dynamicEngineWeights = decision.dynamicEngineWeights;
-      matchingSignal.archetypeAdjustedScore = decision.archetypeAdjustedScore;
-      matchingSignal.aiParliamentVote = decision.aiParliamentVote;
-      matchingSignal.parliamentDecision = decision.parliamentDecision;
-      matchingSignal.parliamentConfidence = decision.parliamentConfidence;
-      matchingSignal.contradictionState = decision.contradictionState;
-      matchingSignal.eliteOverride = decision.eliteOverride;
-      matchingSignal.centralCoreExecution = decision.centralCoreExecution;
-      matchingSignal.executionStyle = decision.executionStyle;
-      matchingSignal.executionSizeMultiplier =
-        decision.executionSizeMultiplier;
-      matchingSignal.shouldWaitForPullback =
-        decision.shouldWaitForPullback;
-      matchingSignal.centralCoreHardBlock = decision.hardBlock;
-      matchingSignal.centralCoreSoftBlock = decision.softBlock;
-      matchingSignal.finalAutonomousDecisionScore =
-        decision.finalDecisionScore;
-      matchingSignal.centralAutonomousAction = decision.action;
-      const finalMasterDecisionProfile =
-        calculateFinalMasterDecisionProfile(matchingSignal);
-      matchingSignal.finalMasterDecisionProfile =
-        finalMasterDecisionProfile;
-      matchingSignal.masterFinalScore =
-        finalMasterDecisionProfile.finalScore;
-      matchingSignal.masterFinalSizingMultiplier =
-        finalMasterDecisionProfile.finalSizingMultiplier;
-      matchingSignal.masterExecutionDecision =
-        finalMasterDecisionProfile.executionDecision;
-      matchingSignal.finalExitProfile =
-        finalMasterDecisionProfile.finalExitProfile;
-      matchingSignal.score =
-        finalMasterDecisionProfile.finalScore;
-      matchingSignal.allocationMultiplier = Number(
-        (
-          Number(matchingSignal.allocationMultiplier || 1) *
-          Number(finalMasterDecisionProfile.finalSizingMultiplier || 0)
-        ).toFixed(2)
-      );
-      if (
-        finalMasterDecisionProfile.suppressEntry &&
-        decision.action !== "ALLOW_REDUCED_SIZE"
-      ) {
-        matchingSignal.autoTradeApproved = false;
-        matchingSignal.approved = false;
-        matchingSignal.decisionLevel =
-          finalMasterDecisionProfile.waitForPullback
-            ? "Final Master Decision Waiting For Pullback"
-            : "Blocked By Final Master Decision Profile";
-      }
-      if (decision.shouldBlock && decision.action !== "ALLOW_REDUCED_SIZE") {
-        matchingSignal.autoTradeApproved = false;
-        matchingSignal.approved = false;
-        matchingSignal.decisionLevel =
-          "Blocked By Central Autonomous Decision Core";
-      }
-      if (decision.action === "WAIT_FOR_PULLBACK") {
-        matchingSignal.autoTradeApproved = false;
-        matchingSignal.approved = true;
-        matchingSignal.decisionLevel =
-          "Central Core Waiting For Micro Pullback";
-        matchingSignal.pullbackWatch = true;
-      }
-      if (decision.action === "ALLOW_REDUCED_SIZE") {
-        matchingSignal.autoTradeApproved = true;
-        matchingSignal.approved = true;
-        matchingSignal.decisionLevel =
-          "Elite Override: Reduced Size Approval";
-        matchingSignal.allocationMultiplier = Number(
-          (
-            Number(matchingSignal.allocationMultiplier || 1) * 0.5
-          ).toFixed(2)
-        );
-      }
-      if (decision.shouldAccelerate) {
-        matchingSignal.decisionLevel =
-          "Central Core Accelerated Capital";
-        matchingSignal.allocationMultiplier = Number(
-          (
-            Number(matchingSignal.allocationMultiplier || 1) *
-            Number(decision.masterCapitalMultiplier || 1)
-          ).toFixed(2)
-        );
-      }
-    }
-    const penaltyCompression =
-      calculatePenaltyCompressionAndEliteOverride(signals);
-    engineState.penaltyCompressionState = penaltyCompression;
-    engineState.penaltyCompressionHistory.unshift(penaltyCompression);
-    engineState.penaltyCompressionHistory =
-      engineState.penaltyCompressionHistory.slice(0, 200);
-    for (const compressed of penaltyCompression.compressedSignals) {
-      const matchingSignal = signals.find(
-        (signal) =>
-          normalizeSymbol(signal.symbol) === normalizeSymbol(compressed.symbol)
-      );
-      if (!matchingSignal) continue;
-      matchingSignal.penaltyCompression = compressed;
-      matchingSignal.penaltyCompressedMultiplier =
-        compressed.compressedMultiplier;
-      matchingSignal.rawStackedMultiplier =
-        compressed.rawStackedMultiplier;
-      matchingSignal.eliteOverride =
-        compressed.eliteOverride;
-      matchingSignal.penaltyCompressionActive =
-        compressed.activePenaltyCount >= 2;
-      if (compressed.shouldRestoreApproval) {
-        matchingSignal.autoTradeApproved = true;
-        matchingSignal.approved = true;
-        matchingSignal.decisionLevel =
-          compressed.correctedDecisionLevel;
-        matchingSignal.allocationMultiplier =
-          compressed.compressedMultiplier;
-        matchingSignal.portfolioAction = "ELITE_OVERRIDE_DEPLOY";
-        matchingSignal.aiPortfolioAction = "ELITE_OVERRIDE_DEPLOY";
-      } else {
-        matchingSignal.decisionLevel =
-          compressed.correctedDecisionLevel;
-        matchingSignal.allocationMultiplier =
-          Math.max(
-            Number(matchingSignal.allocationMultiplier || 0.25),
-            compressed.compressedMultiplier
-          );
-      }
-    }
-    const ENGINE_HISTORY_KEYS = [
-      "marketRegimeHistory",
-      "marketCycleIntelligenceHistory",
-      "institutionalDashboardSnapshots",
-      "signalHistory",
-      "aiDecisionHistory",
-      "sectorRotationHistory",
-      "sectorDominationHistory",
-      "capitalRedistributionHistory",
-      "institutionalRebalanceHistory",
-      "capitalCompoundingHistory",
-      "multiTimeframeHistory",
-      "marketCrashProtectionHistory",
-      "technicalIntelligenceHistory",
-      "institutionalOrchestratorHistory",
-      "dcfValuationHistory",
-      "competitiveAdvantageHistory",
-      "earningsIntelligenceHistory",
-      "portfolioOptimizationHistory",
-      "dividendCompoundingHistory",
-      "macroRiskHistory",
-      "liquidityIntelligenceHistory",
-      "correlationIntelligenceHistory",
-      "portfolioGovernorHistory",
-      "selfOptimizationHistory",
-      "reinforcementWeightHistory",
-      "executionIntelligenceHistory",
-      "autonomousTradingSystemHistory",
-      "phase20AutonomousOrchestrationHistory",
-      "crossEngineMemoryHistory",
-      "adaptiveExecutionTimingHistory",
-      "phase21AutonomousBrainHistory",
-      "liveAiPerformanceHistory",
-      "signalQualityHistory",
-      "marketBreadthHistory",
-      "marketMomentumHistory",
-      "marketVolatilityHistory",
-      "institutionalExposureHistory",
-      "analyticsSnapshots",
-      "selfHealingScanHistory",
-      "finalDashboardSignalSyncHistory",
-    ];
-    for (const historyKey of ENGINE_HISTORY_KEYS) {
-      if (!Array.isArray(engineState[historyKey])) {
-        engineState[historyKey] = [];
-      }
-    }
-    const previousMarketRegimeState =
-      engineState.marketRegime?.state || null;
-    engineState.marketRegime = detectMarketRegime(stockSignals);
-    const marketRegimeDominance =
-      calculateRegimeDominance(
-        engineState.marketRegime,
-        stockSignals
-      );
-    if (
-      previousMarketRegimeState &&
-      previousMarketRegimeState !== engineState.marketRegime?.state
-    ) {
-      broadcastTapeEvent("MARKET_REGIME_CHANGED", {
-        previousRegime: previousMarketRegimeState,
-        currentRegime: engineState.marketRegime?.state,
-        exposureMultiplier: engineState.marketRegime?.exposureMultiplier,
-      });
-    }
-    engineState.marketRegimeHistory.unshift({
-      timestamp: new Date().toISOString(),
-      regime: engineState.marketRegime,
-    });
-    engineState.marketRegimeHistory =
-      engineState.marketRegimeHistory.slice(0, 200);
-    engineState.marketCycleIntelligenceState =
-      calculateMarketPhase(stockSignals, cryptoSignals);
-    engineState.marketCycleIntelligenceHistory.unshift(
-      engineState.marketCycleIntelligenceState
-    );
-    engineState.marketCycleIntelligenceHistory =
-      engineState.marketCycleIntelligenceHistory.slice(0, 200);
-    signals.sort(
-      (a, b) => Number(b.score || 0) - Number(a.score || 0)
-    );
-    if (
-      !Array.isArray(
-        engineState.institutionalDashboardSnapshots
-      )
-    ) {
-      engineState.institutionalDashboardSnapshots = [];
-    }
-    engineState.lastSignals = signals;
-    refreshFinnhubLiveSubscriptions();
-    engineState.institutionalDashboardSnapshots.unshift({
-      createdAt: new Date().toISOString(),
-      dashboard:
-        buildInstitutionalDashboardPayload(),
-    });
-    engineState.institutionalDashboardSnapshots =
-      engineState.institutionalDashboardSnapshots.slice(
-        0,
-        200
-      );
-    engineState.lastSuccessfulCycleAt =
-      new Date().toISOString();
-    engineState.marketMomentumScore =
-      stockSignals.reduce(
-        (sum, s) =>
-          sum + Number(s.percentChange || 0),
-        0
-      ) / Math.max(1, stockSignals.length);
-    engineState.averageSignalScore =
-      signals.reduce(
-        (sum, s) => sum + Number(s.score || 0),
-        0
-      ) / Math.max(1, signals.length);
-    engineState.lastStockSignals = stockSignals;
-    engineState.lastCryptoSignals = cryptoSignals;
-    emitSignalTapeTransitions(signals);
-    emitSystemRiskTapeState({
-      reason: "Final scan reconciliation completed.",
-    });
-    engineState.lastScanAt = new Date().toISOString();
-    engineState.signalHistory.unshift({
-      timestamp: new Date().toISOString(),
-      signalCount: signals.length,
-      topSignals: signals.slice(0, 10),
-      averageTopScore:
-        signals.slice(0, 10).reduce(
-          (sum, s) => sum + Number(s.score || 0),
-          0
-        ) / Math.max(1, signals.slice(0, 10).length),
-    });
-    engineState.signalHistory =
-      engineState.signalHistory.slice(0, 200);
-    engineState.aiDecisionHistory.unshift({
-      timestamp: new Date().toISOString(),
-      marketRegime: engineState.marketRegime,
-      marketStressLevel:
-        engineState.marketStressLevel,
-      totalSignals: signals.length,
-      stockSignals: stockSignals.length,
-      cryptoSignals: cryptoSignals.length,
-    });
-    engineState.aiDecisionHistory =
-      engineState.aiDecisionHistory.slice(0, 500);
-    const sectorRotation = calculateAiSectorRotationEngine(stockSignals);
-    engineState.sectorRotationState = sectorRotation;
-    engineState.sectorRotationHistory.unshift(sectorRotation);
-    engineState.sectorRotationHistory =
-      engineState.sectorRotationHistory.slice(0, 200);
-    const sectorDominance =
-      calculateInstitutionalSectorDominanceEngine(stockSignals);
-    engineState.sectorDominanceState = sectorDominance;
-    engineState.sectorDominationState = sectorDominance;
-    if (!Array.isArray(engineState.sectorDominanceHistory)) {
-      engineState.sectorDominanceHistory = [];
-    }
-    engineState.sectorDominanceHistory.unshift(sectorDominance);
-    engineState.sectorDominanceHistory =
-      engineState.sectorDominanceHistory.slice(0, 200);
-    engineState.sectorDominationHistory =
-      engineState.sectorDominanceHistory;
-    stockSignals = stockSignals.map((signal) =>
-      applyInstitutionalSectorDominance(signal)
-    );
-    const analyticsPositions = Array.isArray(engineState.cachedPositions)
-      ? engineState.cachedPositions
-      : [];
-    const analyticsAiPositions = analyticsPositions.filter((position) => {
-      const symbol = normalizeSymbol(position.symbol);
-      if (!symbol) return false;
-      if (
-        Array.isArray(engineState.aiManagedSymbols) &&
-        engineState.aiManagedSymbols.includes(symbol)
-      ) {
-        return true;
-      }
-      return String(position.asset_class || "").toLowerCase() === "us_equity";
-    });
-    const allSignalsForAnalytics =
-      Array.isArray(stockSignals) && stockSignals.length > 0
-        ? stockSignals
-        : Array.isArray(cryptoSignals) && cryptoSignals.length > 0
-          ? cryptoSignals
-          : Array.isArray(engineState.lastSignals)
-            ? engineState.lastSignals
-            : [];
-    for (const signal of allSignalsForAnalytics) {
-      const cryptoRealism = calculateCryptoSignalRealismEngine(signal);
-      signal.cryptoRealism = cryptoRealism;
-      signal.realismAdjustedScore = cryptoRealism.realismScore;
-      if (
-        signal.assetClass === "crypto" ||
-        signal.asset_class === "crypto" ||
-        String(signal.symbol || "").includes("/")
-      ) {
-        signal.score = cryptoRealism.realismScore;
-        signal.cryptoRiskPenalty = cryptoRealism.cryptoRiskPenalty;
-        signal.cryptoRealismReason = cryptoRealism.cryptoRealismReason;
-        const cryptoLiquidityPass =
-          cryptoRealism.missingCryptoLiquidity !== true &&
-          Number(cryptoRealism.dollarVolume || 0) >= 25000;
-        signal.qualifiedToBuy =
-          signal.qualifiedToBuy === true &&
-          cryptoLiquidityPass &&
-          Number(signal.score || 0) >=
-          Number(
-            engineState.selfOptimizationState?.adaptiveMinScoreToBuy ||
-            CONFIG.minScoreToBuy ||
-            70
-          );
-        if (!cryptoLiquidityPass) {
-          signal.autoTradeApproved = false;
-          signal.approved = false;
-          signal.decisionLevel = "Blocked By Crypto Liquidity Realism";
-        }
-      }
-    }
-    const updatedInstitutionalWatchlist =
-      updateInstitutionalWatchlist(allSignalsForAnalytics);
-    engineState.institutionalWatchlist = updatedInstitutionalWatchlist;
-    const capitalRedistribution = calculateSmartCapitalRedistributionEngine(
-      account,
-      analyticsAiPositions,
-      allSignalsForAnalytics,
-      engineState.sectorRotationState
-    );
-    engineState.capitalRedistributionState = capitalRedistribution;
-    engineState.capitalRedistributionHistory.unshift(capitalRedistribution);
-    engineState.capitalRedistributionHistory =
-      engineState.capitalRedistributionHistory.slice(0, 200);
-    const institutionalRebalance =
-      calculateInstitutionalRebalanceIntelligence(
-        account,
-        analyticsAiPositions,
-        allSignalsForAnalytics
-      );
-    engineState.institutionalRebalanceState =
-      institutionalRebalance;
-    if (!Array.isArray(engineState.institutionalRebalanceHistory)) {
-      engineState.institutionalRebalanceHistory = [];
-    }
-    engineState.institutionalRebalanceHistory.unshift(
-      institutionalRebalance
-    );
-    engineState.institutionalRebalanceHistory =
-      engineState.institutionalRebalanceHistory.slice(0, 200);
-    const capitalCompounding =
-      calculateSmartCapitalCompoundingEngine(
-        account,
-        analyticsAiPositions
-      );
-    engineState.capitalCompoundingState =
-      capitalCompounding;
-    engineState.capitalCompoundingHistory.unshift(
-      capitalCompounding
-    );
-    engineState.capitalCompoundingHistory =
-      engineState.capitalCompoundingHistory.slice(0, 200);
-    const multiTimeframeAnalysis =
-      calculateMultiTimeframeConfirmationEngine(allSignalsForAnalytics);
-    engineState.multiTimeframeState = multiTimeframeAnalysis;
-    engineState.multiTimeframeHistory.unshift(multiTimeframeAnalysis);
-    engineState.multiTimeframeHistory =
-      engineState.multiTimeframeHistory.slice(0, 200);
-    const marketCrashProtection =
-      calculateAiMarketCrashProtectionEngine(
-        allSignalsForAnalytics,
-        engineState.marketRegime,
-        account
-      );
-    engineState.marketCrashProtectionState =
-      marketCrashProtection;
-    engineState.marketCrashProtectionHistory.unshift(
-      marketCrashProtection
-    );
-    engineState.marketCrashProtectionHistory =
-      engineState.marketCrashProtectionHistory.slice(0, 200);
-    const getUnifiedTechnicalScore = (signal = {}) => {
-      const directScore = Number(
-        signal.technicalIntelligence?.institutionalEntryScore ||
-        signal.technicalScore ||
-        0
-      );
-      if (directScore > 0) {
-        return clampScore(directScore);
-      }
-      return clampScore(
-        Number(signal.score || 0) * 0.85 +
-        (Number(signal.barsFound || 0) >= 30
-          ? 15
-          : Number(signal.barsFound || 0) >= 20
-            ? 10
-            : Number(signal.barsFound || 0) >= 10
-              ? 5
-              : 0) +
-        (signal.qualifiedToBuy !== false ? 5 : -20)
-      );
-    };
-    const getUnifiedExhaustionRisk = (signal = {}) => {
-      const directRisk = Number(
-        signal.technicalIntelligence?.exhaustionRiskScore ||
-        signal.exhaustionRiskScore ||
-        0
-      );
-      if (directRisk > 0) {
-        return clampScore(directRisk);
-      }
-      return clampScore(
-        35 -
-        (Number(signal.score || 0) >= 80 ? 10 : 0) +
-        (signal.qualifiedToBuy === false ? 20 : 0)
-      );
-    };
-    const technicalSignals =
-      allSignalsForAnalytics.filter(
-        (signal) => getUnifiedTechnicalScore(signal) >= 65
-      );
-    const averageTechnicalScore =
-      allSignalsForAnalytics.length > 0
-        ? allSignalsForAnalytics.reduce(
-          (sum, signal) => sum + getUnifiedTechnicalScore(signal),
-          0
-        ) / allSignalsForAnalytics.length
-        : 0;
-    const averageExhaustionRisk =
-      allSignalsForAnalytics.length > 0
-        ? allSignalsForAnalytics.reduce(
-          (sum, signal) => sum + getUnifiedExhaustionRisk(signal),
-          0
-        ) / allSignalsForAnalytics.length
-        : 0;
-    engineState.technicalIntelligenceState = {
-      updatedAt: new Date().toISOString(),
-      qualifyingTechnicalSignals: technicalSignals.length,
-      averageTechnicalScore: Number(averageTechnicalScore.toFixed(2)),
-      averageExhaustionRisk: Number(averageExhaustionRisk.toFixed(2)),
-      strongestTechnicalSetups:
-        technicalSignals
-          .slice(0, 5)
-          .map((signal) => ({
-            symbol: signal.symbol,
-            score: signal.score,
-            technicalScore: getUnifiedTechnicalScore(signal),
-            exhaustionRisk: getUnifiedExhaustionRisk(signal),
-          })),
-    };
-    engineState.technicalIntelligenceHistory.unshift(
-      engineState.technicalIntelligenceState
-    );
-    engineState.technicalIntelligenceHistory =
-      engineState.technicalIntelligenceHistory.slice(0, 200);
-    const orchestratedSignals =
-      allSignalsForAnalytics.map((signal) => ({
-        ...signal,
-        institutionalOrchestrator:
-          calculateInstitutionalAiPortfolioOrchestrator(signal),
-      }));
-    for (const signal of orchestratedSignals) {
-      const realismScore = Number(
-        signal.realismAdjustedScore ||
-        signal.cryptoRealism?.realismScore ||
-        signal.score ||
-        0
-      );
-      const spreadPercent = Number(
-        signal.cryptoRealism?.spreadPercent || 0
-      );
-      const statisticalScore =
-        Number(signal.statisticalScore || 0) +
-        Number(signal.statisticalEdgeScore || 0) +
-        Number(signal.statisticalEdge?.statisticalEdgeScore || 0);
-      const timeframeDecision =
-        signal.timeframeDecision || "WEAK_CONFIRMATION";
-      const finalInstitutionalDecisionScore =
-        Number(
-          signal.institutionalOrchestrator
-            ?.finalInstitutionalDecisionScore || 0
-        );
-      signal.qualifiedToBuy =
-        realismScore >= CONFIG.minScoreToBuy &&
-        finalInstitutionalDecisionScore >= 65 &&
-        spreadPercent <= 0.65 &&
-        timeframeDecision !== "TIMEFRAME_CONFLICT" &&
-        (
-          statisticalScore > 0 ||
-          realismScore >= 85
-        );
-    }
-    const deployableOrchestratedSignals =
-      orchestratedSignals.filter((signal) => {
-        const finalScore = Number(
-          signal.institutionalOrchestrator?.finalInstitutionalDecisionScore || 0
-        );
-        const action =
-          signal.institutionalOrchestrator?.orchestratorAction || "BLOCK_TRADE";
-        const timeframeDecision =
-          signal.timeframeDecision ||
-          engineState.multiTimeframeState?.topAlignedSignals?.find(
-            (item) => normalizeSymbol(item.symbol) === normalizeSymbol(signal.symbol)
-          )?.timeframeDecision ||
-          "WEAK_CONFIRMATION";
-        return (
-          finalScore >= 70 &&
-          action !== "BLOCK_TRADE" &&
-          timeframeDecision !== "TIMEFRAME_CONFLICT"
-        );
-      });
-    const averageOrchestratorScore =
-      orchestratedSignals.length > 0
-        ? orchestratedSignals.reduce(
-          (sum, signal) =>
-            sum +
-            Number(
-              signal.institutionalOrchestrator
-                ?.finalInstitutionalDecisionScore || 0
-            ),
-          0
-        ) / orchestratedSignals.length
-        : 0;
-    if (!engineState.statisticalMemoryState) {
-      engineState.statisticalMemoryState = {
-        updatedAt: new Date().toISOString(),
-        setupHistory: [],
-        setupPerformance: {},
-        expectancyHistory: [],
-        probabilityHistory: [],
-      };
-    }
-    const reinforcedSignals =
-      orchestratedSignals.filter(
-        (signal) =>
-          Number(
-            signal.institutionalOrchestrator
-              ?.probabilityReinforcement
-              ?.reinforcedProbability || 0
-          ) >= 70
-      );
-    const weakeningSignals =
-      orchestratedSignals.filter(
-        (signal) =>
-          signal.institutionalOrchestrator
-            ?.probabilityReinforcement
-            ?.reinforcementMode === "WEAKENING"
-      );
-    const averageReinforcedProbability =
-      orchestratedSignals.length > 0
-        ? orchestratedSignals.reduce(
-          (sum, signal) =>
-            sum +
-            Number(
-              signal.institutionalOrchestrator
-                ?.probabilityReinforcement
-                ?.reinforcedProbability || 0
-            ),
-          0
-        ) / orchestratedSignals.length
-        : 0;
-    engineState.institutionalOrchestratorState = {
-      updatedAt: new Date().toISOString(),
-      totalSignals: orchestratedSignals.length,
-      deployableSignals: deployableOrchestratedSignals.length,
-      averageOrchestratorScore:
-        Number(averageOrchestratorScore.toFixed(2)),
-      reinforcedSignals: reinforcedSignals.length,
-      weakeningSignals: weakeningSignals.length,
-      averageReinforcedProbability:
-        Number(
-          averageReinforcedProbability.toFixed(2)
-        ),
-      strongestOrchestratedSignals:
-        deployableOrchestratedSignals
-          .slice(0, 5)
-          .map((signal) => ({
-            symbol: signal.symbol,
-            score: signal.score,
-            finalInstitutionalDecisionScore:
-              signal.institutionalOrchestrator
-                ?.finalInstitutionalDecisionScore,
-            orchestratorAction:
-              signal.institutionalOrchestrator
-                ?.orchestratorAction,
-            orchestratorMultiplier:
-              signal.institutionalOrchestrator
-                ?.orchestratorMultiplier,
-          })),
-    };
-    engineState.institutionalOrchestratorHistory.unshift(
-      engineState.institutionalOrchestratorState
-    );
-    engineState.institutionalOrchestratorHistory =
-      engineState.institutionalOrchestratorHistory.slice(
-        0,
-        200
-      );
-    const dcfValuationSignals =
-      allSignalsForAnalytics.filter(
-        (signal) =>
-          Number(signal.dcfValuationScore || 0) >= 65
-      );
-    const highValuationRiskSignals =
-      allSignalsForAnalytics.filter(
-        (signal) =>
-          Number(signal.valuationRiskScore || 0) >= 75
-      );
-    const averageDcfValuationScore =
-      allSignalsForAnalytics.length > 0
-        ? allSignalsForAnalytics.reduce(
-          (sum, signal) =>
-            sum +
-            Number(signal.dcfValuationScore || 0),
-          0
-        ) / allSignalsForAnalytics.length
-        : 0;
-    engineState.dcfValuationState = {
-      updatedAt: new Date().toISOString(),
-      qualifyingDcfSignals:
-        dcfValuationSignals.length,
-      highValuationRiskSignals:
-        highValuationRiskSignals.length,
-      averageDcfValuationScore:
-        Number(
-          averageDcfValuationScore.toFixed(2)
-        ),
-      strongestDcfSetups:
-        dcfValuationSignals
-          .slice(0, 5)
-          .map((signal) => ({
-            symbol: signal.symbol,
-            score: signal.score,
-            dcfValuationScore:
-              signal.dcfValuationScore,
-            valuationRiskScore:
-              signal.valuationRiskScore,
-            valuationLabel:
-              signal.valuationLabel,
-            qualityAdjustedMarginOfSafety:
-              signal.qualityAdjustedMarginOfSafety,
-          })),
-    };
-    engineState.dcfValuationHistory.unshift(
-      engineState.dcfValuationState
-    );
-    engineState.dcfValuationHistory =
-      engineState.dcfValuationHistory.slice(
-        0,
-        200
-      );
-    const competitiveAdvantageSignals =
-      allSignalsForAnalytics.filter(
-        (signal) =>
-          Number(signal.competitiveAdvantageScore || signal.moatScore || 0) >= 65
-      );
-    const averageCompetitiveAdvantageScore =
-      allSignalsForAnalytics.length > 0
-        ? allSignalsForAnalytics.reduce(
-          (sum, signal) =>
-            sum +
-            Number(
-              signal.competitiveAdvantageScore ||
-              signal.moatScore ||
-              0
-            ),
-          0
-        ) / allSignalsForAnalytics.length
-        : 0;
-    engineState.competitiveAdvantageState = {
-      updatedAt: new Date().toISOString(),
-      qualifyingMoatSignals: competitiveAdvantageSignals.length,
-      averageCompetitiveAdvantageScore:
-        Number(averageCompetitiveAdvantageScore.toFixed(2)),
-      strongestMoatCandidates: competitiveAdvantageSignals
-        .slice(0, 5)
-        .map((signal) => ({
-          symbol: signal.symbol,
-          score: signal.score,
-          moatScore: signal.moatScore,
-          competitiveAdvantageScore:
-            signal.competitiveAdvantageScore,
-          moatLabel: signal.moatLabel,
-          estimatedSector: signal.estimatedSector,
-        })),
-    };
-    engineState.competitiveAdvantageHistory.unshift(
-      engineState.competitiveAdvantageState
-    );
-    engineState.competitiveAdvantageHistory =
-      engineState.competitiveAdvantageHistory.slice(0, 200);
-    const earningsSignals =
-      allSignalsForAnalytics.filter(
-        (signal) => Number(signal.earningsScore || 0) >= 70
-      );
-    const highEarningsRiskSignals =
-      allSignalsForAnalytics.filter(
-        (signal) =>
-          signal.earningsRiskMode === "HIGH_EARNINGS_RISK" ||
-          Number(signal.earningsVolatilityRiskScore || 0) >= 75
-      );
-    const averageEarningsScore =
-      allSignalsForAnalytics.length > 0
-        ? allSignalsForAnalytics.reduce(
-          (sum, signal) =>
-            sum + Number(signal.earningsScore || 0),
-          0
-        ) / allSignalsForAnalytics.length
-        : 0;
-    const averageEarningsVolatilityRisk =
-      allSignalsForAnalytics.length > 0
-        ? allSignalsForAnalytics.reduce(
-          (sum, signal) =>
-            sum +
-            Number(signal.earningsVolatilityRiskScore || 0),
-          0
-        ) / allSignalsForAnalytics.length
-        : 0;
-    engineState.earningsIntelligenceState = {
-      updatedAt: new Date().toISOString(),
-      qualifyingEarningsSignals: earningsSignals.length,
-      highEarningsRiskSignals: highEarningsRiskSignals.length,
-      averageEarningsScore:
-        Number(averageEarningsScore.toFixed(2)),
-      averageEarningsVolatilityRisk:
-        Number(averageEarningsVolatilityRisk.toFixed(2)),
-      strongestEarningsSetups: earningsSignals
-        .slice(0, 5)
-        .map((signal) => ({
-          symbol: signal.symbol,
-          score: signal.score,
-          earningsScore: signal.earningsScore,
-          earningsRiskMode: signal.earningsRiskMode,
-          earningsAction: signal.earningsAction,
-        })),
-      riskiestEarningsSetups: highEarningsRiskSignals
-        .slice(0, 5)
-        .map((signal) => ({
-          symbol: signal.symbol,
-          score: signal.score,
-          earningsScore: signal.earningsScore,
-          earningsRiskMode: signal.earningsRiskMode,
-          earningsVolatilityRiskScore:
-            signal.earningsVolatilityRiskScore,
-        })),
-    };
-    engineState.earningsIntelligenceHistory.unshift(
-      engineState.earningsIntelligenceState
-    );
-    engineState.earningsIntelligenceHistory =
-      engineState.earningsIntelligenceHistory.slice(0, 200);
-    const portfolioOptimization =
-      calculateBlackRockPortfolioOptimizer(
-        account,
-        analyticsAiPositions,
-        allSignalsForAnalytics
-      );
-    engineState.portfolioOptimizationState =
-      portfolioOptimization;
-    engineState.portfolioOptimizationHistory.unshift(
-      portfolioOptimization
-    );
-    engineState.portfolioOptimizationHistory =
-      engineState.portfolioOptimizationHistory.slice(
-        0,
-        200
-      );
-    const dividendCompounders = allSignalsForAnalytics
-      .map((signal) => ({
-        symbol: signal.symbol,
-        score: Number(signal.score || 0),
-        harvardDividendScore: Number(
-          signal.harvardDividendScore ||
-          signal.harvardDividendCompounding
-            ?.harvardDividendCompoundingScore ||
-          0
-        ),
-        harvardDividendProfile:
-          signal.harvardDividendProfile ||
-          signal.harvardDividendCompounding
-            ?.harvardDividendProfile ||
-          "Unknown",
-        dividendScore: Number(signal.dividendScore || 0),
-        wealthProfile: signal.wealthProfile || "Unknown",
-      }))
-      .filter((item) => item.harvardDividendScore > 0)
-      .sort(
-        (a, b) =>
-          Number(b.harvardDividendScore || 0) -
-          Number(a.harvardDividendScore || 0)
-      )
-      .slice(0, 10);
-    engineState.dividendCompoundingState = {
-      updatedAt: new Date().toISOString(),
-      phase: "15.7_HARVARD_DIVIDEND_COMPOUNDING_ENGINE",
-      reviewedCount: allSignalsForAnalytics.length,
-      topDividendCompounders: dividendCompounders,
-      eliteCompounderCount: dividendCompounders.filter(
-        (item) => item.harvardDividendScore >= 85
-      ).length,
-      reason:
-        `Dividend engine reviewed ${allSignalsForAnalytics.length} signals ` +
-        `and found ${dividendCompounders.length} dividend/compounder candidates.`,
-    };
-    if (!Array.isArray(engineState.dividendCompoundingHistory)) {
-      engineState.dividendCompoundingHistory = [];
-    }
-    engineState.dividendCompoundingHistory.unshift(
-      engineState.dividendCompoundingState
-    );
-    engineState.dividendCompoundingHistory =
-      engineState.dividendCompoundingHistory.slice(0, 200);
-    const macroRisk =
-      calculateBridgewaterMacroRiskEngine(
-        allSignalsForAnalytics,
-        engineState.marketRegime,
-        marketCrashProtection,
-        account
-      );
-    engineState.macroRiskState = macroRisk;
-    engineState.macroRiskHistory.unshift(macroRisk);
-    engineState.macroRiskHistory =
-      engineState.macroRiskHistory.slice(0, 200);
-    const marketCycleIntelligence =
-      calculateAdaptiveMarketCycleIntelligence(
-        allSignalsForAnalytics
-      );
-    engineState.marketCycleIntelligenceState =
-      marketCycleIntelligence;
-    engineState.marketCycleIntelligenceHistory.unshift(
-      marketCycleIntelligence
-    );
-    engineState.marketCycleIntelligenceHistory =
-      engineState.marketCycleIntelligenceHistory.slice(0, 200);
-    const liquidityIntelligence =
-      calculateLiquidityIntelligenceEngine(
-        allSignalsForAnalytics
-      );
-    engineState.liquidityIntelligenceState =
-      liquidityIntelligence;
-    engineState.liquidityIntelligenceHistory.unshift(
-      liquidityIntelligence
-    );
-    engineState.liquidityIntelligenceHistory =
-      engineState.liquidityIntelligenceHistory.slice(0, 200);
-    const correlationIntelligence =
-      calculateCorrelationIntelligenceEngine(
-        analyticsAiPositions,
-        allSignalsForAnalytics
-      );
-    engineState.correlationIntelligenceState =
-      correlationIntelligence;
-    engineState.correlationIntelligenceHistory.unshift(
-      correlationIntelligence
-    );
-    engineState.correlationIntelligenceHistory =
-      engineState.correlationIntelligenceHistory.slice(0, 200);
-    const portfolioGovernor =
-      calculateAutonomousPortfolioGovernor(
-        account,
-        analyticsAiPositions,
-        allSignalsForAnalytics,
-        engineState.portfolioOptimizationState,
-        engineState.macroRiskState,
-        marketCrashProtection
-      );
-    engineState.portfolioGovernorState = portfolioGovernor;
-    engineState.portfolioGovernorHistory.unshift(portfolioGovernor);
-    engineState.portfolioGovernorHistory =
-      engineState.portfolioGovernorHistory.slice(0, 200);
-    const selfOptimization =
-      calculateAiSelfOptimizationLayer(
-        allSignalsForAnalytics
-      );
-    engineState.selfOptimizationState =
-      selfOptimization;
-    engineState.selfOptimizationHistory.unshift(
-      selfOptimization
-    );
-    engineState.selfOptimizationHistory =
-      engineState.selfOptimizationHistory.slice(0, 200);
-    const reinforcementWeights =
-      calculateReinforcementLearningWeightEngine(
-        allSignalsForAnalytics
-      );
-    engineState.reinforcementWeightState =
-      reinforcementWeights;
-    engineState.reinforcementWeightHistory.unshift(
-      reinforcementWeights
-    );
-    engineState.reinforcementWeightHistory =
-      engineState.reinforcementWeightHistory.slice(0, 200);
-    const executionIntelligence =
-      calculateInstitutionalExecutionIntelligence(
-        allSignalsForAnalytics,
-        analyticsAiPositions
-      );
-    engineState.executionIntelligenceState =
-      executionIntelligence;
-    engineState.executionIntelligenceHistory.unshift(
-      executionIntelligence
-    );
-    engineState.executionIntelligenceHistory =
-      engineState.executionIntelligenceHistory.slice(0, 200);
-    const autonomousTradingSystem =
-      calculateFullInstitutionalAutonomousTradingSystem(
-        allSignalsForAnalytics
-      );
-    engineState.autonomousTradingSystemState =
-      autonomousTradingSystem;
-    engineState.autonomousTradingSystemHistory.unshift(
-      autonomousTradingSystem
-    );
-    engineState.autonomousTradingSystemHistory =
-      engineState.autonomousTradingSystemHistory.slice(0, 200);
-    const phase20Orchestration =
-      calculatePhase20AsyncMultiAgentOrchestration(
-        allSignalsForAnalytics
-      );
-    engineState.phase20AutonomousOrchestrationState =
-      phase20Orchestration;
-    engineState.phase20AutonomousOrchestrationHistory.unshift(
-      phase20Orchestration
-    );
-    engineState.phase20AutonomousOrchestrationHistory =
-      engineState.phase20AutonomousOrchestrationHistory.slice(0, 200);
-    const crossEngineMemory =
-      calculateCrossEngineMemoryEvolution(
-        allSignalsForAnalytics
-      );
-    engineState.crossEngineMemoryState = crossEngineMemory;
-    engineState.crossEngineMemoryHistory.unshift(
-      crossEngineMemory
-    );
-    engineState.crossEngineMemoryHistory =
-      engineState.crossEngineMemoryHistory.slice(0, 200);
-    const adaptiveExecutionTiming =
-      calculateAdaptiveExecutionTimingIntelligence(
-        allSignalsForAnalytics
-      );
-    engineState.adaptiveExecutionTimingState =
-      adaptiveExecutionTiming;
-    engineState.adaptiveExecutionTimingHistory.unshift(
-      adaptiveExecutionTiming
-    );
-    engineState.adaptiveExecutionTimingHistory =
-      engineState.adaptiveExecutionTimingHistory.slice(0, 200);
-    const phase21AutonomousBrain =
-      calculatePhase21AutonomousInstitutionalBrain(
-        allSignalsForAnalytics
-      );
-    engineState.phase21AutonomousBrainState =
-      phase21AutonomousBrain;
-    engineState.phase21AutonomousBrainHistory.unshift(
-      phase21AutonomousBrain
-    );
-    engineState.phase21AutonomousBrainHistory =
-      engineState.phase21AutonomousBrainHistory.slice(0, 200);
-    const liveAiPerformance =
-      calculateLiveAiPerformanceAnalyticsEngine(
-        account,
-        analyticsAiPositions
-      );
-    engineState.liveAiPerformanceState = liveAiPerformance;
-    engineState.liveAiPerformanceHistory.unshift(liveAiPerformance);
-    engineState.liveAiPerformanceHistory =
-      engineState.liveAiPerformanceHistory.slice(0, 200);
-    const selfHealingScanRecovery =
-      calculateSelfHealingScanRecoveryEngine();
-    engineState.selfHealingScanState =
-      selfHealingScanRecovery;
-    const macroProbeOverrideAllowed =
-      engineState.macroRiskState?.shouldBlockNewTrades === true &&
-      marketCrashProtection.shouldBlockNewTrades !== true &&
-      engineState.portfolioGovernorState?.shouldBlockNewTrades !== true &&
-      Number(engineState.macroRiskState?.macroStressScore || 0) < 88 &&
-      Number(engineState.averageSignalScore || 0) >= 35;
-    engineState.macroProbeOverrideState = {
-      updatedAt: new Date().toISOString(),
-      allowed: macroProbeOverrideAllowed,
-      macroStressScore: engineState.macroRiskState?.macroStressScore,
-      averageSignalScore: engineState.averageSignalScore,
-      marketCrashBlock: marketCrashProtection.shouldBlockNewTrades === true,
-      portfolioGovernorBlock:
-        engineState.portfolioGovernorState?.shouldBlockNewTrades === true,
-      reason: macroProbeOverrideAllowed
-        ? "Macro risk high, but controlled probe mode allowed."
-        : "Macro risk block remains active.",
-    };
-    if (
-      marketCrashProtection.shouldBlockNewTrades ||
-      engineState.portfolioGovernorState?.shouldBlockNewTrades ||
-      (
-        engineState.macroRiskState?.shouldBlockNewTrades &&
-        !macroProbeOverrideAllowed
-      )
-    ) {
-      recordOrder("AUTO_TRADING_BLOCKED_MACRO_RISK", "SYSTEM", {
-        marketCrashProtection,
-        macroRisk: engineState.macroRiskState,
-        macroProbeOverrideState: engineState.macroProbeOverrideState,
-      });
-    }
-    if (macroProbeOverrideAllowed) {
-      recordOrder("MACRO_PROBE_OVERRIDE_ALLOWED", "SYSTEM", {
-        macroRisk: engineState.macroRiskState,
-        macroProbeOverrideState: engineState.macroProbeOverrideState,
-      });
-    }
-    engineState.sectorStrengthHistory =
-      engineState.sectorStrengthHistory.slice(0, 200);
-    engineState.lastScanDurationMs =
-      Date.now() - scanStartedAt;
-    engineState.signalQualityHistory.unshift({
-      timestamp: new Date().toISOString(),
-      averageSignalScore:
-        engineState.averageSignalScore,
-      signalCount: signals.length,
-    });
-    engineState.signalQualityHistory =
-      engineState.signalQualityHistory.slice(0, 200);
-    engineState.marketBreadthHistory.unshift({
-      timestamp: new Date().toISOString(),
-      breadth: engineState.marketBreadth,
-    });
-    engineState.marketBreadthHistory =
-      engineState.marketBreadthHistory.slice(0, 200);
-    engineState.marketMomentumHistory.unshift({
-      timestamp: new Date().toISOString(),
-      score: engineState.marketMomentumScore,
-    });
-    engineState.marketMomentumHistory =
-      engineState.marketMomentumHistory.slice(0, 200);
-    engineState.marketVolatilityHistory.unshift({
-      timestamp: new Date().toISOString(),
-      volatility: engineState.marketVolatility,
-    });
-    engineState.marketVolatilityHistory =
-      engineState.marketVolatilityHistory.slice(0, 200);
-    engineState.institutionalExposureHistory.unshift({
-      timestamp: new Date().toISOString(),
-      mode: engineState.institutionalExposureMode,
-      volatility: engineState.marketVolatility,
-      momentum: engineState.marketMomentumScore,
-      stress: engineState.marketStressLevel,
-    });
-    engineState.institutionalExposureHistory =
-      engineState.institutionalExposureHistory.slice(0, 200);
-    engineState.institutionalWatchlist =
-      signals
-        .filter((s) => Number(s.score || 0) >= 85)
-        .slice(0, 25)
-        .map((s) => ({
-          symbol: s.symbol,
-          score: s.score,
-          price: s.current,
-          percentChange: s.percentChange,
-          institutionalGrade:
-            s.institutionalGrade,
-          updatedAt: new Date().toISOString(),
-        }));
-    engineState.analyticsSnapshots.unshift({
-      timestamp: new Date().toISOString(),
-      marketRegime: engineState.marketRegime,
-      institutionalExposureMode:
-        engineState.institutionalExposureMode,
-      marketStressLevel:
-        engineState.marketStressLevel,
-      marketMomentumScore:
-        engineState.marketMomentumScore,
-      marketVolatility:
-        engineState.marketVolatility,
-      averageSignalScore:
-        engineState.averageSignalScore,
-      signalCount: signals.length,
-      stockSignalCount: stockSignals.length,
-      cryptoSignalCount: cryptoSignals.length,
-    });
-    if (engineState.tradeJournalState) {
-      const tradeJournalSnapshot = {
-        timestamp: new Date().toISOString(),
-        totalClosedTrades:
-          engineState.tradeJournalState.totalClosedTrades || 0,
-        winningTrades:
-          engineState.tradeJournalState.winningTrades || 0,
-        losingTrades:
-          engineState.tradeJournalState.losingTrades || 0,
-        averageProfitPercent:
-          engineState.tradeJournalState.averageProfitPercent || 0,
-        winRate:
-          engineState.tradeJournalState.winRate || 0,
-      };
-      engineState.analyticsSnapshots.unshift({
-        type: "TRADE_JOURNAL_ANALYTICS",
-        ...tradeJournalSnapshot,
-      });
-    }
-    engineState.analyticsSnapshots =
-      engineState.analyticsSnapshots.slice(0, 300);
-    saveEngineState("SCAN_COMPLETED");
-    const marketStressLocked =
-      engineState.marketStressLevel >= 25;
-    const volatilityLocked =
-      engineState.marketVolatility >= 18;
-    const portfolioRefreshAccount =
-      engineState.cachedAccount || account;
-    const portfolioRefreshPositions =
-      Array.isArray(engineState.cachedPositions)
-        ? engineState.cachedPositions.filter((position) => {
-          const symbol = normalizeSymbol(position.symbol);
-          if (!symbol) return false;
-          if (
-            Array.isArray(engineState.aiManagedSymbols) &&
-            engineState.aiManagedSymbols.includes(symbol)
-          ) {
-            return true;
-          }
-          return String(position.asset_class || "").toLowerCase() === "us_equity";
-        })
-        : [];
-    for (const signal of stockSignals) {
-      if (
-        !signal.institutionalExecutionPlan &&
-        typeof calculateInstitutionalExecutionPlan === "function"
-      ) {
-        const refreshExecutionPlan =
-          calculateInstitutionalExecutionPlan(signal, 0);
-        signal.institutionalExecutionPlan = refreshExecutionPlan;
-        signal.executionConfidence =
-          refreshExecutionPlan.executionConfidence;
-      }
-      const refreshedPortfolioManager =
-        calculateAiPortfolioManagerDecision(
-          signal,
-          portfolioRefreshAccount,
-          portfolioRefreshPositions,
-          engineState.marketRegime || detectMarketRegime(stockSignals)
-        );
-      const penaltyCompressionApproval =
-        signal.penaltyCompression?.shouldRestoreApproval === true;
-      const protectedPenaltyCompressionDecision =
-        penaltyCompressionApproval
-          ? {
-            autoTradeApproved: signal.autoTradeApproved,
-            approved: signal.approved,
-            decisionLevel: signal.decisionLevel,
-            portfolioAction: signal.portfolioAction,
-            aiPortfolioAction: signal.aiPortfolioAction,
-            allocationMultiplier: signal.allocationMultiplier,
-          }
-          : null;
-      Object.assign(signal, refreshedPortfolioManager);
-      if (protectedPenaltyCompressionDecision) {
-        Object.assign(signal, protectedPenaltyCompressionDecision);
-        signal.finalApprovalProtection = {
-          phase: "58_FINAL_APPROVAL_RECONCILIATION",
-          protected: true,
-          reason:
-            "Penalty compression restored approval; later portfolio refresh was not allowed to overwrite it.",
-        };
-      }
-      const finalSizingReconciliation =
-        calculateFinalPositionSizingReconciliation({
-          signal,
-          account,
-          managedPositions,
-          portfolioGovernor: engineState.portfolioGovernorState || {},
-          portfolioManager: refreshedPortfolioManager,
-          institutionalExecutionPlan:
-            signal.institutionalExecutionPlan || {},
-          capitalPressure:
-            signal.autonomousCapitalPressure || {},
-          baseTradeAmount:
-            signal.recommendedTradeAmount || 0,
-        });
-      signal.finalSizingReconciliation = finalSizingReconciliation;
-      signal.recommendedTradeAmount =
-        finalSizingReconciliation.finalTradeAmount;
-      signal.finalApprovedTradeAmount =
-        finalSizingReconciliation.finalTradeAmount;
-      signal.displayTradeAmount =
-        finalSizingReconciliation.finalTradeAmount;
-      signal.aiAllocationPercentOfBotBudget =
-        finalSizingReconciliation.maxBotBudget > 0
-          ? Number(
-            (
-              finalSizingReconciliation.finalTradeAmount /
-              finalSizingReconciliation.maxBotBudget *
-              100
-            ).toFixed(2)
-          )
-          : 0;
-      if (
-        finalSizingReconciliation.finalBlocked &&
-        signal.finalApprovalProtection?.protected !== true
-      ) {
-        signal.autoTradeApproved = false;
-        signal.approved = false;
-        signal.decisionLevel = "Blocked By Final Sizing Reconciliation";
-        signal.portfolioAction = "FINAL_SIZE_BLOCK";
-        signal.aiPortfolioAction = "FINAL_SIZE_BLOCK";
-      }
-    }
-    signals = [...stockSignals, ...cryptoSignals];
-    const finalFullInstitutionalAiBrain =
-      calculateFullInstitutionalAiBrain(signals);
-    engineState.fullInstitutionalAiBrainState =
-      finalFullInstitutionalAiBrain;
-    engineState.fullInstitutionalAiBrainHistory.unshift(
-      finalFullInstitutionalAiBrain
-    );
-    engineState.fullInstitutionalAiBrainHistory =
-      engineState.fullInstitutionalAiBrainHistory.slice(0, 200);
-    const finalAutonomousTradingSystem =
-      calculateFullInstitutionalAutonomousTradingSystem(
-        signals
-      );
-    engineState.autonomousTradingSystemState =
-      finalAutonomousTradingSystem;
-    engineState.autonomousTradingSystemHistory.unshift(
-      finalAutonomousTradingSystem
-    );
-    engineState.autonomousTradingSystemHistory =
-      engineState.autonomousTradingSystemHistory.slice(0, 200);
-    const finalPhase20Orchestration =
-      calculatePhase20AsyncMultiAgentOrchestration(
-        signals
-      );
-    engineState.phase20AutonomousOrchestrationState =
-      finalPhase20Orchestration;
-    engineState.phase20AutonomousOrchestrationHistory.unshift(
-      finalPhase20Orchestration
-    );
-    engineState.phase20AutonomousOrchestrationHistory =
-      engineState.phase20AutonomousOrchestrationHistory.slice(0, 200);
-    const finalPhase21AutonomousBrain =
-      calculatePhase21AutonomousInstitutionalBrain(
-        signals
-      );
-    engineState.phase21AutonomousBrainState =
-      finalPhase21AutonomousBrain;
-    engineState.phase21AutonomousBrainHistory.unshift(
-      finalPhase21AutonomousBrain
-    );
-    engineState.phase21AutonomousBrainHistory =
-      engineState.phase21AutonomousBrainHistory.slice(0, 200);
-    stockSignals = syncSignalObjectsBySymbol(
-      stockSignals,
-      signals
-    );
-    cryptoSignals = syncSignalObjectsBySymbol(
-      cryptoSignals,
-      signals
-    );
-    signals = [...stockSignals, ...cryptoSignals];
-    const finalDashboardSignalSync =
-      syncFinalInstitutionalDashboardSignals(
-        stockSignals,
-        cryptoSignals
-      );
-    engineState.finalDashboardSignalSyncState =
-      finalDashboardSignalSync;
-    if (!Array.isArray(engineState.finalDashboardSignalSyncHistory)) {
-      engineState.finalDashboardSignalSyncHistory = [];
-    }
-    engineState.finalDashboardSignalSyncHistory.unshift(
-      finalDashboardSignalSync
-    );
-    engineState.finalDashboardSignalSyncHistory =
-      engineState.finalDashboardSignalSyncHistory.slice(0, 200);
-    recordOrder("FINAL_DASHBOARD_SIGNAL_SYNC_UPDATED", "DASHBOARD", {
-      reviewedCount: finalDashboardSignalSync.reviewedCount || 0,
-      stockSignalCount:
-        finalDashboardSignalSync.stockSignalCount || 0,
-      cryptoSignalCount:
-        finalDashboardSignalSync.cryptoSignalCount || 0,
-      topSymbols:
-        finalDashboardSignalSync.topSymbols || [],
-    });
-    signals = signals.map((signal) => ({
-      ...signal,
-      score: clampScore(signal.score),
-      runnerScore: clampScore(signal.runnerScore),
-      explosiveRunnerScore: clampScore(signal.explosiveRunnerScore),
-      fastRunnerScore: clampScore(signal.fastRunnerScore),
-      quickInstitutionalScore: clampScore(signal.quickInstitutionalScore),
-      aiConfidence: clampScore(signal.aiConfidence),
-      autonomousConfidenceScore: clampScore(signal.autonomousConfidenceScore),
-    }));
-    stockSignals = stockSignals.map((signal) => ({
-      ...signal,
-      score: clampScore(signal.score),
-      runnerScore: clampScore(signal.runnerScore),
-      explosiveRunnerScore: clampScore(signal.explosiveRunnerScore),
-      fastRunnerScore: clampScore(signal.fastRunnerScore),
-      quickInstitutionalScore: clampScore(signal.quickInstitutionalScore),
-      swingScore: clampScore(signal.swingScore),
-      swingConfidence: clampScore(signal.swingConfidence),
-      aiConfidence: clampScore(signal.aiConfidence),
-      autonomousConfidenceScore: clampScore(signal.autonomousConfidenceScore),
-    }));
-    cryptoSignals = cryptoSignals.map((signal) => ({
-      ...signal,
-      score: clampScore(signal.score),
-      runnerScore: clampScore(signal.runnerScore),
-      explosiveRunnerScore: clampScore(signal.explosiveRunnerScore),
-      fastRunnerScore: clampScore(signal.fastRunnerScore),
-      quickInstitutionalScore: clampScore(signal.quickInstitutionalScore),
-      aiConfidence: clampScore(signal.aiConfidence),
-      autonomousConfidenceScore: clampScore(signal.autonomousConfidenceScore),
-    }));
-    engineState.lastSignals = signals;
-    engineState.lastStockSignals =
-      Array.isArray(stockSignals) && stockSignals.length > 0
-        ? stockSignals
-        : Array.isArray(engineState.lastStockSignals)
-          ? engineState.lastStockSignals
-          : [];
-    engineState.lastCryptoSignals =
-      Array.isArray(cryptoSignals) && cryptoSignals.length > 0
-        ? cryptoSignals
-        : Array.isArray(engineState.lastCryptoSignals)
-          ? engineState.lastCryptoSignals
-          : [];
-    engineState.topSignals = [...engineState.lastStockSignals, ...engineState.lastCryptoSignals]
-      .sort((a, b) => Number(b.score || 0) - Number(a.score || 0))
-      .slice(0, CONFIG.maxSignalsToReturn || 75);
-    engineState.topStockSignals = [...engineState.lastStockSignals]
-      .sort((a, b) => Number(b.score || 0) - Number(a.score || 0))
-      .slice(0, 25);
-    engineState.topSwingWatchlist =
-      Array.isArray(engineState.topSwingWatchlist) &&
-        engineState.topSwingWatchlist.length > 0
-        ? engineState.topSwingWatchlist.slice(0, 25)
-        : [...(engineState.lastStockSignals || [])]
-          .filter((signal) => Number(signal.swingScore || 0) >= 65)
-          .sort((a, b) => Number(b.swingScore || 0) - Number(a.swingScore || 0))
-          .slice(0, 25);
-
-    engineState.highConfidenceSwingStocks =
-      Array.isArray(engineState.highConfidenceSwingStocks) &&
-        engineState.highConfidenceSwingStocks.length > 0
-        ? engineState.highConfidenceSwingStocks.slice(0, 10)
-        : [...(engineState.lastStockSignals || [])]
-          .filter((signal) => signal.highConfidenceSwing === true)
-          .sort((a, b) => Number(b.swingScore || 0) - Number(a.swingScore || 0))
-          .slice(0, 10);
-
-    engineState.topCryptoSignals = [...engineState.lastCryptoSignals]
-      .sort((a, b) => Number(b.score || 0) - Number(a.score || 0))
-      .slice(0, 25);
-    pushLiveSignalUpdate(
-      buildLiveSignalPushPayload()
-    );
-    refreshFinnhubLiveSubscriptions();
-    if (
-      ENABLE_POLYGON_WEBSOCKET &&
-      typeof refreshPolygonLiveSubscriptions === "function"
-    ) {
-      refreshEarlyMoversThenPolygonSubscriptions();
-    }
-    const approvedStockSignals = stockSignals.filter(
-      (signal) =>
-        signal.qualifiedToBuy === true &&
-        signal.autoTradeApproved === true &&
-        Number(signal.score || 0) >= CONFIG.minScoreToBuy
-    );
-    const approvedCryptoSignals = cryptoSignals.filter(
-      (signal) =>
-        signal.qualifiedToBuy === true &&
-        signal.autoTradeApproved !== false &&
-        Number(signal.score || 0) >= CONFIG.minScoreToBuy
-    );
-    const bestStockSignal = stockSignals
-      .filter(
-        (s) =>
-          s.qualifiedToBuy === true &&
-          s.autoTradeApproved === true
-      )
-      .sort((a, b) => b.score - a.score)[0];
-    const bestCryptoSignal = cryptoSignals
-      .filter(
-        (s) =>
-          s.qualifiedToBuy === true &&
-          s.autoTradeApproved !== false
-      )
-      .sort((a, b) => b.score - a.score)[0];
-    const bestStockScore =
-      bestStockSignal?.score || 0;
-    const bestCryptoScore =
-      bestCryptoSignal?.score || 0;
-    if (TRADING_MODE === "smart") {
-      effectiveMode =
-        bestStockScore >= bestCryptoScore
-          ? "live_stock"
-          : "live_crypto";
-    }
-    engineState.effectiveMode = effectiveMode;
-    const effectiveStockModeEnabled =
-      effectiveMode === "live_stock" || TRADING_MODE === "smart";
-    const effectiveCryptoModeEnabled =
-      effectiveMode === "live_crypto" || TRADING_MODE === "smart";
-    const shouldRunStockAutoBuy =
-      marketOpen &&
-      effectiveStockModeEnabled &&
-      approvedStockSignals.length > 0 &&
-      !tradingStoppedForDay &&
-      !engineState.stockTradingStoppedForDay;
-    const shouldRunCryptoAutoBuy =
-      effectiveCryptoModeEnabled &&
-      approvedCryptoSignals.length > 0 &&
-      !tradingStoppedForDay &&
-      !engineState.cryptoTradingStoppedForDay;
-    if (
-      autoTradingEnabled &&
-      !engineState.dailyLossLocked &&
-      !engineState.profitLocked &&
-      !riskLocked
-    ) {
-      if (shouldRunStockAutoBuy) {
-        await autoBuySignals(stockSignals);
-        engineState.aiDecisionHistory.unshift({
-          timestamp: new Date().toISOString(),
-          type: marketOpen
-            ? "AUTO_STOCK_BUY_EXECUTED"
-            : "AUTO_STOCK_BUY_EXTENDED_HOURS_EXECUTED",
-          signalCount: stockSignals.length,
-          approvedSignalCount: approvedStockSignals.length,
-          tradingMode: TRADING_MODE,
-          effectiveMode,
-          marketOpen,
-        });
-        engineState.aiDecisionHistory =
-          engineState.aiDecisionHistory.slice(0, 300);
-      }
-      if (shouldRunCryptoAutoBuy) {
-        await autoBuyCryptoSignals(cryptoSignals);
-        engineState.aiDecisionHistory.unshift({
-          timestamp: new Date().toISOString(),
-          type: "AUTO_CRYPTO_BUY_EXECUTED",
-          signalCount: cryptoSignals.length,
-          approvedSignalCount: approvedCryptoSignals.length,
-          tradingMode: TRADING_MODE,
-          effectiveMode,
-          marketOpen,
-        });
-        engineState.aiDecisionHistory =
-          engineState.aiDecisionHistory.slice(0, 300);
-      }
-      if (!shouldRunStockAutoBuy && !shouldRunCryptoAutoBuy) {
-        recordOrder("AUTO_BUY_SKIPPED_NO_APPROVED_SIGNALS", "ALL", {
-          stockApprovedCount: approvedStockSignals.length,
-          cryptoApprovedCount: approvedCryptoSignals.length,
-          tradingMode: TRADING_MODE,
-          effectiveMode,
-          marketOpen,
-        });
-      }
-    }
-    if (
-      autoTradingEnabled &&
-      !marketOpen &&
-      !shouldRunStockAutoBuy &&
-      !shouldRunCryptoAutoBuy
-    ) {
-      recordOrder("BUY_SKIPPED_NO_APPROVED_EXTENDED_HOURS_SIGNAL", "ALL", {
-        message:
-          "Market closed, but extended-hours stock buying is allowed when approved stock signals exist.",
-      });
-    }
-  } catch (err) {
-    engineState.lastError = err.message;
-    engineState.scanFailureCount =
-      Number(engineState.scanFailureCount || 0) + 1;
-    engineState.selfHealingScanState = {
-      updatedAt: new Date().toISOString(),
-      recoveryAction: "SCAN_ERROR_RECORDED",
-      recovered: false,
-      error: err.message,
-      scanFailureCount: engineState.scanFailureCount,
-    };
-    engineState.selfHealingScanHistory.unshift(
-      engineState.selfHealingScanState
-    );
-    engineState.selfHealingScanHistory =
-      engineState.selfHealingScanHistory.slice(0, 200);
-    engineState.lastEngineStopReason = "ENGINE_ERROR";
-    console.error("ENGINE_ERROR_FULL", {
-      message: err?.message,
-      stack: err?.stack,
-    });
-  } finally {
-    engineState.lastTickDurationMs =
-      Date.now() - engineState.lastTickStartedAt;
-    const completedWithoutError =
-      engineState.lastEngineStopReason !== "ENGINE_ERROR";
-    if (completedWithoutError) {
-      engineState.lastEngineStopReason = "ENGINE_TICK_COMPLETED";
-    }
-    engineState.engineFreezeDetected = false;
-    saveEngineState(
-      completedWithoutError ? "ENGINE_TICK_COMPLETED" : "ENGINE_ERROR"
-    );
-    engineState.running = false;
-  }
+  return engineCycleRunner.run(executeEngineCycleBody);
 }
+const { executeEngineCycleBody } = createEngineCycle({
+  CONFIG,
+  applyCrossMarketCorrelationToSignals,
+  applyCryptoCapitalRotationToSignals,
+  applyCryptoExecutionTimingToSignals,
+  applyCryptoExitStrategyToSignals,
+  applyCryptoLiquiditySweepToSignals,
+  applyCryptoPositionSizingToSignals,
+  applyInstitutionalSectorDominance,
+  applyMultiTimeframeCryptoToSignals,
+  applyStablecoinFlowToSignals,
+  applyWhaleSmartMoneyToSignals,
+  autoBuyCryptoSignals,
+  autoBuySignals,
+  autoCloseCryptoBeforeMarketOpen,
+  autoExitCryptoPositions,
+  autoExitPositions,
+  broadcastTapeEvent,
+  buildInstitutionalDashboardPayload,
+  buildLiveSignalPushPayload,
+  buildStrategyExecutionPlan,
+  buildTopAiBrains,
+  calculateAdaptiveExecutionTimingIntelligence,
+  calculateAdaptiveMarketCycleIntelligence,
+  calculateAiMarketCrashProtectionEngine,
+  calculateAiPortfolioManagerDecision,
+  calculateAiSectorRotationEngine,
+  calculateAiSelfOptimizationLayer,
+  calculateAutonomousHedgeFundLayer,
+  calculateAutonomousMetaReinforcement,
+  calculateAutonomousPortfolioGovernor,
+  calculateBlackRockPortfolioOptimizer,
+  calculateBridgewaterMacroRiskEngine,
+  calculateCentralAutonomousDecisionCore,
+  calculateCorrelationIntelligenceEngine,
+  calculateCrossEngineMemoryEvolution,
+  calculateCrossMarketCorrelation,
+  calculateCryptoCapitalRotation,
+  calculateCryptoInstitutionalSignal,
+  calculateCryptoReinforcementLearning,
+  calculateCryptoSignalRealismEngine,
+  calculateCryptoStrategySelector,
+  calculateDynamicCapitalParliament,
+  calculateFinalMasterDecisionProfile,
+  calculateFinalPositionSizingReconciliation,
+  calculateFullInstitutionalAiBrain,
+  calculateFullInstitutionalAutonomousTradingSystem,
+  calculateGlobalRiskDefense,
+  calculateInstitutionalAiPortfolioOrchestrator,
+  calculateInstitutionalExecutionIntelligence,
+  calculateInstitutionalExecutionPlan,
+  calculateInstitutionalRebalanceIntelligence,
+  calculateInstitutionalSectorDominanceEngine,
+  calculateLiquidityIntelligenceEngine,
+  calculateLiquiditySweepTrapIntelligence,
+  calculateLiveAiPerformanceAnalyticsEngine,
+  calculateLiveMomentumMutation,
+  calculateMarketPhase,
+  calculateMultiTimeframeConfirmationEngine,
+  calculatePenaltyCompressionAndEliteOverride,
+  calculatePhase20AsyncMultiAgentOrchestration,
+  calculatePhase21AutonomousInstitutionalBrain,
+  calculatePhase59InstitutionalOrderFlowIntelligence,
+  calculatePhase60AdaptiveExecutionAlgorithms,
+  calculatePhase61ProfitAggressionAI,
+  calculatePhase62MarketPersonalityMemory,
+  calculatePhase63StrategyEvolutionEngine,
+  calculatePortfolioEcosystemIntelligence,
+  calculateProfitVelocity,
+  calculateRegimeDominance,
+  calculateReinforcementLearningWeightEngine,
+  calculateSelfHealingScanRecoveryEngine,
+  calculateSmartCapitalCompoundingEngine,
+  calculateSmartCapitalRedistributionEngine,
+  calculateStablecoinFlowPressure,
+  calculateUnifiedOrchestrator,
+  checkDailyLossAndProfitLock,
+  clampScore,
+  detectMarketRegime,
+  emitSignalTapeTransitions,
+  emitSystemRiskTapeState,
+  engineState,
+  executePendingExits,
+  flattenStocksAndCryptoBeforeMarketClose,
+  getAccount,
+  getAlpacaKeys,
+  getBotOwnedSymbols,
+  getClock,
+  getEffectiveTradingMode,
+  getEnabledStrategyModes,
+  getPositions,
+  normalizeSymbol,
+  pushLiveSignalUpdate,
+  recordOrder,
+  refreshEarlyMoversThenPolygonSubscriptions,
+  refreshFinnhubLiveSubscriptions,
+  refreshPolygonLiveSubscriptions,
+  resetDailySafetyStateIfNewDay,
+  runFastRunnerEngine,
+  runFullBrainFastSync,
+  runLiveStarterBuyGate,
+  runQuickInstitutionalGate,
+  saveEngineState,
+  scanCryptoMarket,
+  scanMarket,
+  selectSmartTradingMode,
+  syncFinalInstitutionalDashboardSignals,
+  syncSignalObjectsBySymbol,
+  updateCryptoExecutionTimingState,
+  updateCryptoExitStrategyState,
+  updateCryptoInstitutionalState,
+  updateCryptoLiquiditySweepState,
+  updateCryptoPositionSizingState,
+  updateInstitutionalWatchlist,
+  updateMultiTimeframeCryptoState,
+  updateWhaleSmartMoneyState,
+  getRuntime: () => ({ TRADING_MODE, autoTradingEnabled, ENABLE_POLYGON_WEBSOCKET, FINNHUB_API_KEY, POLYGON_API_KEY }),
+});
 setInterval(() => {
   if (
     engineState.running &&
@@ -32524,21 +22917,19 @@ setInterval(() => {
     saveEngineState("ENGINE_FREEZE_RECOVERY");
   }
 }, 30000);
-app.get("/", requireAdmin, (req, res) => {
-  res.json({
+registerSystemRoutes(app, {
+  requireAdmin,
+  getSystemSnapshot: () => ({
     app: "SmartMoney Pro Backend",
     status: "online",
     autoTradingEnabled,
     config: CONFIG,
     freshness: getEngineFreshness(),
-    marketStressLevel:
-      engineState.marketStressLevel,
+    marketStressLevel: engineState.marketStressLevel,
     apiHealth: engineState.apiHealth || {},
     engineState,
-  });
-});
-app.get("/infra-status", requireAdmin, (req, res) => {
-  res.json({
+  }),
+  getInfrastructureSnapshot: () => ({
     ok: true,
     phase: "13A",
     backendAuthority: true,
@@ -32570,78 +22961,28 @@ app.get("/infra-status", requireAdmin, (req, res) => {
     lastScanAt: engineState.lastScanAt,
     freshness: getEngineFreshness(),
     lastError: engineState.lastError,
-    savedAt: new Date().toISOString(),
-  });
+  }),
+  getClock,
+  getHealthPayload: buildBackendHealthPayload,
+  getFallbackMarketOpen: () => engineState.marketOpen,
+  getEngineRuntime: () => engineState,
 });
-app.get("/debug", requireAdmin, async (req, res) => {
-  try {
-    const account = await getAccount();
-    const clock = await getClock();
-    const symbols = await getTopMovers();
-    const maxSymbolsToScan = Number(process.env.MAX_SYMBOLS_TO_SCAN || 750);
-    const limitedSymbols = symbols.slice(0, maxSymbolsToScan);
-    const positions = await getPositions();
-    engineState.cachedAccount = account;
-    engineState.cachedPositions = positions;
-    const aiOwnedSymbols = await getBotOwnedSymbols();
-    const aiPositions = positions.filter((p) =>
-      isAiManagedOpenPosition(p, aiOwnedSymbols)
-    );
-    res.json({
-      ok: true,
-      accountStatus: account.status,
-      marketOpen: clock.is_open,
-      symbolsCount: symbols.length,
-      maxSymbolsToScan,
-      symbolsThatWouldScan: limitedSymbols.length,
-      firstSymbols: limitedSymbols.slice(0, 30),
-      lastSignalsCount: engineState.lastSignals.length,
-      skippedSymbolsCount: engineState.skippedSymbols.length,
-      recentSkippedSymbols: engineState.skippedSymbols.slice(0, 20),
-      config: CONFIG,
-      adaptiveSwingRisk: {
-        mode: "SWING_ADAPTIVE",
-        stock: {
-          stopLossPercent: CONFIG.stopLossPercent,
-          trailingStopPercent: CONFIG.trailingStopPercent,
-          takeProfitPercent: CONFIG.takeProfitPercent,
-        },
-        crypto: {
-          stopLossPercent: -4,
-          trailingStopPercent: -3,
-          takeProfitPercent: 8,
-        },
-        runner: {
-          triggerPercent: CONFIG.runnerTriggerPercent,
-          trailingStopPercent:
-            CONFIG.runnerTrailingStopPercent,
-        },
-        engineState:
-          engineState.adaptiveRiskState || null,
-        description:
-          "Adaptive swing exits active with wider institutional breathing room.",
-      },
-      risk: {
-        equity: Number(account.equity || 0),
-        cash: Number(account.cash || 0),
-        maxBotBudget:
-          Number(account.equity || 0) * (CONFIG.maxBotExposurePercent / 100),
-        currentBotExposure: getBotExposure(aiPositions),
-        perTradeMax:
-          (Number(account.equity || 0) *
-            (CONFIG.maxBotExposurePercent / 100)) /
-          CONFIG.maxOpenTrades,
-      },
-      engineState,
-    });
-  } catch (err) {
-    res.status(500).json({
-      ok: false,
-      error: err.message,
-      engineState,
-    });
-  }
+
+registerDiagnosticRoutes(app, {
+  requireAdmin,
+  getState: () => engineState,
+  getConfig: () => CONFIG,
+  getAccount,
+  getClock,
+  getTopMovers,
+  getPositions,
+  getBotOwnedSymbols,
+  isManagedPosition: isAiManagedOpenPosition,
+  getBotExposure,
+  getMaxSymbols: () => Number(process.env.MAX_SYMBOLS_TO_SCAN || 750),
+  getFreshness: getEngineFreshness,
 });
+
 function buildTopAiBrains() {
   const brains = [
     {
@@ -32716,28 +23057,6 @@ function buildTopAiBrains() {
     .sort((a, b) => b.confidence - a.confidence)
     .slice(0, 5);
 }
-app.get("/health", async (req, res) => {
-  try {
-    const clock = await getClock().catch((err) => ({
-      is_open: Boolean(engineState.marketOpen),
-      error: err.message,
-    }));
-    res.json(buildBackendHealthPayload(clock));
-  } catch (err) {
-    res.status(500).json({
-      ok: false,
-      online: false,
-      service: "SmartMoney Backend",
-      error: err.message,
-      generatedAt: new Date().toISOString(),
-      engine: {
-        running: Boolean(engineState.running),
-        crashed: true,
-        lastError: err.message,
-      },
-    });
-  }
-});
 function calculateFullInstitutionalAiBrain(signals = []) {
   const reviewed = (Array.isArray(signals) ? signals : []).map((signal) => {
     const score = Number(signal.score || 0);
@@ -36322,76 +26641,6 @@ function getLatestFrontendStatusSnapshot() {
     phase21AutonomousBrain: engineState.phase21AutonomousBrainState || {},
   };
 }
-app.get("/frontend/portfolio", requireAdmin, async (req, res) => {
-  try {
-    const accountRefresh = await refreshFrontendAccountCache();
-    const latestStatus = getLatestFrontendStatusSnapshot();
-    const account = latestStatus?.account || {};
-    const risk = latestStatus?.risk || {};
-    const dashboard = latestStatus?.institutionalDashboard || {};
-    const governor = dashboard?.portfolioGovernor || {};
-    const equity = Number(account.equity || risk.currentEquity || 0);
-    const cash = Number(account.cash || risk.currentCash || 0);
-    const openValue = Number(
-      account.position_market_value ||
-      risk.currentBotExposure ||
-      governor.currentExposure ||
-      0
-    );
-    const maxBotBudget = Number(
-      governor.maxBudget ||
-      risk.maxBotBudget ||
-      0
-    );
-    const autoCapLeft = Math.max(
-      0,
-      maxBotBudget - openValue
-    );
-    const peakEquity = Number(
-      account.peakEquity ||
-      risk.peakEquity ||
-      equity
-    );
-    const drawdownPercent =
-      peakEquity > 0
-        ? ((peakEquity - equity) / peakEquity) * 100
-        : 0;
-    const portfolioReturnPercent =
-      Number(account.last_equity || 0) > 0
-        ? (
-          ((equity - Number(account.last_equity)) /
-            Number(account.last_equity)) *
-          100
-        )
-        : 0;
-    res.json({
-      success: true,
-      portfolio: {
-        equity,
-        cash,
-        openValue,
-        maxBotBudget,
-        autoCapLeft,
-        unrealizedPL: equity - cash,
-        realizedPL: 0,
-        portfolioReturnPercent,
-        drawdownPercent,
-        dailyLossLeftPercent:
-          Number(CONFIG.dailyLossLimitPercent || 2) -
-          drawdownPercent,
-        openPositions:
-          Number(latestStatus?.positions?.length || 0),
-        peakEquity,
-      },
-    });
-  } catch (err) {
-    console.error("frontend portfolio error", err);
-    res.status(500).json({
-      success: false,
-      error: err.message,
-    });
-  }
-});
 function collectFrontendSignalSnapshot() {
   const latestStatus = getLatestFrontendStatusSnapshot();
   const orchestration =
@@ -36452,280 +26701,6 @@ function buildFrontendStartupSnapshot(limit = 50) {
     cryptoSignals: displaySignals.filter((s) => isCrypto(s.symbol)),
   };
 }
-app.get("/frontend/snapshot", requireAdmin, (req, res) => {
-  try {
-    const limit = Math.min(
-      100,
-      Math.max(10, Number(req.query.limit || 50))
-    );
-    res.json({
-      success: true,
-      ...buildFrontendStartupSnapshot(limit),
-    });
-  } catch (err) {
-    console.error("frontend snapshot error", err);
-    res.status(500).json({
-      success: false,
-      error: err.message,
-    });
-  }
-});
-app.get("/frontend/signals", requireAdmin, async (req, res) => {
-  try {
-    const latestStatus = getLatestFrontendStatusSnapshot();
-    const orchestration =
-      latestStatus?.phase20AutonomousOrchestration || {};
-    const signals = [
-      ...(Array.isArray(engineState.topStockSignals)
-        ? engineState.topStockSignals
-        : []),
-      ...(Array.isArray(engineState.lastStockSignals)
-        ? engineState.lastStockSignals
-        : []),
-      ...(Array.isArray(engineState.fastRunnerCandidates)
-        ? engineState.fastRunnerCandidates
-        : []),
-      ...(Array.isArray(engineState.quickInstitutionalCandidates)
-        ? engineState.quickInstitutionalCandidates
-        : []),
-      ...(Array.isArray(engineState.topCryptoSignals)
-        ? engineState.topCryptoSignals
-        : []),
-      ...(Array.isArray(engineState.lastCryptoSignals)
-        ? engineState.lastCryptoSignals
-        : []),
-      ...(Array.isArray(orchestration.topSignals)
-        ? orchestration.topSignals
-        : []),
-    ]
-      .filter(Boolean)
-      .filter(
-        (signal, index, arr) =>
-          arr.findIndex(
-            (item) => normalizeSymbol(item.symbol) === normalizeSymbol(signal.symbol)
-          ) === index
-      )
-      .map(mergeLiveQuoteIntoSignal);
-    const approvedSignals = signals
-      .filter(
-        (s) =>
-          s &&
-          s.qualifiedToBuy &&
-          (s.autoTradeApproved || s.approved)
-      )
-      .sort((a, b) => (b.score || 0) - (a.score || 0));
-    const displaySignals = approvedSignals.length
-      ? approvedSignals
-      : signals.sort((a, b) => Number(b.score || 0) - Number(a.score || 0));
-    res.json({
-      success: true,
-      count: displaySignals.length,
-      approvedCount: approvedSignals.length,
-      source: approvedSignals.length ? "approved_signals" : "memory_snapshot_fallback",
-      signals: displaySignals,
-    });
-  } catch (err) {
-    console.error("frontend signals error", err);
-    res.status(500).json({
-      success: false,
-      error: err.message,
-    });
-  }
-});
-app.get("/frontend/ai", requireAdmin, async (req, res) => {
-  try {
-    const latestStatus = getLatestFrontendStatusSnapshot();
-    const brain =
-      latestStatus?.phase21AutonomousBrain || {};
-    const orchestration =
-      latestStatus?.phase20AutonomousOrchestration || {};
-    const autonomous =
-      latestStatus?.autonomousTradingSystem || {};
-    const dashboard =
-      latestStatus?.institutionalDashboard || {};
-    const governor =
-      dashboard?.portfolioGovernor || {};
-    res.json({
-      success: true,
-      ai: {
-        brainMode: brain.brainMode,
-        autonomousIntelligenceScore:
-          brain.autonomousIntelligenceScore,
-        parliamentDecision:
-          autonomous.capitalParliamentDecision,
-        probabilityScore:
-          autonomous.probabilityScore,
-        consensusScore:
-          orchestration.consensusScore,
-        governorMode:
-          governor.governorMode,
-        governorScore:
-          governor.governorScore,
-        capitalThrottleMultiplier:
-          governor.capitalThrottleMultiplier,
-        shouldBlockNewTrades:
-          brain.shouldBlockNewTrades,
-        finalSystemReason:
-          autonomous.finalSystemReason,
-        governorReason:
-          governor.governorReason,
-        topCandidates:
-          brain.topAutonomousCandidates || [],
-      },
-    });
-  } catch (err) {
-    console.error("frontend ai error", err);
-    res.status(500).json({
-      success: false,
-      error: err.message,
-    });
-  }
-});
-app.get("/frontend/alerts", requireAdmin, async (req, res) => {
-  try {
-    const latestStatus = getLatestFrontendStatusSnapshot();
-    const orchestration =
-      latestStatus?.phase20AutonomousOrchestration || {};
-    const topSignals = [
-      ...(Array.isArray(engineState.topStockSignals)
-        ? engineState.topStockSignals
-        : []),
-      ...(Array.isArray(engineState.lastStockSignals)
-        ? engineState.lastStockSignals
-        : []),
-      ...(Array.isArray(engineState.topCryptoSignals)
-        ? engineState.topCryptoSignals
-        : []),
-      ...(Array.isArray(engineState.lastCryptoSignals)
-        ? engineState.lastCryptoSignals
-        : []),
-      ...(Array.isArray(orchestration.topSignals)
-        ? orchestration.topSignals
-        : []),
-    ]
-      .filter(Boolean)
-      .filter(
-        (signal, index, arr) =>
-          arr.findIndex(
-            (item) => normalizeSymbol(item.symbol) === normalizeSymbol(signal.symbol)
-          ) === index
-      )
-      .map(mergeLiveQuoteIntoSignal);
-    const alerts = topSignals
-      .filter((s) => s.score >= Number(CONFIG.minScoreToBuy || 70))
-      .slice(0, 25)
-      .map((s) => ({
-        symbol: s.symbol,
-        score: s.score,
-        message:
-          s.portfolioManagerReason ||
-          s.technicalReason ||
-          s.executionReason ||
-          "Institutional signal detected",
-        approved:
-          s.autoTradeApproved || s.approved,
-        executionConfidence:
-          s.executionConfidence || 0,
-        institutionalGrade:
-          s.institutionalGrade || "NORMAL",
-      }));
-    res.json({
-      success: true,
-      count: alerts.length,
-      alerts,
-    });
-  } catch (err) {
-    console.error("frontend alerts error", err);
-    res.status(500).json({
-      success: false,
-      error: err.message,
-    });
-  }
-});
-app.get("/frontend/dashboard", requireAdmin, async (req, res) => {
-  try {
-    const latestStatus = getLatestFrontendStatusSnapshot();
-    res.json({
-      success: true,
-      dashboard: {
-        marketRegime:
-          latestStatus?.institutionalDashboard
-            ?.marketRegime || {},
-        autonomousTradingSystem:
-          latestStatus?.autonomousTradingSystem || {},
-        portfolioGovernor:
-          latestStatus?.institutionalDashboard
-            ?.portfolioGovernor || {},
-        topSignals:
-          getTopSignals(
-            [
-              ...(Array.isArray(engineState.topStockSignals)
-                ? engineState.topStockSignals
-                : []),
-              ...(Array.isArray(engineState.lastStockSignals)
-                ? engineState.lastStockSignals
-                : []),
-              ...(Array.isArray(engineState.topCryptoSignals)
-                ? engineState.topCryptoSignals
-                : []),
-              ...(Array.isArray(engineState.lastCryptoSignals)
-                ? engineState.lastCryptoSignals
-                : []),
-              ...(Array.isArray(
-                latestStatus?.phase20AutonomousOrchestration?.topSignals
-              )
-                ? latestStatus.phase20AutonomousOrchestration.topSignals
-                : []),
-            ]
-              .filter(Boolean)
-              .filter(
-                (signal, index, arr) =>
-                  arr.findIndex(
-                    (item) =>
-                      normalizeSymbol(item.symbol) === normalizeSymbol(signal.symbol)
-                  ) === index
-              ),
-            25
-          ).map(mergeLiveQuoteIntoSignal),
-        topOpportunities:
-          latestStatus
-            ?.phase21AutonomousBrain
-            ?.topAutonomousCandidates || [],
-      },
-    });
-  } catch (err) {
-    console.error("/status route failed:", err.message);
-    res.json({
-      success: true,
-      degradedMode: true,
-      dashboard: {
-        statusWarnings: [err.message],
-        marketRegime:
-          engineState.marketRegime || {},
-        autonomousTradingSystem:
-          engineState.autonomousTradingSystemState || {},
-        portfolioGovernor:
-          engineState.portfolioGovernorState || {},
-        topSignals: [
-          ...(Array.isArray(engineState.topStockSignals)
-            ? engineState.topStockSignals
-            : []),
-          ...(Array.isArray(engineState.lastStockSignals)
-            ? engineState.lastStockSignals
-            : []),
-          ...(Array.isArray(engineState.topCryptoSignals)
-            ? engineState.topCryptoSignals
-            : []),
-          ...(Array.isArray(engineState.lastCryptoSignals)
-            ? engineState.lastCryptoSignals
-            : []),
-        ].slice(0, 10).map(mergeLiveQuoteIntoSignal),
-        topOpportunities:
-          engineState.topAutonomousCandidates || [],
-      },
-    });
-  }
-});
 function isLiveQuoteFresh(symbol, maxAgeSeconds = 90) {
   const cleanSymbol = normalizeSymbol(symbol);
   const quote = engineState.liveQuoteCache?.[cleanSymbol];
@@ -37148,6 +27123,7 @@ function getSymbolsForPolygonLiveStream(
   limit = POLYGON_SUBSCRIPTION_ROTATION_LIMIT
 ) {
   const liveCandidateSymbols = [
+    ...(engineState.boundedQuietDiscoveryState?.liveSymbols || []),
     ...(engineState.liveEarlyMoverSymbols || []),
     ...(engineState.quickInstitutionalCandidates || []),
     ...(engineState.fastRunnerCandidates || []),
@@ -39832,23 +29808,7 @@ async function refreshEarlyMoversThenPolygonSubscriptions() {
   };
 }
 async function runLiveScheduledTask(taskName, intervalMs, worker) {
-  const now = Date.now();
-  if (liveSchedulerLocks[taskName]) return;
-  const lastRun = Number(liveSchedulerLastRun[taskName] || 0);
-  if (now - lastRun < intervalMs) return;
-  liveSchedulerLocks[taskName] = true;
-  liveSchedulerLastRun[taskName] = now;
-  try {
-    await worker();
-  } catch (err) {
-    console.error(`Live scheduler task failed: ${taskName}`, err.message);
-    recordFailedOrder("LIVE_SCHEDULER_TASK_FAILED", taskName, err.message, {
-      taskName,
-      intervalMs,
-    });
-  } finally {
-    liveSchedulerLocks[taskName] = false;
-  }
+  return liveTaskScheduler.run(taskName, intervalMs, worker);
 }
 function startLiveScheduler() {
   if (liveSchedulerTimer) return engineState.liveSchedulerState;
@@ -39908,6 +29868,11 @@ function startLiveScheduler() {
       DEEP_INTELLIGENCE_SYNC_INTERVAL_MS,
       () => runDeepIntelligenceSync()
     );
+    void runLiveScheduledTask(
+      "runBoundedQuietDiscoveryScan",
+      60 * 60 * 1000,
+      () => runBoundedQuietDiscoveryScan()
+    );
     if (ENABLE_MAIN_SWING_SCAN) {
       void runLiveScheduledTask(
         "runMainSwingScan",
@@ -39946,6 +29911,7 @@ function startLiveScheduler() {
       "runLiveScaleInEngine",
       "runFullBrainFastSync",
       "runDeepIntelligenceSync",
+      "runBoundedQuietDiscoveryScan",
       "runMainSwingScan",
     ],
   };
@@ -40034,40 +30000,6 @@ function validateLiveOrder(symbol, side = "BUY") {
     quote.priceIsLive === true &&
     isLiveQuoteSource(quoteSource);
 
-  const blockReasons = [];
-
-  if (!cleanSymbol) {
-    blockReasons.push("Missing symbol");
-  }
-
-  if (cleanSide === "BUY" && (!price || price <= 0)) {
-    blockReasons.push("Missing valid live price");
-  }
-
-  if (cleanSide === "BUY" && !quoteIsLive) {
-    blockReasons.push(
-      `Quote is not live websocket source: ${quoteSource || "unknown"}`
-    );
-  }
-
-  if (
-    cleanSide === "BUY" &&
-    quoteAgeSeconds > LIVE_ORDER_MAX_QUOTE_AGE_SECONDS
-  ) {
-    blockReasons.push(
-      `Live quote stale: ${quoteAgeSeconds}s old`
-    );
-  }
-
-  if (
-    cleanSide === "BUY" &&
-    spreadPercent > LIVE_ORDER_MAX_SPREAD_PERCENT
-  ) {
-    blockReasons.push(
-      `Spread too wide: ${spreadPercent}%`
-    );
-  }
-
   const requirePolygonForThisAsset =
     LIVE_ORDER_REQUIRE_POLYGON_CONNECTED &&
     (
@@ -40076,30 +30008,37 @@ function validateLiveOrder(symbol, side = "BUY") {
         : ENABLE_POLYGON_WEBSOCKET
     );
 
-  if (
-    cleanSide === "BUY" &&
-    !cryptoAsset &&
-    requirePolygonForThisAsset &&
-    !isPolygonLiveConnected()
-  ) {
-    blockReasons.push(
-      "Polygon live stream not connected/authenticated"
-    );
-  }
-
-  if (
-    cleanSide === "BUY" &&
-    cryptoAsset &&
-    requirePolygonForThisAsset &&
-    !isPolygonCryptoLiveConnected()
-  ) {
-    blockReasons.push(
-      "Polygon crypto live stream not connected/authenticated"
-    );
-  }
+  const liveProviderConnected = cryptoAsset
+    ? isPolygonCryptoLiveConnected()
+    : isPolygonLiveConnected();
+  const decision = evaluatePreTradeRisk({
+    order: { symbol: cleanSymbol, side: cleanSide, qty: 1 },
+    options: { automated: false },
+    context: {
+      emergencyStopActive: false,
+      realCashTradingUnlocked: true,
+      autoTradingEnabled: true,
+      dailyLossLocked: false,
+      profitLocked: false,
+      isCrypto: cryptoAsset,
+      marketOpen: true,
+      price,
+      spreadPercent,
+      quoteAgeSeconds,
+      quoteIsLive,
+      requireLiveProvider: requirePolygonForThisAsset,
+      liveProviderConnected,
+      maxQuoteAgeSeconds: LIVE_ORDER_MAX_QUOTE_AGE_SECONDS,
+      maxSpreadPercent: LIVE_ORDER_MAX_SPREAD_PERCENT,
+      maxExposurePercent: 100,
+      maxOpenTrades: 0,
+      account: { equity: Math.max(1, price) },
+      positions: [],
+    },
+  });
 
   return {
-    approved: blockReasons.length === 0,
+    approved: decision.approved,
     symbol: cleanSymbol,
     side: cleanSide,
     price,
@@ -40107,11 +30046,9 @@ function validateLiveOrder(symbol, side = "BUY") {
     quoteAgeSeconds,
     quoteSource,
     quoteIsLive,
-    polygonConnected: cryptoAsset
-      ? isPolygonCryptoLiveConnected()
-      : isPolygonLiveConnected(),
-    blockReasons,
-    checkedAt: new Date().toISOString(),
+    polygonConnected: liveProviderConnected,
+    blockReasons: decision.reasons,
+    checkedAt: decision.checkedAt,
   };
 }
 
@@ -40132,6 +30069,7 @@ function getSymbolsForFinnhubLiveStream(limit = 75) {
       .filter(Boolean)
       .filter((symbol) => !symbol.includes("/") && !symbol.endsWith("USD"));
   const signalSymbols = [
+    ...collectStockSymbols(engineState.boundedQuietDiscoveryState?.liveSymbols),
     ...collectStockSymbols(engineState.liveEarlyMoverSymbols),
     ...collectStockSymbols(engineState.lastSignals),
     ...collectStockSymbols(engineState.lastStockSignals),
@@ -40164,6 +30102,17 @@ function subscribeFinnhubSymbol(symbol) {
 }
 function refreshFinnhubLiveSubscriptions() {
   const symbols = getSymbolsForFinnhubLiveStream();
+  const desired = new Set(symbols);
+  if (finnhubLiveSocket?.readyState === 1) {
+    for (const symbol of [...finnhubSubscribedSymbols]) {
+      if (!desired.has(symbol)) {
+        try {
+          finnhubLiveSocket.send(JSON.stringify({ type: "unsubscribe", symbol }));
+        } catch { }
+        finnhubSubscribedSymbols.delete(symbol);
+      }
+    }
+  }
   for (const symbol of symbols) {
     subscribeFinnhubSymbol(symbol);
   }
@@ -40732,2071 +30681,297 @@ async function getTopSignalsWithFreshQuotes(signals = [], limit = 25) {
     (a, b) => Number(b.score || 0) - Number(a.score || 0)
   );
 }
-app.get("/high-conviction", requireAdmin, (req, res) => {
-  try {
-    const limit = Math.min(
-      10,
-      Math.max(3, Number(req.query.limit || 5))
-    );
-    res.json({
-      ok: true,
-      ...buildHighConvictionInstitutionalSummary(limit),
-    });
-  } catch (err) {
-    res.status(500).json({
-      ok: false,
-      error: "Failed to build high conviction summary",
-      details: err.message,
-    });
-  }
-});
-app.get("/production-health", requireAdmin, (req, res) => {
-  const liveQuoteCount = Object.keys(engineState.liveQuoteCache || {}).length;
-  res.json({
-    ok: true,
-    generatedAt: new Date().toISOString(),
+registerSignalObservabilityRoutes(app, {
+  requireAdmin,
+  getState: () => engineState,
+  buildHighConvictionSummary: buildHighConvictionInstitutionalSummary,
+  buildLiveQuotesPayload,
+  getProductionContext: () => ({
     mode: TRADING_MODE,
     autoTradingEnabled,
-    marketOpen: engineState.marketOpen,
     activeBuyLocks: Array.from(activeBuyExecutionLocks),
     liveSignalClientCount: liveSignalClients.size,
-    liveQuoteCount,
-    liveQuoteStreamState: engineState.liveQuoteStreamState || null,
-    lastScanAt: engineState.lastScanAt,
-    lastSuccessfulCycleAt: engineState.lastSuccessfulCycleAt,
-    lastError: engineState.lastError,
-    hedgeFundLayer: engineState.autonomousHedgeFundLayerState || null,
-    parliament: engineState.aiParliamentVotingState || null,
-    metaReinforcement: engineState.autonomousMetaReinforcementState || null,
-  });
+  }),
+  normalizeSymbol,
+  savePendingExits: buildPendingExitsFromAlpacaOrders,
+  getOpenOrders,
 });
-app.get("/stream", requireAdmin, (req, res) => {
-  res.writeHead(200, {
-    "Content-Type": "text/event-stream",
-    "Cache-Control": "no-cache",
-    Connection: "keep-alive",
-    "Access-Control-Allow-Origin": getStreamCorsOrigin(req),
-    "Access-Control-Allow-Credentials": "true",
-  });
-  const allowedSymbols = String(req.query.symbols || "")
-    .split(",")
-    .map(normalizeSymbol)
-    .filter(Boolean);
-  res.allowedSymbols = allowedSymbols;
-  backendStreamClients.add(res);
-  const since = String(req.query.since || "");
-  replayBackendStreamEvents(res, since);
-  res.write(
-    `event: CONNECTED\ndata: ${JSON.stringify({
-      type: "CONNECTED",
-      generatedAt: new Date().toISOString(),
-      payload: {
-        message: "SmartMoney enhanced stream connected",
-        allowedSymbols,
-        marketOpen: engineState.marketOpen,
-        mode: TRADING_MODE,
-        effectiveMode: engineState.effectiveMode,
-        lastScanAt: engineState.lastScanAt,
-      },
-    })}\n\n`
-  );
-  const heartbeat = setInterval(() => {
-    pushBackendStreamEvent("HEALTH_EVENT", {
-      running: engineState.running,
-      marketOpen: engineState.marketOpen,
-      lastScanAt: engineState.lastScanAt,
-      lastSuccessfulCycleAt: engineState.lastSuccessfulCycleAt,
-      lastError: engineState.lastError,
-      liveQuoteCount: Object.keys(engineState.liveQuoteCache || {}).length,
-      streamClientCount: backendStreamClients.size,
-    });
-  }, 15000);
-  req.on("close", () => {
-    clearInterval(heartbeat);
-    backendStreamClients.delete(res);
-  });
-});
-app.get("/live-signals/stream", requireAdmin, (req, res) => {
-  res.writeHead(200, {
-    "Content-Type": "text/event-stream",
-    "Cache-Control": "no-cache",
-    Connection: "keep-alive",
-    "Access-Control-Allow-Origin": getStreamCorsOrigin(req),
-    "Access-Control-Allow-Credentials": "true",
-  });
-  res.write(
-    `data: ${JSON.stringify(buildLiveSignalPushPayload())}\n\n`
-  );
-  liveSignalClients.add(res);
-  req.on("close", () => {
-    liveSignalClients.delete(res);
-  });
-});
-app.get("/live-quotes", requireAdmin, (req, res) => {
-  try {
-    const rawSymbols = String(req.query.symbols || "")
-      .split(",")
-      .map((symbol) => symbol.trim())
-      .filter(Boolean);
-    res.json(buildLiveQuotesPayload(rawSymbols));
-  } catch (err) {
-    res.status(500).json({
-      ok: false,
-      error: "Failed to load live quotes",
-      details: err.message,
-      generatedAt: new Date().toISOString(),
-    });
-  }
-});
-app.get("/live-movers", requireAdmin, (req, res) => {
-  try {
-    const limit = Math.min(
-      100,
-      Math.max(10, Number(req.query.limit || 50))
-    );
-    const toArray = (value) => (Array.isArray(value) ? value : []);
-    const findLiveQuote = (symbol) => {
-      const clean = normalizeSymbol(symbol);
-      const cache = engineState.liveQuoteCache || {};
-      return (
-        cache[clean] ||
-        cache[clean.replace("/", "")] ||
-        cache[clean.replace("-USD", "USD")] ||
-        cache[clean.replace("/USD", "USD")] ||
-        cache[clean.replace("USD", "/USD")] ||
-        null
-      );
-    };
-    const sourceSignals = [
-      ...toArray(engineState.topStockSignals),
-      ...toArray(engineState.lastStockSignals),
-      ...toArray(engineState.topCryptoSignals),
-      ...toArray(engineState.lastCryptoSignals),
-      ...toArray(engineState.topSignals),
-      ...toArray(engineState.lastSignals),
-    ];
-    const map = new Map();
-    for (const rawSignal of sourceSignals) {
-      const symbol = normalizeSymbol(rawSignal?.symbol);
-      if (!symbol) continue;
-      const merged = mergeLiveQuoteIntoSignal(rawSignal);
-      const liveQuote = findLiveQuote(symbol) || {};
-      const livePrice = Number(
-        liveQuote.lastTradePrice ||
-        liveQuote.tradePrice ||
-        liveQuote.lastPrice ||
-        liveQuote.markPrice ||
-        liveQuote.midPrice ||
-        liveQuote.price ||
-        liveQuote.livePrice ||
-        merged.lastTradePrice ||
-        merged.tradePrice ||
-        merged.lastPrice ||
-        merged.markPrice ||
-        merged.midPrice ||
-        merged.livePrice ||
-        merged.currentPrice ||
-        (
-          Number(merged.price || 0) > 0 &&
-            Number(merged.price || 0) !== Number(merged.high || 0)
-            ? merged.price
-            : 0
-        ) ||
-        merged.current ||
-        merged.close ||
-        merged.c ||
-        0
-      );
-      if (!Number.isFinite(livePrice) || livePrice <= 0) continue;
-      const previousClose = Number(
-        liveQuote.previousClose ||
-        liveQuote.prevClose ||
-        merged.previousClose ||
-        merged.prevClose ||
-        merged.pc ||
-        0
-      );
-      const open = Number(
-        liveQuote.open ||
-        liveQuote.dayOpen ||
-        merged.open ||
-        merged.dayOpen ||
-        merged.o ||
-        0
-      );
-      const changePercent =
-        previousClose > 0
-          ? ((livePrice - previousClose) / previousClose) * 100
-          : Number(
-            merged.dayChangePercent ||
-            merged.percentChange ||
-            merged.changePercent ||
-            liveQuote.percentChange ||
-            liveQuote.livePercentChange ||
-            0
-          );
-      const liveStarterCandidate =
-        (engineState.liveStarterBuyHistory || []).find(
-          (x) => normalizeSymbol(x?.symbol) === symbol
-        ) ||
-        (engineState.quickInstitutionalCandidates || []).find(
-          (x) => normalizeSymbol(x?.symbol) === symbol
-        ) ||
-        (engineState.fastRunnerCandidates || []).find(
-          (x) => normalizeSymbol(x?.symbol) === symbol
-        ) ||
-        (engineState.topAutonomousCandidates || []).find(
-          (x) => normalizeSymbol(x?.symbol) === symbol
-        ) ||
-        {};
-      const resolvedRecommendedTradeAmount = Number(
-        merged.recommendedTradeAmount ||
-        merged.rawRecommendedTradeAmount ||
-        merged.recommendedSize ||
-        merged.tradeAmount ||
-        merged.positionSize ||
-        merged.dollarAmount ||
-        merged.notional ||
-        merged.positionSizing?.recommendedTradeAmount ||
-        merged.positionSizing?.recommendedSize ||
-        merged.portfolioManager?.recommendedTradeAmount ||
-        merged.portfolioManager?.aiRecommendedTradeAmount ||
-        liveStarterCandidate.decision?.starterAmount ||
-        liveStarterCandidate.decision?.plannedFullTradeAmount ||
-        engineState.aiEntryScores?.[symbol]?.starterAmount ||
-        engineState.aiEntryScores?.[symbol]?.plannedFullTradeAmount ||
-        liveStarterCandidate.recommendedTradeAmount ||
-        liveStarterCandidate.rawRecommendedTradeAmount ||
-        liveStarterCandidate.recommendedSize ||
-        liveStarterCandidate.tradeAmount ||
-        liveStarterCandidate.positionSize ||
-        liveStarterCandidate.dollarAmount ||
-        0
-      );
-      const current = map.get(symbol);
-      const cryptoAsset = isCrypto(symbol);
-      const cryptoMemory =
-        engineState.cryptoInstitutionalMemory?.[symbol] ||
-        engineState.cryptoInstitutionalMemory?.[symbol.replace("/", "")] ||
-        engineState.cryptoInstitutionalMemory?.[symbol.replace("-USD", "USD")] ||
-        {};
-      const cryptoScoreCandidates = [
-        merged.score,
-        merged.institutionalScore,
-        merged.aiConfidence,
-        merged.autonomousConfidenceScore,
-        merged.quickInstitutionalScore,
-        merged.executionConfidence,
-        merged.cryptoInstitutionalScore,
-        merged.cryptoLiquidityScore,
-        merged.cryptoMomentumScore,
-        merged.phase42CryptoInstitutional?.cryptoInstitutionalScore,
-        merged.cryptoInstitutionalQualification?.cryptoInstitutionalScore,
-        merged.cryptoInstitutionalQualification?.score,
-        merged.cryptoInstitutionalQualification?.volumeConfidenceScore,
-        cryptoMemory.cryptoInstitutionalScore,
-        cryptoMemory.cryptoLiquidityScore,
-        cryptoMemory.cryptoMomentumScore,
-      ]
-        .map((value) => Number(value))
-        .filter((value) => Number.isFinite(value) && value > 0);
-      const stockScoreCandidates = [
-        merged.score,
-        merged.institutionalScore,
-        merged.aiConfidence,
-        merged.autonomousConfidenceScore,
-        merged.quickInstitutionalScore,
-        merged.executionConfidence,
-        merged.runnerScore,
-        merged.fastRunnerScore,
-        merged.finalLiveScore,
-        merged.gateScore,
-      ]
-        .map((value) => Number(value))
-        .filter((value) => Number.isFinite(value) && value > 0);
-      const displayScore = isCrypto
-        ? Math.max(...cryptoScoreCandidates, Number(merged.score || 0))
-        : Math.max(...stockScoreCandidates, Number(merged.score || 0));
-      const displayQuickInstitutionalScore = isCrypto
-        ? Math.max(
-          displayScore,
-          Number(merged.quickInstitutionalScore || 0),
-          Number(merged.institutionalScore || 0),
-          Number(merged.phase42CryptoInstitutional?.cryptoInstitutionalScore || 0),
-          Number(cryptoMemory.cryptoInstitutionalScore || 0)
-        )
-        : Number(
-          merged.quickInstitutionalScore ||
-          merged.institutionalScore ||
-          merged.score ||
-          0
-        );
-      const next = {
-        symbol,
-        assetClass:
-          merged.assetClass ||
-          merged.asset_class ||
-          (isCrypto(symbol) ? "crypto" : "stock"),
-        price: livePrice,
-        livePrice,
-        displayPrice: livePrice,
-        current: livePrice,
-        previousClose,
-        open,
-        dayOpen: open,
-        changePercent,
-        dayChangePercent: changePercent,
-        percentChange: changePercent,
-        bid: Number(liveQuote.bid || merged.bid || 0),
-        ask: Number(liveQuote.ask || merged.ask || 0),
-        spreadPercent: Number(
-          liveQuote.spreadPercent || merged.spreadPercent || 0
-        ),
-        liveQuoteUpdatedAt: new Date().toISOString(),
-        liveQuoteSource:
-          liveQuote.liveQuoteSource ||
-          liveQuote.source ||
-          liveQuote.dataSource ||
-          merged.liveQuoteSource ||
-          merged.source ||
-          merged.dataSource ||
-          "live_movers",
-        priceIsLive: true,
-        score: displayScore,
-        institutionalScore: displayScore,
-        aiConfidence: displayScore,
-        autonomousConfidenceScore: displayScore,
-        cryptoInstitutionalScore: displayScore,
-        runnerScore: Number(
-          merged.runnerScore ||
-          merged.fastRunnerScore ||
-          liveQuote.fastRunnerScore ||
-          0
-        ),
-        quickInstitutionalScore: displayQuickInstitutionalScore,
-        tapeSpeedScore: Number(
-          merged.tapeSpeedScore ||
-          merged.tapeSpeed ||
-          liveQuote.tapeSpeed ||
-          0
-        ),
-        liquidityPressureScore: Number(
-          merged.liquidityPressureScore ||
-          merged.liquidityPressure ||
-          liveQuote.liquidityPressure ||
-          0
-        ),
-        qualifiedToBuy: merged.qualifiedToBuy === true,
-        backendApproved:
-          merged.backendApproved === true ||
-          merged.approved === true ||
-          merged.qualifiedToBuy === true ||
-          merged.autoTradeApproved === true,
-        approved:
-          merged.approved === true ||
-          merged.backendApproved === true ||
-          merged.qualifiedToBuy === true ||
-          merged.autoTradeApproved === true,
-        autoTradeApproved: merged.autoTradeApproved === true,
-        recommendedTradeAmount: resolvedRecommendedTradeAmount,
-        aiAllocationPercentOfBotBudget: Number(
-          merged.aiAllocationPercentOfBotBudget ||
-          merged.positionSizing?.aiAllocationPercentOfBotBudget ||
-          merged.portfolioManager?.aiAllocationPercentOfBotBudget ||
-          0
-        ),
-        aiPortfolioAction:
-          merged.aiPortfolioAction ||
-          merged.portfolioAction ||
-          merged.portfolioManager?.aiPortfolioAction ||
-          (merged.autoTradeApproved ? "AUTO-TRADE APPROVED" : "Watch Only"),
-        portfolioManagerReason:
-          merged.portfolioManagerReason ||
-          merged.reason ||
-          merged.pattern ||
-          merged.tradeQuality ||
-          "Live mover price update",
-      };
-      if (!current || Math.abs(next.changePercent) > Math.abs(current.changePercent)) {
-        map.set(symbol, next);
-      }
-    }
-    const movers = Array.from(map.values())
-      .sort((a, b) => Math.abs(b.changePercent) - Math.abs(a.changePercent))
-      .slice(0, limit);
-    res.json({
-      ok: true,
-      source: "live_movers_lightweight",
-      generatedAt: new Date().toISOString(),
-      count: movers.length,
-      movers,
-      signals: movers,
-      stockSignals: movers.filter((s) => !isCrypto(s.symbol)),
-      cryptoSignals: movers.filter((s) => isCrypto(s.symbol)),
-      autoTradingEnabled,
-      mode: TRADING_MODE,
-      effectiveMode: engineState.effectiveMode,
-    });
-  } catch (err) {
-    res.status(500).json({
-      ok: false,
-      error: "Failed to load live movers",
-      details: err.message,
-      generatedAt: new Date().toISOString(),
-    });
-  }
-});
-app.get("/deep-intelligence-sync", requireAdmin, (req, res) => {
-  try {
-    res.json({
-      ok: true,
-      generatedAt: new Date().toISOString(),
-      enabled: ENABLE_DEEP_INTELLIGENCE_SYNC,
-      state: engineState.deepIntelligenceSyncState || null,
-      history: (engineState.deepIntelligenceSyncHistory || []).slice(0, 25),
-    });
-  } catch (err) {
-    res.status(500).json({
-      ok: false,
-      error: "Failed to load deep intelligence sync",
-      details: err.message,
-    });
-  }
-});
-app.get("/full-brain-fast-sync", requireAdmin, (req, res) => {
-  try {
-    res.json({
-      ok: true,
-      generatedAt: new Date().toISOString(),
-      enabled: ENABLE_FULL_BRAIN_FAST_SYNC,
-      state: engineState.fullBrainFastSyncState || null,
-      history: (engineState.fullBrainFastSyncHistory || []).slice(0, 25),
-    });
-  } catch (err) {
-    res.status(500).json({
-      ok: false,
-      error: "Failed to load full brain fast sync",
-      details: err.message,
-    });
-  }
-});
-app.get("/live-scale-in", requireAdmin, (req, res) => {
-  try {
-    res.json({
-      ok: true,
-      generatedAt: new Date().toISOString(),
-      enabled: ENABLE_LIVE_SCALE_IN,
-      state: engineState.liveScaleInState || null,
-      history: (engineState.liveScaleInHistory || []).slice(0, 25),
-    });
-  } catch (err) {
-    res.status(500).json({
-      ok: false,
-      error: "Failed to load live scale-in engine",
-      details: err.message,
-    });
-  }
-});
-app.get("/live-position-management", requireAdmin, (req, res) => {
-  try {
-    res.json({
-      ok: true,
-      generatedAt: new Date().toISOString(),
-      enabled: ENABLE_LIVE_POSITION_MANAGEMENT,
-      state: engineState.livePositionManagementState || null,
-      history: (engineState.livePositionManagementHistory || []).slice(0, 25),
-    });
-  } catch (err) {
-    res.status(500).json({
-      ok: false,
-      error: "Failed to load live position management",
-      details: err.message,
-    });
-  }
-});
-app.get("/live-starter-buy-gate", requireAdmin, (req, res) => {
-  try {
-    res.json({
-      ok: true,
-      generatedAt: new Date().toISOString(),
-      enabled: ENABLE_LIVE_STARTER_BUY,
-      state: engineState.liveStarterBuyGateState || null,
-      history: (engineState.liveStarterBuyHistory || []).slice(0, 25),
-    });
-  } catch (err) {
-    res.status(500).json({
-      ok: false,
-      error: "Failed to load live starter buy gate",
-      details: err.message,
-    });
-  }
-});
-app.get("/quick-institutional-gate", requireAdmin, (req, res) => {
-  try {
-    res.json({
-      ok: true,
-      generatedAt: new Date().toISOString(),
-      state: engineState.quickInstitutionalGateState || null,
-      count: engineState.quickInstitutionalCandidates?.length || 0,
-      candidates: engineState.quickInstitutionalCandidates || [],
-    });
-  } catch (err) {
-    res.status(500).json({
-      ok: false,
-      error: "Failed to load quick institutional gate",
-      details: err.message,
-    });
-  }
-});
-app.get("/fast-runners", requireAdmin, async (req, res) => {
-  try {
-    const refresh = String(req.query.refresh || "").toLowerCase() === "true";
-    if (refresh || !engineState.fastRunnerEngineState) {
-      await runFastRunnerEngine();
-    }
-    res.json({
-      ok: true,
-      generatedAt: new Date().toISOString(),
-      state: engineState.fastRunnerEngineState || null,
-      count: engineState.fastRunnerCandidates?.length || 0,
 
-      candidates:
-        engineState.fastRunnerCandidates || [],
+registerStreamRoutes(app, {
+  requireAdmin,
+  normalizeSymbol,
+  getCorsOrigin: getStreamCorsOrigin,
+  backendClients: backendStreamClients,
+  liveSignalClients,
+  replayEvents: replayBackendStreamEvents,
+  pushEvent: pushBackendStreamEvent,
+  getState: () => engineState,
+  getMode: () => TRADING_MODE,
+  buildLiveSignalPayload: buildLiveSignalPushPayload,
+});
 
-      visibleCandidates:
-        engineState.visibleLiveCandidates || [],
-    });
-  } catch (err) {
-    res.status(500).json({
-      ok: false,
-      error: "Failed to load fast runners",
-      details: err.message,
-    });
-  }
-});
-app.get("/live-market-memory", requireAdmin, (req, res) => {
-  try {
-    const rawSymbols = String(req.query.symbols || "")
-      .split(",")
-      .map((symbol) => symbol.trim())
-      .filter(Boolean)
-      .map(normalizeSymbol);
-    const memory = Object.entries(engineState.liveMarketMemory || {})
-      .filter(([symbol]) => {
-        return rawSymbols.length === 0 || rawSymbols.includes(symbol);
-      })
-      .map(([symbol, item]) => ({
-        symbol,
-        price: Number(item.price || 0),
-        bid: Number(item.bid || 0),
-        ask: Number(item.ask || 0),
-        spread: Number(item.spread || 0),
-        spreadPercent: Number(item.spreadPercent || 0),
-        fastRunnerScore: Number(item.fastRunnerScore || 0),
-        liveMomentumPercent: Number(item.liveMomentumPercent || 0),
-        tapeSpeed: Number(item.tapeSpeed || 0),
-        liquidityPressure: Number(item.liquidityPressure || 0),
-        fastRunnerBreakdown: item.fastRunnerBreakdown || null,
-        updatedAt: item.updatedAt || null,
-        secondCandles: item.secondCandles?.slice(-60) || [],
-      }))
-      .sort((a, b) => Number(b.fastRunnerScore || 0) - Number(a.fastRunnerScore || 0));
-    res.json({
-      ok: true,
-      generatedAt: new Date().toISOString(),
-      polygonLiveStreamState: engineState.polygonLiveStreamState || null,
-      liveEarlyMoverSymbols: engineState.liveEarlyMoverSymbols || [],
-      liveEarlyMoverRefreshState: engineState.liveEarlyMoverRefreshState || null,
-      count: memory.length,
-      memory,
-    });
-  } catch (err) {
-    res.status(500).json({
-      ok: false,
-      error: "Failed to load live market memory",
-      details: err.message,
-      generatedAt: new Date().toISOString(),
-    });
-  }
-});
-app.get("/live-signals", requireAdmin, async (req, res) => {
-  try {
-    const stockSignals = getTopSignals(
-      [
-        ...(engineState.lastStockSignals || []),
-        ...(engineState.fastRunnerCandidates || []),
-        ...(engineState.quickInstitutionalCandidates || []),
-      ],
-      25
-    ).map(mergeLiveQuoteIntoSignal);
-    const cryptoSignals = getTopSignals(
-      engineState.lastCryptoSignals || [],
-      25
-    ).map(mergeLiveQuoteIntoSignal);
-    return res.json({
-      generatedAt: new Date().toISOString(),
-      marketOpen: Boolean(engineState.marketOpen),
-      marketSession: getMarketSession({
-        is_open: Boolean(engineState.marketOpen),
-      }),
-      mode: TRADING_MODE,
-      effectiveMode: engineState.effectiveMode,
-      autoTradingEnabled,
-      liveQuoteStreamState:
-        engineState.liveQuoteStreamState || null,
-      stockSignals,
-      cryptoSignals,
-      signalCount:
-        stockSignals.length + cryptoSignals.length,
-    });
-  } catch (err) {
-    console.error("live-signals error", err);
-    res.status(500).json({
-      error: "Failed to load live signals",
-      details: err.message,
-      generatedAt: new Date().toISOString(),
-    });
-  }
-});
-app.get("/top-brains", requireAdmin, async (req, res) => {
-  try {
-    const brains = buildTopAiBrains();
-    res.json({
-      ok: true,
-      generatedAt: new Date().toISOString(),
-      count: brains.length,
-      brains,
-    });
-  } catch (err) {
-    res.status(500).json({
-      ok: false,
-      error: "Failed to load top AI brains",
-      details: err.message,
-    });
-  }
-});
-app.get("/pending-exits", requireAdmin, async (req, res) => {
-  try {
-    const openOrders = await getOpenOrders();
-    const pendingExits = buildPendingExitsFromAlpacaOrders(openOrders);
-    res.json({
-      ok: true,
-      generatedAt: new Date().toISOString(),
-      count: pendingExits.length,
-      pendingExits,
-    });
-  } catch (err) {
-    res.status(500).json({
-      ok: false,
-      error: "Failed to load pending exits",
-      details: err.message,
-      generatedAt: new Date().toISOString(),
-      fallbackPendingExits: engineState.pendingExits || [],
-    });
-  }
-});
-app.get("/status", requireAdmin, async (req, res) => {
-  try {
-    const accountRefresh = await refreshFrontendAccountCache();
-    const latestStatus = getLatestFrontendStatusSnapshot();
-    res.json({
-      ok: true,
-      lightweight: true,
-      generatedAt: new Date().toISOString(),
-      online: true,
-      mode: TRADING_MODE,
-      effectiveMode: engineState.effectiveMode,
-      tradingModeLocked,
-      autoTradingEnabled,
-      marketOpen: engineState.marketOpen,
-      marketRegime: engineState.marketRegime,
-      marketStressLevel: engineState.marketStressLevel,
-      marketMomentumScore: engineState.marketMomentumScore,
-      marketVolatility: engineState.marketVolatility,
-      marketBreadth: engineState.marketBreadth,
-      institutionalExposureMode: engineState.institutionalExposureMode,
-      lastScanAt: engineState.lastScanAt,
-      lastHeartbeatAt: engineState.lastHeartbeatAt,
-      lastSuccessfulCycleAt: engineState.lastSuccessfulCycleAt,
-      lastTickDurationMs: engineState.lastTickDurationMs,
-      lastError: engineState.lastError,
-      liveQuoteStreamState: engineState.liveQuoteStreamState || null,
-      polygonLiveStreamState: engineState.polygonLiveStreamState || null,
-      liveEarlyMoverRefreshState:
-        engineState.liveEarlyMoverRefreshState || null,
-      signalCount: latestStatus.signalCount,
-      stockSignalCount: latestStatus.stockSignalCount,
-      cryptoSignalCount: latestStatus.cryptoSignalCount,
-      topStockSignals: latestStatus.topStockSignals || [],
-      topCryptoSignals: latestStatus.topCryptoSignals || [],
-      fastRunnerCandidates:
-        (engineState.fastRunnerCandidates || [])
-          .slice(0, 25)
-          .map(mergeLiveQuoteIntoSignal),
-      quickInstitutionalCandidates:
-        (engineState.quickInstitutionalCandidates || [])
-          .slice(0, 25)
-          .map(mergeLiveQuoteIntoSignal),
-      liveStarterBuyGateState:
-        engineState.liveStarterBuyGateState || null,
-      account: latestStatus?.account || engineState.cachedAccount || null,
-      risk: latestStatus?.risk || null,
-      statusAccountRefresh: accountRefresh,
-      note:
-        "Lightweight status. Use /status/full for full broker/account/order debug payload.",
-    });
-  } catch (err) {
-    res.status(500).json({
-      ok: false,
-      error: "Failed to load lightweight status",
-      details: err.message,
-      generatedAt: new Date().toISOString(),
-    });
-  }
-});
-app.get("/status/full", requireAdmin, async (req, res) => {
-  try {
-    const account = await getAccount();
-    const peaks = updateAccountPeaks(account);
-    const clock = await getClock();
-    const positions = await getPositions();
-    const aiOwnedSymbols = await getBotOwnedSymbols();
-    const openOrders = await getOpenOrders();
-    const pendingExits = buildPendingExitsFromAlpacaOrders(openOrders);
-    const aiPositions = positions.filter((p) =>
-      isAiManagedOpenPosition(p, aiOwnedSymbols)
-    );
-    res.json({
-      institutionalDashboard:
-        buildInstitutionalDashboardPayload(),
-      highConvictionInstitutionalSummary:
-        buildHighConvictionInstitutionalSummary(5),
-      online: true,
-      mode: TRADING_MODE,
-      effectiveMode: engineState.effectiveMode,
-      tradingModeLocked,
-      autoTradingEnabled,
-      config: CONFIG,
-      signals:
-        (
-          engineState.topSignals?.length
-            ? engineState.topSignals
-            : engineState.lastSignals || []
-        ).map(mergeLiveQuoteIntoSignal),
-      stockSignals:
-        (
-          engineState.topStockSignals?.length
-            ? engineState.topStockSignals
-            : engineState.lastStockSignals || []
-        ).map(mergeLiveQuoteIntoSignal),
-      cryptoSignals:
-        (
-          engineState.topCryptoSignals?.length
-            ? engineState.topCryptoSignals
-            : engineState.lastCryptoSignals || []
-        ).map(mergeLiveQuoteIntoSignal),
-      liveStreamState: {
-        polygon:
-          engineState.polygonLiveStreamState || null,
-        polygonCrypto:
-          engineState.polygonCryptoLiveStreamState || null,
-        finnhub:
-          engineState.liveQuoteStreamState || null,
-        fastRunner:
-          engineState.fastRunnerEngineState || null,
-        quickGate:
-          engineState.quickInstitutionalGateState || null,
-        starterBuy:
-          engineState.liveStarterBuyGateState || null,
-      },
-      account: {
-        ...account,
-        peakEquity: peaks.peakEquity,
-        peakCash: peaks.peakCash,
-      },
-      clock,
-      topAiBrains: buildTopAiBrains(),
-      pendingExits,
-      openExitOrderCount: pendingExits.filter(
-        (exit) => exit.source === "alpaca_open_order"
-      ).length,
-      pdtProtectedPendingExitCount: pendingExits.filter(
-        (exit) => exit.source === "engine_pdt_or_ai_pending"
-      ).length,
-      risk: {
-        maxBotExposurePercent: CONFIG.maxBotExposurePercent,
-        maxBotBudget:
-          Number(account.equity || 0) * (CONFIG.maxBotExposurePercent / 100),
-        currentBotExposure: getBotExposure(aiPositions),
-        perTradeMax:
-          (Number(account.equity || 0) *
-            (CONFIG.maxBotExposurePercent / 100)) /
-          CONFIG.maxOpenTrades,
-        currentEquity: Number(account.equity || 0),
-        currentCash: Number(account.cash || 0),
-        peakEquity: peaks.peakEquity,
-        peakCash: peaks.peakCash,
-      },
-      autonomousTradingSystem:
-        engineState.autonomousTradingSystemState || null,
-      phase20AutonomousOrchestration:
-        engineState.phase20AutonomousOrchestrationState || null,
-      crossEngineMemory:
-        engineState.crossEngineMemoryState || null,
-      adaptiveExecutionTiming:
-        engineState.adaptiveExecutionTimingState || null,
-      phase21AutonomousBrain:
-        engineState.phase21AutonomousBrainState || null,
-      executionIntelligence:
-        engineState.executionIntelligenceState || null,
-      reinforcementWeights:
-        engineState.reinforcementWeightState || null,
-      selfOptimization:
-        engineState.selfOptimizationState || null,
-      marketCycleIntelligence:
-        engineState.marketCycleIntelligenceState || null,
-      liquidityIntelligence:
-        engineState.liquidityIntelligenceState || null,
-      correlationIntelligence:
-        engineState.correlationIntelligenceState || null,
-      portfolioGovernor:
-        engineState.portfolioGovernorState || null,
-      engineState: {
-        ...engineState,
-        lastSignals:
-          (engineState.lastSignals || []).map(mergeLiveQuoteIntoSignal),
-        lastStockSignals:
-          (engineState.lastStockSignals || []).map(mergeLiveQuoteIntoSignal),
-        lastCryptoSignals:
-          (engineState.lastCryptoSignals || []).map(mergeLiveQuoteIntoSignal),
-        topSignals:
-          (engineState.topSignals || []).map(mergeLiveQuoteIntoSignal),
-        topStockSignals:
-          (engineState.topStockSignals || []).map(mergeLiveQuoteIntoSignal),
-        topCryptoSignals:
-          (engineState.topCryptoSignals || []).map(mergeLiveQuoteIntoSignal),
-      },
-    });
-  } catch (err) {
-    console.error("/status route failed:", err.message);
-    res.json({
-      online: true,
-      degradedMode: true,
-      statusWarnings: [err.message],
-      mode: TRADING_MODE,
-      effectiveMode: engineState.effectiveMode,
-      tradingModeLocked,
-      autoTradingEnabled,
-      config: CONFIG,
-      institutionalDashboard:
-        buildInstitutionalDashboardPayload(),
-      signals:
-        (
-          engineState.topSignals?.length
-            ? engineState.topSignals
-            : engineState.lastSignals || []
-        ).map(mergeLiveQuoteIntoSignal),
-      stockSignals:
-        (
-          engineState.topStockSignals?.length
-            ? engineState.topStockSignals
-            : engineState.lastStockSignals || []
-        ).map(mergeLiveQuoteIntoSignal),
-      cryptoSignals:
-        (
-          engineState.topCryptoSignals?.length
-            ? engineState.topCryptoSignals
-            : engineState.lastCryptoSignals || []
-        ).map(mergeLiveQuoteIntoSignal),
-      liveStreamState: {
-        polygon:
-          engineState.polygonLiveStreamState || null,
-        fastRunner:
-          engineState.fastRunnerEngineState || null,
-        quickGate:
-          engineState.quickInstitutionalGateState || null,
-        starterBuy:
-          engineState.liveStarterBuyGateState || null,
-      },
-      engineState: {
-        ...engineState,
-        lastError: err.message,
-      },
-    });
-  }
-});
-app.get("/stock-quote/:symbol", requireAdmin, async (req, res) => {
-  try {
-    const symbol = normalizeSymbol(req.params.symbol);
-    const q = await getStockQuote(symbol);
-    const asset = await getAsset(symbol).catch(() => null);
-    if (!q || !q.current) {
-      return res.status(404).json({
-        ok: false,
-        error: "No quote found",
-        symbol,
-      });
-    }
-    res.json({
-      ok: true,
-      stock: {
-        symbol,
-        current: q.current,
-        price: q.current,
-        previousClose: q.previousClose,
-        changePercent: q.previousClose
-          ? ((q.current - q.previousClose) / q.previousClose) * 100
-          : 0,
-        percentChange: q.percentChange,
-        open: q.open,
-        dayOpen: q.open,
-        liveQuoteUpdatedAt: q.quoteFetchedAt,
-        liveQuoteSource: q.liveQuoteSource,
-        priceIsLive: q.priceIsLive === true,
-        chartBars: q.chartBars || [],
-        historicalBars: q.historicalBars || [],
-        sparkline: q.sparkline || [],
-        source: q.source || "polygon_first_manual_search",
-        autoTradeAllowed: false,
-        manuallyBuyable: true,
-        fractionable: asset?.fractionable === true,
-        assetClass: asset?.asset_class || "us_equity",
-      },
-    });
-  } catch (err) {
-    res.status(500).json({
-      ok: false,
-      error: err.message,
-    });
-  }
-});
-app.get("/institutional-dashboard", requireAdmin, async (req, res) => {
-  try {
-    res.json({
-      success: true,
-      dashboard:
-        buildInstitutionalDashboardPayload(),
-    });
-  } catch (err) {
-    res.status(500).json({
-      success: false,
-      error: err.message,
-    });
-  }
-});
-app.get("/signals", requireAdmin, async (req, res) => {
-  res.json({
-    lastScanAt: engineState.lastScanAt,
-    signals: (engineState.lastSignals || []).map(mergeLiveQuoteIntoSignal),
-    skippedSymbols: engineState.skippedSymbols,
-  });
-});
-app.get("/crypto-signals", requireAdmin, async (req, res) => {
-  try {
-    if (!["live_crypto", "smart"].includes(TRADING_MODE)) {
-      return res.status(403).json({
-        error: "Crypto signals are available in live_crypto or smart mode.",
-        mode: TRADING_MODE,
-      });
-    }
-    const signals = await scanCryptoMarket();
-    const liveMergedSignals =
-      (signals || []).map(mergeLiveQuoteIntoSignal);
-    res.json({
-      mode: TRADING_MODE,
-      liveOnly: true,
-      signals: liveMergedSignals,
-    });
-  } catch (err) {
-    res.status(500).json({ error: err.message });
-  }
-}); app.get("/all-positions-test", requireAdmin, async (req, res) => {
-  try {
-    const positions = await getPositions();
-    res.json({
-      ok: true,
-      count: positions.length,
-      positions,
-      aiManagedSymbols: engineState.aiManagedSymbols,
-    });
-  } catch (err) {
-    res.status(500).json({
-      ok: false,
-      error: err.message,
-    });
-  }
-});
-app.get("/alpaca/raw-positions", requireAdmin, async (req, res) => {
-  try {
-    const positions = await getPositions();
-    const aiOwnedSymbols = await getBotOwnedSymbols();
-    const aiPositions = positions.filter((position) =>
-      aiOwnedSymbols.has(normalizeSymbol(position.symbol))
-    );
-    res.json({
-      positions: aiPositions,
-      allAlpacaPositions: positions,
-      highWaterMarks: engineState.highWaterMarks,
-      aiEntryScores: engineState.aiEntryScores,
-      runnerPositions: engineState.runnerPositions,
-      currentBotExposure: getBotExposure(aiPositions),
-    });
-  } catch (err) {
-    res.status(500).json({ error: err.message });
-  }
-});
-app.get("/alpaca/raw-orders", requireAdmin, async (req, res) => {
-  try {
-    const orders = await getOrders();
-    const aiOrders = orders.filter(isBotOrder);
-    const activeStatuses = new Set([
-      "new",
-      "accepted",
-      "pending_new",
-      "partially_filled",
-      "pending_replace",
-      "pending_cancel",
-    ]);
-    const closedStatuses = new Set([
-      "filled",
-      "canceled",
-      "expired",
-      "rejected",
-      "replaced",
-    ]);
-    const activeOrders = aiOrders.filter((order) =>
-      activeStatuses.has(String(order.status || "").toLowerCase())
-    );
-    const closedOrders = aiOrders.filter((order) =>
-      closedStatuses.has(String(order.status || "").toLowerCase())
-    );
-    res.json({
-      alpacaOrders: orders,
-      aiAlpacaOrders: aiOrders,
-      activeOrders,
-      closedOrders,
-      backendOrders: engineState.recentOrders,
-      failedOrders: engineState.failedOrders,
-      pendingExits: engineState.pendingExits,
-      runnerPositions: engineState.runnerPositions,
-      effectiveMode: engineState.effectiveMode,
-      stockTradingStoppedForDay: engineState.stockTradingStoppedForDay,
-      cryptoTradingStoppedForDay: engineState.cryptoTradingStoppedForDay,
-    });
-  } catch (err) {
-    res.status(500).json({ error: err.message });
-  }
-});
-app.get("/telemetry", requireAdmin, async (req, res) => {
-  res.json({
-    engine: {
-      running: engineState.running,
-      marketOpen: engineState.marketOpen,
-      lastScanAt: engineState.lastScanAt,
-      lastHeartbeatAt: engineState.lastHeartbeatAt,
-      lastSuccessfulCycleAt:
-        engineState.lastSuccessfulCycleAt,
-      lastTickDurationMs:
-        engineState.lastTickDurationMs,
-      totalEngineTicks:
-        engineState.totalEngineTicks,
-      engineFreezeDetected:
-        engineState.engineFreezeDetected,
-      engineFreezeCount:
-        engineState.engineFreezeCount,
-      lastEngineStopReason:
-        engineState.lastEngineStopReason,
-    },
-    freshness: getEngineFreshness(),
-    marketRegime: engineState.marketRegime,
-    marketStressLevel:
-      engineState.marketStressLevel,
-    averageSignalScore:
-      engineState.averageSignalScore,
-    confidenceWeightedMode:
-      engineState.averageSignalScore >= 90,
-    marketBreadth:
-      engineState.marketBreadth,
-    marketMomentumScore:
-      engineState.marketMomentumScore,
-    marketVolatility:
-      engineState.marketVolatility,
-    institutionalExposureMode:
-      engineState.institutionalExposureMode,
-    institutionalWatchlist:
-      engineState.institutionalWatchlist,
-    analyticsSnapshots:
-      engineState.analyticsSnapshots?.slice(0, 20) || [],
-    statisticalMemoryState:
-      engineState.statisticalMemoryState || {
-        updatedAt: null,
-        setupHistory: [],
-        setupPerformance: {},
-        expectancyHistory: [],
-        probabilityHistory: [],
-      },
-    statisticalEdgeState:
-      engineState.statisticalEdgeState || null,
-    statisticalEdgeHistory:
-      (engineState.statisticalEdgeHistory || []).slice(
-        0,
-        20
-      ),
-    apiHealth: engineState.apiHealth || {},
-    recentSignals:
-      engineState.signalHistory?.slice(0, 20) || [],
-    activeCooldowns:
-      Object.keys(engineState.symbolCooldowns || {}),
-    recentRegimes:
-      engineState.marketRegimeHistory?.slice(0, 20) || [],
-  });
-});
-app.post("/scan-now", requireAdmin, async (req, res) => {
-  if (engineState.running) {
-    return res.json({
-      ok: true,
-      message: "Scan already running",
-      running: true,
-      lastScanAt: engineState.lastScanAt,
-      lastTickStartedAt: engineState.lastTickStartedAt,
-    });
-  }
-  runEngineCycle().catch((err) => {
-    engineState.lastError = err.message;
-    engineState.running = false;
-    saveEngineState("MANUAL_SCAN_FAILED");
-    console.error("Manual scan failed:", err.message);
-  });
-  res.json({
-    ok: true,
-    message: "Scan started",
-    running: true,
+registerLiveMoversRoutes(app, {
+  requireAdmin,
+  getState: () => engineState,
+  normalizeSymbol,
+  mergeLiveQuote: mergeLiveQuoteIntoSignal,
+  isCrypto,
+  getRuntimeStatus: () => ({
     autoTradingEnabled,
-    lastScanAt: engineState.lastScanAt,
-  });
+    emergencyStopActive,
+    mode: TRADING_MODE,
+  }),
 });
-app.post("/auto-trading/on", requireAdmin, (req, res) => {
-  if (engineState.dailyLossLocked) {
-    return res.status(403).json({
-      message: "Auto trading locked because daily loss limit was reached",
-    });
-  }
-  if (engineState.profitLocked) {
-    return res.status(403).json({
-      message: "Auto trading locked because profit lock was hit",
-    });
-  }
-  autoTradingEnabled = true;
-  runtimeConfig = saveRuntimeConfig({
-    ...runtimeConfig,
-    autoTradingEnabled,
-  });
-  saveEngineState("AUTO_TRADING_ENABLED");
-  res.json({
-    message: "Auto trading enabled",
-    autoTradingEnabled,
-  });
+
+registerLiveEngineRoutes(app, {
+  requireAdmin,
+  getState: () => engineState,
+  flags: {
+    deepIntelligenceSync: ENABLE_DEEP_INTELLIGENCE_SYNC,
+    fullBrainFastSync: ENABLE_FULL_BRAIN_FAST_SYNC,
+    liveScaleIn: ENABLE_LIVE_SCALE_IN,
+    livePositionManagement: ENABLE_LIVE_POSITION_MANAGEMENT,
+    liveStarterBuy: ENABLE_LIVE_STARTER_BUY,
+  },
 });
-app.post("/reset-runtime-config", requireAdmin, (req, res) => {
-  try {
-    const preservedAlpacaKeys = {
-      alpacaLiveKey: runtimeConfig.alpacaLiveKey,
-      alpacaLiveSecret: runtimeConfig.alpacaLiveSecret,
-    };
-    if (fs.existsSync(CONFIG_FILE)) {
-      fs.unlinkSync(CONFIG_FILE);
-    }
-    runtimeConfig = saveRuntimeConfig(preservedAlpacaKeys);
-    res.json({
-      success: true,
-      message:
-        "runtime-config.json deleted successfully. Restart backend now.",
-    });
-  } catch (err) {
-    res.status(500).json({
-      success: false,
-      error: err.message,
-    });
-  }
+
+registerLiveSignalRoutes(app, {
+  requireAdmin,
+  getState: () => engineState,
+  runFastRunnerEngine,
+  getTopSignals,
+  mergeLiveQuote: mergeLiveQuoteIntoSignal,
+  getMarketSession,
+  getMode: () => TRADING_MODE,
+  getAutoTradingEnabled: () => autoTradingEnabled,
+  buildTopBrains: buildTopAiBrains,
 });
-app.get("/config", requireAdmin, (req, res) => {
-  res.json({
-    message: "Current remote config",
-    config: CONFIG,
-  });
+
+registerFrontendRoutes(app, {
+  requireAdmin,
+  getState: () => engineState,
+  getConfig: () => CONFIG,
+  refreshAccountCache: refreshFrontendAccountCache,
+  getLatestStatus: getLatestFrontendStatusSnapshot,
+  buildStartupSnapshot: buildFrontendStartupSnapshot,
+  normalizeSymbol,
+  mergeLiveQuote: mergeLiveQuoteIntoSignal,
+  getTopSignals,
 });
-app.post("/config", requireAdmin, (req, res) => {
-  const numericConfigKeys = [
-    "minStockPrice",
-    "maxStockPrice",
-    "minScoreToBuy",
-    "maxBotExposurePercent",
-    "cryptoMaxExposureShareOfBotExposure",
-    "stopLossPercent",
-    "trailingStopPercent",
-    "takeProfitPercent",
-    "maxOpenTrades",
-    "maxStockOpenTrades",
-    "maxCryptoOpenTrades",
-    "replaceWeakestMinScoreGap",
-    "targetCapitalSlots",
-    "minAutonomousTradeAmount",
-    "pyramidMinProfitPercent",
-    "pyramidMinScore",
-    "pyramidMaxAddsPerSymbol",
-    "pyramidAddSizePercent",
-    "runnerTriggerPercent",
-    "runnerTrailingStopPercent",
-    "dailyLossLimitPercent",
-    "profitLockTriggerPercent",
-    "profitLockProtectPercent",
-    "moversTop",
-    "minVolume",
-    "maxPercentChange",
-    "maxSignalsToReturn",
-    "topAutoTradeCandidates",
-    "maxRotationsPerDay",
-    "maxContinuationHoldStocks",
-    "maxMorningTradesPerDay",
-    "morningStrikeStartHourET",
-    "morningStrikeEndHourET",
-    "minPremarketGapPercent",
-    "minPremarketRelativeVolume",
-    "eliteMorningStrikeLimit",
-    "aggressiveBullishExposureMultiplier",
-    "cautiousBullishExposureMultiplier",
-    "defensiveExposureMultiplier",
-    "panicExposureMultiplier",
-    "minVolumeSpikeRatio",
-    "minCloseNearHighPercent",
-    "fakeBreakoutMaxHighPullbackPercent",
-    "maxGapUpPercent",
-    "newsLookbackDays",
-    "eliteConcentrationMinScore",
-    "eliteConcentrationMaxMultiplier",
-    "eliteConcentrationMinTradeAmount",
-    "liveStarterBuyIntervalMs",
-    "liveStarterBuyPercent",
-    "liveStarterMinGateScore",
-    "liveStarterMinFinalScore",
-    "liveStarterMaxBuysPerCycle",
-    "liveOrderMaxQuoteAgeSeconds",
-    "liveOrderMaxSpreadPercent",
-    "liveOrderLockMs",
-    "liveDuplicateOrderWindowMs",
-    "livePositionManagementIntervalMs",
-    "liveProfitTrimTriggerPercent",
-    "liveProfitTrimQtyPercent",
-    "liveHardStopPercent",
-    "liveTrailStopFromHighPercent",
-    "liveScaleInIntervalMs",
-    "liveScaleInMinProfitPercent",
-    "liveScaleInMinFastScore",
-    "liveScaleInPercentOfPlan",
-    "liveScaleInMaxAddsPerSymbol",
-    "liveScaleInMaxAddsPerCycle"
-  ];
-  const booleanConfigKeys = [
-    "autoTradingEnabled",
-    "tradingModeLocked",
-    "enableMarketRegimeEngine",
-    "enableAdvancedFilters",
-    "requireAboveVwap",
-    "enableNewsRiskFilter",
-    "enableWeakestReplacement",
-    "eliteCapitalConcentrationEnabled",
-    "allowClosedMarketAutoTrade",
-    "enableLiveStarterBuy",
-    "enableLivePositionManagement",
-    "enableLiveScaleIn",
-    "liveOrderRequirePolygonConnected"
-  ];
-  const stringConfigKeys = ["tradingMode"];
-  const updates = {};
-  for (const key of numericConfigKeys) {
-    if (req.body[key] === undefined) continue;
-    const value = Number(req.body[key]);
-    if (!Number.isFinite(value)) {
-      return res.status(400).json({
-        ok: false,
-        error: `Invalid number for ${key}`,
-        received: req.body[key],
-      });
-    }
-    const protectedValue =
-      key === "minScoreToBuy" ? Math.max(70, value) : value;
-    updates[key] = protectedValue;
-    CONFIG[key] = protectedValue;
-  }
-  for (const key of booleanConfigKeys) {
-    if (req.body[key] === undefined) continue;
-    const value =
-      req.body[key] === true ||
-      req.body[key] === "true" ||
-      req.body[key] === 1 ||
-      req.body[key] === "1";
-    updates[key] = value;
-    CONFIG[key] = value;
-    if (key === "autoTradingEnabled") {
-      autoTradingEnabled = value;
-    }
-    if (key === "tradingModeLocked") {
-      tradingModeLocked = value;
-    }
-  }
-  for (const key of stringConfigKeys) {
-    if (req.body[key] === undefined) continue;
-    updates[key] = String(req.body[key]);
-    CONFIG[key] = String(req.body[key]);
-    if (key === "tradingMode") {
-      TRADING_MODE = String(req.body[key]);
-    }
-  }
-  runtimeConfig = saveRuntimeConfig({
-    ...runtimeConfig,
-    ...updates,
-    tradingMode: TRADING_MODE,
-    tradingModeLocked,
-    autoTradingEnabled,
-  });
-  runtimeConfig = sanitizeRuntimeConfig(runtimeConfig);
-  Object.assign(CONFIG, runtimeConfig);
-  CONFIG.minScoreToBuy = Math.max(70, Number(CONFIG.minScoreToBuy || 70));
-  applyRuntimeLiveSettings();
-  saveEngineState("MANUAL_CONFIG_UPDATED");
-  res.json({
-    ok: true,
-    permanent: true,
-    message: "Remote config permanently updated",
-    config: CONFIG,
-    runtimeConfig,
-    liveSettings: {
-      ENABLE_LIVE_STARTER_BUY,
-      LIVE_STARTER_BUY_PERCENT,
-      LIVE_STARTER_MIN_FINAL_SCORE,
-      LIVE_ORDER_MAX_QUOTE_AGE_SECONDS,
-      LIVE_ORDER_MAX_SPREAD_PERCENT,
-      ENABLE_LIVE_POSITION_MANAGEMENT,
-      LIVE_HARD_STOP_PERCENT,
-      LIVE_TRAIL_STOP_FROM_HIGH_PERCENT,
-      LIVE_PROFIT_TRIM_TRIGGER_PERCENT,
-      LIVE_PROFIT_TRIM_QTY_PERCENT,
-      ENABLE_LIVE_SCALE_IN,
-      LIVE_SCALE_IN_MIN_PROFIT_PERCENT,
-      LIVE_SCALE_IN_MIN_FAST_SCORE,
-    },
-  });
-});
-app.post("/mode-lock/on", requireAdmin, (req, res) => {
-  tradingModeLocked = true;
-  runtimeConfig = saveRuntimeConfig({
-    ...runtimeConfig,
-    tradingMode: TRADING_MODE,
-    tradingModeLocked,
-    autoTradingEnabled,
-  });
-  res.json({
-    message: "Trading mode locked",
+
+registerStatusRoutes(app, {
+  requireAdmin,
+  getState: () => engineState,
+  getRuntime: () => ({
     mode: TRADING_MODE,
     tradingModeLocked,
     autoTradingEnabled,
-  });
+    emergencyStopActive,
+    config: CONFIG,
+  }),
+  refreshAccountCache: refreshFrontendAccountCache,
+  getLatestStatus: getLatestFrontendStatusSnapshot,
+  mergeLiveQuote: mergeLiveQuoteIntoSignal,
+  getAccount,
+  updateAccountPeaks,
+  getClock,
+  getPositions,
+  getBotOwnedSymbols,
+  getOpenOrders,
+  reconcileBrokerState,
+  normalizeSymbol,
+  isManagedPosition: isAiManagedOpenPosition,
+  getBotExposure,
+  buildInstitutionalDashboard: buildInstitutionalDashboardPayload,
+  buildHighConvictionSummary: buildHighConvictionInstitutionalSummary,
+  buildTopBrains: buildTopAiBrains,
 });
-app.post("/mode-lock/off", requireAdmin, (req, res) => {
-  tradingModeLocked = false;
-  runtimeConfig = saveRuntimeConfig({
-    ...runtimeConfig,
-    tradingMode: TRADING_MODE,
-    tradingModeLocked,
+
+registerSignalRoutes(app, {
+  requireAdmin,
+  getState: () => engineState,
+  getMode: () => TRADING_MODE,
+  mergeLiveQuote: mergeLiveQuoteIntoSignal,
+  scanCrypto: scanCryptoMarket,
+  buildDashboard: buildInstitutionalDashboardPayload,
+  initializeJournal: initTradeJournalState,
+});
+
+registerBrokerDiagnosticRoutes(app, {
+  requireAdmin,
+  getState: () => engineState,
+  getPositions,
+  getOrders,
+  getBotOwnedSymbols,
+  normalizeSymbol,
+  getBotExposure,
+  isBotOrder,
+});
+
+registerQuoteDiagnosticRoutes(app, {
+  requireAdmin,
+  normalizeSymbol,
+  getStockQuote,
+  getAsset,
+  polygonQuote,
+  getPolygonContext: () => ({
+    enabled: ENABLE_POLYGON,
+    primary: POLYGON_PRIMARY,
+    keyFound: Boolean(POLYGON_API_KEY),
+    failures: engineState.apiFailureCounts?.polygon || 0,
+  }),
+});
+
+registerOperationalControlRoutes(app, {
+  requireAdmin,
+  getControlState: () => ({
+    emergencyStopActive,
     autoTradingEnabled,
-  });
-  res.json({
-    message: "Trading mode unlocked",
-    mode: TRADING_MODE,
-    tradingModeLocked,
-    autoTradingEnabled,
-  });
-});
-app.post("/manual-buy-stock", requireAdmin, async (req, res) => {
-  try {
-    const { symbol, dollars, shares, buyMode } = req.body;
-    const cleanSymbol = normalizeSymbol(symbol);
-    const amount = Number(dollars);
-    const shareAmount = Number(shares || 0);
-    const mode = String(buyMode || "dollars");
-    const asset = await getAsset(cleanSymbol);
-    const fractionable = asset?.fractionable === true;
-    if (!cleanSymbol) throw new Error("Missing symbol");
-    if (mode !== "shares" && (!amount || amount < 1)) {
-      throw new Error("Invalid dollar amount");
+    dailyLossLocked: engineState.dailyLossLocked,
+    profitLocked: engineState.profitLocked,
+  }),
+  updateControlState: (updates) => {
+    if (typeof updates.emergencyStopActive === "boolean") {
+      emergencyStopActive = updates.emergencyStopActive;
     }
-    const orderBody = {
-      symbol: cleanSymbol,
-      side: "buy",
-      type: "market",
-      time_in_force: "day",
-      client_order_id: `${AI_ORDER_PREFIX}_MANUAL_BUY_${cleanSymbol}_${Date.now()}`,
-    };
-    if (mode === "shares") {
-      if (!shareAmount || shareAmount <= 0) {
-        throw new Error("Invalid share amount");
-      }
-      if (!fractionable && Math.floor(shareAmount) < 1) {
-        throw new Error(
-          `${cleanSymbol} is not fractionable. Enter at least 1 whole share.`
-        );
-      }
-      orderBody.qty = fractionable
-        ? String(shareAmount)
-        : String(Math.floor(shareAmount));
-    } else {
-      if (!amount || amount < 1) {
-        throw new Error("Invalid dollar amount");
-      }
-      if (fractionable) {
-        orderBody.notional = Number(amount.toFixed(2));
-      } else {
-        const q = await getStockQuote(cleanSymbol);
-        const estimatedShares = Math.floor(amount / Number(q.current || 0));
-        if (!estimatedShares || estimatedShares < 1) {
-          throw new Error(
-            `${cleanSymbol} is not fractionable. Enter enough dollars for at least 1 whole share or use share mode.`
-          );
-        }
-        orderBody.qty = String(estimatedShares);
-      }
+    if (typeof updates.autoTradingEnabled === "boolean") {
+      autoTradingEnabled = updates.autoTradingEnabled;
     }
-    const order = await alpacaTradingRequest("/v2/orders", {
-      method: "POST",
-      body: JSON.stringify(orderBody),
-    });
-    console.log("MANUAL BUY ORDER:", order);
-    if (!order || !order.id) {
-      return res.json({
-        ok: false,
-        error: "Order not created",
-      });
-    }
-    markAiManagedSymbol(cleanSymbol);
-    return res.json({
-      ok: true,
-      message: `${cleanSymbol} manual buy placed. Bot can manage exit.`,
-      symbol: cleanSymbol,
-      dollars: amount,
-      aiManagedSymbols: engineState.aiManagedSymbols,
-      order,
-    });
-  } catch (err) {
-    res.status(500).json({
-      ok: false,
-      error: err.message,
-    });
-  }
-});
-app.post("/close-position", requireAdmin, async (req, res) => {
-  const { symbol } = req.body;
-  if (!symbol) {
-    return res.status(400).json({ error: "symbol is required" });
-  }
-  try {
-    const normalizedSymbol = normalizeSymbol(symbol);
-    const result = await closePosition(normalizedSymbol);
-    recordOrder("MANUAL_CLOSE", normalizedSymbol, {
-      result,
-    });
-    engineState.symbolCooldowns[normalizedSymbol] =
-      new Date().toISOString();
-    delete engineState.highWaterMarks[normalizedSymbol];
-    delete engineState.aiEntryScores[normalizedSymbol];
-    delete engineState.runnerPositions[normalizedSymbol];
-    res.json({
-      message: `Close position submitted for ${normalizedSymbol}`,
-      result,
-    });
-  } catch (err) {
-    recordFailedOrder("MANUAL_CLOSE_FAILED", symbol, err.message);
-    res.status(500).json({ error: err.message });
-  }
-});
-app.get("/probability-reinforcement", requireAdmin, async (req, res) => {
-  try {
-    res.json({
-      ok: true,
-      probabilityReinforcementState:
-        engineState.probabilityReinforcementState || null,
-      probabilityReinforcementHistory:
-        (
-          engineState.probabilityReinforcementHistory || []
-        ).slice(0, 100),
-    });
-  } catch (err) {
-    res.status(500).json({
-      ok: false,
-      error: err.message,
-    });
-  }
-});
-app.get("/institutional-orchestrator", requireAdmin, async (req, res) => {
-  try {
-    res.json({
-      ok: true,
-      institutionalOrchestratorState:
-        engineState.institutionalOrchestratorState || null,
-      institutionalOrchestratorHistory:
-        (
-          engineState.institutionalOrchestratorHistory || []
-        ).slice(0, 100),
-    });
-  } catch (err) {
-    res.status(500).json({
-      ok: false,
-      error: err.message,
-    });
-  }
-});
-app.get("/dcf-valuation", requireAdmin, async (req, res) => {
-  try {
-    res.json({
-      ok: true,
-      dcfValuationState:
-        engineState.dcfValuationState || null,
-      dcfValuationHistory:
-        (
-          engineState.dcfValuationHistory || []
-        ).slice(0, 100),
-    });
-  } catch (err) {
-    res.status(500).json({
-      ok: false,
-      error: err.message,
-    });
-  }
-});
-app.get("/competitive-advantage", requireAdmin, async (req, res) => {
-  try {
-    res.json({
-      ok: true,
-      competitiveAdvantageState:
-        engineState.competitiveAdvantageState || null,
-      competitiveAdvantageHistory:
-        (
-          engineState.competitiveAdvantageHistory || []
-        ).slice(0, 100),
-    });
-  } catch (err) {
-    res.status(500).json({
-      ok: false,
-      error: err.message,
-    });
-  }
-});
-app.get("/earnings-intelligence", requireAdmin, async (req, res) => {
-  try {
-    res.json({
-      ok: true,
-      earningsIntelligenceState:
-        engineState.earningsIntelligenceState || null,
-      earningsIntelligenceHistory:
-        (
-          engineState.earningsIntelligenceHistory || []
-        ).slice(0, 100),
-    });
-  } catch (err) {
-    res.status(500).json({
-      ok: false,
-      error: err.message,
-    });
-  }
-});
-app.get("/portfolio-optimizer", requireAdmin, async (req, res) => {
-  try {
-    res.json({
-      ok: true,
-      portfolioOptimizationState:
-        engineState.portfolioOptimizationState || null,
-      portfolioOptimizationHistory:
-        (
-          engineState.portfolioOptimizationHistory || []
-        ).slice(0, 100),
-    });
-  } catch (err) {
-    res.status(500).json({
-      ok: false,
-      error: err.message,
-    });
-  }
-});
-app.get("/technical-intelligence", requireAdmin, async (req, res) => {
-  try {
-    res.json({
-      ok: true,
-      technicalIntelligenceState:
-        engineState.technicalIntelligenceState || null,
-      technicalIntelligenceHistory:
-        (
-          engineState.technicalIntelligenceHistory || []
-        ).slice(0, 100),
-    });
-  } catch (err) {
-    res.status(500).json({
-      ok: false,
-      error: err.message,
-    });
-  }
-});
-
-app.get("/api/memory-status", requireAdmin, (req, res) => {
-  const memory = process.memoryUsage();
-
-  res.json({
-    ok: true,
-    updatedAt: new Date().toISOString(),
-
-    processMemory: {
-      rssMb: Number(
-        (memory.rss / 1024 / 1024).toFixed(2)
-      ),
-
-      heapUsedMb: Number(
-        (memory.heapUsed / 1024 / 1024).toFixed(2)
-      ),
-
-      heapTotalMb: Number(
-        (memory.heapTotal / 1024 / 1024).toFixed(2)
-      ),
-
-      externalMb: Number(
-        (memory.external / 1024 / 1024).toFixed(2)
-      ),
-    },
-
-    engineMemory: {
-      runnerPredictionHistory:
-        engineState.runnerPredictionHistory?.length || 0,
-
-      runnerLearningResults:
-        engineState.runnerLearningResults?.length || 0,
-
-      runnerWatchlistHistory:
-        engineState.runnerWatchlistHistory?.length || 0,
-
-      fastRunnerCandidates:
-        engineState.fastRunnerCandidates?.length || 0,
-
-      topRunnerWatchlist:
-        engineState.topRunnerWatchlist?.length || 0,
-
-      highAlertRunnerStocks:
-        engineState.highAlertRunnerStocks?.length || 0,
-
-      liveQuoteSymbols:
-        Object.keys(
-          engineState.liveQuoteCache || {}
-        ).length,
-
-      liveMarketMemorySymbols:
-        Object.keys(
-          engineState.liveMarketMemory || {}
-        ).length,
-    },
-  });
-});
-
-app.get("/api/swing-watchlist", requireAdmin, (req, res) => {
-  try {
-    saveRenderMemory("SWING_WATCHLIST_ROUTE_READ");
-
-    res.json({
-      ok: true,
-      updatedAt: new Date().toISOString(),
-
-      swingWatchlistState:
-        engineState.swingWatchlistState || null,
-
-      topSwingWatchlist:
-        (engineState.topSwingWatchlist || []).slice(0, 25),
-
-      highConfidenceSwingStocks:
-        (engineState.highConfidenceSwingStocks || []).slice(0, 10),
-
-      swingPredictionHistory:
-        (engineState.swingPredictionHistory || []).slice(0, 50),
-
-      swingLearningState:
-        engineState.swingLearningState || null,
-
-      swingLearningResults:
-        (engineState.swingLearningResults || []).slice(0, 50),
-
-      swingWatchlistHistory:
-        (engineState.swingWatchlistHistory || []).slice(0, 25),
-    });
-  } catch (err) {
-    res.status(500).json({
-      ok: false,
-      error: err.message,
-    });
-  }
-});
-
-app.get("/api/runner-watchlist", requireAdmin, (req, res) => {
-  try {
-    saveRenderMemory("RUNNER_WATCHLIST_ROUTE_READ");
-
-    res.json({
-      ok: true,
-      updatedAt: new Date().toISOString(),
-
-      runnerWatchlistState:
-        engineState.runnerWatchlistState || null,
-
-      topRunnerWatchlist:
-        (engineState.topRunnerWatchlist || []).slice(0, 25),
-
-      highAlertRunnerStocks:
-        (engineState.highAlertRunnerStocks || []).slice(0, 10),
-
-      fastRunnerCandidates:
-        (engineState.fastRunnerCandidates || []).slice(0, 25),
-
-      visibleLiveCandidates:
-        (engineState.visibleLiveCandidates || []).slice(0, 25),
-
-      runnerPredictionHistory:
-        (engineState.runnerPredictionHistory || []).slice(0, 50),
-
-      runnerLearningState:
-        engineState.runnerLearningState || null,
-
-      runnerLearningResults:
-        (engineState.runnerLearningResults || []).slice(0, 50),
-
-      runnerWatchlistHistory:
-        (engineState.runnerWatchlistHistory || []).slice(0, 25),
-    });
-  } catch (err) {
-    res.status(500).json({
-      ok: false,
-      error: err.message,
-    });
-  }
-});
-
-app.get("/statistical-edge", requireAdmin, async (req, res) => {
-  try {
-    res.json({
-      ok: true,
-      statisticalEdgeState:
-        engineState.statisticalEdgeState || null,
-      statisticalEdgeHistory:
-        (engineState.statisticalEdgeHistory || []).slice(
-          0,
-          100
-        ),
-    });
-  } catch (err) {
-    res.status(500).json({
-      ok: false,
-      error: err.message,
-    });
-  }
-});
-app.get("/capital-compounding", requireAdmin, async (req, res) => {
-  try {
-    res.json({
-      ok: true,
-      capitalCompoundingState:
-        engineState.capitalCompoundingState || null,
-      equityCurveState:
-        engineState.equityCurveState || null,
-      drawdownRecoveryState:
-        engineState.drawdownRecoveryState || null,
-      adaptiveRiskState:
-        engineState.adaptiveRiskState || null,
-      capitalCompoundingHistory:
-        (engineState.capitalCompoundingHistory || []).slice(
-          0,
-          100
-        ),
-    });
-  } catch (err) {
-    res.status(500).json({
-      ok: false,
-      error: err.message,
-    });
-  }
-});
-
-app.post("/api/config", requireAdmin, (req, res) => {
-  try {
-    const updates = req.body || {};
-
-    runtimeConfig = sanitizeRuntimeConfig({
+    runtimeConfig = saveRuntimeConfig(CONFIG_FILE, {
       ...runtimeConfig,
-      ...updates,
+      emergencyStopActive,
+      autoTradingEnabled,
     });
-
-    if (updates.tradingMode) {
-      TRADING_MODE = String(updates.tradingMode);
-      runtimeConfig.tradingMode = TRADING_MODE;
-    }
-
-    if (updates.tradingModeLocked !== undefined) {
-      tradingModeLocked =
-        updates.tradingModeLocked === true ||
-        updates.tradingModeLocked === "true";
-      runtimeConfig.tradingModeLocked = tradingModeLocked;
-    }
-
-    if (updates.autoTradingEnabled !== undefined) {
-      autoTradingEnabled =
-        updates.autoTradingEnabled === true ||
-        updates.autoTradingEnabled === "true";
-      runtimeConfig.autoTradingEnabled = autoTradingEnabled;
-    }
-
-    saveRuntimeConfig(CONFIG_FILE, runtimeConfig);
-
-    res.json({
-      ok: true,
-      updatedAt: new Date().toISOString(),
-      runtimeConfig,
+    return { emergencyStopActive, autoTradingEnabled };
+  },
+  recordOrder,
+  getClientIp,
+  saveEngineState,
+});
+registerOperationalActionRoutes(app, {
+  requireAdmin,
+  getState: () => engineState,
+  runEngineCycle,
+  getAutoTradingEnabled: () => autoTradingEnabled,
+  saveState: saveEngineState,
+  setModeLock: (locked) => {
+    tradingModeLocked = locked;
+    runtimeConfig = saveRuntimeConfig(CONFIG_FILE, {
+      ...runtimeConfig,
       tradingMode: TRADING_MODE,
-      effectiveMode: getEffectiveTradingMode(engineState.marketOpen),
       tradingModeLocked,
       autoTradingEnabled,
     });
-  } catch (err) {
-    res.status(500).json({
-      ok: false,
-      error: err.message,
-    });
-  }
+    return { mode: TRADING_MODE, tradingModeLocked, autoTradingEnabled };
+  },
+  recordOrder,
 });
 
-app.post("/reset-daily-lock", requireAdmin, (req, res) => {
-  engineState.dailyLossLocked = false;
-  engineState.profitLocked = false;
-  engineState.dailyStartEquity = null;
-  engineState.dailyPeakEquity = null;
-  engineState.profitLockFloorEquity = null;
-  engineState.dailyDateKey = null;
-  recordOrder("MANUAL_DAILY_LOCK_RESET", "ACCOUNT", {
-    resetAt: new Date().toISOString(),
-  });
-  saveEngineState("DAILY_PROFIT_LOCK_RESET");
-  res.json({
-    message: "Daily/profit lock reset",
-    engineState,
-  });
-});
-app.get("/morning-strike", requireAdmin, async (req, res) => {
-  try {
-    resetDailyMorningTradeCounter();
-    res.json({
-      ok: true,
-      premarketMomentumState:
-        engineState.premarketMomentumState || null,
-      morningStrikeState:
-        engineState.morningStrikeState || null,
-      continuationHoldState:
-        engineState.continuationHoldState || null,
-      explosiveRunnerState:
-        engineState.explosiveRunnerState || null,
-      activeContinuationHoldSymbol:
-        engineState.activeContinuationHoldSymbol || null,
-      morningTradeLimit: {
-        morningTradesToday:
-          engineState.morningTradesToday || 0,
-        maxMorningTradesPerDay:
-          CONFIG.maxMorningTradesPerDay,
-        remainingMorningTrades:
-          Math.max(
-            0,
-            Number(CONFIG.maxMorningTradesPerDay || 10) -
-            Number(engineState.morningTradesToday || 0)
-          ),
-        lastMorningTradeDateKey:
-          engineState.lastMorningTradeDateKey || null,
-      },
-      windows: {
-        isPremarketWindow:
-          isPremarketMomentumWindow(),
-        isMorningStrikeWindow:
-          isMorningStrikeWindow(),
-        isContinuationHoldWindow:
-          isContinuationHoldWindow(),
-      },
-      premarketMomentumHistory:
-        (engineState.premarketMomentumHistory || []).slice(
-          0,
-          20
-        ),
-      morningStrikeHistory:
-        (engineState.morningStrikeHistory || []).slice(
-          0,
-          20
-        ),
-      explosiveRunnerHistory:
-        (engineState.explosiveRunnerHistory || []).slice(
-          0,
-          20
-        ),
-      continuationHoldHistory:
-        (engineState.continuationHoldHistory || []).slice(
-          0,
-          20
-        ),
-    });
-  } catch (err) {
-    res.status(500).json({
-      ok: false,
-      error: err.message,
-    });
-  }
-});
-app.get("/polygon-test/:symbol", requireAdmin, async (req, res) => {
-  try {
-    const symbol = normalizeSymbol(req.params.symbol);
-    const quote = await polygonQuote(symbol);
-    res.json({
-      ok: !!quote,
-      symbol,
-      polygonEnabled: ENABLE_POLYGON,
-      polygonPrimary: POLYGON_PRIMARY,
-      polygonKeyFound: !!POLYGON_API_KEY,
-      quote,
-      polygonFailures: engineState.apiFailureCounts?.polygon || 0,
-    });
-  } catch (err) {
-    res.status(500).json({
-      ok: false,
-      error: err.message,
-    });
-  }
-});
-app.get("/trade-journal", requireAdmin, (req, res) => {
-  try {
-    initTradeJournalState();
-    res.json({
-      ok: true,
-      tradeJournalState:
-        engineState.tradeJournalState,
-      openEntries:
-        engineState.tradeJournalOpenEntries,
-      recentClosedTrades:
-        (engineState.tradeJournalHistory || []).slice(
-          0,
-          100
-        ),
-      strategyPerformanceState:
-        engineState.strategyPerformanceState,
-      regimePerformanceState:
-        engineState.regimePerformanceState,
-      sectorPerformanceState:
-        engineState.sectorPerformanceState,
-      confirmationPerformanceState:
-        engineState.confirmationPerformanceState,
-    });
-  } catch (err) {
-    res.status(500).json({
-      ok: false,
-      error: err.message,
-    });
-  }
-});
-async function shutdown(signal) {
-  saveEngineState(`SHUTDOWN_${signal}`);
-  if (typeof flushStateToFile === "function") {
-    await flushStateToFile();
-  } else {
-    saveEngineState("SHUTDOWN");
-  }
-  process.exit(0);
-}
-process.on("SIGINT", () => {
-  shutdown("SIGINT");
-});
-process.on("SIGTERM", () => {
-  shutdown("SIGTERM");
+
+registerIntelligenceRoutes(app, {
+  requireAdmin,
+  getState: () => engineState,
 });
 
-setInterval(() => {
-  try {
-    saveRenderMemory("RENDER_MEMORY_INTERVAL");
-    saveEngineState("RENDER_MEMORY_INTERVAL");
-  } catch (err) {
-    console.error(
-      "RENDER_MEMORY_INTERVAL",
-      err?.message
-    );
-  }
-}, 300000);
+registerQuietDiscoveryRoutes(app, {
+  requireAdmin,
+  getState: () => engineState,
+  getStoreStats: () => discoveryFeatureStore.stats(),
+  runDiscovery: runBoundedQuietDiscoveryScan,
+});
+
+registerMemoryWatchlistRoutes(app, {
+  requireAdmin,
+  getState: () => engineState,
+  saveRenderMemory,
+});
 
 
-setInterval(() => {
-  checkRunnerPredictionResults().catch((err) => {
-    console.error(
-      "RUNNER_RESULT_CHECKER_INTERVAL",
-      err?.message
-    );
-  });
-}, 60 * 60 * 1000);
 
 
-app.listen(PORT, "0.0.0.0", async () => {
-  console.log(`SmartMoney Pro backend running on port ${PORT}`);
-  startFinnhubStream();
-  startLiveScheduler();
-  startPolygonStockStream();
-  startPolygonCryptoStream();
-  console.log(`Auto trading enabled: ${autoTradingEnabled}`);
-  console.log("Advanced filters config:", {
-    enableAdvancedFilters: CONFIG.enableAdvancedFilters,
-    minVolumeSpikeRatio: CONFIG.minVolumeSpikeRatio,
-    minCloseNearHighPercent: CONFIG.minCloseNearHighPercent,
-    requireAboveVwap: CONFIG.requireAboveVwap,
-    enableNewsRiskFilter: CONFIG.enableNewsRiskFilter,
-  });
-  console.log("Runner strategy config:", {
-    runnerTriggerPercent: CONFIG.runnerTriggerPercent,
-    runnerTrailingStopPercent: CONFIG.runnerTrailingStopPercent,
-    takeProfitPercent: CONFIG.takeProfitPercent,
-    stopLossPercent: CONFIG.stopLossPercent,
-    trailingStopPercent: CONFIG.trailingStopPercent,
-  });
-  if (!RUN_STARTUP_ENGINE_SCAN) {
-    console.log("Startup engine scan skipped because RUN_STARTUP_ENGINE_SCAN is false.");
-    return;
-  }
-  console.log("Running first SmartMoney Pro scan on startup.");
-  if (
-    engineState.running ||
-    engineState.engineFreezeDetected
-  ) {
-    console.warn("Startup scan skipped because engine is already running or frozen.");
-    return;
-  }
-  setTimeout(() => {
-    runEngineCycle()
-      .then(() => {
-        engineState.startupScanState = {
-          ok: true,
-          completedAt: new Date().toISOString(),
-        };
-        saveEngineState("STARTUP_SCAN_COMPLETED");
-      })
-      .catch((err) => {
-        engineState.running = false;
-        engineState.lastError = err.message;
-        engineState.lastEngineStopReason = "STARTUP_ENGINE_TICK_FAILED";
-        engineState.startupScanState = {
-          ok: false,
-          failedAt: new Date().toISOString(),
-          error: err.message,
-        };
-        saveEngineState("STARTUP_SCAN_FAILED");
-        console.error("Startup runEngineCycle failed:", err.message);
-      });
-  }, 3000);
+
+registerManualExecutionRoutes(app, {
+  requireAdmin,
+  normalizeSymbol,
+  getAsset,
+  getStockQuote,
+  manualStockBuy: (input) => orderService.manualStockBuy(input),
+  markManagedSymbol: markAiManagedSymbol,
+  getState: () => engineState,
+  closePosition,
+  recordOrder,
+  recordFailedOrder,
+});
+
+
+registerConfigRoutes(app, {
+  requireAdmin,
+  getConfig: () => CONFIG,
+  getRuntimeConfig: () => runtimeConfig,
+  isEmergencyStopped: () => emergencyStopActive,
+  resetRuntimeConfig: () => {
+    const preserved = { alpacaLiveKey: runtimeConfig.alpacaLiveKey, alpacaLiveSecret: runtimeConfig.alpacaLiveSecret };
+    if (fs.existsSync(CONFIG_FILE)) fs.unlinkSync(CONFIG_FILE);
+    runtimeConfig = saveRuntimeConfig(CONFIG_FILE, preserved);
+  },
+  applyPermanentUpdates: (updates) => {
+    Object.assign(CONFIG, updates);
+    if (updates.autoTradingEnabled !== undefined) autoTradingEnabled = updates.autoTradingEnabled;
+    if (updates.tradingModeLocked !== undefined) tradingModeLocked = updates.tradingModeLocked;
+    if (updates.tradingMode !== undefined) TRADING_MODE = updates.tradingMode;
+    runtimeConfig = sanitizeRuntimeConfig(saveRuntimeConfig(CONFIG_FILE, {
+      ...runtimeConfig, ...updates, tradingMode: TRADING_MODE, tradingModeLocked, autoTradingEnabled,
+    }));
+    Object.assign(CONFIG, runtimeConfig);
+    CONFIG.minScoreToBuy = Math.max(70, Number(CONFIG.minScoreToBuy || 70));
+    applyRuntimeLiveSettings();
+    saveEngineState("MANUAL_CONFIG_UPDATED");
+    return { ok: true, permanent: true, message: "Remote config permanently updated", config: CONFIG,
+      runtimeConfig, liveSettings: { ENABLE_LIVE_STARTER_BUY, LIVE_STARTER_BUY_PERCENT,
+        LIVE_STARTER_MIN_FINAL_SCORE, LIVE_ORDER_MAX_QUOTE_AGE_SECONDS, LIVE_ORDER_MAX_SPREAD_PERCENT,
+        ENABLE_LIVE_POSITION_MANAGEMENT, LIVE_HARD_STOP_PERCENT, LIVE_TRAIL_STOP_FROM_HIGH_PERCENT,
+        LIVE_PROFIT_TRIM_TRIGGER_PERCENT, LIVE_PROFIT_TRIM_QTY_PERCENT, ENABLE_LIVE_SCALE_IN,
+        LIVE_SCALE_IN_MIN_PROFIT_PERCENT, LIVE_SCALE_IN_MIN_FAST_SCORE } };
+  },
+  applyApiUpdates: (updates) => {
+    runtimeConfig = sanitizeRuntimeConfig({ ...runtimeConfig, ...updates });
+    if (updates.tradingMode) TRADING_MODE = runtimeConfig.tradingMode = String(updates.tradingMode);
+    if (updates.tradingModeLocked !== undefined) tradingModeLocked = runtimeConfig.tradingModeLocked = updates.tradingModeLocked === true || updates.tradingModeLocked === "true";
+    if (updates.autoTradingEnabled !== undefined) autoTradingEnabled = runtimeConfig.autoTradingEnabled = updates.autoTradingEnabled === true || updates.autoTradingEnabled === "true";
+    saveRuntimeConfig(CONFIG_FILE, runtimeConfig);
+    return { runtimeConfig, tradingMode: TRADING_MODE, effectiveMode: getEffectiveTradingMode(engineState.marketOpen),
+      tradingModeLocked, autoTradingEnabled };
+  },
+});
+
+registerMorningStrikeRoutes(app, {
+  requireAdmin,
+  resetCounter: resetDailyMorningTradeCounter,
+  getState: () => engineState,
+  getConfig: () => CONFIG,
+  getWindows: () => ({
+    isPremarketWindow: isPremarketMomentumWindow(),
+    isMorningStrikeWindow: isMorningStrikeWindow(),
+    isContinuationHoldWindow: isContinuationHoldWindow(),
+  }),
+});
+
+startServerLifecycle({
+  app,
+  port: PORT,
+  state: engineState,
+  config: CONFIG,
+  autoTradingEnabled,
+  runStartupEngineScan: RUN_STARTUP_ENGINE_SCAN,
+  runStartupScan: runEngineCycle,
+  saveState: saveEngineState,
+  flushState: flushStateToFile,
+  saveRenderMemory,
+  checkRunnerResults: checkRunnerPredictionResults,
+  startServices: [
+    startFinnhubStream,
+    startLiveScheduler,
+    startPolygonStockStream,
+    startPolygonCryptoStream,
+  ],
 });

@@ -2,12 +2,12 @@ function fallbackIsNormalStockSymbol(symbol = "") {
   const clean = String(symbol || "").trim().toUpperCase();
 
   if (!clean) return false;
-  if (clean.includes(".")) return false;
-  if (clean.includes("-")) return false;
   if (clean.includes("/")) return false;
-  if (clean.length > 5) return false;
+  if (clean.includes("-USD")) return false;
+  if (clean.includes("USDT")) return false;
+  if (clean.length > 7) return false;
 
-  return /^[A-Z]+$/.test(clean);
+  return /^[A-Z][A-Z0-9.-]*$/.test(clean);
 }
 
 function getStockSymbolValidator(isNormalStockSymbol) {
