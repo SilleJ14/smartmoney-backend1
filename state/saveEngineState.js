@@ -1,29 +1,63 @@
-import { compactPersistedEngineStateSnapshot } from "./compactEngineState.js";
+import {
+  compactLiveEngineStateHistories,
+  compactPersistedEngineStateSnapshot,
+} from "./compactEngineState.js";
 import { pruneEngineState } from "./pruneEngineState.js";
 import { writeJsonAtomic } from "./safeJson.js";
-
-let engineStateSaveTimer = null;
-let pendingEngineStateSnapshot = null;
-let pendingEngineStateReason = "STATE_UPDATE";
 
 export function createEngineStateSaver({
   ENGINE_STATE_FILE,
   engineState,
   getEffectiveTradingMode,
+  writeState = writeJsonAtomic,
+  saveDelayMs = 1000,
+  setTimeoutFn = setTimeout,
+  clearTimeoutFn = clearTimeout,
 }) {
+  let engineStateSaveTimer = null;
+  let pendingEngineStateSnapshot = null;
+  let pendingEngineStateReason = "STATE_UPDATE";
+  let stateWritePromise = null;
+  let lastWriteError = null;
+  let completedWriteCount = 0;
+
   function flushEngineStateSave() {
+    if (engineStateSaveTimer) {
+      clearTimeoutFn(engineStateSaveTimer);
+      engineStateSaveTimer = null;
+    }
+    if (stateWritePromise) return stateWritePromise;
     if (!pendingEngineStateSnapshot) return Promise.resolve();
 
-    const snapshot = pendingEngineStateSnapshot;
-    pendingEngineStateSnapshot = null;
-
-    return writeJsonAtomic(ENGINE_STATE_FILE, snapshot).catch((err) => {
-      console.error("Async engine-state save failed:", err.message);
+    stateWritePromise = (async () => {
+      while (pendingEngineStateSnapshot) {
+        const snapshot = pendingEngineStateSnapshot;
+        pendingEngineStateSnapshot = null;
+        try {
+          await writeState(ENGINE_STATE_FILE, snapshot);
+          completedWriteCount += 1;
+          lastWriteError = null;
+        } catch (err) {
+          lastWriteError = err?.message || String(err);
+          console.error("Async engine-state save failed:", lastWriteError);
+        }
+      }
+    })().finally(() => {
+      stateWritePromise = null;
+      if (pendingEngineStateSnapshot && !engineStateSaveTimer) {
+        engineStateSaveTimer = setTimeoutFn(() => {
+          engineStateSaveTimer = null;
+          void flushEngineStateSave();
+        }, 0);
+      }
     });
+
+    return stateWritePromise;
   }
 
   function saveEngineState(reason = "STATE_UPDATE") {
     try {
+      compactLiveEngineStateHistories(engineState);
       const safeState = {
         reason,
         savedAt: new Date().toISOString(),
@@ -692,10 +726,10 @@ export function createEngineStateSaver({
       pendingEngineStateReason = reason;
 
       if (!engineStateSaveTimer) {
-        engineStateSaveTimer = setTimeout(() => {
+        engineStateSaveTimer = setTimeoutFn(() => {
           engineStateSaveTimer = null;
-          flushEngineStateSave();
-        }, 1000);
+          void flushEngineStateSave();
+        }, saveDelayMs);
       }
 
       return compactSafeState;
@@ -708,6 +742,14 @@ export function createEngineStateSaver({
   return {
     saveEngineState,
     flushEngineStateSave,
+    flushStateToFile: flushEngineStateSave,
     getPendingEngineStateReason: () => pendingEngineStateReason,
+    getSaveStatus: () => ({
+      writeInProgress: Boolean(stateWritePromise),
+      saveScheduled: Boolean(engineStateSaveTimer),
+      pendingSnapshot: Boolean(pendingEngineStateSnapshot),
+      completedWriteCount,
+      lastWriteError,
+    }),
   };
 }

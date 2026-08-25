@@ -10,7 +10,9 @@ export async function writeJsonAtomic(filePath, data) {
 
   const tempFile = `${filePath}.tmp`;
 
-  const json = JSON.stringify(data, null, 2);
+  // Persist compact JSON. Pretty-printing large engine snapshots can add
+  // tens of megabytes and keeps that larger string resident during writes.
+  const json = JSON.stringify(data);
 
   await fs.promises.writeFile(
     tempFile,

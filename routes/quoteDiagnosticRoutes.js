@@ -11,7 +11,7 @@ export function registerQuoteDiagnosticRoutes(app, dependencies) {
         percentChange: quote.percentChange, open: quote.open, dayOpen: quote.open,
         liveQuoteUpdatedAt: quote.quoteFetchedAt, liveQuoteSource: quote.liveQuoteSource,
         priceIsLive: quote.priceIsLive === true, chartBars: quote.chartBars || [],
-        historicalBars: quote.historicalBars || [], sparkline: quote.sparkline || [],
+        historicalBars: quote.historicalBars || quote.chartBars || [], sparkline: quote.sparkline || [],
         source: quote.source || "polygon_first_manual_search", autoTradeAllowed: false,
         manuallyBuyable: true, fractionable: asset?.fractionable === true,
         assetClass: asset?.asset_class || "us_equity",

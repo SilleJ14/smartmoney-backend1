@@ -90,6 +90,7 @@ export function createEngineCycle(dependencies) {
     getEffectiveTradingMode,
     getEnabledStrategyModes,
     getPositions,
+    getMemoryGuardState,
     normalizeSymbol,
     pushLiveSignalUpdate,
     recordOrder,
@@ -208,6 +209,18 @@ export function createEngineCycle(dependencies) {
       }
       let stockSignals = [];
       let cryptoSignals = [];
+      const memoryGuard = typeof getMemoryGuardState === "function"
+        ? getMemoryGuardState()
+        : { shouldPauseHeavyWork: false };
+      engineState.memoryGuardState = {
+        ...memoryGuard,
+        checkedAt: new Date().toISOString(),
+      };
+      if (memoryGuard.shouldPauseHeavyWork) {
+        engineState.lastEngineStopReason = "MEMORY_GUARD_HEAVY_SCAN_SKIPPED";
+        engineState.lastHeartbeatAt = new Date().toISOString();
+        return;
+      }
       const scanStartedAt = Date.now();
       if (cryptoModeEnabled) {
         cryptoSignals = await scanCryptoMarket();

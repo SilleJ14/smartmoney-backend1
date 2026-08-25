@@ -527,7 +527,6 @@ export function createCryptoMarketScanner(dependencies) {
           score,
           barsFound: bars.length,
           chartBars: cryptoChartBars,
-          historicalBars: cryptoChartBars,
           sparkline: cryptoSparkline,
           chartSource: "polygon_crypto_aggs",
           chartTimeframe: "best_available_live_crypto",

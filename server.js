@@ -15,7 +15,10 @@ import {
 import { registerAlpacaRoutes } from "./routes/alpacaRoutes.js";
 import { writeJsonAtomic } from "./state/safeJson.js";
 import { loadPersistedEngineState } from "./state/loadEngineState.js";
-import { compactPersistedEngineStateSnapshot } from "./state/compactEngineState.js";
+import {
+  compactLiveEngineStateHistories,
+  compactPersistedEngineStateSnapshot,
+} from "./state/compactEngineState.js";
 import {
   getAlpacaKeys as getAlpacaKeysFromProvider,
   getTradingBaseUrl,
@@ -151,6 +154,7 @@ import { registerLiveMoversRoutes } from "./routes/liveMoversRoutes.js";
 import { registerStatusRoutes } from "./routes/statusRoutes.js";
 import { resetDailySafetyState } from "./state/dailySafetyState.js";
 import { createEngineState } from "./state/createEngineState.js";
+import { buildMemoryGuardSnapshot } from "./state/memoryGuard.js";
 import { createInitialEngineState } from "./state/initialEngineState.js";
 import {
   getEffectiveTradingMode as resolveEffectiveTradingMode,
@@ -659,7 +663,7 @@ function resetDailySafetyStateIfNewDay(account) {
   return result.reset;
 }
 runtimeConfig = sanitizeRuntimeConfig(runtimeConfig);
-const persistedEngineState =
+let persistedEngineState =
   pruneEngineState(
     loadPersistedEngineState(ENGINE_STATE_FILE)
   );
@@ -995,14 +999,21 @@ engineState = createEngineState({
   canonicalize: canonicalizeEngineStateAliases,
   config: CONFIG,
 });
+compactLiveEngineStateHistories(engineState);
+// Release the original parsed snapshot after hydration. Otherwise it keeps the
+// pre-compaction history graph reachable for the lifetime of the process.
+persistedEngineState = null;
 const {
   saveEngineState,
   flushStateToFile,
+  getSaveStatus,
 } = createEngineStateSaver({
   ENGINE_STATE_FILE,
   engineState,
   getEffectiveTradingMode,
 });
+saveEngineState("STARTUP_MEMORY_COMPACTION");
+await flushStateToFile();
 cleanupLiveQuoteCache(LIVE_MARKET_MEMORY_MAX_AGE_MINUTES);
 const activeBuyExecutionLocks = new Set();
 const activeScanLocks = {
@@ -2831,6 +2842,7 @@ function getLatestLiveQuoteUpdateAt() {
 function buildBackendHealthPayload(clock = {}) {
   const liveQuoteCount = Object.keys(engineState.liveQuoteCache || {}).length;
   const latestLiveQuoteUpdateAt = getLatestLiveQuoteUpdateAt();
+  const processMemory = buildMemoryGuardSnapshot();
   return {
     ok: true,
     online: true,
@@ -2847,6 +2859,8 @@ function buildBackendHealthPayload(clock = {}) {
     server: {
       uptimeSeconds: Math.floor(process.uptime()),
       timestamp: new Date().toISOString(),
+      memory: processMemory,
+      stateSaver: getSaveStatus(),
     },
     engine: {
       running: Boolean(engineState.running),
@@ -14128,7 +14142,6 @@ async function getStockQuote(symbol) {
     open,
     previousClose,
     chartBars: stockChartBars,
-    historicalBars: stockChartBars,
     sparkline: stockSparkline,
     chartSource: "alpaca_stock_bars",
     chartTimeframe: "5Min",
@@ -22908,6 +22921,7 @@ const { executeEngineCycleBody } = createEngineCycle({
   getEffectiveTradingMode,
   getEnabledStrategyModes,
   getPositions,
+  getMemoryGuardState: buildMemoryGuardSnapshot,
   normalizeSymbol,
   pushLiveSignalUpdate,
   recordOrder,
