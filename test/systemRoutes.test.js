@@ -30,4 +30,6 @@ test("health tolerates clock failure using cached market state", async () => {
   const response = await api.invoke("/health");
   assert.equal(response.body.ok, true);
   assert.equal(response.body.marketOpen, true);
+  assert.equal(response.body.release.id, "scoring-telemetry-2026-08-25");
+  assert.ok(Object.hasOwn(response.body.release, "commit"));
 });
