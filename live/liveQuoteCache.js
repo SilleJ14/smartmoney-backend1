@@ -1,17 +1,54 @@
-export function isLiveQuoteSource(source = "") {
-  const clean = String(source || "").toLowerCase();
+const LIVE_QUOTE_PROVIDER_BY_SOURCE = Object.freeze({
+  polygon_ws_trade: "polygon",
+  polygon_ws_quote: "polygon",
+  polygon_ws_second_aggregate: "polygon",
+  polygon_crypto_ws_trade: "polygon",
+  polygon_crypto_ws_quote: "polygon",
+  polygon_crypto_ws_aggregate: "polygon",
+  polygon_crypto_ws_minute_aggregate: "polygon",
+  finnhub_ws: "finnhub",
+  finnhub_ws_trade: "finnhub",
+  alpaca_latest_stock_quote: "alpaca",
+  alpaca_crypto_latest: "alpaca",
+});
 
-  return [
-    "polygon_ws_trade",
-    "polygon_ws_quote",
-    "polygon_ws_second_aggregate",
-    "polygon_crypto_ws_trade",
-    "polygon_crypto_ws_quote",
-    "polygon_crypto_ws_aggregate",
-    "polygon_crypto_ws_minute_aggregate",
-    "finnhub_ws",
-    "finnhub_ws_trade",
-  ].includes(clean);
+export function getLiveQuoteProvider(source = "") {
+  return LIVE_QUOTE_PROVIDER_BY_SOURCE[String(source || "").toLowerCase()] || null;
+}
+
+export function isLiveQuoteSource(source = "") {
+  return getLiveQuoteProvider(source) !== null;
+}
+
+export function evaluateLiveQuoteProviderReadiness(
+  source = "",
+  {
+    isCrypto = false,
+    polygonConnected = false,
+    polygonCryptoConnected = false,
+    finnhubConnected = false,
+  } = {}
+) {
+  const provider = getLiveQuoteProvider(source);
+  const connected =
+    provider === "polygon"
+      ? isCrypto
+        ? polygonCryptoConnected === true
+        : polygonConnected === true
+      : provider === "finnhub"
+        ? isCrypto !== true && finnhubConnected === true
+        : provider === "alpaca";
+
+  return {
+    provider,
+    connected,
+    quoteSource: String(source || ""),
+    reason: provider
+      ? connected
+        ? `${provider.toUpperCase()}_LIVE_QUOTE_PROVIDER_READY`
+        : `${provider.toUpperCase()}_LIVE_QUOTE_PROVIDER_DISCONNECTED`
+      : "UNRECOGNIZED_LIVE_QUOTE_PROVIDER",
+  };
 }
 
 export function calculateSpread({ bid = 0, ask = 0, price = 0, previous = {} }) {

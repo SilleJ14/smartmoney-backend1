@@ -50,12 +50,14 @@ import {
   getAuthoritativeLiveQuote as getAuthoritativeLiveQuoteHelper,
   getLiveQuoteAgeSeconds as getLiveQuoteAgeSecondsHelper,
   cleanupLiveQuoteCache as cleanupLiveQuoteCacheHelper,
+  evaluateLiveQuoteProviderReadiness,
   isLiveQuoteSource,
 } from "./live/liveQuoteCache.js";
 import {
   updateLiveMarketMemory as updateLiveMarketMemoryHelper,
   calculateFastRunnerScoreFromMemory,
 } from "./live/liveMarketMemory.js";
+import { resolvePreTradeQuote } from "./live/preTradeQuoteResolver.js";
 import { createEngineStateSaver } from "./state/saveEngineState.js";
 import { createTradingMode } from "./engine/tradingMode.js";
 import {
@@ -13486,10 +13488,11 @@ const preTradeRiskGuard = {
     }
     const symbol = normalizeSymbol(order.symbol);
     const cryptoAsset = isCrypto(symbol);
-    const quote =
-      engineState.liveQuoteCache?.[symbol] ||
-      engineState.liveMarketMemory?.[symbol] ||
-      {};
+    const quoteResolution = await resolveVerifiedPreTradeQuote(
+      symbol,
+      cryptoAsset
+    );
+    const quote = quoteResolution.quote;
     const [account, positions, botOwnedSymbols] = await Promise.all([
       getAccount(),
       getPositions(),
@@ -13515,6 +13518,10 @@ const preTradeRiskGuard = {
     });
     options.liveTradeLimitDecision = liveTradeLimitDecision;
     const quoteSource = quote.liveQuoteSource || quote.source || "";
+    const liveProviderEvidence = getLiveProviderEvidence(
+      quoteSource,
+      cryptoAsset
+    );
     return assertPreTradeRisk({
       order,
       options,
@@ -13531,9 +13538,11 @@ const preTradeRiskGuard = {
         spreadPercent: Number(quote.spreadPercent || 0),
         quoteIsLive: quote.priceIsLive === true && isLiveQuoteSource(quoteSource),
         requireLiveProvider: LIVE_ORDER_REQUIRE_POLYGON_CONNECTED,
-        liveProviderConnected: cryptoAsset
-          ? isPolygonCryptoLiveConnected()
-          : isPolygonLiveConnected(),
+        liveProviderConnected: liveProviderEvidence.connected,
+        liveProvider: liveProviderEvidence.provider,
+        liveProviderReason: liveProviderEvidence.reason,
+        liveProviderFallbackUsed: quoteResolution.usedFallback,
+        liveProviderFallbackError: quoteResolution.fallbackError,
         maxQuoteAgeSeconds: LIVE_ORDER_MAX_QUOTE_AGE_SECONDS,
         maxSpreadPercent: LIVE_ORDER_MAX_SPREAD_PERCENT,
         maxExposurePercent: CONFIG.maxBotExposurePercent,
@@ -30288,6 +30297,48 @@ function isPolygonCryptoLiveConnected() {
     Number(state.subscribedCount || 0) > 0
   );
 }
+function isFinnhubLiveConnected() {
+  const state = engineState.liveQuoteStreamState || {};
+  return (
+    state.ok === true &&
+    String(state.provider || "").toLowerCase() === "finnhub" &&
+    Number(state.subscribedCount || 0) > 0
+  );
+}
+function getLiveProviderEvidence(quoteSource, cryptoAsset = false) {
+  return evaluateLiveQuoteProviderReadiness(quoteSource, {
+    isCrypto: cryptoAsset,
+    polygonConnected: isPolygonLiveConnected(),
+    polygonCryptoConnected: isPolygonCryptoLiveConnected(),
+    finnhubConnected: isFinnhubLiveConnected(),
+  });
+}
+function isPreTradeQuoteReady(quote = {}, cryptoAsset = false) {
+  const quoteSource = quote.liveQuoteSource || quote.source || "";
+  const providerEvidence = getLiveProviderEvidence(
+    quoteSource,
+    cryptoAsset
+  );
+  return (
+    quote.priceIsLive === true &&
+    isFreshLiveQuote(quote) &&
+    providerEvidence.connected === true
+  );
+}
+async function resolveVerifiedPreTradeQuote(symbol, cryptoAsset = false) {
+  const cachedQuote =
+    engineState.liveQuoteCache?.[symbol] ||
+    engineState.liveMarketMemory?.[symbol] ||
+    null;
+  return resolvePreTradeQuote({
+    cachedQuote,
+    isQuoteReady: (quote) => isPreTradeQuoteReady(quote, cryptoAsset),
+    fetchFallback: () => cryptoAsset
+      ? alpacaCryptoMarketData.getLatestQuote(symbol)
+      : getAlpacaStockPrice(symbol),
+    storeFallback: (quote) => updateQuoteCache(symbol, quote) || quote,
+  });
+}
 function buildLiveOrderDedupKey(symbol, side, action = "LIVE_ORDER") {
   return `${normalizeSymbol(symbol)}_${String(side || "").toUpperCase()}_${String(action || "").toUpperCase()}`;
 }
@@ -30348,17 +30399,11 @@ function validateLiveOrder(symbol, side = "BUY") {
     quote.priceIsLive === true &&
     isLiveQuoteSource(quoteSource);
 
-  const requirePolygonForThisAsset =
-    LIVE_ORDER_REQUIRE_POLYGON_CONNECTED &&
-    (
-      cryptoAsset
-        ? ENABLE_POLYGON_CRYPTO_WEBSOCKET
-        : ENABLE_POLYGON_WEBSOCKET
-    );
-
-  const liveProviderConnected = cryptoAsset
-    ? isPolygonCryptoLiveConnected()
-    : isPolygonLiveConnected();
+  const requireLiveProvider = LIVE_ORDER_REQUIRE_POLYGON_CONNECTED;
+  const liveProviderEvidence = getLiveProviderEvidence(
+    quoteSource,
+    cryptoAsset
+  );
   const decision = evaluatePreTradeRisk({
     order: { symbol: cleanSymbol, side: cleanSide, qty: 1 },
     options: { automated: false },
@@ -30374,8 +30419,10 @@ function validateLiveOrder(symbol, side = "BUY") {
       spreadPercent,
       quoteAgeSeconds,
       quoteIsLive,
-      requireLiveProvider: requirePolygonForThisAsset,
-      liveProviderConnected,
+      requireLiveProvider,
+      liveProviderConnected: liveProviderEvidence.connected,
+      liveProvider: liveProviderEvidence.provider,
+      liveProviderReason: liveProviderEvidence.reason,
       maxQuoteAgeSeconds: LIVE_ORDER_MAX_QUOTE_AGE_SECONDS,
       maxSpreadPercent: LIVE_ORDER_MAX_SPREAD_PERCENT,
       maxExposurePercent: 100,
@@ -30394,7 +30441,12 @@ function validateLiveOrder(symbol, side = "BUY") {
     quoteAgeSeconds,
     quoteSource,
     quoteIsLive,
-    polygonConnected: liveProviderConnected,
+    liveProvider: liveProviderEvidence.provider,
+    liveProviderConnected: liveProviderEvidence.connected,
+    liveProviderReason: liveProviderEvidence.reason,
+    polygonConnected: cryptoAsset
+      ? isPolygonCryptoLiveConnected()
+      : isPolygonLiveConnected(),
     blockReasons: decision.reasons,
     checkedAt: decision.checkedAt,
   };
