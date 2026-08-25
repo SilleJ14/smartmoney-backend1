@@ -7,8 +7,46 @@ export const DEFAULT_REINFORCEMENT_WEIGHTS = Object.freeze({
   riskQuality: 0.15,
 });
 
+const BASE_GROUP_WEIGHTS = Object.freeze({
+  marketEvidence: 0.44,
+  fundamentals: 0.12,
+  marketContext: 0.14,
+  riskAndPortfolio: 0.3,
+});
+
+const clampMultiplier = (value) => Math.max(0.75, Math.min(1.25, Number(value) || 1));
+
+function resolveEffectiveGroupWeights(reinforcementWeights = {}) {
+  const merged = { ...DEFAULT_REINFORCEMENT_WEIGHTS, ...(reinforcementWeights || {}) };
+  const ratio = (key) => Number(merged[key]) / Number(DEFAULT_REINFORCEMENT_WEIGHTS[key]);
+  const marketDefaultTotal = DEFAULT_REINFORCEMENT_WEIGHTS.momentum
+    + DEFAULT_REINFORCEMENT_WEIGHTS.technicals
+    + DEFAULT_REINFORCEMENT_WEIGHTS.statisticalEdge;
+  const marketMultiplier = clampMultiplier(
+    (
+      ratio("momentum") * DEFAULT_REINFORCEMENT_WEIGHTS.momentum
+      + ratio("technicals") * DEFAULT_REINFORCEMENT_WEIGHTS.technicals
+      + ratio("statisticalEdge") * DEFAULT_REINFORCEMENT_WEIGHTS.statisticalEdge
+    ) / marketDefaultTotal
+  );
+  const multipliers = {
+    marketEvidence: marketMultiplier,
+    fundamentals: clampMultiplier(ratio("fundamentals")),
+    marketContext: clampMultiplier(ratio("macro")),
+    riskAndPortfolio: clampMultiplier(ratio("riskQuality")),
+  };
+  const adjusted = Object.fromEntries(
+    Object.entries(BASE_GROUP_WEIGHTS).map(([name, weight]) => [name, weight * multipliers[name]])
+  );
+  const total = Object.values(adjusted).reduce((sum, value) => sum + value, 0);
+  return Object.fromEntries(
+    Object.entries(adjusted).map(([name, weight]) => [name, Number((weight / total).toFixed(6))])
+  );
+}
+
 export function calculateInstitutionalBlend(input = {}, { clampScore }) {
-  const weights = input.reinforcementWeights || DEFAULT_REINFORCEMENT_WEIGHTS;
+  const weights = { ...DEFAULT_REINFORCEMENT_WEIGHTS, ...(input.reinforcementWeights || {}) };
+  const effectiveGroupWeights = resolveEffectiveGroupWeights(weights);
   const momentumScore = clampScore(
     50 + Number(input.momentum || 0) * 1.5 + Number(input.volumeRatio || 0) * 8 -
     (Number(input.momentum || 0) > 35 ? (input.premarketContinuationRelief ? 5 : 15) : 0)
@@ -31,15 +69,15 @@ export function calculateInstitutionalBlend(input = {}, { clampScore }) {
   const riskPortfolioScore = clampScore(Number(input.blendedRiskScore || 0) * 0.7 + Number(input.portfolioScore || 0) * 0.3);
   const fundamentalDataValid = input.fundamentalDataValid === true;
   const groups = [
-    { name: "marketEvidence", score: marketEvidenceScore, weight: 0.44, available: true },
-    { name: "fundamentals", score: fundamentalBlendScore, weight: 0.12, available: fundamentalDataValid },
-    { name: "marketContext", score: contextScore, weight: 0.14, available: true },
-    { name: "riskAndPortfolio", score: riskPortfolioScore, weight: 0.3, available: true },
+    { name: "marketEvidence", score: marketEvidenceScore, weight: effectiveGroupWeights.marketEvidence, available: true },
+    { name: "fundamentals", score: fundamentalBlendScore, weight: effectiveGroupWeights.fundamentals, available: fundamentalDataValid },
+    { name: "marketContext", score: contextScore, weight: effectiveGroupWeights.marketContext, available: true },
+    { name: "riskAndPortfolio", score: riskPortfolioScore, weight: effectiveGroupWeights.riskAndPortfolio, available: true },
   ];
   const availableWeight = groups.filter((group) => group.available).reduce((sum, group) => sum + group.weight, 0);
   const institutionalScore = clampScore(groups.filter((group) => group.available).reduce((sum, group) => sum + group.score * group.weight, 0) / availableWeight);
   const componentTelemetry = groups.map((group) => ({ ...group, contribution: group.available ? Number(((group.score * group.weight) / availableWeight).toFixed(2)) : 0 }));
-  return { momentumScore, marketEvidenceScore, fundamentalBlendScore, contextScore, riskPortfolioScore, fundamentalDataValid, institutionalScore, reinforcementWeights: weights, componentTelemetry };
+  return { momentumScore, marketEvidenceScore, fundamentalBlendScore, contextScore, riskPortfolioScore, fundamentalDataValid, institutionalScore, reinforcementWeights: weights, effectiveGroupWeights, componentTelemetry };
 }
 
 export function evaluateInstitutionalApproval(input = {}) {

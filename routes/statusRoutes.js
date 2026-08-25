@@ -13,6 +13,19 @@ function liveStreamState(state, includeCrypto = true) {
   };
 }
 
+function compactOutcomeStatus(state) {
+  const outcomeState = state.stockScoreOutcomeState;
+  if (!outcomeState || typeof outcomeState !== "object") return null;
+  const { observations: _observations, ...status } = outcomeState;
+  return {
+    ...status,
+    retainedObservationCount: Array.isArray(outcomeState.observations)
+      ? outcomeState.observations.length
+      : Number(outcomeState.observationCount || 0),
+    observationsIncluded: false,
+  };
+}
+
 export function registerStatusRoutes(app, dependencies) {
   const {
     requireAdmin,
@@ -75,6 +88,9 @@ export function registerStatusRoutes(app, dependencies) {
         fastRunnerCandidates: (state.fastRunnerCandidates || []).slice(0, 25).map(mergeLiveQuote),
         quickInstitutionalCandidates: (state.quickInstitutionalCandidates || []).slice(0, 25).map(mergeLiveQuote),
         liveStarterBuyGateState: state.liveStarterBuyGateState || null,
+        stockScoreOutcomeSummary: state.stockScoreOutcomeSummary || {},
+        stockScoreOutcomeStatus: compactOutcomeStatus(state),
+        stockScoreOutcomeLearning: state.stockScoreOutcomeLearning || null,
         account: latestStatus?.account || state.cachedAccount || null,
         risk: latestStatus?.risk || null,
         statusAccountRefresh: accountRefresh,
@@ -158,6 +174,7 @@ export function registerStatusRoutes(app, dependencies) {
         portfolioGovernor: state.portfolioGovernorState || null,
         engineState: {
           ...state,
+          stockScoreOutcomeState: compactOutcomeStatus(state),
           lastSignals: (state.lastSignals || []).map(mergeLiveQuote),
           lastStockSignals: (state.lastStockSignals || []).map(mergeLiveQuote),
           lastCryptoSignals: (state.lastCryptoSignals || []).map(mergeLiveQuote),
@@ -182,7 +199,11 @@ export function registerStatusRoutes(app, dependencies) {
         stockSignals: mappedSignals(state.topStockSignals, state.lastStockSignals, mergeLiveQuote),
         cryptoSignals: mappedSignals(state.topCryptoSignals, state.lastCryptoSignals, mergeLiveQuote),
         liveStreamState: liveStreamState(state, false),
-        engineState: { ...state, lastError: err.message },
+        engineState: {
+          ...state,
+          stockScoreOutcomeState: compactOutcomeStatus(state),
+          lastError: err.message,
+        },
       });
     }
   });

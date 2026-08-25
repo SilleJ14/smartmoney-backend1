@@ -16,3 +16,26 @@ test("invalid fundamentals are excluded and remaining weights are normalized", (
   assert.equal(invalid.institutionalScore, neutral.institutionalScore);
   assert.equal(invalid.componentTelemetry.find((item) => item.name === "fundamentals").available, false);
 });
+
+test("reinforcement weights change the bounded family blend", () => {
+  const input = {
+    momentum: 25,
+    volumeRatio: 3,
+    technicalScore: 95,
+    statisticalScore: 95,
+    fundamentalScore: 20,
+    dcfValuationScore: 20,
+    earningsScore: 20,
+    moatScore: 20,
+    macroScore: 50,
+    sectorScore: 50,
+    blendedRiskScore: 50,
+    portfolioScore: 50,
+    fundamentalDataValid: true,
+  };
+  const marketWeighted = calculateInstitutionalBlend({ ...input, reinforcementWeights: { momentum: 0.5, technicals: 0.5, statisticalEdge: 0.5, fundamentals: 0.02 } }, { clampScore });
+  const fundamentalWeighted = calculateInstitutionalBlend({ ...input, reinforcementWeights: { momentum: 0.05, technicals: 0.05, statisticalEdge: 0.05, fundamentals: 0.5 } }, { clampScore });
+  assert.notEqual(marketWeighted.institutionalScore, fundamentalWeighted.institutionalScore);
+  assert.ok(marketWeighted.institutionalScore > fundamentalWeighted.institutionalScore);
+  assert.ok(Math.abs(Object.values(marketWeighted.effectiveGroupWeights).reduce((sum, value) => sum + value, 0) - 1) < 0.00001);
+});

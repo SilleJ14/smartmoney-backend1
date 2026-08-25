@@ -3,6 +3,7 @@ import {
   calculateEarlyDiscoveryScore,
   calculateEntryQualityScore,
   calculateMultiDayContinuationScore,
+  evaluateStockTradeCandidate,
 } from "../scoring/decisionScores.js";
 
 export function createStockMarketStrategy(dependencies) {
@@ -803,9 +804,11 @@ export function createStockMarketStrategy(dependencies) {
     q.entryQualityScore = q.entryQualityScorecard.score;
     const separatedEntryApproval = q.entryQualityScorecard.tier === "BLOCKED"
       ? "BLOCK"
-      : q.entryQualityScore >= 72
+      : q.entryQualityScorecard.approved === true
         ? "APPROVED"
-        : q.entryQualityScore >= 60
+        : q.entryQualityScorecard.tier === "WAIT_FOR_DATA"
+          ? "WATCHLIST_WAIT_FOR_DATA"
+          : q.entryQualityScore >= 60
           ? "WATCHLIST_WAIT_FOR_ENTRY"
           : "REJECT_WEAK_TIMING";
     q.phase6ScoringLayers = {
@@ -905,10 +908,13 @@ export function createStockMarketStrategy(dependencies) {
             securityName: stockIdentity.securityName || "",
             nameSource: stockIdentity.nameSource || "not_found",
           });
+          const quoteChartBars = Array.isArray(quote.chartBars)
+            ? quote.chartBars
+            : quote.stockChartBars;
           const technicalBars =
-            Array.isArray(quote.stockChartBars) &&
-              quote.stockChartBars.length > 0
-              ? quote.stockChartBars.map((bar) => ({
+            Array.isArray(quoteChartBars) &&
+              quoteChartBars.length > 0
+              ? quoteChartBars.map((bar) => ({
                 c: Number(bar.close || 0),
                 h: Number(bar.high || 0),
                 l: Number(bar.low || 0),
@@ -918,6 +924,7 @@ export function createStockMarketStrategy(dependencies) {
               }))
               : [];
           quote.technicals = computeTechnicals(technicalBars);
+          quote.technicalBarsFound = technicalBars.length;
           if (CONFIG.enableAdvancedFilters) {
             quote.confirmations = await getAdvancedConfirmations(quote);
           }
@@ -1195,12 +1202,16 @@ export function createStockMarketStrategy(dependencies) {
                 ) &&
                 institutional.decisionLevel !== "Visible Stock" &&
                 quote.phase6ScoringLayers?.hardReject !== true &&
+                quote.entryQualityScorecard?.approved === true &&
+                Number(quote.entryQualityScorecard?.coverage || 0) >= 0.8 &&
+                Number(quote.entryQualityScore || 0) >= 75 &&
                 quote.phase6ScoringLayers?.finalTradeApproval !== "REJECT_WEAK_TIMING" &&
                 quote.phase6ScoringLayers?.finalTradeApproval !== "BLOCK" &&
+                quote.phase6ScoringLayers?.finalTradeApproval !== "WATCHLIST_WAIT_FOR_DATA" &&
                 engineState.phase20AutonomousOrchestrationState?.shouldBlockNewTrades !== true &&
                 engineState.phase21AutonomousBrainState?.shouldBlockNewTrades !== true,
             autoTradeApproved:
-              quote.blockBuying === true
+              quote.blockBuying === true || quote.entryQualityScorecard?.approved !== true
                 ? false
                 : portfolioManager.autoTradeApproved,
             displayOnly: quote.displayOnly === true,
@@ -1980,20 +1991,53 @@ export function createStockMarketStrategy(dependencies) {
         signal.finalInstitutionalGradeReason =
           finalGrade.reason;
       }
+      // Rebuild every separated score after all discovery memory and scoring
+      // layers have finished. This is the canonical telemetry returned to the
+      // engine and prevents stale pre-boost contributions from being displayed.
+      for (const signal of results) {
+        signal.stockOutcomeLearning =
+          engineState.stockScoreOutcomeLearning || null;
+        signal.discoveryScorecard = calculateEarlyDiscoveryScore(signal);
+        signal.discoveryScore = signal.discoveryScorecard.score;
+        signal.discoveryTier = signal.discoveryScorecard.tier;
+        signal.entryQualityScorecard = calculateEntryQualityScore(signal);
+        signal.entryQualityScore = signal.entryQualityScorecard.score;
+        signal.entryScore = signal.entryQualityScore;
+        signal.continuationScorecard = calculateMultiDayContinuationScore(signal);
+        signal.multiDayContinuationScore = signal.continuationScorecard.score;
+        signal.multiDayContinuationTier = signal.continuationScorecard.tier;
+        signal.decisionScoreTelemetry = buildDecisionScoreTelemetry(signal);
+        signal.stockDecisionScore = signal.decisionScoreTelemetry.scores.decision;
+        signal.decisionScoreCoverage = signal.decisionScoreTelemetry.stages.decision.coverage;
+        const stockTradeEvidence = evaluateStockTradeCandidate(signal);
+        signal.stockTradeEvidence = stockTradeEvidence;
+        signal.watchlistEligible = stockTradeEvidence.watchlistEligible;
+        signal.qualifiedCandidate = stockTradeEvidence.qualifiedCandidate;
+        if (!stockTradeEvidence.approved) {
+          signal.qualifiedToBuy = false;
+          signal.autoTradeApproved = false;
+          signal.entryEvidenceBlocked = true;
+          signal.entryEvidenceBlockReason = [
+            ...signal.entryQualityScorecard.gates,
+            ...stockTradeEvidence.reasons,
+          ].join(", ") || "ENTRY_SCORE_BELOW_75";
+        }
+      }
       const finalResults = results;
       return finalResults
         .sort((a, b) => {
-          const rankA =
-            Number(a.score || 0) * 0.35 +
-            Number(a.explosiveRunnerScore || a.runnerScore || 0) * 0.30 +
-            Number(a.earlyProjectionScore || 0) * 0.20 +
-            Number(a.aiConfidence || a.autonomousConfidenceScore || 0) * 0.15;
-          const rankB =
-            Number(b.score || 0) * 0.35 +
-            Number(b.explosiveRunnerScore || b.runnerScore || 0) * 0.30 +
-            Number(b.earlyProjectionScore || 0) * 0.20 +
-            Number(b.aiConfidence || b.autonomousConfidenceScore || 0) * 0.15;
-          if (rankB !== rankA) return rankB - rankA;
+          const finalDifference =
+            Number(b.stockDecisionScore || 0) -
+            Number(a.stockDecisionScore || 0);
+          if (finalDifference !== 0) return finalDifference;
+          const discoveryDifference =
+            Number(b.discoveryScore || 0) -
+            Number(a.discoveryScore || 0);
+          if (discoveryDifference !== 0) return discoveryDifference;
+          const continuationDifference =
+            Number(b.multiDayContinuationScore || 0) -
+            Number(a.multiDayContinuationScore || 0);
+          if (continuationDifference !== 0) return continuationDifference;
           return Number(b.percentChange || 0) - Number(a.percentChange || 0);
         })
         .slice(0, CONFIG.maxSignalsToReturn);

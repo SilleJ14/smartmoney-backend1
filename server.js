@@ -97,6 +97,19 @@ import {
   evaluateInstitutionalApproval,
 } from "./scoring/institutionalBlend.js";
 import {
+  STOCK_DECISION_WEIGHTS,
+  STOCK_EXECUTION_THRESHOLDS,
+  buildStockDecisionScore,
+  evaluateStockTradeCandidate,
+  getCompletedUniqueStockSessionDays,
+} from "./scoring/decisionScores.js";
+import { updateStockContinuationSession } from "./scoring/stockContinuationMemory.js";
+import {
+  calculateStockOutcomeLearning,
+  getDueStockOutcomeSymbols,
+  updateStockScoreOutcomes,
+} from "./scoring/stockScoreOutcomeTracker.js";
+import {
   calculateCryptoLiquidityFromBars,
   calculateCryptoSignalRealism,
 } from "./scoring/cryptoScoring.js";
@@ -121,6 +134,7 @@ import { createCryptoIntelligenceStrategy } from "./strategies/cryptoIntelligenc
 import { createCryptoMarketScanner } from "./strategies/cryptoMarketScanner.js";
 import { createStockMarketStrategy } from "./strategies/stockMarketStrategy.js";
 import { createAlpacaCryptoMarketData } from "./market-data/alpacaCryptoMarketData.js";
+import { fetchAlpacaStockOutcomeQuotes } from "./market-data/alpacaStockOutcomeQuotes.js";
 import { createTaskScheduler } from "./engine/taskScheduler.js";
 import { createDiscoveryFeatureStore } from "./discovery/featureStore.js";
 import { fetchAlpacaGroupedDaily } from "./discovery/alpacaDailyBars.js";
@@ -386,7 +400,7 @@ let LIVE_ORDER_MAX_QUOTE_AGE_SECONDS = runtimeNumber(
 let LIVE_ORDER_MAX_SPREAD_PERCENT = runtimeNumber(
   "liveOrderMaxSpreadPercent",
   "LIVE_ORDER_MAX_SPREAD_PERCENT",
-  2.5
+  1
 );
 let LIVE_ORDER_REQUIRE_POLYGON_CONNECTED = runtimeBoolean(
   "liveOrderRequirePolygonConnected",
@@ -476,7 +490,7 @@ function applyRuntimeLiveSettings() {
   LIVE_STARTER_MIN_FINAL_SCORE = runtimeNumber("liveStarterMinFinalScore", "LIVE_STARTER_MIN_FINAL_SCORE", 86);
   LIVE_STARTER_MAX_BUYS_PER_CYCLE = runtimeNumber("liveStarterMaxBuysPerCycle", "LIVE_STARTER_MAX_BUYS_PER_CYCLE", 5);
   LIVE_ORDER_MAX_QUOTE_AGE_SECONDS = runtimeNumber("liveOrderMaxQuoteAgeSeconds", "LIVE_ORDER_MAX_QUOTE_AGE_SECONDS", 15);
-  LIVE_ORDER_MAX_SPREAD_PERCENT = runtimeNumber("liveOrderMaxSpreadPercent", "LIVE_ORDER_MAX_SPREAD_PERCENT", 2.5);
+  LIVE_ORDER_MAX_SPREAD_PERCENT = runtimeNumber("liveOrderMaxSpreadPercent", "LIVE_ORDER_MAX_SPREAD_PERCENT", 1);
   LIVE_ORDER_REQUIRE_POLYGON_CONNECTED = runtimeBoolean("liveOrderRequirePolygonConnected", "LIVE_ORDER_REQUIRE_POLYGON_CONNECTED", true);
   LIVE_ORDER_LOCK_MS = runtimeNumber("liveOrderLockMs", "LIVE_ORDER_LOCK_MS", 15000);
   LIVE_DUPLICATE_ORDER_WINDOW_MS = runtimeNumber("liveDuplicateOrderWindowMs", "LIVE_DUPLICATE_ORDER_WINDOW_MS", 60000);
@@ -4769,9 +4783,8 @@ function calculateMultiDayProbability(signal = {}) {
     0
   );
   const percentChange = Number(signal.percentChange || 0);
-  const seenDaysCount = Array.isArray(memory.seenDays)
-    ? memory.seenDays.length
-    : 0;
+  const observedSessionDays = getCompletedUniqueStockSessionDays(memory.seenDays);
+  const seenDaysCount = observedSessionDays.length;
   const seenDaysScore = clampScore(seenDaysCount * 12);
   const volumeExpansionScore = clampScore(
     Math.min(relativeVolume * 18, 100)
@@ -4801,13 +4814,11 @@ function calculateMultiDayProbability(signal = {}) {
     exhaustionRisk * 0.16
   );
   const multiDayLabel =
-    multiDayScore >= 90
+    multiDayScore >= 85 && seenDaysCount >= 4
       ? "ELITE_MULTI_DAY"
-      : multiDayScore >= 80
+      : multiDayScore >= 72 && seenDaysCount >= 3
         ? "STRONG_MULTI_DAY"
-        : multiDayScore >= 70
-          ? "GOOD_CONTINUATION"
-          : multiDayScore >= 60
+        : multiDayScore >= 60 && seenDaysCount >= 2
             ? "POSSIBLE_CONTINUATION"
             : "INTRADAY_ONLY";
   return {
@@ -4819,6 +4830,7 @@ function calculateMultiDayProbability(signal = {}) {
     persistenceScore,
     supportHoldingScore,
     seenDaysCount,
+    observedSessionDays,
     continuationProbability,
     continuationHoldScore:
       continuationHold.continuationScore,
@@ -5203,26 +5215,19 @@ function updateMultiDayAccumulationMemory(signal = {}) {
   const isFailedBreakout =
     fakeBreakout === true ||
     pullbackFromHighPercent >= 12;
-  const seenDays = [
-    ...new Set([...(previous.seenDays || []), todayKey]),
-  ].slice(-20);
+  const continuationSession = updateStockContinuationSession(previous, {
+    dayKey: todayKey,
+    accumulationEvent: isAccumulationEvent,
+    stealthVolumeEvent: isStealthVolume,
+    supportHoldEvent: isSupportHolding,
+    failedBreakoutEvent: isFailedBreakout,
+  });
+  const seenDays = continuationSession.seenDays;
   const next = {
     ...previous,
     symbol,
     lastSeenAt: new Date().toISOString(),
-    seenDays,
-    accumulationEvents:
-      Number(previous.accumulationEvents || 0) +
-      (isAccumulationEvent ? 1 : 0),
-    stealthVolumeEvents:
-      Number(previous.stealthVolumeEvents || 0) +
-      (isStealthVolume ? 1 : 0),
-    supportHoldEvents:
-      Number(previous.supportHoldEvents || 0) +
-      (isSupportHolding ? 1 : 0),
-    failedBreakoutEvents:
-      Number(previous.failedBreakoutEvents || 0) +
-      (isFailedBreakout ? 1 : 0),
+    ...continuationSession,
     highestAccumulationScore: Math.max(
       Number(previous.highestAccumulationScore || 0),
       Number(accumulation.accumulationScore || 0)
@@ -13454,6 +13459,8 @@ const alpacaCryptoMarketData = createAlpacaCryptoMarketData({
   dataRequest: alpacaDataRequest,
   normalizeSymbol,
 });
+const getStockOutcomeFollowupQuotes = (symbols) =>
+  fetchAlpacaStockOutcomeQuotes(symbols, { dataRequest: alpacaDataRequest });
 const brokerSnapshotService = createBrokerSnapshotService({
   tradingRequest: alpacaTradingRequest,
   getCache: (key) => engineState[key],
@@ -13885,6 +13892,13 @@ async function polygonQuote(symbol) {
     const quote = {
       current: currentPrice,
       price: currentPrice,
+      bid: quoteBid,
+      ask: quoteAsk,
+      spreadPercent:
+        quoteBid > 0 && quoteAsk > 0 && quoteMid > 0
+          ? Number((((quoteAsk - quoteBid) / quoteMid) * 100).toFixed(4))
+          : null,
+      spreadAvailable: quoteBid > 0 && quoteAsk > 0,
       c: currentPrice,
       h: Number(
         ticker?.day?.h || currentPrice
@@ -14056,8 +14070,15 @@ async function getStockQuote(symbol) {
       console.error("Polygon secondary failed:", symbol, err.message);
     }
   }
+  const provisionalPrimary = polygon || finnhub;
+  const provisionalBid = Number(provisionalPrimary?.bid || provisionalPrimary?.bp || 0);
+  const provisionalAsk = Number(provisionalPrimary?.ask || provisionalPrimary?.ap || 0);
   let alpacaLatestFallback = null;
-  if (!polygon && !finnhub && (!alpacaCurrent || alpacaCurrent <= 0)) {
+  if (
+    (!provisionalPrimary && (!alpacaCurrent || alpacaCurrent <= 0)) ||
+    provisionalBid <= 0 ||
+    provisionalAsk <= 0
+  ) {
     alpacaLatestFallback = await getAlpacaStockPrice(cleanSymbol);
   }
   const primary =
@@ -14068,6 +14089,15 @@ async function getStockQuote(symbol) {
         ? alpacaLatestFallback
         : null
     );
+  const spreadQuote = provisionalBid > 0 && provisionalAsk > 0
+    ? provisionalPrimary
+    : alpacaLatestFallback;
+  const bid = Number(spreadQuote?.bid || spreadQuote?.bp || 0);
+  const ask = Number(spreadQuote?.ask || spreadQuote?.ap || 0);
+  const spreadMid = bid > 0 && ask > 0 ? (bid + ask) / 2 : 0;
+  const spreadPercent = spreadMid > 0
+    ? Number((((ask - bid) / spreadMid) * 100).toFixed(4))
+    : null;
   let current = Number(
     primary?.current ||
     primary?.price ||
@@ -14141,6 +14171,14 @@ async function getStockQuote(symbol) {
     ),
     open,
     previousClose,
+    bid: bid > 0 ? bid : null,
+    ask: ask > 0 ? ask : null,
+    spreadPercent,
+    spreadAvailable: bid > 0 && ask > 0,
+    spreadSource:
+      bid > 0 && ask > 0
+        ? String(spreadQuote?.liveQuoteSource || spreadQuote?.source || "unknown")
+        : "unavailable",
     chartBars: stockChartBars,
     sparkline: stockSparkline,
     chartSource: "alpaca_stock_bars",
@@ -14187,52 +14225,93 @@ async function getStockQuote(symbol) {
           ? "Polygon price/quote + Alpaca bars"
           : finnhub
             ? "Finnhub price/quote + Alpaca bars"
-            : "No valid price/quote",
-    stockChartBars,
+            : alpacaLatestFallback
+              ? "Alpaca price/quote + Alpaca bars"
+              : "No valid price/quote",
   };
   cacheStockQuote(cleanSymbol, combinedQuote);
   return combinedQuote;
 }
+const recentStockBarsCache = new Map();
+const RECENT_STOCK_BARS_CACHE_TTL_MS = 45_000;
+const RECENT_STOCK_BARS_CACHE_MAX_ENTRIES = 80;
+
 async function getRecentBars(symbol, timeframe = "5Min", limit = 30) {
   const cleanSymbol = normalizeSymbol(symbol);
   if (!cleanSymbol) return [];
+  const cacheKey = `${cleanSymbol}:${timeframe}:${Number(limit || 30)}`;
+  const cached = recentStockBarsCache.get(cacheKey);
+  if (
+    cached &&
+    Date.now() - Number(cached.at || 0) < RECENT_STOCK_BARS_CACHE_TTL_MS &&
+    Array.isArray(cached.bars)
+  ) {
+    return cached.bars;
+  }
+  const cacheBars = (bars) => {
+    if (!Array.isArray(bars) || bars.length === 0) return bars;
+    if (!recentStockBarsCache.has(cacheKey) && recentStockBarsCache.size >= RECENT_STOCK_BARS_CACHE_MAX_ENTRIES) {
+      const oldestKey = recentStockBarsCache.keys().next().value;
+      if (oldestKey) recentStockBarsCache.delete(oldestKey);
+    }
+    recentStockBarsCache.set(cacheKey, { at: Date.now(), bars });
+    return bars;
+  };
+  const now = new Date();
+  const lookbackDays = timeframe === "1Day" ? 120 : 7;
+  const to = now.toISOString().slice(0, 10);
+  const from = new Date(
+    now.getTime() - lookbackDays * 24 * 60 * 60 * 1000
+  ).toISOString().slice(0, 10);
 
-  if (!ENABLE_POLYGON || !POLYGON_API_KEY) {
-    return [];
+  if (ENABLE_POLYGON && POLYGON_API_KEY) {
+    try {
+      const multiplier = timeframe === "1Day" ? 1 : 5;
+      const timespan = timeframe === "1Day" ? "day" : "minute";
+      const url =
+        `https://api.polygon.io/v2/aggs/ticker/${encodeURIComponent(cleanSymbol)}` +
+        `/range/${multiplier}/${timespan}/${from}/${to}` +
+        `?adjusted=true&sort=desc&limit=${Number(limit || 30)}` +
+        `&apiKey=${POLYGON_API_KEY}`;
+
+      const data = await fetchWithTimeout(url);
+
+      if (!data?.ok) {
+        throw new Error(`HTTP ${data?.status || "unknown"}`);
+      }
+
+      const json = await data.json();
+
+      const polygonBars = Array.isArray(json?.results)
+        ? json.results
+          .reverse()
+          .map((bar) => ({
+            o: Number(bar.o || 0),
+            h: Number(bar.h || 0),
+            l: Number(bar.l || 0),
+            c: Number(bar.c || 0),
+            v: Number(bar.v || 0),
+            t: bar.t || null,
+          }))
+        : [];
+      if (polygonBars.length > 0) return cacheBars(polygonBars);
+    } catch (err) {
+      console.warn("Polygon bars error, using Alpaca fallback:", cleanSymbol, err?.message);
+    }
   }
 
   try {
-    const now = new Date();
-
-    const multiplier = timeframe === "1Day" ? 1 : 5;
-    const timespan = timeframe === "1Day" ? "day" : "minute";
-
-    const lookbackDays = timeframe === "1Day" ? 120 : 7;
-
-    const to = now.toISOString().slice(0, 10);
-    const from = new Date(
-      now.getTime() - lookbackDays * 24 * 60 * 60 * 1000
-    )
-      .toISOString()
-      .slice(0, 10);
-
-    const url =
-      `https://api.polygon.io/v2/aggs/ticker/${encodeURIComponent(cleanSymbol)}` +
-      `/range/${multiplier}/${timespan}/${from}/${to}` +
-      `?adjusted=true&sort=desc&limit=${Number(limit || 30)}` +
-      `&apiKey=${POLYGON_API_KEY}`;
-
-    const data = await fetchWithTimeout(url);
-
-    if (!data?.ok) {
-      console.warn("Polygon bars failed:", cleanSymbol, data?.status);
-      return [];
-    }
-
-    const json = await data.json();
-
-    return Array.isArray(json?.results)
-      ? json.results
+    const alpacaPath =
+      `/v2/stocks/${encodeURIComponent(cleanSymbol)}/bars` +
+      `?timeframe=${encodeURIComponent(timeframe)}` +
+      `&start=${encodeURIComponent(from)}` +
+      `&end=${encodeURIComponent(now.toISOString())}` +
+      `&limit=${Math.max(1, Number(limit || 30))}` +
+      `&adjustment=raw&feed=iex&sort=desc`;
+    const data = await alpacaDataRequest(alpacaPath);
+    const alpacaBars = Array.isArray(data?.bars)
+      ? data.bars
+        .slice()
         .reverse()
         .map((bar) => ({
           o: Number(bar.o || 0),
@@ -14243,8 +14322,9 @@ async function getRecentBars(symbol, timeframe = "5Min", limit = 30) {
           t: bar.t || null,
         }))
       : [];
+    return cacheBars(alpacaBars);
   } catch (err) {
-    console.warn("Polygon bars error:", cleanSymbol, err?.message);
+    console.warn("Alpaca stock bars fallback failed:", cleanSymbol, err?.message);
     return [];
   }
 }
@@ -22424,6 +22504,9 @@ function hydrateCryptoExecutionCandidate(candidate = {}) {
     ask: spreadAvailable ? ask : null,
     spreadAvailable,
     spreadPercent,
+    spreadSource: spreadAvailable
+      ? String(quote.liveQuoteSource || quote.source || "live_quote_cache")
+      : "unavailable",
   };
 }
 
@@ -22905,6 +22988,7 @@ const { executeEngineCycleBody } = createEngineCycle({
   calculateSmartCapitalCompoundingEngine,
   calculateSmartCapitalRedistributionEngine,
   calculateStablecoinFlowPressure,
+  calculateStockOutcomeLearning,
   calculateUnifiedOrchestrator,
   checkDailyLossAndProfitLock,
   clampScore,
@@ -22912,6 +22996,7 @@ const { executeEngineCycleBody } = createEngineCycle({
   emitSignalTapeTransitions,
   emitSystemRiskTapeState,
   engineState,
+  evaluateStockTradeCandidate,
   executePendingExits,
   flattenStocksAndCryptoBeforeMarketClose,
   getAccount,
@@ -22922,6 +23007,8 @@ const { executeEngineCycleBody } = createEngineCycle({
   getEnabledStrategyModes,
   getPositions,
   getMemoryGuardState: buildMemoryGuardSnapshot,
+  getDueStockOutcomeSymbols,
+  getStockOutcomeFollowupQuotes,
   normalizeSymbol,
   pushLiveSignalUpdate,
   recordOrder,
@@ -22946,8 +23033,17 @@ const { executeEngineCycleBody } = createEngineCycle({
   updateCryptoPositionSizingState,
   updateInstitutionalWatchlist,
   updateMultiTimeframeCryptoState,
+  updateStockScoreOutcomes,
   updateWhaleSmartMoneyState,
-  getRuntime: () => ({ TRADING_MODE, autoTradingEnabled, ENABLE_POLYGON_WEBSOCKET, FINNHUB_API_KEY, POLYGON_API_KEY }),
+  getRuntime: () => ({
+    TRADING_MODE,
+    autoTradingEnabled,
+    ENABLE_POLYGON_WEBSOCKET,
+    FINNHUB_API_KEY,
+    POLYGON_API_KEY,
+    LIVE_ORDER_MAX_QUOTE_AGE_SECONDS,
+    LIVE_ORDER_MAX_SPREAD_PERCENT,
+  }),
 });
 setInterval(() => {
   if (
@@ -24620,7 +24716,12 @@ function getArchetypeEngineWeights(tradeArchetype) {
       velocity: 0.06,
     },
   };
-  return weightsByArchetype[tradeArchetype] || weightsByArchetype.MEAN_REVERSION;
+  const selected = weightsByArchetype[tradeArchetype] || weightsByArchetype.MEAN_REVERSION;
+  const total = Object.values(selected).reduce((sum, value) => sum + Number(value || 0), 0);
+  if (total <= 0) return selected;
+  return Object.fromEntries(
+    Object.entries(selected).map(([name, weight]) => [name, Number((Number(weight || 0) / total).toFixed(6))])
+  );
 }
 function calculateArchetypeWeightedDecisionScore({
   signal,
@@ -25453,6 +25554,21 @@ function calculateLiveMomentumMutation(signals = []) {
       scanPrice ||
       0
     );
+    const liveQuoteUpdatedAt =
+      liveQuote?.liveQuoteUpdatedAt ||
+      liveQuote?.updatedAt ||
+      signal.liveQuoteUpdatedAt ||
+      signal.quoteFetchedAt ||
+      null;
+    const liveQuoteSource =
+      liveQuote?.liveQuoteSource ||
+      liveQuote?.source ||
+      signal.liveQuoteSource ||
+      signal.source ||
+      null;
+    const priceIsLive =
+      liveQuote?.priceIsLive === true ||
+      signal.priceIsLive === true;
     const liveMovePercent =
       scanPrice > 0 && livePrice > 0
         ? Number((((livePrice - scanPrice) / scanPrice) * 100).toFixed(2))
@@ -25516,6 +25632,9 @@ function calculateLiveMomentumMutation(signals = []) {
       tradeArchetype,
       scanPrice,
       livePrice,
+      liveQuoteUpdatedAt,
+      liveQuoteSource,
+      priceIsLive,
       liveMovePercent,
       secondsSinceLiveUpdate,
       baseScore,
@@ -25910,6 +26029,9 @@ function calculateCentralAutonomousDecisionCore(stockSignals = [], cryptoSignals
     const cryptoDecisionEvidence = isCryptoSignal
       ? buildCryptoDecisionScore(signal)
       : null;
+    const stockDecisionEvidence = isCryptoSignal
+      ? null
+      : buildStockDecisionScore(signal);
     const cryptoComponent = (name) => {
       const component = cryptoDecisionEvidence?.componentsByName?.[name];
       if (!component || component.available !== true) {
@@ -25924,21 +26046,17 @@ function calculateCentralAutonomousDecisionCore(stockSignals = [], cryptoSignals
     const components = {
       base: isCryptoSignal
         ? cryptoComponent("base")
-        : resolveDecisionScoreComponent([{ value: signal.score, source: "score" }]),
+        : resolveDecisionScoreComponent([{ value: stockDecisionEvidence?.discovery?.score, source: "discoveryScorecard" }]),
       institutional: isCryptoSignal
         ? { value: 0, available: false, source: "excluded_correlated_crypto_family" }
         : resolveDecisionScoreComponent([
-          { value: signal.institutionalBrainScore, source: "institutionalBrainScore" },
-          { value: signal.fullInstitutionalAiBrain?.dynamicConvictionScore, source: "fullInstitutionalAiBrain.dynamicConvictionScore" },
-          { value: signal.fullInstitutionalAiBrain?.consensusScore, source: "fullInstitutionalAiBrain.consensusScore" },
-          { value: signal.institutionalScore, source: "institutionalScore" },
-          { value: signal.aiConfidence, source: "aiConfidence" },
+          { value: signal.contextScore, source: "marketContext" },
+          { value: signal.macroScore, source: "macroScore" },
         ]),
       execution: isCryptoSignal
         ? cryptoComponent("execution")
         : resolveDecisionScoreComponent([
-          { value: signal.executionConfidence, source: "executionConfidence" },
-          { value: signal.institutionalExecutionPlan?.executionConfidence, source: "institutionalExecutionPlan.executionConfidence" },
+          { value: stockDecisionEvidence?.entry?.score, source: "entryQualityScorecard" },
         ]),
       orderFlow: isCryptoSignal
         ? { value: 0, available: false, source: "included_once_in_entry_quality" }
@@ -25949,10 +26067,8 @@ function calculateCentralAutonomousDecisionCore(stockSignals = [], cryptoSignals
       runner: isCryptoSignal
         ? cryptoComponent("runner")
         : resolveDecisionScoreComponent([
-          { value: signal.runnerScore, source: "runnerScore" },
-          { value: signal.explosiveRunnerScore, source: "explosiveRunnerScore" },
-          { value: signal.explosiveRunnerPrediction?.explosiveRunnerScore, source: "explosiveRunnerPrediction.explosiveRunnerScore" },
-          { value: signal.adaptiveRunnerScore, source: "adaptiveRunnerScore" },
+          { value: signal.continuationScorecard?.score, source: "continuationScorecard" },
+          { value: signal.multiDayContinuationScore, source: "multiDayContinuationScore" },
         ]),
       meta: isCryptoSignal
         ? { value: 0, available: false, source: "not_used_for_crypto" }
@@ -26001,8 +26117,8 @@ function calculateCentralAutonomousDecisionCore(stockSignals = [], cryptoSignals
       (signal.confirmations?.newsRisk ? 20 : 0) +
       (marketStress >= 75 ? 18 : 0) +
       (signal.globalRiskOffDefense?.shouldBlock ? 30 : 0);
-    const archetypeDecision =
-      calculateArchetypeWeightedDecisionScore({
+    const archetypeDecision = isCryptoSignal
+      ? calculateArchetypeWeightedDecisionScore({
         signal,
         baseScore,
         institutionalScore,
@@ -26021,7 +26137,20 @@ function calculateCentralAutonomousDecisionCore(stockSignals = [], cryptoSignals
         componentSources: Object.fromEntries(
           Object.entries(components).map(([name, component]) => [name, component.source])
         ),
-      });
+      })
+      : {
+        tradeArchetype: classifyTradeArchetype(signal),
+        dynamicEngineWeights: stockDecisionEvidence.effectiveWeights || STOCK_DECISION_WEIGHTS,
+        archetypeAdjustedScore: stockDecisionEvidence.score,
+        archetypeTrustAdjustment: getArchetypeTrustAdjustment(signal),
+        archetypeMemoryBonus: 0,
+        archetypeMemoryPenalty: 0,
+        scoreCoverage: stockDecisionEvidence.coverage,
+        missingComponents: stockDecisionEvidence.missingComponents,
+        decisionComponents: stockDecisionEvidence.components,
+        finalDecisionScore: stockDecisionEvidence.score,
+        reason: "SEPARATED_STOCK_DECISION_FAMILIES",
+      };
     const decisionScoreComponents = isCryptoSignal
       ? archetypeDecision.decisionComponents.map((component) => ({
         ...component,
@@ -26070,6 +26199,11 @@ function calculateCentralAutonomousDecisionCore(stockSignals = [], cryptoSignals
       signal.confirmations?.newsRisk === true;
     const cryptoEvidenceBlock =
       isCryptoSignal && cryptoDecisionEvidence?.coreEvidencePass !== true;
+    const stockEvidenceBlock =
+      !isCryptoSignal && stockDecisionEvidence?.coreEvidencePass !== true;
+    const requiredDecisionScore = isCryptoSignal
+      ? Number(CONFIG.minScoreToBuy || 0)
+      : STOCK_EXECUTION_THRESHOLDS.finalScore;
     const softBlock =
       signal.autoTradeApproved === false ||
       signal.unifiedInstitutionalOrchestrator?.shouldBlock === true ||
@@ -26078,10 +26212,13 @@ function calculateCentralAutonomousDecisionCore(stockSignals = [], cryptoSignals
       signal.phase62MarketPersonality?.shouldPersonalityBlock === true ||
       signal.phase63StrategyEvolution?.shouldStrategyBlock === true ||
       cryptoEvidenceBlock ||
-      finalDecisionScore < CONFIG.minScoreToBuy;
+      stockEvidenceBlock ||
+      finalDecisionScore < requiredDecisionScore;
     const shouldBlock =
       hardBlock ||
       cryptoEvidenceBlock ||
+      stockEvidenceBlock ||
+      (!isCryptoSignal && finalDecisionScore < requiredDecisionScore) ||
       (softBlock && !eliteOverride.eligibleForEliteOverride);
     const aiParliamentVote =
       calculateAiParliamentVote({
@@ -26122,18 +26259,15 @@ function calculateCentralAutonomousDecisionCore(stockSignals = [], cryptoSignals
       :
       !shouldBlock &&
       centralCoreExecution.shouldWaitForPullback !== true &&
-      finalDecisionScore >= 82 &&
-      executionScore >= 60 &&
-      institutionalScore >= 70 &&
-      orderFlowScore >= 65 &&
-      profitAggressionScore >= 65 &&
-      personalityScore >= 55 &&
-      strategyEvolutionDecisionScore >= 52 &&
+      finalDecisionScore >= STOCK_EXECUTION_THRESHOLDS.acceleratedFinalScore &&
+      executionScore >= STOCK_EXECUTION_THRESHOLDS.acceleratedEntryScore &&
       marketStress < 60;
     const action =
-      aiParliamentVote.parliamentDecision === "PARLIAMENT_BLOCK"
+      shouldBlock
         ? "BLOCK"
-        : aiParliamentVote.parliamentDecision === "PARLIAMENT_REDUCED_SIZE_APPROVAL"
+        : aiParliamentVote.parliamentDecision === "PARLIAMENT_BLOCK"
+          ? "BLOCK"
+          : aiParliamentVote.parliamentDecision === "PARLIAMENT_REDUCED_SIZE_APPROVAL"
           ? "ALLOW_REDUCED_SIZE"
           : aiParliamentVote.parliamentDecision === "PARLIAMENT_WAIT"
             ? "WAIT_FOR_PULLBACK"
@@ -26144,7 +26278,7 @@ function calculateCentralAutonomousDecisionCore(stockSignals = [], cryptoSignals
                 ? "BLOCK"
                 : shouldAccelerate
                   ? "ACCELERATE_CAPITAL"
-                  : finalDecisionScore >= CONFIG.minScoreToBuy
+                  : finalDecisionScore >= requiredDecisionScore
                     ? "ALLOW"
                     : "WATCH");
     return {
@@ -26165,6 +26299,30 @@ function calculateCentralAutonomousDecisionCore(stockSignals = [], cryptoSignals
       missingScoreComponents,
       scoreComponents: decisionScoreComponents,
       cryptoDecisionScore: isCryptoSignal ? finalDecisionScore : null,
+      stockDecisionScore: isCryptoSignal ? null : finalDecisionScore,
+      watchlistEligible: isCryptoSignal
+        ? null
+        : finalDecisionScore >= STOCK_EXECUTION_THRESHOLDS.watchlistScore &&
+          stockDecisionEvidence.coverage >= STOCK_EXECUTION_THRESHOLDS.entryCoverage,
+      qualifiedCandidate: isCryptoSignal
+        ? null
+        : finalDecisionScore >= STOCK_EXECUTION_THRESHOLDS.qualifiedScore &&
+          stockDecisionEvidence.coverage >= STOCK_EXECUTION_THRESHOLDS.entryCoverage &&
+          stockDecisionEvidence.entry.coverage >= STOCK_EXECUTION_THRESHOLDS.entryCoverage &&
+          stockDecisionEvidence.entry.approved === true &&
+          stockDecisionEvidence.coreEvidencePass === true &&
+          shouldBlock !== true,
+      stockDecisionEvidence: isCryptoSignal
+        ? null
+        : {
+          coreEvidencePass: stockDecisionEvidence.coreEvidencePass,
+          missingCriticalEvidence: stockDecisionEvidence.missingCriticalEvidence,
+          discoveryCoverage: stockDecisionEvidence.discovery.coverage,
+          entryCoverage: stockDecisionEvidence.entry.coverage,
+          entryApproved: stockDecisionEvidence.entry.approved,
+          effectiveWeights: stockDecisionEvidence.effectiveWeights,
+          reinforcementWeightsApplied: stockDecisionEvidence.reinforcementWeightsApplied,
+        },
       cryptoDecisionEvidence: isCryptoSignal
         ? {
           coreEvidencePass: cryptoDecisionEvidence.coreEvidencePass,

@@ -2,6 +2,37 @@ import {
   CRYPTO_MAX_ENTRY_SPREAD_PERCENT,
 } from "../scoring/cryptoScoring.js";
 import { evaluateCryptoTradeCandidate } from "../scoring/componentScore.js";
+import { evaluateStockTradeCandidate } from "../scoring/decisionScores.js";
+
+export function resolveCanonicalStockDecisionScore(signal = {}) {
+  const value =
+    signal.masterFinalScore ??
+    signal.finalAutonomousDecisionScore ??
+    signal.stockDecisionScore ??
+    signal.decisionScoreTelemetry?.scores?.decision ??
+    signal.score ??
+    0;
+  const parsed = Number(value);
+  return Number.isFinite(parsed) ? parsed : 0;
+}
+
+export function evaluateCanonicalStockAutoBuyEligibility(
+  signal = {},
+  minimumScore = 78,
+  options = {}
+) {
+  const evidence = evaluateStockTradeCandidate(signal, {
+    ...options,
+    requireCentralDecision: true,
+  });
+  const canonicalScore = resolveCanonicalStockDecisionScore(signal);
+  return {
+    approved: evidence.approved && canonicalScore >= Number(minimumScore || 0),
+    canonicalScore,
+    minimumScore: Number(minimumScore || 0),
+    evidence,
+  };
+}
 
 export function createAutoBuyStrategies(dependencies) {
   const {
@@ -213,32 +244,35 @@ export function createAutoBuyStrategies(dependencies) {
     const frozenOpenSlots = openSlots;
     const effectiveBuyThreshold = getEffectiveBuyThreshold(signals);
     const adaptiveMinScoreToBuy = Math.max(
-      70,
+      78,
       effectiveBuyThreshold,
       Number(CONFIG.minScoreToBuy || 70),
       Number(engineState.selfOptimizationState?.adaptiveMinScoreToBuy || 0)
     );
     engineState.effectiveBuyThreshold = {
       updatedAt: new Date().toISOString(),
-      hardFloor: 70,
+      hardFloor: 78,
       configMinScoreToBuy: CONFIG.minScoreToBuy,
       effectiveBuyScore: adaptiveMinScoreToBuy,
       reason:
-        adaptiveMinScoreToBuy > 70
-          ? "Buy threshold raised above 70 by risk/adaptive conditions."
-          : "Hard floor active. Buy threshold cannot go below 70.",
+        adaptiveMinScoreToBuy > 78
+          ? "Buy threshold raised above 78 by risk/adaptive conditions."
+          : "Stock hard floor active. Buy threshold cannot go below 78.",
     };
     const frozenApprovedSignals = signals
       .filter(
-        (signal) =>
-          signal.qualifiedToBuy === true &&
-          signal.autoTradeApproved === true &&
-          Number(signal.score || 0) >= adaptiveMinScoreToBuy
+        (signal) => {
+          const eligibility = evaluateCanonicalStockAutoBuyEligibility(
+            signal,
+            adaptiveMinScoreToBuy
+          );
+          return eligibility.approved;
+        }
       )
       .sort(
         (a, b) =>
-          Number(b.masterFinalScore || b.score || 0) -
-          Number(a.masterFinalScore || a.score || 0)
+          resolveCanonicalStockDecisionScore(b) -
+          resolveCanonicalStockDecisionScore(a)
       )
       .slice(
         0,
@@ -255,13 +289,16 @@ export function createAutoBuyStrategies(dependencies) {
     const baseCandidates = frozenApprovedSignals
       .filter((signal) => {
         const symbol = normalizeSymbol(signal.symbol);
-        const score = Number(signal.score || 0);
+        const score = resolveCanonicalStockDecisionScore(signal);
         const adaptiveMinScore = Number(
           engineState.selfOptimizationState?.adaptiveMinScoreToBuy ||
           CONFIG.minScoreToBuy
         );
         const executionApproved = executableSymbols.has(symbol);
-        const normalQualified = signal.qualifiedToBuy === true;
+        const normalQualified = evaluateCanonicalStockAutoBuyEligibility(
+          signal,
+          0
+        ).approved;
         return (
           normalQualified ||
           (
@@ -273,7 +310,7 @@ export function createAutoBuyStrategies(dependencies) {
           )
         );
       })
-      .filter((signal) => Number(signal.score || 0) >= adaptiveMinScoreToBuy)
+      .filter((signal) => resolveCanonicalStockDecisionScore(signal) >= adaptiveMinScoreToBuy)
       .filter((signal) => {
         const symbol = normalizeSymbol(signal.symbol);
         const lastSold = engineState.lastSoldAt[symbol] || 0;
@@ -307,8 +344,8 @@ export function createAutoBuyStrategies(dependencies) {
       )
       .sort(
         (a, b) =>
-          Number(b.morningMomentumScore || b.premarketMomentum?.morningMomentumScore || b.score || 0) -
-          Number(a.morningMomentumScore || a.premarketMomentum?.morningMomentumScore || a.score || 0)
+          Number(b.morningMomentumScore || b.premarketMomentum?.morningMomentumScore || resolveCanonicalStockDecisionScore(b)) -
+          Number(a.morningMomentumScore || a.premarketMomentum?.morningMomentumScore || resolveCanonicalStockDecisionScore(a))
       )
       .slice(0, Math.min(openSlots, Number(CONFIG.eliteMorningStrikeLimit || 10)));
     const fallbackCandidates = baseCandidates
@@ -316,7 +353,7 @@ export function createAutoBuyStrategies(dependencies) {
         (signal) =>
           !morningStrikeSymbols.has(normalizeSymbol(signal.symbol))
       )
-      .sort((a, b) => Number(b.score || 0) - Number(a.score || 0))
+      .sort((a, b) => resolveCanonicalStockDecisionScore(b) - resolveCanonicalStockDecisionScore(a))
       .slice(0, Math.max(0, openSlots - morningStrikeCandidates.length));
     const remainingMorningTrades = Math.max(
       0,
@@ -351,6 +388,16 @@ export function createAutoBuyStrategies(dependencies) {
     let stockBudgetReservedThisCycle = 0;
     for (const candidate of candidates) {
       const symbol = normalizeSymbol(candidate.symbol);
+      const stockTradeEvidence = evaluateStockTradeCandidate(candidate, { requireCentralDecision: true });
+      if (!stockTradeEvidence.approved) {
+        recordOrder("STOCK_SKIPPED_ENTRY_EVIDENCE", symbol, {
+          ...stockTradeEvidence,
+        });
+        continue;
+      }
+      candidate.legacySignalScore = Number(candidate.score || 0);
+      candidate.score = resolveCanonicalStockDecisionScore(candidate);
+      candidate.scoreSource = "canonical_stock_final_decision";
       if (shouldSkipFromTradeMemory(symbol)) {
         recordOrder("STOCK_SKIPPED_TRADE_MEMORY", symbol, {
           memory: engineState.tradeMemory?.[symbol],

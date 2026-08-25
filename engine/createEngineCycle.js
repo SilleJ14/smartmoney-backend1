@@ -74,6 +74,7 @@ export function createEngineCycle(dependencies) {
     calculateSmartCapitalCompoundingEngine,
     calculateSmartCapitalRedistributionEngine,
     calculateStablecoinFlowPressure,
+    calculateStockOutcomeLearning,
     calculateUnifiedOrchestrator,
     checkDailyLossAndProfitLock,
     clampScore,
@@ -81,6 +82,7 @@ export function createEngineCycle(dependencies) {
     emitSignalTapeTransitions,
     emitSystemRiskTapeState,
     engineState,
+    evaluateStockTradeCandidate,
     executePendingExits,
     flattenStocksAndCryptoBeforeMarketClose,
     getAccount,
@@ -91,6 +93,8 @@ export function createEngineCycle(dependencies) {
     getEnabledStrategyModes,
     getPositions,
     getMemoryGuardState,
+    getDueStockOutcomeSymbols,
+    getStockOutcomeFollowupQuotes,
     normalizeSymbol,
     pushLiveSignalUpdate,
     recordOrder,
@@ -115,6 +119,7 @@ export function createEngineCycle(dependencies) {
     updateCryptoPositionSizingState,
     updateInstitutionalWatchlist,
     updateMultiTimeframeCryptoState,
+    updateStockScoreOutcomes,
     updateWhaleSmartMoneyState,
     getRuntime,
   } = dependencies;
@@ -518,6 +523,8 @@ export function createEngineCycle(dependencies) {
           decision.finalDecisionScore;
         if (cryptoSignals.includes(matchingSignal)) {
           matchingSignal.cryptoDecisionScore = decision.finalDecisionScore;
+        } else {
+          matchingSignal.stockDecisionScore = decision.finalDecisionScore;
         }
         matchingSignal.centralAutonomousAction = decision.action;
         matchingSignal.masterCapitalMultiplier =
@@ -917,24 +924,14 @@ export function createEngineCycle(dependencies) {
         );
         matchingSignal.displayPrice =
           matchingSignal.livePrice || matchingSignal.price;
-        matchingSignal.liveQuoteUpdatedAt =
-          mutation.liveQuoteUpdatedAt ||
-          mutation.updatedAt ||
-          new Date().toISOString();
-        matchingSignal.liveQuoteSource =
-          mutation.liveQuoteSource ||
-          mutation.source ||
-          "polygon_live";
-        matchingSignal.priceIsLive =
-          matchingSignal.livePrice > 0;
+        if (mutation.liveQuoteUpdatedAt) {
+          matchingSignal.liveQuoteUpdatedAt = mutation.liveQuoteUpdatedAt;
+        }
+        if (mutation.liveQuoteSource) {
+          matchingSignal.liveQuoteSource = mutation.liveQuoteSource;
+        }
+        matchingSignal.priceIsLive = mutation.priceIsLive === true;
         matchingSignal.displayPrice = matchingSignal.livePrice || matchingSignal.price;
-        matchingSignal.liveQuoteUpdatedAt = new Date().toISOString();
-        matchingSignal.liveQuoteSource =
-          mutation.liveQuoteSource ||
-          mutation.source ||
-          matchingSignal.liveQuoteSource ||
-          "live_momentum_mutation";
-        matchingSignal.priceIsLive = true;
         matchingSignal.score = clampScore(
           Number(matchingSignal.score || 0) * 0.82 +
           Number(mutation.liveMutatedScore || 0) * 0.18
@@ -2460,6 +2457,33 @@ export function createEngineCycle(dependencies) {
           signal.portfolioAction = "FINAL_SIZE_BLOCK";
           signal.aiPortfolioAction = "FINAL_SIZE_BLOCK";
         }
+        const finalStockExecutionGate = evaluateStockTradeCandidate(signal, {
+          requireCentralDecision: true,
+          maxQuoteAgeSeconds: Number(
+            getRuntime()?.LIVE_ORDER_MAX_QUOTE_AGE_SECONDS ||
+            15
+          ),
+          maxSpreadPercent: Number(
+            getRuntime()?.LIVE_ORDER_MAX_SPREAD_PERCENT ||
+            1
+          ),
+        });
+        signal.finalStockExecutionGate = finalStockExecutionGate;
+        signal.finalEntryEvidenceGate = finalStockExecutionGate;
+        if (!finalStockExecutionGate.approved) {
+          signal.qualifiedToBuy = false;
+          signal.autoTradeApproved = false;
+          signal.approved = false;
+          signal.recommendedTradeAmount = 0;
+          signal.finalApprovedTradeAmount = 0;
+          signal.displayTradeAmount = 0;
+          signal.aiAllocationPercentOfBotBudget = 0;
+          signal.decisionLevel = `Watch Only - ${finalStockExecutionGate.reasons.join(", ")}`;
+        } else {
+          signal.qualifiedToBuy = true;
+          signal.autoTradeApproved = true;
+          signal.approved = true;
+        }
       }
       signals = [...stockSignals, ...cryptoSignals];
       const finalFullInstitutionalAiBrain =
@@ -2569,6 +2593,56 @@ export function createEngineCycle(dependencies) {
         aiConfidence: clampScore(signal.aiConfidence),
         autonomousConfidenceScore: clampScore(signal.autonomousConfidenceScore),
       }));
+      const outcomeNow = Date.now();
+      const priorFollowupState =
+        engineState.stockScoreOutcomeFollowupState || { lastAttemptBySymbol: {} };
+      const dueOutcomeSymbols = getDueStockOutcomeSymbols(
+        engineState.stockScoreOutcomeState,
+        stockSignals,
+        {
+          now: outcomeNow,
+          maxSymbols: 20,
+          lastAttemptBySymbol: priorFollowupState.lastAttemptBySymbol,
+        }
+      );
+      let outcomeFollowupSignals = [];
+      if (dueOutcomeSymbols.length > 0) {
+        try {
+          outcomeFollowupSignals = await getStockOutcomeFollowupQuotes(
+            dueOutcomeSymbols
+          );
+        } catch (error) {
+          recordOrder("STOCK_OUTCOME_FOLLOWUP_QUOTE_FAILED", "MARKET", {
+            requestedCount: dueOutcomeSymbols.length,
+            error: error?.message || String(error),
+          });
+        }
+      }
+      const nextAttemptsBySymbol = {
+        ...(priorFollowupState.lastAttemptBySymbol || {}),
+      };
+      for (const symbol of dueOutcomeSymbols) {
+        nextAttemptsBySymbol[symbol] = outcomeNow;
+      }
+      const nextAttemptEntries = Object.entries(nextAttemptsBySymbol)
+        .sort((a, b) => Number(b[1] || 0) - Number(a[1] || 0))
+        .slice(0, 100);
+      engineState.stockScoreOutcomeFollowupState = {
+        updatedAt: new Date(outcomeNow).toISOString(),
+        requestedSymbols: dueOutcomeSymbols,
+        receivedCount: outcomeFollowupSignals.length,
+        retryDelayMinutes: 15,
+        lastAttemptBySymbol: Object.fromEntries(nextAttemptEntries),
+      };
+      engineState.stockScoreOutcomeState = updateStockScoreOutcomes(
+        engineState.stockScoreOutcomeState,
+        [...stockSignals, ...outcomeFollowupSignals],
+        { now: outcomeNow }
+      );
+      engineState.stockScoreOutcomeSummary =
+        engineState.stockScoreOutcomeState.summary;
+      engineState.stockScoreOutcomeLearning =
+        calculateStockOutcomeLearning(engineState.stockScoreOutcomeState);
       engineState.lastSignals = signals;
       engineState.lastStockSignals =
         Array.isArray(stockSignals) && stockSignals.length > 0
@@ -2621,9 +2695,7 @@ export function createEngineCycle(dependencies) {
       }
       const approvedStockSignals = stockSignals.filter(
         (signal) =>
-          signal.qualifiedToBuy === true &&
-          signal.autoTradeApproved === true &&
-          Number(signal.score || 0) >= CONFIG.minScoreToBuy
+          signal.finalStockExecutionGate?.approved === true
       );
       const approvedCryptoSignals = cryptoSignals.filter(
         (signal) =>

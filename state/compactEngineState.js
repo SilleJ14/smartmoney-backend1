@@ -144,6 +144,22 @@ function compactHeavyHistoryEntry(key, entry = {}) {
   };
 }
 
+function boundStockScoreOutcomeState(outcomeState) {
+  if (!outcomeState || typeof outcomeState !== "object") return outcomeState;
+  const observations = Array.isArray(outcomeState.observations)
+    ? outcomeState.observations.slice(0, 500)
+    : [];
+  return {
+    ...outcomeState,
+    maxObservations: Math.max(
+      1,
+      Math.min(500, Number(outcomeState.maxObservations || 500))
+    ),
+    observationCount: observations.length,
+    observations,
+  };
+}
+
 export function compactLiveEngineStateHistories(
   state = {},
   {
@@ -166,6 +182,9 @@ export function compactLiveEngineStateHistories(
       state[key] = value.slice(0, defaultLimit);
     }
   }
+  state.stockScoreOutcomeState = boundStockScoreOutcomeState(
+    state.stockScoreOutcomeState
+  );
   return state;
 }
 

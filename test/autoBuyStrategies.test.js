@@ -1,6 +1,47 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import { createAutoBuyStrategies } from "../strategies/autoBuyStrategies.js";
+import {
+  createAutoBuyStrategies,
+  evaluateCanonicalStockAutoBuyEligibility,
+  resolveCanonicalStockDecisionScore,
+} from "../strategies/autoBuyStrategies.js";
+
+test("stock auto-buy resolves the canonical Final Decision score before the legacy score", () => {
+  assert.equal(resolveCanonicalStockDecisionScore({
+    score: 55,
+    stockDecisionScore: 86,
+  }), 86);
+  assert.equal(resolveCanonicalStockDecisionScore({
+    score: 95,
+    stockDecisionScore: 70,
+    finalAutonomousDecisionScore: 82,
+    masterFinalScore: 84,
+  }), 84);
+});
+
+test("canonical stock approval ignores stale legacy booleans but preserves explicit safety blocks", () => {
+  const signal = {
+    score: 55,
+    masterFinalScore: 86,
+    entryQualityScore: 82,
+    entryQualityScorecard: { approved: true, coverage: 1 },
+    discoveryScorecard: { coverage: 1 },
+    decisionScoreCoverage: 1,
+    centralAutonomousAction: "ALLOW",
+    riskScore: 70,
+    quoteFetchedAt: new Date().toISOString(),
+    qualifiedToBuy: false,
+    autoTradeApproved: false,
+  };
+  const canonical = evaluateCanonicalStockAutoBuyEligibility(signal, 78);
+  assert.equal(canonical.approved, true);
+  const suppressed = evaluateCanonicalStockAutoBuyEligibility({
+    ...signal,
+    phase9LiquiditySuppressed: true,
+  }, 78);
+  assert.equal(suppressed.approved, false);
+  assert.ok(suppressed.evidence.reasons.includes("EXPLICIT_BUY_BLOCK"));
+});
 
 test("auto-buy strategies read trading mode at invocation time", async () => {
   let mode = "paper";
