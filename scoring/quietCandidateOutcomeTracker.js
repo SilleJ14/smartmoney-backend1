@@ -79,16 +79,19 @@ export function calculateQuietCandidateLearning(
     minUniqueSymbols = 10,
   } = {}
 ) {
-  const observations = (state.observations || []).filter(
+  const safeState = state && typeof state === "object" ? state : {};
+  const observations = (Array.isArray(safeState.observations)
+    ? safeState.observations
+    : []).filter(
     (observation) => observation.assetClass === assetClass
   );
-  const evaluatedAt = Date.parse(state.updatedAt || "") || Date.now();
+  const evaluatedAt = Date.parse(safeState.updatedAt || "") || Date.now();
   const due = observations.filter(
     (observation) => observation.assetClass === "crypto"
       ? Number(observation.targetTimestamps?.[horizonDays] || 0) > 0 &&
         evaluatedAt >= Number(observation.targetTimestamps[horizonDays])
       : observation.targets?.[horizonDays] &&
-        state.updatedDayKey >= observation.targets[horizonDays]
+        safeState.updatedDayKey >= observation.targets[horizonDays]
   );
   const measured = due.filter(
     (observation) => Number.isFinite(Number(observation.measurements?.[horizonDays]?.peakReturnPercent))
@@ -155,6 +158,9 @@ export function updateQuietCandidateOutcomes(
     tradedSymbols = [],
   } = {}
 ) {
+  const safePreviousState = previousState && typeof previousState === "object"
+    ? previousState
+    : {};
   const safeMaxObservations = Math.max(
     50,
     Math.min(600, Number(maxObservations || 600))
@@ -179,8 +185,8 @@ export function updateQuietCandidateOutcomes(
       }])
       .filter(([symbol, value]) => symbol && value.price > 0)
   );
-  const observations = (Array.isArray(previousState.observations)
-    ? previousState.observations
+  const observations = (Array.isArray(safePreviousState.observations)
+    ? safePreviousState.observations
     : []).map((observation) => ({
       ...observation,
       targets: { ...(observation.targets || {}) },

@@ -36,6 +36,24 @@ test("every selected quiet candidate is tracked even when it never becomes a tra
   assert.deepEqual(Object.keys(state.observations[0].targets), ["1", "3", "5"]);
 });
 
+test("null persisted outcome state is migrated without stopping the engine", () => {
+  const state = updateQuietCandidateOutcomes(
+    null,
+    [{ symbol: "AAPL", price: 100, discoveryScore: 80 }],
+    [{ symbol: "AAPL", price: 100 }],
+    {
+      assetClass: "stock",
+      dayKey: "2026-08-26",
+      now: Date.parse("2026-08-26T14:00:00.000Z"),
+    }
+  );
+
+  assert.equal(state.observationCount, 1);
+  assert.equal(state.observations[0].symbol, "AAPL");
+  assert.equal(state.learning.stock.active, false);
+  assert.equal(state.learning.crypto.active, false);
+});
+
 test("quiet candidates receive 1, 3 and 5 day measurements", () => {
   const selected = candidates(2);
   let state = updateQuietCandidateOutcomes({}, selected, selected, {
