@@ -395,11 +395,21 @@ export function createCryptoMarketScanner(dependencies) {
     engineState.skippedSymbols = [];
     engineState.lastCryptoScanStartedAt = new Date().toISOString();
     engineState.topCryptoSignals = [];
+    let processedSymbols = 0;
     for (const symbol of symbols) {
       const institutionalUsdPair = String(symbol || "").endsWith("/USD");
       if (!institutionalUsdPair) {
         continue;
       }
+      processedSymbols += 1;
+      engineState.lastHeartbeatAt = new Date().toISOString();
+      engineState.engineCycleStage = {
+        stage: "SCANNING_CRYPTO",
+        symbol,
+        processedSymbols,
+        totalSymbols: symbols.length,
+        updatedAt: engineState.lastHeartbeatAt,
+      };
       try {
         const liveCryptoQuote = getFreshLiveCryptoQuote(
           symbol,

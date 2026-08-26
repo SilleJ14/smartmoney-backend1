@@ -882,7 +882,17 @@ export function createStockMarketStrategy(dependencies) {
       console.log(`Scanning ${limitedSymbols.length} of ${symbols.length} symbols...`);
       console.log("Advanced filters enabled:", CONFIG.enableAdvancedFilters);
       const batchSize = 2;
+      let processedSymbols = 0;
       const rawResults = await processBatches(limitedSymbols, batchSize, async (symbol) => {
+        processedSymbols += 1;
+        engineState.lastHeartbeatAt = new Date().toISOString();
+        engineState.engineCycleStage = {
+          stage: "SCANNING_STOCKS",
+          symbol,
+          processedSymbols,
+          totalSymbols: limitedSymbols.length,
+          updatedAt: engineState.lastHeartbeatAt,
+        };
         try {
           const assetCheck = await checkAssetEligibility(symbol);
           if (!assetCheck.ok) {

@@ -134,7 +134,18 @@ export function createEngineCycle(dependencies) {
     };
   }
 
+  function markCycleStage(stage, details = {}) {
+    const updatedAt = new Date().toISOString();
+    engineState.lastHeartbeatAt = updatedAt;
+    engineState.engineCycleStage = {
+      stage,
+      updatedAt,
+      ...details,
+    };
+  }
+
   async function executeEngineCycleBody() {
+    markCycleStage("INITIALIZING");
     const { TRADING_MODE, autoTradingEnabled, ENABLE_POLYGON_WEBSOCKET, FINNHUB_API_KEY, POLYGON_API_KEY } = getRuntime();
       const { key, secret } = getAlpacaKeys();
       if (!key || !secret) {
@@ -229,7 +240,11 @@ export function createEngineCycle(dependencies) {
       }
       const scanStartedAt = Date.now();
       if (cryptoModeEnabled) {
+        markCycleStage("SCANNING_CRYPTO");
         cryptoSignals = await scanCryptoMarket();
+        markCycleStage("CRYPTO_SCAN_COMPLETED", {
+          signalCount: cryptoSignals.length,
+        });
         const selectedQuietCrypto = Array.isArray(
           engineState.cryptoQuietDiscoveryState?.topCandidates
         )
@@ -251,7 +266,11 @@ export function createEngineCycle(dependencies) {
         }
       }
       if (stockModeEnabled) {
+        markCycleStage("SCANNING_STOCKS");
         stockSignals = await scanMarket();
+        markCycleStage("STOCK_SCAN_COMPLETED", {
+          signalCount: stockSignals.length,
+        });
       }
       recordOrder("PIPELINE_SCAN_COMPLETED", "ALL", {
         tradingMode: TRADING_MODE,
@@ -1453,6 +1472,10 @@ export function createEngineCycle(dependencies) {
         );
       engineState.lastSuccessfulCycleAt =
         new Date().toISOString();
+      markCycleStage("CYCLE_COMPLETED", {
+        stockSignalCount: stockSignals.length,
+        cryptoSignalCount: cryptoSignals.length,
+      });
       engineState.marketMomentumScore =
         stockSignals.reduce(
           (sum, s) =>

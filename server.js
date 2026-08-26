@@ -142,6 +142,7 @@ import { createStockMarketStrategy } from "./strategies/stockMarketStrategy.js";
 import { createAlpacaCryptoMarketData } from "./market-data/alpacaCryptoMarketData.js";
 import { fetchAlpacaStockOutcomeQuotes } from "./market-data/alpacaStockOutcomeQuotes.js";
 import { createTaskScheduler } from "./engine/taskScheduler.js";
+import { resolveBoundedScanLimit } from "./engine/scanBudget.js";
 import { createDiscoveryFeatureStore } from "./discovery/featureStore.js";
 import { fetchAlpacaGroupedDaily } from "./discovery/alpacaDailyBars.js";
 import { prunePreMoverMemory } from "./discovery/preMoverMemory.js";
@@ -2900,6 +2901,7 @@ function buildBackendHealthPayload(clock = {}) {
       lastTickDurationMs: engineState.lastTickDurationMs || null,
       lastScanDurationMs: engineState.lastScanDurationMs || null,
       totalEngineTicks: Number(engineState.totalEngineTicks || 0),
+      currentStage: engineState.engineCycleStage || null,
       engineFreezeDetected: Boolean(engineState.engineFreezeDetected),
       engineFreezeCount: Number(engineState.engineFreezeCount || 0),
       lastEngineStopReason: engineState.lastEngineStopReason || null,
@@ -18426,7 +18428,8 @@ function getScanWeight(symbol) {
   };
 }
 function narrowScanUniverse(symbols = []) {
-  const maxSymbolsToScan = Number(process.env.MAX_SYMBOLS_TO_SCAN || 500);
+  const requestedMaxSymbolsToScan = Number(process.env.MAX_SYMBOLS_TO_SCAN || 60);
+  const maxSymbolsToScan = resolveBoundedScanLimit(requestedMaxSymbolsToScan);
   const guaranteedEarlySymbols = [
     ...(engineState.liveEarlyMoverSymbols || []),
     ...(engineState.preMoverDiscoveryState?.topCandidates || []).map((item) => item.symbol || item),
@@ -18461,6 +18464,7 @@ function narrowScanUniverse(symbols = []) {
     totalUniverseCount: reviewed.length,
     narrowedCount: elite.length,
     maxSymbolsToScan,
+    requestedMaxSymbolsToScan,
     averageScanWeight:
       reviewed.length > 0
         ? Number(
@@ -23320,10 +23324,11 @@ const { executeEngineCycleBody } = createEngineCycle({
   }),
 });
 setInterval(() => {
+  const lastProgressAt = Date.parse(engineState.lastHeartbeatAt || "");
   if (
     engineState.running &&
-    engineState.lastTickStartedAt &&
-    Date.now() - engineState.lastTickStartedAt > 1000 * 60 * 5
+    Number.isFinite(lastProgressAt) &&
+    Date.now() - lastProgressAt > 1000 * 60 * 5
   ) {
     engineState.engineFreezeDetected = true;
     engineState.engineFreezeCount =
@@ -23395,7 +23400,7 @@ registerDiagnosticRoutes(app, {
   getBotOwnedSymbols,
   isManagedPosition: isAiManagedOpenPosition,
   getBotExposure,
-  getMaxSymbols: () => Number(process.env.MAX_SYMBOLS_TO_SCAN || 750),
+  getMaxSymbols: () => resolveBoundedScanLimit(process.env.MAX_SYMBOLS_TO_SCAN),
   getFreshness: getEngineFreshness,
 });
 
