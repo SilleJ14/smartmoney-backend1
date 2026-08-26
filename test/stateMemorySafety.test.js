@@ -103,6 +103,58 @@ test("persisted snapshot removes live caches and stays within a bounded size", (
   assert.ok(bytes < 100_000, `expected compact snapshot below 100 KB, received ${bytes}`);
 });
 
+test("state saver persists bounded stock and quiet-candidate learning history", async () => {
+  const quietObservations = Array.from({ length: 650 }, (_, index) => ({
+    id: `crypto:Q${index}:2026-08-20`,
+    assetClass: "crypto",
+    symbol: `Q${index}`,
+    observedAt: index,
+    baselinePrice: 100,
+    trackingPeakPrice: 101,
+    componentScores: { structure: 70 },
+    targets: { 1: "2026-08-21", 3: "2026-08-23", 5: "2026-08-25" },
+    measurements: {},
+  }));
+  const state = {
+    highWaterMarks: {},
+    stockScoreOutcomeState: { observations: [{ id: "AAPL:2026-08-20" }] },
+    stockScoreOutcomeLearning: { active: true, sampleCount: 30 },
+    quietCandidateOutcomeState: {
+      maxObservations: 650,
+      observations: quietObservations,
+    },
+    quietCandidateOutcomeLearning: {
+      stock: { active: false, sampleCount: 10 },
+      crypto: { active: true, sampleCount: 30 },
+    },
+    cryptoQuietDiscoveryState: {
+      topCandidates: Array.from({ length: 40 }, (_, index) => ({
+        symbol: `C${index}`,
+        chartBars: Array(100).fill({ c: 100 }),
+      })),
+    },
+  };
+  const saver = createEngineStateSaver({
+    ENGINE_STATE_FILE: "unused.json",
+    engineState: state,
+    getEffectiveTradingMode: () => "smart",
+    writeState: async () => {},
+    saveDelayMs: 60_000,
+  });
+
+  const snapshot = saver.saveEngineState("PERSIST_SCORING_LEARNING");
+
+  assert.equal(snapshot.quietCandidateOutcomeState.observations.length, 600);
+  assert.equal(snapshot.quietCandidateOutcomeLearning.crypto.active, true);
+  assert.equal(snapshot.stockScoreOutcomeLearning.sampleCount, 30);
+  assert.equal(snapshot.cryptoQuietDiscoveryState.topCandidates.length, 25);
+  assert.equal(
+    "chartBars" in snapshot.cryptoQuietDiscoveryState.topCandidates[0],
+    false
+  );
+  await saver.flushEngineStateSave();
+});
+
 test("state saver coalesces updates and never overlaps writes", async () => {
   const releases = [];
   const reasons = [];

@@ -25,6 +25,13 @@ export function evaluatePreTradeRisk({ order = {}, context = {}, options = {} } 
     const price = finiteNumber(context.price);
     const quoteAgeSeconds = finiteNumber(context.quoteAgeSeconds, Infinity);
     const spreadPercent = finiteNumber(context.spreadPercent);
+    const spreadAvailable = context.spreadAvailable === true || (
+      context.spreadAvailable !== false &&
+      context.spreadPercent !== null &&
+      context.spreadPercent !== undefined &&
+      context.spreadPercent !== "" &&
+      Number.isFinite(Number(context.spreadPercent))
+    );
     const value = orderValue(order, price);
     const equity = finiteNumber(context.account?.equity || context.account?.portfolio_value);
     const exposure = (context.positions || []).reduce(
@@ -43,6 +50,7 @@ export function evaluatePreTradeRisk({ order = {}, context = {}, options = {} } 
     if (!context.isCrypto && !context.marketOpen) reasons.push("Stock market is closed");
     if (price <= 0) reasons.push("Missing valid live price");
     if (!context.quoteIsLive) reasons.push("Quote is not from a live source");
+    if (!spreadAvailable) reasons.push("Live bid/ask spread is unavailable");
     if (quoteAgeSeconds > finiteNumber(context.maxQuoteAgeSeconds, 15)) {
       reasons.push(`Live quote stale: ${quoteAgeSeconds}s old`);
     }

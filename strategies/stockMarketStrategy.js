@@ -223,6 +223,8 @@ export function createStockMarketStrategy(dependencies) {
       momentumScore,
       fundamentalBlendScore,
       reinforcementWeights: blend.reinforcementWeights,
+      reinforcementLearningActive:
+        engineState.reinforcementWeightState?.active === true,
       technicalIntelligence: citadelTechnical,
       trendQualityScore: citadelTechnical.trendQualityScore,
       breakoutQualityScore: citadelTechnical.breakoutQualityScore,
@@ -378,6 +380,8 @@ export function createStockMarketStrategy(dependencies) {
       Number(q.newsScore || 0) > 0 ||
       Number(q.catalystScore || 0) > 0 ||
       Number(q.catalystRanking?.catalystScore || 0) > 0 ||
+      q.confirmations?.newsCatalyst?.catalystAvailable === true ||
+      (Array.isArray(q.confirmations?.newsHeadlines) && q.confirmations.newsHeadlines.length > 0) ||
       (Array.isArray(q.news) && q.news.length > 0);
   
     const hasMomentum =
@@ -428,7 +432,7 @@ export function createStockMarketStrategy(dependencies) {
     const discoveryRescue =
       explosiveRunnerRescue ||
       strongPremarketContinuation ||
-      preMoverScore >= 75;
+      preMoverScore >= 58;
   
     const allowRiskDisplay =
       explosiveRunnerRescue ||
@@ -576,6 +580,7 @@ export function createStockMarketStrategy(dependencies) {
   
   function scoreStock(q) {
     let score = 0;
+    q.requireNewsRiskForEntry = CONFIG.enableNewsRiskFilter !== false;
     const runnerStageProfile = calculateRunnerStageProfile(q);
     q.runnerStage = runnerStageProfile.runnerStage;
     q.runnerStageProfile = runnerStageProfile;
@@ -680,13 +685,10 @@ export function createStockMarketStrategy(dependencies) {
       q.preMoverVolumeWakeupScore = Number(preMoverMem.volumeWakeupScore || 0);
     }
     if (Number(q.preMoveScore || 0) >= 82) {
-      score += 14; // ELITE_PRE_MOVER in scoreStock real-time
       q.preMoveLabel = q.preMoveLabel || "ELITE_PRE_MOVER";
     } else if (Number(q.preMoveScore || 0) >= 72) {
-      score += 8;
       q.preMoveLabel = q.preMoveLabel || "STRONG_PRE_MOVER";
     } else if (Number(q.preMoveScore || 0) >= 62) {
-      score += 4;
       q.preMoveLabel = q.preMoveLabel || "DEVELOPING_PRE_MOVER";
     }
   
@@ -926,7 +928,9 @@ export function createStockMarketStrategy(dependencies) {
           quote.technicals = computeTechnicals(technicalBars);
           quote.technicalBarsFound = technicalBars.length;
           if (CONFIG.enableAdvancedFilters) {
-            quote.confirmations = await getAdvancedConfirmations(quote);
+            quote.confirmations = await getAdvancedConfirmations(quote, {
+              includeNews: false,
+            });
           }
           const premarketContinuationWindow =
             !engineState.marketOpen &&
@@ -993,7 +997,41 @@ export function createStockMarketStrategy(dependencies) {
             quality.discoveryOnly === true;
           quote.displayOnlyReason = quote.displayOnlyReason || quality.reason || "";
   
-          const score = scoreStock(quote);
+          let score = scoreStock(quote);
+          const newsReviewEligible =
+            CONFIG.enableAdvancedFilters &&
+            quality.discoveryOnly !== true &&
+            quote.blockBuying !== true &&
+            (
+              Number(quote.entryQualityScore || 0) >= 60 ||
+              Number(quote.discoveryScore || 0) >= 70 ||
+              Number(quote.preMoveScore || 0) >= 70
+            );
+          if (CONFIG.enableAdvancedFilters && newsReviewEligible) {
+            quote.confirmations = await getAdvancedConfirmations(quote, {
+              includeNews: true,
+              baseConfirmations: quote.confirmations,
+            });
+            if (quote.confirmations.newsRisk === true) {
+              quote.blockBuying = true;
+              quote.buyBlocked = true;
+              quote.discoveryOnly = true;
+              quote.buyBlockReason =
+                `News risk: ${quote.confirmations.newsRiskReason}`;
+            }
+            score = scoreStock(quote);
+          } else if (CONFIG.enableAdvancedFilters) {
+            quote.confirmations = {
+              ...quote.confirmations,
+              newsRiskAvailable: false,
+              newsRiskReason: "News review deferred: candidate did not reach Entry shortlist",
+              newsCacheStatus: "deferred",
+            };
+            quote.blockBuying = true;
+            quote.buyBlocked = true;
+            quote.discoveryOnly = true;
+            quote.buyBlockReason ||= "Entry shortlist not reached";
+          }
           const statisticalEdge = quote.statisticalEdge || null;
           const statisticalScore = Number(quote.statisticalScore || 0);
           const institutional = calculateInstitutionalScores({
@@ -1342,24 +1380,13 @@ export function createStockMarketStrategy(dependencies) {
         if (accumMemory) {
           signal.multiDayAccumulation = accumMemory;
           signal.multiDayAccumulationScore = Number(accumMemory.preBreakoutScore || 0);
-          // Upgraded: scale boost by how strong the pre-breakout signal is
-          if (signal.multiDayAccumulationScore >= 85) {
-            signal.score = clampScore(Number(signal.score || 0) + 14);
-            signal.multiDayAccumulationBoost = 14;
-          } else if (signal.multiDayAccumulationScore >= 75) {
-            signal.score = clampScore(Number(signal.score || 0) + 9);
-            signal.multiDayAccumulationBoost = 9;
-          } else if (signal.multiDayAccumulationScore >= 65) {
-            signal.score = clampScore(Number(signal.score || 0) + 5);
-            signal.multiDayAccumulationBoost = 5;
-          }
         }
         signal.continuationScorecard = calculateMultiDayContinuationScore(signal);
         signal.multiDayContinuationScore = signal.continuationScorecard.score;
         signal.multiDayContinuationTier = signal.continuationScorecard.tier;
   
-        // FIX-A2: Attach preMoveScore and use it as a score boost
-        // This was computed but NEVER fed into signal scoring — now it does
+        // Attach Early Discovery as its own score family. It must not mutate
+        // the legacy/Entry score or it would be counted again by Decision.
         const preMoverMemory = engineState.preMoverDiscoveryMemory?.[sym];
         if (preMoverMemory) {
           signal.preMoverDiscovery = preMoverMemory;
@@ -1367,18 +1394,11 @@ export function createStockMarketStrategy(dependencies) {
           signal.preMoverCompressionScore = Number(preMoverMemory.compressionScore || 0);
           signal.preMoverAccumulationScore = Number(preMoverMemory.accumulationScore || 0);
           signal.preMoverVolumeWakeupScore = Number(preMoverMemory.volumeWakeupScore || 0);
-          // Strong pre-move fingerprint = before-the-move detection bonus
           if (signal.preMoveScore >= 82) {
-            signal.score = clampScore(Number(signal.score || 0) + 16);
-            signal.preMoveBoost = 16;
             signal.preMoveLabel = "ELITE_PRE_MOVER";
           } else if (signal.preMoveScore >= 74) {
-            signal.score = clampScore(Number(signal.score || 0) + 10);
-            signal.preMoveBoost = 10;
             signal.preMoveLabel = "STRONG_PRE_MOVER";
           } else if (signal.preMoveScore >= 65) {
-            signal.score = clampScore(Number(signal.score || 0) + 5);
-            signal.preMoveBoost = 5;
             signal.preMoveLabel = "DEVELOPING_PRE_MOVER";
           }
         }

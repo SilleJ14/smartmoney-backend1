@@ -29,6 +29,7 @@ test("canonical stock approval ignores stale legacy booleans but preserves expli
     decisionScoreCoverage: 1,
     centralAutonomousAction: "ALLOW",
     riskScore: 70,
+    spreadPercent: 0.2,
     quoteFetchedAt: new Date().toISOString(),
     qualifiedToBuy: false,
     autoTradeApproved: false,
@@ -277,6 +278,14 @@ test("crypto auto-buy accepts complete evidence and trusts a narrow live quote o
     spreadAvailable: true,
     spreadPercent: 5,
     windowDollarVolume: 1_000_000,
+    cryptoDiscoveryScorecard: {
+      stage: "CRYPTO_EARLY_DISCOVERY",
+      score: 90,
+      coverage: 1,
+      calculatedAt: new Date().toISOString(),
+      extension: { alreadyExtended: false },
+    },
+    newsCatalyst: { dataAvailable: true, riskDetected: false },
     centralAutonomousDecisionCore: {
       cryptoDecisionEvidence: { coreEvidencePass: true },
     },

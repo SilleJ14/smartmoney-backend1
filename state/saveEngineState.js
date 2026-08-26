@@ -290,6 +290,18 @@ export function createEngineStateSaver({
         lastCryptoSignals: (engineState.lastCryptoSignals || []).slice(0, 50),
         topCryptoSignals: (engineState.topCryptoSignals || []).slice(0, 50),
 
+        stockScoreOutcomeState: engineState.stockScoreOutcomeState || null,
+        stockScoreOutcomeSummary: engineState.stockScoreOutcomeSummary || {},
+        stockScoreOutcomeFollowupState:
+          engineState.stockScoreOutcomeFollowupState || null,
+        stockScoreOutcomeLearning: engineState.stockScoreOutcomeLearning || null,
+        quietCandidateOutcomeState:
+          engineState.quietCandidateOutcomeState || null,
+        quietCandidateOutcomeLearning:
+          engineState.quietCandidateOutcomeLearning || { stock: null, crypto: null },
+        cryptoQuietDiscoveryState:
+          engineState.cryptoQuietDiscoveryState || null,
+
         liveMarketMemory: engineState.liveMarketMemory || {},
         liveEarlyMoverSymbols: engineState.liveEarlyMoverSymbols || [],
         liveEarlyMoverRefreshState: engineState.liveEarlyMoverRefreshState || null,

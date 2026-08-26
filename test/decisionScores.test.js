@@ -14,9 +14,24 @@ test("quiet pre-move evidence outranks an already-loud sparse mover", () => {
   const quiet = calculateEarlyDiscoveryScore({ percentChange: 0.4, relativeVolume: 0.7, preMoveScore: 88, accumulationIntelligence: { accumulationScore: 84 }, catalystScore: 65 });
   const loudAndSparse = calculateEarlyDiscoveryScore({ percentChange: 15 });
   assert.ok(quiet.score >= 72);
-  assert.equal(quiet.tier, "STRONG_DISCOVERY");
+  assert.ok(["STRONG_DISCOVERY", "ELITE_DISCOVERY"].includes(quiet.tier));
   assert.ok(loudAndSparse.score < 40);
   assert.equal(loudAndSparse.tier, "LATE_MOVE_NOT_DISCOVERY");
+});
+
+test("stock technical discovery is not reduced when no catalyst is available", () => {
+  const discovery = calculateEarlyDiscoveryScore({
+    percentChange: 0.4,
+    preMoveScore: 84,
+    catalystRanking: {
+      catalystAvailable: false,
+      catalystScore: 0,
+    },
+  });
+
+  assert.equal(discovery.score, 84);
+  assert.equal(discovery.coverage, 0.85);
+  assert.equal(discovery.catalystBonus, 0);
 });
 
 test("extreme relative volume is not treated as quiet early discovery", () => {
@@ -63,6 +78,64 @@ test("entry approval fails closed when execution evidence is missing", () => {
   assert.equal(sparse.tier, "WAIT_FOR_DATA");
   assert.ok(sparse.missingComponents.includes("liquidityExecution"));
   assert.ok(sparse.missingComponents.includes("priceLocation"));
+});
+
+test("explicitly unavailable news-risk data blocks stock entry but not discovery", () => {
+  const signal = {
+    percentChange: 0.3,
+    preMoveScore: 85,
+    requireNewsRiskForEntry: true,
+    confirmations: {
+      aboveVwap: true,
+      closeNearHighPercent: 85,
+      fakeBreakout: false,
+      newsRiskAvailable: false,
+    },
+    bid: 10,
+    ask: 10.01,
+    technicalBarsFound: 30,
+    technicals: { ema9: 11, ema20: 10, macd: 2, macdSignal: 1, rsi: 60 },
+    phase5SignalQuality: {
+      liquidityStabilityScore: 90,
+      antiChaseRisk: 10,
+      exhaustionRisk: 10,
+      spreadWideningRisk: 10,
+      breakoutRetestConfirmation: true,
+    },
+  };
+  const discovery = calculateEarlyDiscoveryScore(signal);
+  const entry = calculateEntryQualityScore(signal);
+
+  assert.ok(discovery.score >= 65);
+  assert.equal(entry.approved, false);
+  assert.ok(entry.gates.includes("NEWS_RISK_UNAVAILABLE"));
+});
+
+test("news availability only hard-blocks Entry when the production risk check is required", () => {
+  const entry = calculateEntryQualityScore({
+    requireNewsRiskForEntry: false,
+    confirmations: {
+      aboveVwap: true,
+      closeNearHighPercent: 85,
+      fakeBreakout: false,
+      newsRiskAvailable: false,
+    },
+    bid: 10,
+    ask: 10.01,
+    technicalBarsFound: 30,
+    technicals: { ema9: 11, ema20: 10, macd: 2, macdSignal: 1, rsi: 60 },
+    phase5SignalQuality: {
+      liquidityStabilityScore: 90,
+      antiChaseRisk: 10,
+      exhaustionRisk: 10,
+      spreadWideningRisk: 10,
+      breakoutRetestConfirmation: true,
+    },
+  });
+
+  assert.equal(entry.newsRiskRequired, false);
+  assert.equal(entry.gates.includes("NEWS_RISK_UNAVAILABLE"), false);
+  assert.equal(entry.approved, true);
 });
 
 test("entry approval requires a measured stock spread and enough technical bars", () => {
@@ -220,15 +293,44 @@ test("bounded reinforcement changes the canonical stock decision score", () => {
   };
   const discoveryWeighted = buildStockDecisionScore({
     ...base,
+    reinforcementLearningActive: true,
     reinforcementWeights: { momentum: 0.5, statisticalEdge: 0.5, technicals: 0.1, macro: 0.1, riskQuality: 0.15, fundamentals: 0.12 },
   });
   const entryWeighted = buildStockDecisionScore({
     ...base,
+    reinforcementLearningActive: true,
     reinforcementWeights: { momentum: 0.05, statisticalEdge: 0.05, technicals: 0.5, macro: 0.1, riskQuality: 0.15, fundamentals: 0.12 },
   });
   assert.notEqual(discoveryWeighted.score, entryWeighted.score);
   assert.equal(discoveryWeighted.reinforcementWeightsApplied, true);
   assert.ok(Object.values(discoveryWeighted.effectiveWeights).every((value) => value > 0));
+});
+
+test("legacy reinforcement weights stay inactive without enough measured samples", () => {
+  const base = {
+    discoveryScorecard: { score: 92, coverage: 1 },
+    entryQualityScorecard: { score: 82, coverage: 1, approved: true },
+    contextScore: 55,
+    riskPortfolioScore: 55,
+    fundamentalBlendScore: 30,
+    fundamentalDataValid: true,
+  };
+  const baseline = buildStockDecisionScore(base);
+  const premature = buildStockDecisionScore({
+    ...base,
+    reinforcementWeights: {
+      momentum: 0.5,
+      statisticalEdge: 0.5,
+      technicals: 0.1,
+      macro: 0.1,
+      riskQuality: 0.15,
+      fundamentals: 0.12,
+    },
+  });
+
+  assert.equal(premature.score, baseline.score);
+  assert.equal(premature.reinforcementWeightsApplied, false);
+  assert.equal(premature.reinforcementLearningActive, false);
 });
 
 test("bounded outcome learning changes weights only when activated", () => {
@@ -275,6 +377,7 @@ test("stock execution enforces final, entry, coverage, and acceleration threshol
     decisionScoreCoverage: 0.8,
     centralAutonomousAction: "ALLOW",
     riskScore: 70,
+    spreadPercent: 0.2,
     quoteFetchedAt: new Date().toISOString(),
   }, { requireCentralDecision: true });
   assert.equal(regular.approved, true);
@@ -289,6 +392,7 @@ test("stock execution enforces final, entry, coverage, and acceleration threshol
     decisionScoreCoverage: 0.8,
     centralAutonomousAction: "ACCELERATE_CAPITAL",
     riskScore: 70,
+    spreadPercent: 0.2,
     quoteFetchedAt: new Date().toISOString(),
   }, { requireCentralDecision: true });
   assert.equal(accelerated.accelerated, true);
@@ -394,6 +498,7 @@ test("final stock gate requires minimum measured risk quality", () => {
     decisionScoreCoverage: 1,
     centralAutonomousAction: "ALLOW",
     quoteFetchedAt: new Date().toISOString(),
+    spreadPercent: 0.2,
   };
   const unavailable = evaluateStockTradeCandidate(base, { requireCentralDecision: true });
   assert.equal(unavailable.approved, false);
@@ -415,6 +520,7 @@ test("final stock gate requires a fresh quote for executable approval", () => {
     decisionScoreCoverage: 1,
     centralAutonomousAction: "ALLOW",
     riskScore: 70,
+    spreadPercent: 0.2,
   };
   const missing = evaluateStockTradeCandidate(base, {
     requireCentralDecision: true,
@@ -478,4 +584,28 @@ test("canonical risk component combines actual risk quality with portfolio fit",
   const component = weakRisk.components.find((item) => item.name === "riskPortfolio");
   assert.equal(component.value, 41);
   assert.equal(component.source, "risk_quality_70_portfolio_fit_30");
+});
+
+test("stock execution fails closed on invalid final score and missing spread", () => {
+  const base = {
+    masterFinalScore: 90,
+    entryQualityScore: 90,
+    entryQualityScorecard: { approved: true, coverage: 1 },
+    discoveryScorecard: { coverage: 1 },
+    decisionScoreCoverage: 1,
+    centralAutonomousAction: "ALLOW",
+    riskScore: 70,
+    quoteFetchedAt: new Date().toISOString(),
+  };
+  const missingSpread = evaluateStockTradeCandidate(base, { requireCentralDecision: true });
+  assert.equal(missingSpread.approved, false);
+  assert.ok(missingSpread.reasons.includes("SPREAD_UNAVAILABLE"));
+
+  const invalidScore = evaluateStockTradeCandidate({
+    ...base,
+    masterFinalScore: "not-a-score",
+    spreadPercent: 0.2,
+  }, { requireCentralDecision: true });
+  assert.equal(invalidScore.approved, false);
+  assert.ok(invalidScore.reasons.includes("FINAL_SCORE_INVALID"));
 });

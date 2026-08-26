@@ -2,6 +2,7 @@ import {
   CRYPTO_MAX_ENTRY_SPREAD_PERCENT,
   scoreSparseCryptoMarket,
 } from "../scoring/cryptoScoring.js";
+import { calculateCryptoEarlyDiscoveryScore } from "../scoring/earlyDiscovery.js";
 
 export function createCryptoMarketScanner(dependencies) {
   const {
@@ -12,7 +13,9 @@ export function createCryptoMarketScanner(dependencies) {
     clampScore,
     engineState,
     getBestCryptoBars,
+    getCryptoDailyBarsForDiscovery,
     getCryptoAssets,
+    getCryptoNewsIntelligence,
     getCryptoLatestQuote,
     getFreshLiveCryptoQuote,
     isCrypto,
@@ -225,7 +228,9 @@ export function createCryptoMarketScanner(dependencies) {
   function calculateCryptoInstitutionalQualification({
     quote = {},
     score = 0,
+    entryTimingScore = 0,
     bars = [],
+    discoveryScorecard = null,
     liquidityMetrics = {},
     spreadPercent = null,
     spreadAvailable = false,
@@ -267,31 +272,35 @@ export function createCryptoMarketScanner(dependencies) {
       );
     const liquidityPass =
       trueLiquidityPass || smallCryptoProbePass;
-    const trendStructureScore = clampScore(
-      45 +
-      (Number(score || 0) >= 65 ? 10 : 0) +
-      (Number(score || 0) >= 75 ? 12 : 0) +
-      (volumeSpikeRatio >= 0.5 ? 10 : 0) +
-      (volumeSpikeRatio >= 1.2 ? 12 : 0) +
-      (volumeConfidenceScore >= 60 ? 12 : 0) +
-      (spreadAvailable && cleanSpreadPercent <= 0.45 ? 10 : 0) -
-      (!spreadAvailable ? 20 : cleanSpreadPercent > 0.85 ? 25 : 0) -
-      (barsFound < 10 ? 30 : 0)
+    const discoveryComponents = Object.fromEntries(
+      (discoveryScorecard?.components || []).map((component) => [component.name, component])
     );
+    const structureValues = [
+      discoveryComponents.structure,
+      discoveryComponents.accumulation,
+    ].filter((component) => component?.available === true);
+    const trendStructureScore = structureValues.length > 0
+      ? clampScore(
+        structureValues.reduce((sum, component) => sum + Number(component.value || 0), 0) /
+        structureValues.length
+      )
+      : 0;
     const cryptoTrapRiskScore = clampScore(
       25 +
       (!spreadAvailable ? 20 : cleanSpreadPercent > 0.85 ? 25 : 0) +
       (volumeConfidenceScore < 35 ? 18 : 0) +
       (volumeSpikeRatio < 0.15 ? 12 : 0) +
       (barsFound < 10 ? 30 : 0) -
-      (Number(score || 0) >= 75 ? 10 : 0) -
       (volumeConfidenceScore >= 65 ? 12 : 0)
     );
+    const entryExecutionScore = clampScore(
+      (spreadPass ? 55 : 0) +
+      (liquidityMetrics.liquidityPass === true ? 30 : 0) +
+      (barsFound >= 10 ? 15 : 0)
+    );
     const institutionalCryptoScore = clampScore(
-      Number(score || 0) * 0.45 +
-      trendStructureScore * 0.25 +
-      volumeConfidenceScore * 0.2 +
-      (100 - cryptoTrapRiskScore) * 0.1
+      Number(score || 0) * 0.6 +
+      entryExecutionScore * 0.4
     );
     const institutionalCryptoGrade =
       institutionalCryptoScore >= 85 && cryptoTrapRiskScore <= 35
@@ -301,13 +310,14 @@ export function createCryptoMarketScanner(dependencies) {
           : institutionalCryptoScore >= 65 && cryptoTrapRiskScore <= 55
             ? "C_CRYPTO_PROBE"
             : "D_CRYPTO_AVOID";
-    const momentumPass =
+    const discoveryPass =
       Number(score || 0) >=
       Math.max(
         70,
         Number(CONFIG.minScoreToBuy || 70),
         Number(engineState.selfOptimizationState?.adaptiveMinScoreToBuy || 0)
       );
+    const entryTimingPass = Number(entryTimingScore || 0) >= 60;
     const dataPass =
       barsFound >= 10 &&
       Number(quote.current || 0) > 0;
@@ -322,22 +332,28 @@ export function createCryptoMarketScanner(dependencies) {
         engineState.marketCrashProtectionState?.shouldBlockNewTrades !== true
       );
     const institutionalStructurePass =
-      institutionalCryptoScore >= 65 &&
+      Number(discoveryScorecard?.coverage || 0) >= 0.65 &&
+      trendStructureScore >= 55 &&
       cryptoTrapRiskScore <= 60 &&
       institutionalCryptoGrade !== "D_CRYPTO_AVOID";
     const qualifiedToBuy =
       dataPass &&
-      momentumPass &&
+      discoveryPass &&
+      entryTimingPass &&
       liquidityPass &&
       macroPass &&
-      institutionalStructurePass;
+      institutionalStructurePass &&
+      discoveryScorecard?.gates?.includes("NEGATIVE_NEWS_RISK") !== true;
     return {
       qualifiedToBuy,
       cryptoInstitutionalQualification: {
         passed: qualifiedToBuy,
         approved: qualifiedToBuy,
         dataPass,
-        momentumPass,
+        discoveryPass,
+        momentumPass: discoveryPass,
+        entryTimingPass,
+        entryTimingScore: Number(entryTimingScore || 0),
         liquidityPass,
         macroPass,
         spreadPass,
@@ -352,6 +368,7 @@ export function createCryptoMarketScanner(dependencies) {
         institutionalCryptoGrade,
         cryptoTrapRiskScore,
         trendStructureScore,
+        entryExecutionScore,
         institutionalStructurePass,
         reason: qualifiedToBuy
           ? "Crypto institutional qualification passed"
@@ -389,8 +406,12 @@ export function createCryptoMarketScanner(dependencies) {
           LIVE_ORDER_MAX_QUOTE_AGE_SECONDS
         );
         const quote = liveCryptoQuote || await getCryptoLatestQuote(symbol);
-        const bars = await getBestCryptoBars(symbol);
-        const score = scoreCrypto(quote, bars);
+        const [bars, dailyBars, newsCatalyst] = await Promise.all([
+          getBestCryptoBars(symbol),
+          getCryptoDailyBarsForDiscovery(symbol),
+          getCryptoNewsIntelligence(symbol),
+        ]);
+        const legacyMomentumScore = scoreCrypto(quote, bars);
         const validBars = Array.isArray(bars)
           ? bars.filter((bar) => Number(bar.c || bar.close || 0) > 0)
           : [];
@@ -470,6 +491,15 @@ export function createCryptoMarketScanner(dependencies) {
               ((Number(quote.ask) + Number(quote.bid)) / 2)) *
             100
             : null;
+        const cryptoDiscoveryScorecard = calculateCryptoEarlyDiscoveryScore({
+          symbol,
+          dailyBars,
+          intradayBars: bars,
+          currentPrice: latestPrice,
+          newsCatalyst,
+          learning: engineState.quietCandidateOutcomeLearning?.crypto || null,
+        });
+        const score = cryptoDiscoveryScorecard.score;
         const cryptoChartBars = Array.isArray(bars)
           ? bars
             .map((bar) => {
@@ -495,7 +525,9 @@ export function createCryptoMarketScanner(dependencies) {
           calculateCryptoInstitutionalQualification({
             quote,
             score,
+            entryTimingScore: legacyMomentumScore,
             bars,
+            discoveryScorecard: cryptoDiscoveryScorecard,
             liquidityMetrics,
             spreadPercent,
             spreadAvailable,
@@ -525,6 +557,17 @@ export function createCryptoMarketScanner(dependencies) {
           rawCryptoScore: score,
           scannerScore: score,
           score,
+          legacyMomentumScore,
+          cryptoDiscoveryScore: score,
+          cryptoDiscoveryTier: cryptoDiscoveryScorecard.tier,
+          cryptoDiscoveryScorecard,
+          discoveryScorecard: cryptoDiscoveryScorecard,
+          discoveryScore: score,
+          discoveryTier: cryptoDiscoveryScorecard.tier,
+          multiHorizonExtension: cryptoDiscoveryScorecard.extension,
+          newsCatalyst,
+          newsRisk: newsCatalyst?.riskDetected === true,
+          dailyBarsFound: Array.isArray(dailyBars) ? dailyBars.length : 0,
           barsFound: bars.length,
           chartBars: cryptoChartBars,
           sparkline: cryptoSparkline,
@@ -578,6 +621,50 @@ export function createCryptoMarketScanner(dependencies) {
       cryptoResults: results.filter((s) => isCrypto(s.symbol)).length,
       topSymbols: results.slice(0, 10).map((s) => s.symbol),
     });
+    const quietCandidates = results
+      .filter((signal) =>
+        Number(signal.cryptoDiscoveryScore || 0) >= 58 &&
+        signal.cryptoDiscoveryScorecard?.extension?.alreadyExtended !== true &&
+        signal.newsCatalyst?.riskDetected !== true
+      )
+      .sort((a, b) => Number(b.cryptoDiscoveryScore || 0) - Number(a.cryptoDiscoveryScore || 0))
+      .slice(0, 25);
+    const compactQuietCandidates = quietCandidates.map((signal) => ({
+      symbol: signal.symbol,
+      assetClass: "crypto",
+      current: Number(signal.current || 0),
+      high: Number(signal.high || signal.current || 0),
+      cryptoDiscoveryScore: Number(signal.cryptoDiscoveryScore || 0),
+      cryptoDiscoveryTier: signal.cryptoDiscoveryTier,
+      cryptoDiscoveryScorecard: {
+        stage: signal.cryptoDiscoveryScorecard?.stage,
+        score: signal.cryptoDiscoveryScorecard?.score,
+        rawScore: signal.cryptoDiscoveryScorecard?.rawScore,
+        coverage: signal.cryptoDiscoveryScorecard?.coverage,
+        components: signal.cryptoDiscoveryScorecard?.components,
+        extension: signal.cryptoDiscoveryScorecard?.extension,
+        gates: signal.cryptoDiscoveryScorecard?.gates,
+      },
+      newsCatalyst: signal.newsCatalyst
+        ? {
+          catalystAvailable: signal.newsCatalyst.catalystAvailable,
+          catalystScore: signal.newsCatalyst.catalystScore,
+          riskDetected: signal.newsCatalyst.riskDetected,
+          label: signal.newsCatalyst.label,
+          articleCount: signal.newsCatalyst.articleCount,
+        }
+        : null,
+    }));
+    engineState.cryptoQuietDiscoveryState = {
+      phase: "CRYPTO_QUIET_PRE_MOVE_DISCOVERY",
+      updatedAt: new Date().toISOString(),
+      reviewedCount: results.length,
+      selectedCount: compactQuietCandidates.length,
+      topCandidates: compactQuietCandidates,
+      reason: quietCandidates.length > 0
+        ? "Quiet crypto candidates selected before extension."
+        : "No quiet crypto candidate met the current discovery floor.",
+    };
     return results.sort((a, b) => b.score - a.score);
   }
 

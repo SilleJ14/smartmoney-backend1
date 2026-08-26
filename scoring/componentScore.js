@@ -132,13 +132,24 @@ function calculateBoundedContext(signal = {}) {
   };
 }
 
-export function buildCryptoDecisionScore(signal = {}) {
+export function buildCryptoDecisionScore(
+  signal = {},
+  { now = Date.now(), maxDiscoveryAgeMinutes = 15 } = {}
+) {
   const barsFound = Math.max(0, finiteNumber(signal.barsFound) || 0);
   const discovery = resolveComponent([
-    { value: signal.rawCryptoScore, source: "rawCryptoScore" },
-    { value: signal.scannerScore, source: "scannerScore" },
-    { value: signal.score, source: "score" },
+    { value: signal.cryptoDiscoveryScorecard?.score, source: "cryptoDiscoveryScorecard.score" },
   ]);
+  const discoveryTimestampRaw = signal.cryptoDiscoveryScorecard?.calculatedAt;
+  const discoveryTimestamp = discoveryTimestampRaw
+    ? Date.parse(discoveryTimestampRaw)
+    : NaN;
+  const discoveryAgeMinutes = Number.isFinite(discoveryTimestamp)
+    ? (Number(now) - discoveryTimestamp) / 60_000
+    : null;
+  const discoveryFresh = discoveryAgeMinutes !== null &&
+    discoveryAgeMinutes >= -1 &&
+    discoveryAgeMinutes <= Math.max(1, Number(maxDiscoveryAgeMinutes || 15));
   const spread = calculateMeasuredSpread(signal);
   const liquidity = resolveCryptoLiquidityEvidence(signal);
   const measuredEntryQuality = calculateCryptoEntryQualityFromEvidence({
@@ -219,6 +230,15 @@ export function buildCryptoDecisionScore(signal = {}) {
   }));
   const missingCriticalEvidence = [
     ...(discovery.available ? [] : ["discovery"]),
+    ...(Number(signal.cryptoDiscoveryScorecard?.coverage ?? 0) >= 0.65
+      ? []
+      : ["discoveryCoverage"]),
+    ...(discoveryFresh ? [] : ["freshDiscoveryScorecard"]),
+    ...(signal.cryptoDiscoveryScorecard?.extension?.alreadyExtended === true
+      ? ["multiHorizonExtension"]
+      : []),
+    ...(signal.newsCatalyst?.riskDetected === true ? ["negativeNewsRisk"] : []),
+    ...(signal.newsCatalyst?.dataAvailable === true ? [] : ["newsRiskCoverage"]),
     ...(barsFound >= 10 ? [] : ["barHistory"]),
     ...(spread.measured ? [] : ["liveSpread"]),
     ...(spread.measured && !spread.pass ? ["acceptableSpread"] : []),
@@ -242,22 +262,34 @@ export function buildCryptoDecisionScore(signal = {}) {
     liquidity,
     contextObservations: context.observations || [],
     continuationEvidence: { seenDays },
+    discoveryFreshness: {
+      calculatedAt: Number.isFinite(discoveryTimestamp)
+        ? new Date(discoveryTimestamp).toISOString()
+        : null,
+      ageMinutes: discoveryAgeMinutes === null
+        ? null
+        : Number(discoveryAgeMinutes.toFixed(2)),
+      maximumAgeMinutes: Math.max(1, Number(maxDiscoveryAgeMinutes || 15)),
+      fresh: discoveryFresh,
+    },
   };
 }
 
 export function evaluateCryptoTradeCandidate(
   signal = {},
-  { minimumScore = 70 } = {}
+  { minimumScore = 70, now = Date.now(), maxDiscoveryAgeMinutes = 15 } = {}
 ) {
-  const evidence = buildCryptoDecisionScore(signal);
+  const evidence = buildCryptoDecisionScore(signal, { now, maxDiscoveryAgeMinutes });
   const centralEvidence = signal.centralAutonomousDecisionCore
     ?.cryptoDecisionEvidence;
-  const score = finiteNumber(
+  const resolvedScore = finiteNumber(
     signal.masterFinalScore,
     signal.cryptoDecisionScore,
     signal.finalAutonomousDecisionScore,
     signal.score
-  ) || 0;
+  );
+  const scoreAvailable = resolvedScore !== undefined;
+  const score = scoreAvailable ? resolvedScore : 0;
   const reasons = [
     ...(centralEvidence?.coreEvidencePass === true
       ? []
@@ -265,12 +297,14 @@ export function evaluateCryptoTradeCandidate(
     ...(evidence.coreEvidencePass ? [] : evidence.missingCriticalEvidence),
     ...(signal.qualifiedToBuy === true ? [] : ["NOT_QUALIFIED_TO_BUY"]),
     ...(signal.autoTradeApproved === true ? [] : ["AUTO_TRADE_NOT_APPROVED"]),
+    ...(scoreAvailable ? [] : ["DECISION_SCORE_INVALID"]),
     ...(score >= Number(minimumScore || 0) ? [] : ["DECISION_SCORE_BELOW_THRESHOLD"]),
   ];
   return {
     approved: reasons.length === 0,
     score,
     minimumScore: Number(minimumScore || 0),
+    scoreAvailable,
     reasons: [...new Set(reasons)],
     evidence,
     centralEvidenceAvailable: Boolean(centralEvidence),

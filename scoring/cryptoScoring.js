@@ -489,7 +489,12 @@ export function calculateCryptoLiquidityFromBars(
 
 export function calculateCryptoSignalRealism(signal = {}) {
   const symbol = String(signal.symbol || "").toUpperCase();
-  const rawScore = finiteNumber(signal.rawCryptoScore, signal.scannerScore, signal.score) || 0;
+  const rawScore = finiteNumber(
+    signal.cryptoDiscoveryScorecard?.score,
+    signal.rawCryptoScore,
+    signal.scannerScore,
+    signal.score
+  ) || 0;
   const barsFound = Math.max(0, finiteNumber(signal.barsFound) || 0);
   const bid = finiteNumber(signal.bid);
   const ask = finiteNumber(signal.ask);

@@ -119,6 +119,7 @@ export function createEngineCycle(dependencies) {
     updateCryptoPositionSizingState,
     updateInstitutionalWatchlist,
     updateMultiTimeframeCryptoState,
+    updateQuietCandidateOutcomes,
     updateStockScoreOutcomes,
     updateWhaleSmartMoneyState,
     getRuntime,
@@ -229,6 +230,25 @@ export function createEngineCycle(dependencies) {
       const scanStartedAt = Date.now();
       if (cryptoModeEnabled) {
         cryptoSignals = await scanCryptoMarket();
+        const selectedQuietCrypto = Array.isArray(
+          engineState.cryptoQuietDiscoveryState?.topCandidates
+        )
+          ? engineState.cryptoQuietDiscoveryState.topCandidates
+          : [];
+        if (typeof updateQuietCandidateOutcomes === "function") {
+          engineState.quietCandidateOutcomeState = updateQuietCandidateOutcomes(
+            engineState.quietCandidateOutcomeState,
+            selectedQuietCrypto,
+            cryptoSignals,
+            {
+              assetClass: "crypto",
+              dayKey: new Date().toISOString().slice(0, 10),
+              tradedSymbols: engineState.aiManagedSymbols || [],
+            }
+          );
+          engineState.quietCandidateOutcomeLearning =
+            engineState.quietCandidateOutcomeState.learning;
+        }
       }
       if (stockModeEnabled) {
         stockSignals = await scanMarket();

@@ -111,3 +111,16 @@ test("central pre-trade gate enforces strategy position limits only for buys", (
   const sell = evaluatePreTradeRisk({ order: { symbol: "AAA", side: "sell", qty: 1 }, context: { liveTradeLimitDecision: { approved: false, reasons: ["blocked"] } } });
   assert.equal(sell.approved, true);
 });
+
+test("automated buys fail closed when a live bid/ask spread is unavailable", () => {
+  const result = evaluatePreTradeRisk({
+    order: { symbol: "AAPL", side: "buy", notional: 25 },
+    context: safeContext({
+      spreadPercent: null,
+      spreadAvailable: false,
+    }),
+  });
+
+  assert.equal(result.approved, false);
+  assert.ok(result.reasons.includes("Live bid/ask spread is unavailable"));
+});

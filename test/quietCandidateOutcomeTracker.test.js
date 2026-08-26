@@ -1,0 +1,214 @@
+import test from "node:test";
+import assert from "node:assert/strict";
+import {
+  calculateQuietCandidateLearning,
+  updateQuietCandidateOutcomes,
+} from "../scoring/quietCandidateOutcomeTracker.js";
+
+function candidates(count, price = 100) {
+  return Array.from({ length: count }, (_, index) => ({
+    symbol: `Q${String(index).padStart(2, "0")}`,
+    current: price,
+    high: price,
+    cryptoDiscoveryScore: 60 + (index % 30),
+    cryptoDiscoveryTier: "DEVELOPING_CRYPTO_PRE_MOVER",
+    cryptoDiscoveryScorecard: {
+      score: 60 + (index % 30),
+      components: [
+        { name: "structure", value: 50 + index, available: true },
+        { name: "accumulation", value: 80 - index / 2, available: true },
+      ],
+    },
+  }));
+}
+
+test("every selected quiet candidate is tracked even when it never becomes a trade", () => {
+  const selected = candidates(3);
+  const state = updateQuietCandidateOutcomes({}, selected, selected, {
+    assetClass: "crypto",
+    dayKey: "2026-08-20",
+    now: Date.parse("2026-08-20T00:00:00Z"),
+  });
+
+  assert.equal(state.observationCount, 3);
+  assert.ok(state.observations.every((item) => item.selectedQuietCandidate));
+  assert.ok(state.observations.every((item) => item.becameTrade === false));
+  assert.deepEqual(Object.keys(state.observations[0].targets), ["1", "3", "5"]);
+});
+
+test("quiet candidates receive 1, 3 and 5 day measurements", () => {
+  const selected = candidates(2);
+  let state = updateQuietCandidateOutcomes({}, selected, selected, {
+    assetClass: "crypto",
+    dayKey: "2026-08-20",
+    now: Date.parse("2026-08-20T00:00:00Z"),
+  });
+  for (const [dayKey, price] of [
+    ["2026-08-21", 104],
+    ["2026-08-23", 111],
+    ["2026-08-25", 108],
+  ]) {
+    state = updateQuietCandidateOutcomes(
+      state,
+      [],
+      candidates(2, price),
+      {
+        assetClass: "crypto",
+        dayKey,
+        now: Date.parse(`${dayKey}T00:00:00Z`),
+      }
+    );
+  }
+
+  assert.deepEqual(Object.keys(state.observations[0].measurements), ["1", "3", "5"]);
+  assert.equal(state.observations[0].measurements[3].breakoutHit, true);
+});
+
+test("outcome tracking excludes the discovery bar high from future peak returns", () => {
+  let state = updateQuietCandidateOutcomes(
+    {},
+    [{
+      symbol: "NOLEAK",
+      current: 100,
+      high: 115,
+      cryptoDiscoveryScore: 80,
+    }],
+    [],
+    {
+      assetClass: "crypto",
+      dayKey: "2026-08-20",
+      now: Date.parse("2026-08-20T00:00:00Z"),
+    }
+  );
+  state = updateQuietCandidateOutcomes(
+    state,
+    [],
+    [{ symbol: "NOLEAK", current: 100, high: 100 }],
+    {
+      assetClass: "crypto",
+      dayKey: "2026-08-21",
+      now: Date.parse("2026-08-21T00:00:00Z"),
+    }
+  );
+
+  assert.equal(state.observations[0].measurements[1].peakReturnPercent, 0);
+  assert.equal(state.observations[0].measurements[1].breakoutHit, false);
+});
+
+test("quiet outcomes distinguish candidates that later became trades", () => {
+  let state = updateQuietCandidateOutcomes(
+    {},
+    candidates(1),
+    candidates(1),
+    {
+      assetClass: "crypto",
+      dayKey: "2026-08-20",
+      now: Date.parse("2026-08-20T00:00:00Z"),
+    }
+  );
+  state = updateQuietCandidateOutcomes(
+    state,
+    [],
+    candidates(1),
+    {
+      assetClass: "crypto",
+      dayKey: "2026-08-21",
+      tradedSymbols: ["Q00"],
+      now: Date.parse("2026-08-21T00:00:00Z"),
+    }
+  );
+
+  assert.equal(state.observations[0].becameTrade, true);
+  assert.equal(
+    state.observations[0].becameTradeAt,
+    Date.parse("2026-08-21T00:00:00Z")
+  );
+});
+
+test("learning remains inactive until 30 measured and diverse examples exist", () => {
+  const selected = candidates(30);
+  let state = updateQuietCandidateOutcomes({}, selected, selected, {
+    assetClass: "crypto",
+    dayKey: "2026-08-20",
+    now: Date.parse("2026-08-20T00:00:00Z"),
+  });
+  const early = calculateQuietCandidateLearning(state, { assetClass: "crypto" });
+  assert.equal(early.active, false);
+
+  state = updateQuietCandidateOutcomes(
+    state,
+    [],
+    selected.map((candidate, index) => ({
+      ...candidate,
+      current: 100 + index * 0.5,
+      high: 102 + index,
+    })),
+    {
+      assetClass: "crypto",
+      dayKey: "2026-08-23",
+      now: Date.parse("2026-08-23T00:00:00Z"),
+    }
+  );
+  const learned = calculateQuietCandidateLearning(state, { assetClass: "crypto" });
+
+  assert.equal(learned.active, true);
+  assert.equal(learned.sampleCount, 30);
+  assert.equal(learned.uniqueSymbolCount, 30);
+  assert.ok(Object.values(learned.componentMultipliers).every(
+    (multiplier) => multiplier >= 0.9 && multiplier <= 1.1
+  ));
+});
+
+test("quiet-candidate runtime memory keeps each asset capped at 300 observations", () => {
+  const selected = candidates(700);
+  const state = updateQuietCandidateOutcomes({}, selected, selected, {
+    assetClass: "crypto",
+    dayKey: "2026-08-20",
+    maxObservations: 10_000,
+  });
+
+  assert.equal(state.maxObservations, 600);
+  assert.equal(state.observationCount, 300);
+  assert.equal(state.maxObservationsPerAsset, 300);
+});
+
+test("a position already open at discovery is not credited as a discovered trade", () => {
+  const selected = candidates(1);
+  let state = updateQuietCandidateOutcomes({}, selected, selected, {
+    assetClass: "crypto",
+    dayKey: "2026-08-20",
+    now: Date.parse("2026-08-20T12:00:00Z"),
+    tradedSymbols: ["Q00"],
+  });
+  state = updateQuietCandidateOutcomes(state, [], selected, {
+    assetClass: "crypto",
+    dayKey: "2026-08-22",
+    now: Date.parse("2026-08-22T12:00:00Z"),
+    tradedSymbols: ["Q00"],
+  });
+
+  assert.equal(state.observations[0].alreadyTradedAtSelection, true);
+  assert.equal(state.observations[0].becameTrade, false);
+});
+
+test("crypto one-day outcomes require a full 24 hours rather than a date rollover", () => {
+  const selected = candidates(1);
+  let state = updateQuietCandidateOutcomes({}, selected, selected, {
+    assetClass: "crypto",
+    dayKey: "2026-08-20",
+    now: Date.parse("2026-08-20T23:59:00Z"),
+  });
+  state = updateQuietCandidateOutcomes(state, [], candidates(1, 105), {
+    assetClass: "crypto",
+    dayKey: "2026-08-21",
+    now: Date.parse("2026-08-21T00:01:00Z"),
+  });
+  assert.equal(state.observations[0].measurements[1], undefined);
+
+  state = updateQuietCandidateOutcomes(state, [], candidates(1, 106), {
+    assetClass: "crypto",
+    dayKey: "2026-08-21",
+    now: Date.parse("2026-08-21T23:59:00Z"),
+  });
+  assert.ok(state.observations[0].measurements[1]);
+});

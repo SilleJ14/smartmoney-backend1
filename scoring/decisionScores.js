@@ -154,13 +154,15 @@ export function evaluateStockTradeCandidate(
     now = Date.now(),
   } = {}
 ) {
-  const finalScore = Number(
+  const parsedFinalScore = Number(
     signal.masterFinalScore ??
     signal.finalAutonomousDecisionScore ??
     signal.stockDecisionScore ??
     signal.score ??
     0
   );
+  const finalScoreAvailable = Number.isFinite(parsedFinalScore);
+  const finalScore = finalScoreAvailable ? parsedFinalScore : 0;
   const entryScore = Number(signal.entryQualityScore ?? signal.entryQualityScorecard?.score ?? 0);
   const entryCoverage = Number(signal.entryQualityScorecard?.coverage || 0);
   const decisionCoverage = Number(
@@ -198,6 +200,7 @@ export function evaluateStockTradeCandidate(
     signal.phase5SignalQuality || signal.institutionalSignalQuality || {}
   );
   const calculatedSpread = spreadEvidence.spreadPercent;
+  const spreadAvailable = calculatedSpread !== null && Number.isFinite(calculatedSpread);
   const effectiveMaxSpread = Number.isFinite(Number(maxSpreadPercent))
     ? Math.min(
       STOCK_EXECUTION_THRESHOLDS.maxSpreadPercent,
@@ -281,6 +284,7 @@ export function evaluateStockTradeCandidate(
     ...(!coreEvidencePass ? ["CORE_EVIDENCE_FAILED"] : []),
     ...(!centralDecisionPass ? ["CENTRAL_DECISION_NOT_EXECUTABLE"] : []),
     ...(explicitBuyBlock ? ["EXPLICIT_BUY_BLOCK"] : []),
+    ...(!spreadAvailable ? ["SPREAD_UNAVAILABLE"] : []),
     ...(spreadTooWide ? ["SPREAD_ABOVE_EXECUTION_LIMIT"] : []),
     ...(!riskQualityAvailable ? ["RISK_QUALITY_UNAVAILABLE"] : []),
     ...(riskQualityAvailable && !riskQualityPass ? ["RISK_QUALITY_BELOW_55"] : []),
@@ -295,6 +299,7 @@ export function evaluateStockTradeCandidate(
         : []
     ),
     ...(blockingState ? ["BLOCKING_RISK_STATE"] : []),
+    ...(!finalScoreAvailable ? ["FINAL_SCORE_INVALID"] : []),
     ...(finalScore < STOCK_EXECUTION_THRESHOLDS.finalScore ? ["FINAL_SCORE_BELOW_78"] : []),
   ];
   return {
@@ -310,6 +315,8 @@ export function evaluateStockTradeCandidate(
       coreEvidencePass &&
       riskQualityPass &&
       quoteFreshnessPass &&
+      finalScoreAvailable &&
+      spreadAvailable &&
       !blockingState &&
       !spreadTooWide,
     approved: reasons.length === 0,
@@ -318,6 +325,7 @@ export function evaluateStockTradeCandidate(
       finalScore >= STOCK_EXECUTION_THRESHOLDS.acceleratedFinalScore &&
       entryScore >= STOCK_EXECUTION_THRESHOLDS.acceleratedEntryScore,
     finalScore,
+    finalScoreAvailable,
     entryScore,
     entryCoverage,
     decisionCoverage,
@@ -329,6 +337,7 @@ export function evaluateStockTradeCandidate(
     explicitBuyBlock,
     blockingState,
     spreadPercent: calculatedSpread,
+    spreadAvailable,
     spreadSource: spreadEvidence.source,
     spreadTooWide,
     riskQualityScore: riskQualityEvidence.score,
@@ -366,11 +375,6 @@ export function calculateEarlyDiscoveryScore(signal = {}) {
     confirmations.volumeSpikeRatio
   );
   const percentChange = firstFinite(signal.percentChange, signal.changePercent);
-  const absoluteChange = Math.abs(Number(percentChange || 0));
-  // Discovery should reward quiet pressure before a move, not a move that is already loud.
-  const earlyAcceleration = clamp(
-    90 - Math.max(0, absoluteChange - 1) * 7 - Math.max(0, -Number(percentChange || 0)) * 5
-  );
   const participationBase = clamp(
     55 + (Number(relativeVolume || 0) - 0.5) * 30
   );
@@ -382,32 +386,63 @@ export function calculateEarlyDiscoveryScore(signal = {}) {
     signal.catalystScore,
     signal.newsCatalystScore
   );
-  // preMoveScore already contains accumulation/quietness/liquidity evidence. Use
-  // raw accumulation only as its fallback so the same evidence is not counted twice.
+  const catalystAvailable = signal.catalystRanking
+    ? signal.catalystRanking.catalystAvailable === true
+    : catalyst !== undefined;
+  // preMoveScore already contains compression, accumulation, quiet timing and
+  // liquidity. Treat it as one bounded family and do not count current quietness
+  // or relative volume again.
   const structure = preMove !== undefined ? preMove : accumulation;
   const components = preMove !== undefined
     ? [
-      component("preMoveStructure", structure, 0.65, "preMoveScore", true),
-      component("quietMoveTiming", earlyAcceleration, 0.2, "percentChange", percentChange !== undefined),
-      component("catalystNovelty", catalyst, 0.15, "catalystScore", catalyst !== undefined),
+      component("preMoveStructure", structure, 0.85, "preMoveScore", true),
+      component("catalystNovelty", catalyst, 0.15, "catalystScore", catalystAvailable),
     ]
     : [
-      component("preMoveStructure", structure, 0.45, "accumulationScore", structure !== undefined),
-      component("unusualParticipation", participation, 0.2, "relativeVolume", relativeVolume !== undefined),
-      component("quietMoveTiming", earlyAcceleration, 0.2, "percentChange", percentChange !== undefined),
-      component("catalystNovelty", catalyst, 0.15, "catalystScore", catalyst !== undefined),
+      component("preMoveStructure", structure, 0.6, "accumulationScore", structure !== undefined),
+      component("unusualParticipation", participation, 0.25, "relativeVolume", relativeVolume !== undefined),
+      component("catalystNovelty", catalyst, 0.15, "catalystScore", catalystAvailable),
     ];
   const rawCard = scorecard("EARLY_DISCOVERY", components);
-  let card = rescaleScorecard(rawCard, rawCard.score * rawCard.coverage);
+  const baseCard = scorecard(
+    "EARLY_DISCOVERY_TECHNICAL_BASE",
+    components.filter((item) => item.name !== "catalystNovelty")
+  );
+  const catalystBonus = catalystAvailable
+    ? Math.max(0, Math.min(8, (clamp(catalyst) - 50) * 0.16))
+    : 0;
+  let card = rescaleScorecard(rawCard, baseCard.score + catalystBonus);
   const positiveChange = Number(percentChange || 0);
   const lateMoveCap = positiveChange >= 10 ? 55 : positiveChange >= 8 ? 64 : 100;
-  if (card.score > lateMoveCap) {
-    card = rescaleScorecard(card, lateMoveCap);
-    card.gates = [...card.gates, "ALREADY_LOUD_MOVE"];
+  const extensionProfile = signal.multiHorizonExtension ||
+    signal.extensionProfile ||
+    signal.preMoverDiscovery?.extension ||
+    signal.preMoverDiscovery?.extensionProfile ||
+    null;
+  const extensionAlreadyApplied = signal.extensionAdjusted === true ||
+    signal.preMoverDiscovery?.extensionAdjusted === true;
+  if (!extensionAlreadyApplied && Number(extensionProfile?.extensionPenalty || 0) > 0) {
+    card = rescaleScorecard(
+      card,
+      Math.max(0, card.score - Number(extensionProfile.extensionPenalty || 0))
+    );
+  }
+  const multiHorizonLateCap = extensionProfile?.alreadyExtended === true ? 55 : 100;
+  const effectiveLateCap = Math.min(lateMoveCap, multiHorizonLateCap);
+  if (card.score > effectiveLateCap) {
+    card = rescaleScorecard(card, effectiveLateCap);
+    card.gates = [
+      ...card.gates,
+      ...(lateMoveCap < 100 ? ["ALREADY_LOUD_MOVE"] : []),
+      ...(multiHorizonLateCap < 100 ? ["ALREADY_EXTENDED_MULTI_HORIZON"] : []),
+    ];
   }
   return {
     ...card,
-    tier: lateMoveCap < 72
+    technicalBaseScore: baseCard.score,
+    catalystBonus: Number(catalystBonus.toFixed(2)),
+    extensionProfile,
+    tier: effectiveLateCap < 72
       ? "LATE_MOVE_NOT_DISCOVERY"
       : card.score >= 85 && card.coverage >= 0.8
       ? "ELITE_DISCOVERY"
@@ -478,7 +513,10 @@ export function calculateEntryQualityScore(signal = {}) {
   const riskProtection = riskAvailable ? clamp(100 - Math.max(...riskInputs.map(Number))) : 0;
   const independentRisk = riskAvailable ? Math.max(...riskInputs.map(Number)) : 0;
   const extremeEntryRisk = independentRisk >= 80;
-  const hardReject = quality.hardReject === true || confirmations.newsRisk === true || signal.lateChaseRisk === true || extremeEntryRisk || spreadTooWide;
+  const newsRiskRequired = signal.requireNewsRiskForEntry === true;
+  const newsRiskUnavailable =
+    newsRiskRequired && confirmations.newsRiskAvailable !== true;
+  const hardReject = quality.hardReject === true || confirmations.newsRisk === true || newsRiskUnavailable || signal.lateChaseRisk === true || extremeEntryRisk || spreadTooWide;
   const components = [
     component("trendAlignment", trendAlignment, 0.23, "ema_macd_rsi", trendAvailable),
     component("priceLocation", priceLocation, 0.22, "close_vwap_rejection", priceLocationAvailable),
@@ -490,6 +528,7 @@ export function calculateEntryQualityScore(signal = {}) {
   if (!spreadEvidenceAvailable) missingCriticalEvidence.push("spreadEvidence");
   const gates = [
     ...(hardReject ? ["HARD_RISK_REJECT"] : []),
+    ...(newsRiskUnavailable ? ["NEWS_RISK_UNAVAILABLE"] : []),
     ...(extremeEntryRisk ? ["EXTREME_ENTRY_RISK"] : []),
     ...(spreadTooWide ? ["SPREAD_ABOVE_EXECUTION_LIMIT"] : []),
     ...missingCriticalEvidence.map((name) => `MISSING_${name.replace(/([a-z])([A-Z])/g, "$1_$2").toUpperCase()}`),
@@ -519,6 +558,7 @@ export function calculateEntryQualityScore(signal = {}) {
   return {
     ...card,
     approved,
+    newsRiskRequired,
     spreadPercent: measuredSpread,
     spreadSource: spreadEvidence.source,
     spreadPenalty: Number(spreadPenalty.toFixed(2)),
@@ -654,7 +694,12 @@ export function buildStockDecisionScore(signal = {}) {
     signal.dcfValuationScore
   );
   const fundamentalDataValid = signal.fundamentalDataValid === true;
-  const reinforcementWeights = signal.reinforcementWeights || {};
+  const reinforcementLearningActive =
+    signal.reinforcementLearningActive === true ||
+    signal.reinforcementWeightState?.active === true;
+  const reinforcementWeights = reinforcementLearningActive
+    ? signal.reinforcementWeights || {}
+    : {};
   const outcomeLearning = signal.stockOutcomeLearning || {};
   const outcomeLearningActive = outcomeLearning.active === true;
   const outcomeMultiplier = (name) => {
@@ -706,6 +751,7 @@ export function buildStockDecisionScore(signal = {}) {
     missingCriticalEvidence,
     effectiveWeights,
     reinforcementWeightsApplied: Object.keys(reinforcementWeights).length > 0,
+    reinforcementLearningActive,
     outcomeLearningApplied: outcomeLearningActive,
     outcomeLearningSampleCount: Number(outcomeLearning.sampleCount || 0),
     discovery,

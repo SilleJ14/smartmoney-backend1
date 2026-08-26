@@ -114,6 +114,7 @@ import {
 import {
   calculateCryptoLiquidityFromBars,
   calculateCryptoSignalRealism,
+  getCryptoBaseAsset,
 } from "./scoring/cryptoScoring.js";
 import {
   CRYPTO_DECISION_WEIGHTS,
@@ -125,6 +126,9 @@ import {
   scoreValidatedFundamentals,
   validateFundamentalInputs,
 } from "./scoring/fundamentalValidation.js";
+import { calculateMultiHorizonExtension } from "./scoring/earlyDiscovery.js";
+import { calculateNewsCatalyst } from "./scoring/newsCatalyst.js";
+import { updateQuietCandidateOutcomes } from "./scoring/quietCandidateOutcomeTracker.js";
 import {
   buildStrategyExecutionPlan,
   getEnabledStrategyModes,
@@ -142,6 +146,7 @@ import { createDiscoveryFeatureStore } from "./discovery/featureStore.js";
 import { fetchAlpacaGroupedDaily } from "./discovery/alpacaDailyBars.js";
 import { prunePreMoverMemory } from "./discovery/preMoverMemory.js";
 import {
+  calculateQuietPreMoveFeatures,
   DEFAULT_DISCOVERY_BUDGETS,
   runBoundedQuietDiscovery,
 } from "./discovery/quietDiscoveryPipeline.js";
@@ -934,7 +939,7 @@ const CONFIG = {
     process.env.EARLY_MOVER_DAILY_ATR_EXPANSION_MULTIPLIER || 1.5
   ),
   enableNewsRiskFilter:
-    process.env.ENABLE_NEWS_RISK_FILTER === "true",
+    process.env.ENABLE_NEWS_RISK_FILTER !== "false",
   newsLookbackDays: Number(
     process.env.NEWS_LOOKBACK_DAYS || 3
   ),
@@ -1324,6 +1329,8 @@ function initTradeJournalState() {
     engineState.confirmationPerformanceState = {};
   }
 }
+const MIN_MEASURED_LEARNING_SAMPLES = 30;
+
 function getReinforcementLearnedMultiplier(confidenceScore = 0) {
   const score = Number(confidenceScore || 0);
   const confidenceBand =
@@ -1339,7 +1346,9 @@ function getReinforcementLearnedMultiplier(confidenceScore = 0) {
     confidenceBand
     ];
   const learnedMultiplier = Number(
-    bandStats?.learnedMultiplier || 1
+    Number(bandStats?.trades || 0) >= MIN_MEASURED_LEARNING_SAMPLES
+      ? bandStats?.learnedMultiplier || 1
+      : 1
   );
   return {
     confidenceBand,
@@ -1384,7 +1393,9 @@ function calculatePhase7ReinforcementLearning(signal = {}) {
     regimeStats,
     sectorStats,
     ...confirmationStats,
-  ].filter((bucket) => Number(bucket.trades || bucket.exits || 0) > 0);
+  ].filter((bucket) => (
+    Number(bucket.trades || bucket.exits || 0) >= MIN_MEASURED_LEARNING_SAMPLES
+  ));
   const weightedTrust =
     reviewedBuckets.length > 0
       ? reviewedBuckets.reduce((sum, bucket) => {
@@ -1621,7 +1632,7 @@ function updateInstitutionalMarketMemoryFromClosedTrade(
       (bucket.winRate - 50) * 0.6
     );
     bucket.trustMultiplier =
-      bucket.trades < 5
+      bucket.trades < MIN_MEASURED_LEARNING_SAMPLES
         ? 1
         : bucket.expectancyScore >= 70
           ? 1.08
@@ -1751,7 +1762,7 @@ function updateExecutionStyleMemoryFromClosedTrade(closedTrade = {}) {
     (current.winRate - 50) * 0.7
   );
   current.executionTrustMultiplier =
-    current.trades < 5
+    current.trades < MIN_MEASURED_LEARNING_SAMPLES
       ? 1
       : current.executionTrustScore >= 75
         ? 1.12
@@ -1792,7 +1803,7 @@ function getExecutionStyleTrustAdjustment(signal = {}) {
     "UNKNOWN_EXECUTION_STYLE";
   const key = `${tradeArchetype}_${executionStyle}`;
   const memory = engineState.executionStyleMemoryState?.[key];
-  if (!memory || Number(memory.trades || 0) < 5) {
+  if (!memory || Number(memory.trades || 0) < MIN_MEASURED_LEARNING_SAMPLES) {
     return {
       tradeArchetype,
       executionStyle,
@@ -1862,7 +1873,7 @@ function updateArchetypeMemoryFromClosedTrade(closedTrade = {}) {
     (current.winRate - 50) * 0.7
   );
   current.archetypeTrustMultiplier =
-    current.trades < 5
+    current.trades < MIN_MEASURED_LEARNING_SAMPLES
       ? 1
       : current.archetypeTrustScore >= 75
         ? 1.12
@@ -1903,7 +1914,7 @@ function getArchetypeTrustAdjustment(signal = {}) {
     "unknown_regime";
   const key = `${tradeArchetype}_${regimeKey}`;
   const memory = engineState.archetypeMemoryState?.[key];
-  if (!memory || Number(memory.trades || 0) < 5) {
+  if (!memory || Number(memory.trades || 0) < MIN_MEASURED_LEARNING_SAMPLES) {
     return {
       tradeArchetype,
       regimeKey,
@@ -1970,7 +1981,7 @@ function updateReinforcementWeightStateFromClosedTrade(closedTrade = {}) {
     ((current.wins / Math.max(1, current.trades)) * 100).toFixed(2)
   );
   current.learnedMultiplier =
-    current.trades < 5
+    current.trades < MIN_MEASURED_LEARNING_SAMPLES
       ? 1
       : current.winRate >= 65 && current.averageProfitPercent > 0
         ? 1.08
@@ -2053,7 +2064,7 @@ function updateExitOutcomeLearningState(closedTrade = {}) {
     ((current.wins / Math.max(1, current.exits)) * 100).toFixed(2)
   );
   current.exitQuality =
-    current.exits < 5
+    current.exits < MIN_MEASURED_LEARNING_SAMPLES
       ? "UNPROVEN_EXIT"
       : current.winRate >= 60 && current.averageProfitPercent > 0
         ? "STRONG_EXIT"
@@ -2096,7 +2107,7 @@ function getExitReinforcementAdjustment(exitReason = "UNKNOWN_EXIT", assetClass 
   const key = `${assetClass}_${exitReason}`;
   const stats =
     engineState.smartExitIntelligenceState?.exitReasonPerformance?.[key];
-  if (!stats || Number(stats.exits || 0) < 5) {
+  if (!stats || Number(stats.exits || 0) < MIN_MEASURED_LEARNING_SAMPLES) {
     return {
       exitLearningMultiplier: 1,
       exitLearningQuality: "UNPROVEN_EXIT",
@@ -5383,67 +5394,19 @@ function calculateVolatilityCompressionEngine(signal = {}) {
 }
 function calculateCatalystRankingEngine(signal = {}) {
   const symbol = normalizeSymbol(signal.symbol);
-  const headlineText = (
-    signal.confirmations?.riskyNewsHeadlines ||
-    signal.newsHeadlines ||
-    []
-  )
-    .join(" ")
-    .toLowerCase();
-  const strongWords = [
-    "earnings",
-    "revenue",
-    "guidance",
-    "contract",
-    "partnership",
-    "fda approval",
-    "acquisition",
-    "buyout",
-    "merger",
-    "patent",
-    "ai",
-    "analyst upgrade",
-    "record",
-  ];
-  const dangerWords = [
-    "offering",
-    "bankruptcy",
-    "delisting",
-    "investigation",
-    "lawsuit",
-    "downgrade",
-    "reverse split",
-    "weak guidance",
-  ];
-  const positiveHits = strongWords.filter((word) =>
-    headlineText.includes(word)
-  );
-  const dangerHits = dangerWords.filter((word) =>
-    headlineText.includes(word)
-  );
-  const catalystScore = clampScore(
-    45 +
-    positiveHits.length * 12 -
-    dangerHits.length * 20 +
-    (headlineText.includes("buyout") ? 20 : 0) +
-    (headlineText.includes("fda approval") ? 20 : 0) +
-    (headlineText.includes("offering") ? -30 : 0)
-  );
-  const catalystLabel =
-    catalystScore >= 82
-      ? "MAJOR_CATALYST"
-      : catalystScore >= 68
-        ? "POSITIVE_CATALYST"
-        : catalystScore <= 30
-          ? "DANGEROUS_CATALYST"
-          : "NO_CLEAR_CATALYST";
+  const news = calculateNewsCatalyst({
+    articles: signal.confirmations?.newsArticles || signal.newsArticles || [],
+    headlines: signal.newsHeadlines || signal.confirmations?.newsHeadlines || [],
+    dataAvailable:
+      signal.confirmations?.newsRiskAvailable === true ||
+      signal.newsAvailable === true,
+    source: signal.newsSource || "finnhub_company_news",
+  });
   return {
     symbol,
     phase: "22.3_CATALYST_RANKING_ENGINE",
-    catalystScore,
-    catalystLabel,
-    positiveHits,
-    dangerHits,
+    ...news,
+    catalystLabel: news.label,
   };
 }
 function classifyRunnerPattern(signal = {}) {
@@ -5648,12 +5611,12 @@ function updateRunnerLearningWeightsFromResults() {
 
   const recent = results.slice(0, 100);
 
-  if (recent.length < 10) {
+  if (recent.length < MIN_MEASURED_LEARNING_SAMPLES) {
     engineState.runnerLearningWeights = {
       ...(engineState.runnerLearningWeights || {}),
       updatedAt: new Date().toISOString(),
       ready: false,
-      reason: "Need at least 10 checked runner results before adjusting weights.",
+      reason: `Need at least ${MIN_MEASURED_LEARNING_SAMPLES} checked runner results before adjusting weights.`,
     };
 
     return engineState.runnerLearningWeights;
@@ -9128,7 +9091,7 @@ function calculateCrossEngineMemoryEvolution(signals = []) {
   for (const [name, rawScore] of Object.entries(engineInputs)) {
     const previous = Number(priorTrust[name]?.trustScore || 60);
     const performanceAdjustment =
-      recentTrades.length < 10
+      recentTrades.length < MIN_MEASURED_LEARNING_SAMPLES
         ? 0
         : recentWinRate >= 60 && recentAverageProfit > 0
           ? 4
@@ -10076,6 +10039,7 @@ function calculateInstitutionalExecutionIntelligence(
 function calculateReinforcementLearningWeightEngine(signals = []) {
   const analyzedSignals = Array.isArray(signals) ? signals : [];
   const recentTrades = (engineState.tradeJournalHistory || []).slice(0, 50);
+  const minimumMeasuredSamples = 30;
   const baseWeights = {
     momentum: 0.18,
     technicals: 0.25,
@@ -10128,32 +10092,36 @@ function calculateReinforcementLearningWeightEngine(signals = []) {
   const correlationRisk =
     Number(engineState.correlationIntelligenceState?.hiddenExposureRiskScore || 0);
   let weights = { ...baseWeights };
-  if (totalClosedTrades >= 10 && recentWinRate >= 60 && recentAverageProfit > 0) {
+  const learningActive = totalClosedTrades >= minimumMeasuredSamples;
+  if (learningActive && recentWinRate >= 60 && recentAverageProfit > 0) {
     weights.momentum += 0.03;
     weights.technicals += 0.03;
     weights.statisticalEdge += 0.02;
     weights.riskQuality -= 0.03;
     weights.macro -= 0.02;
   }
-  if (totalClosedTrades >= 10 && recentWinRate < 45) {
+  if (learningActive && recentWinRate < 45) {
     weights.riskQuality += 0.06;
     weights.macro += 0.03;
     weights.momentum -= 0.03;
     weights.technicals -= 0.02;
   }
   if (
-    marketCycle === "PANIC" ||
-    marketCycle === "DISTRIBUTION" ||
-    macroStress >= 65 ||
-    correlationRisk >= 70 ||
-    liquidityQuality < 50
+    learningActive &&
+    (
+      marketCycle === "PANIC" ||
+      marketCycle === "DISTRIBUTION" ||
+      macroStress >= 65 ||
+      correlationRisk >= 70 ||
+      liquidityQuality < 50
+    )
   ) {
     weights.riskQuality += 0.08;
     weights.macro += 0.05;
     weights.momentum -= 0.04;
     weights.fundamentals += 0.02;
   }
-  if (marketCycle === "ACCUMULATION") {
+  if (learningActive && marketCycle === "ACCUMULATION") {
     weights.momentum += 0.03;
     weights.technicals += 0.03;
     weights.statisticalEdge += 0.02;
@@ -10169,8 +10137,8 @@ function calculateReinforcementLearningWeightEngine(signals = []) {
     ])
   );
   const learningMode =
-    totalClosedTrades < 10
-      ? "BASELINE_LEARNING"
+    !learningActive
+      ? "WAITING_FOR_MINIMUM_MEASURED_SAMPLES"
       : recentWinRate >= 60 && recentAverageProfit > 0
         ? "REINFORCE_WINNING_FACTORS"
         : recentWinRate < 45
@@ -10181,6 +10149,9 @@ function calculateReinforcementLearningWeightEngine(signals = []) {
     learningMode,
     weights: normalizedWeights,
     baseWeights,
+    active: learningActive,
+    minimumMeasuredSamples,
+    measuredSampleCount: totalClosedTrades,
     totalClosedTrades,
     recentTradesAnalyzed: recentTrades.length,
     recentWinRate: Number(recentWinRate.toFixed(2)),
@@ -10238,15 +10209,20 @@ function calculateAiSelfOptimizationLayer(signals = []) {
   let adaptiveRiskMultiplier = 1;
   let adaptiveTrailingStopPercent = CONFIG.trailingStopPercent;
   let adaptiveRunnerTrailingStopPercent = CONFIG.runnerTrailingStopPercent;
-  if (totalClosedTrades >= 10 && recentWinRate < 45) {
+  if (totalClosedTrades >= MIN_MEASURED_LEARNING_SAMPLES && recentWinRate < 45) {
     adaptiveMinScoreToBuy += 5;
     adaptiveRiskMultiplier *= 0.75;
   }
-  if (totalClosedTrades >= 10 && recentAverageProfit < 0) {
+  if (totalClosedTrades >= MIN_MEASURED_LEARNING_SAMPLES && recentAverageProfit < 0) {
     adaptiveMinScoreToBuy += 3;
     adaptiveRiskMultiplier *= 0.8;
   }
-  if (recentWinRate >= 60 && recentAverageProfit > 0.5 && governorScore >= 70) {
+  if (
+    totalClosedTrades >= MIN_MEASURED_LEARNING_SAMPLES &&
+    recentWinRate >= 60 &&
+    recentAverageProfit > 0.5 &&
+    governorScore >= 70
+  ) {
     adaptiveMinScoreToBuy -= 2;
     adaptiveRiskMultiplier *= 1.1;
   }
@@ -12381,7 +12357,7 @@ function calculateStatisticalExpectancyEngine(signal = {}) {
   const matchingHistory = setupHistory.filter(
     (item) => item.setupType === setupType
   );
-  if (matchingHistory.length < 5) {
+  if (matchingHistory.length < MIN_MEASURED_LEARNING_SAMPLES) {
     const score = Number(signal.realismAdjustedScore || signal.score || 0);
     const technicalScore = Number(
       signal.technicalIntelligence?.institutionalEntryScore ||
@@ -12496,7 +12472,27 @@ function calculateDynamicProbabilityReinforcementEngine(
   const matchingHistory = setupHistory.filter(
     (item) => item.setupType === setupType
   );
-  const recentHistory = matchingHistory.slice(0, 20);
+  const recentHistory = matchingHistory.slice(0, 50);
+  if (matchingHistory.length < MIN_MEASURED_LEARNING_SAMPLES) {
+    return {
+      updatedAt: new Date().toISOString(),
+      symbol: signal.symbol,
+      setupType,
+      baseProbability: Number(statisticalExpectancy.winRate || 50),
+      reinforcedProbability: Number(statisticalExpectancy.winRate || 50),
+      confidenceDrift: 0,
+      probabilityDecay: 0,
+      adaptiveTrustWeight: 1,
+      reinforcedExpectedValue: Number(statisticalExpectancy.expectedValue || 0),
+      recentSampleSize: matchingHistory.length,
+      recentWinRate: null,
+      runnerWins: 0,
+      losses: 0,
+      reinforcementMode: "WAITING_FOR_MEASURED_SAMPLES",
+      learningReady: false,
+      minimumSamples: MIN_MEASURED_LEARNING_SAMPLES,
+    };
+  }
   const wins = recentHistory.filter(
     (item) => Number(item.profitPercent || 0) > 0
   );
@@ -12599,6 +12595,8 @@ function calculateDynamicProbabilityReinforcementEngine(
     runnerWins: runnerWins.length,
     losses: losses.length,
     reinforcementMode,
+    learningReady: true,
+    minimumSamples: MIN_MEASURED_LEARNING_SAMPLES,
   };
   engineState.probabilityReinforcementState.updatedAt = state.updatedAt;
   engineState.probabilityReinforcementState.setupTrust[setupType] = state;
@@ -13535,7 +13533,10 @@ const preTradeRiskGuard = {
         marketOpen: engineState.marketOpen === true,
         price: Number(quote.price || quote.current || 0),
         quoteAgeSeconds: getLiveQuoteAgeSeconds(symbol),
-        spreadPercent: Number(quote.spreadPercent || 0),
+        spreadPercent: quote.spreadAvailable === true
+          ? Number(quote.spreadPercent)
+          : null,
+        spreadAvailable: quote.spreadAvailable === true,
         quoteIsLive: quote.priceIsLive === true && isLiveQuoteSource(quoteSource),
         requireLiveProvider: LIVE_ORDER_REQUIRE_POLYGON_CONNECTED,
         liveProviderConnected: liveProviderEvidence.connected,
@@ -13966,6 +13967,13 @@ async function getAlpacaStockPrice(symbol) {
       bid > 0 && ask > 0
         ? Number(((bid + ask) / 2).toFixed(4))
         : Number(quote.ap || quote.bp || 0);
+    const providerTimestampRaw = quote.t || quote.timestamp || quote.time;
+    const providerTimestampMs = providerTimestampRaw
+      ? Date.parse(providerTimestampRaw)
+      : NaN;
+    const quoteFetchedAt = Number.isFinite(providerTimestampMs)
+      ? new Date(providerTimestampMs).toISOString()
+      : null;
     return {
       symbol: cleanSymbol,
       price,
@@ -13974,9 +13982,10 @@ async function getAlpacaStockPrice(symbol) {
       ask,
       source: "alpaca_latest_stock_quote",
       liveQuoteSource: "alpaca_latest_stock_quote",
-      priceIsLive: price > 0,
-      priceStale: false,
-      quoteFetchedAt: new Date().toISOString(),
+      priceIsLive: price > 0 && Boolean(quoteFetchedAt),
+      priceStale: !quoteFetchedAt,
+      quoteFetchedAt,
+      fetchedAt: new Date().toISOString(),
     };
   } catch (err) {
     console.error("Alpaca latest stock quote failed:", cleanSymbol, err.message);
@@ -14550,13 +14559,43 @@ function calculateEarlyMoverProfile({
     hasRelativeStrength: relativeStrength.hasRelativeStrength,
   };
 }
+const STOCK_NEWS_CACHE_TTL_MS = 15 * 60 * 1000;
+const STOCK_NEWS_CACHE_STALE_MS = 60 * 60 * 1000;
+const stockNewsCache = new Map();
+let cryptoMarketNewsCache = { at: 0, articles: [], available: false };
+
+function pruneStockNewsCache(maxEntries = 250) {
+  if (stockNewsCache.size <= maxEntries) return;
+  const retained = [...stockNewsCache.entries()]
+    .sort((a, b) => Number(b[1]?.at || 0) - Number(a[1]?.at || 0))
+    .slice(0, maxEntries);
+  stockNewsCache.clear();
+  for (const [symbol, value] of retained) stockNewsCache.set(symbol, value);
+}
+
+function unavailableNewsResult(reason) {
+  return {
+    available: false,
+    risk: false,
+    reason,
+    headlines: [],
+    allHeadlines: [],
+    articles: [],
+    catalyst: calculateNewsCatalyst({ dataAvailable: false }),
+  };
+}
+
 async function getNewsRisk(symbol) {
   if (!CONFIG.enableNewsRiskFilter) {
-    return {
-      risk: false,
-      reason: "News risk filter disabled",
-      headlines: [],
-    }
+    return unavailableNewsResult("News risk filter disabled");
+  }
+  if (!FINNHUB_API_KEY) {
+    return unavailableNewsResult("Finnhub API key missing");
+  }
+  const cleanSymbol = normalizeSymbol(symbol);
+  const cached = stockNewsCache.get(cleanSymbol);
+  if (cached && Date.now() - cached.at <= STOCK_NEWS_CACHE_TTL_MS) {
+    return { ...cached.value, cacheStatus: "fresh" };
   }
   const today = new Date();
   const from = new Date();
@@ -14565,95 +14604,137 @@ async function getNewsRisk(symbol) {
   const fromDate = from.toISOString().slice(0, 10);
   if (
     engineState.apiCooldowns.finnhubNews &&
-    Date.now() <
-    engineState.apiCooldowns.finnhubNews
+    Date.now() < engineState.apiCooldowns.finnhubNews
   ) {
-    return {
-      risk: false,
-      reason: "News API cooling down",
-      headlines: [],
-    };
-  }
-  if (
-    engineState.apiCooldowns.finnhubNews &&
-    Date.now() <
-    engineState.apiCooldowns.finnhubNews
-  ) {
-    return {
-      risk: false,
-      reason: "News API cooling down",
-      headlines: [],
-    };
+    if (cached && Date.now() - cached.at <= STOCK_NEWS_CACHE_STALE_MS) {
+      return {
+        ...cached.value,
+        available: false,
+        cacheStatus: "stale_fallback",
+        stale: true,
+        reason: "News provider unavailable; cached result is too old for a new entry",
+      };
+    }
+    return unavailableNewsResult("News API cooling down");
   }
   const url = `https://finnhub.io/api/v1/company-news?symbol=${encodeURIComponent(
-    symbol
+    cleanSymbol
   )}&from=${fromDate}&to=${toDate}&token=${FINNHUB_API_KEY}`;
   try {
     const res = await fetchWithTimeout(url);
-    updateApiHealth("finnhubNews", true);
     const data = await res.json();
     if (!res.ok || !Array.isArray(data)) {
-      engineState.apiFailureCounts.finnhubNews =
-        (engineState.apiFailureCounts.finnhubNews || 0) + 1;
-      engineState.apiCooldowns.finnhubNews =
-        Date.now() + 1000 * 60;
-      updateApiHealth(
-        "finnhubNews",
-        false,
-        `News failed for ${symbol}`
-      );
-      return {
-        risk: false,
-        reason: "News check failed, allowed",
-        headlines: [],
-      };
+      throw new Error(`Finnhub company news HTTP ${res.status}`);
     }
-    const riskyWords = [
-      "offering",
-      "dilution",
-      "bankruptcy",
-      "investigation",
-      "sec",
-      "lawsuit",
-      "fraud",
-      "delisting",
-      "downgrade",
-      "short report",
-      "halt",
-      "halted",
-      "reverse split",
-    ];
-    const riskyNews = data.filter((item) => {
-      const text = `${item.headline || ""} ${item.summary || ""
-        }`.toLowerCase();
-      return riskyWords.some((word) =>
-        text.includes(word)
-      );
+    updateApiHealth("finnhubNews", true);
+    const articles = data
+      .filter((item) => item?.headline)
+      .sort((a, b) => Number(b.datetime || 0) - Number(a.datetime || 0))
+      .slice(0, 50);
+    const catalyst = calculateNewsCatalyst({
+      articles,
+      dataAvailable: true,
+      source: "finnhub_company_news",
     });
-    return {
-      risk: riskyNews.length > 0,
-      reason:
-        riskyNews.length > 0
-          ? "Risky news detected"
-          : "No major risky news detected",
-      headlines: riskyNews
-        .slice(0, 3)
-        .map((item) => item.headline),
+    const result = {
+      available: true,
+      risk: catalyst.riskDetected,
+      reason: catalyst.riskDetected
+        ? "Risky news detected"
+        : "News checked; no major risk detected",
+      headlines: catalyst.riskDetected ? catalyst.headlines.slice(0, 3) : [],
+      allHeadlines: catalyst.headlines,
+      articles,
+      catalyst,
+      fetchedAt: new Date().toISOString(),
     };
-  } catch {
+    stockNewsCache.set(cleanSymbol, { at: Date.now(), value: result });
+    pruneStockNewsCache();
+    return { ...result, cacheStatus: "refreshed" };
+  } catch (error) {
     engineState.apiFailureCounts.finnhubNews =
       (engineState.apiFailureCounts.finnhubNews || 0) + 1;
-    updateApiHealth(
-      "finnhubNews",
-      false,
-      `News exception for ${symbol}`
-    );
-    return {
-      risk: false,
-      reason: "News check error, allowed",
-      headlines: [],
-    };
+    engineState.apiCooldowns.finnhubNews = Date.now() + 60 * 1000;
+    updateApiHealth("finnhubNews", false, error.message);
+    if (cached && Date.now() - cached.at <= STOCK_NEWS_CACHE_STALE_MS) {
+      return {
+        ...cached.value,
+        available: false,
+        cacheStatus: "stale_fallback",
+        stale: true,
+        reason: "News provider unavailable; cached result is too old for a new entry",
+      };
+    }
+    return unavailableNewsResult("News check error");
   }
+}
+
+function cryptoNewsAliases(symbol) {
+  const base = getCryptoBaseAsset(symbol);
+  const names = {
+    BTC: ["bitcoin", "btc"], ETH: ["ethereum", "ether", "eth"],
+    SOL: ["solana", "sol"], DOGE: ["dogecoin", "doge"],
+    AVAX: ["avalanche", "avax"], LINK: ["chainlink", "link"],
+    LTC: ["litecoin", "ltc"], BCH: ["bitcoin cash", "bch"],
+    UNI: ["uniswap", "uni"], AAVE: ["aave"],
+  };
+  const ambiguousTickers = new Set(["SOL", "LINK", "UNI"]);
+  const tickerAlias = ambiguousTickers.has(base) ? [] : [base.toLowerCase()];
+  return [...new Set([...tickerAlias, ...(names[base] || []).filter(
+    (alias) => !ambiguousTickers.has(base) || alias.length > 4
+  )])].filter(Boolean);
+}
+
+function articleMatchesCrypto(article, aliases) {
+  const text = `${article?.headline || ""} ${article?.summary || ""} ${article?.related || ""}`.toLowerCase();
+  return aliases.some((alias) => alias.length <= 4
+    ? new RegExp(`(^|[^a-z0-9])${alias}([^a-z0-9]|$)`, "i").test(text)
+    : text.includes(alias));
+}
+
+async function getCryptoNewsIntelligence(symbol) {
+  if (!FINNHUB_API_KEY) {
+    return calculateNewsCatalyst({
+      dataAvailable: false,
+      maxAgeHours: 48,
+      source: "finnhub_crypto_market_news",
+    });
+  }
+  const now = Date.now();
+  if (now - Number(cryptoMarketNewsCache.at || 0) > 10 * 60 * 1000) {
+    try {
+      const url = `https://finnhub.io/api/v1/news?category=crypto&minId=0&token=${FINNHUB_API_KEY}`;
+      const response = await fetchWithTimeout(url, {}, 15000);
+      const data = await response.json();
+      if (!response.ok || !Array.isArray(data)) {
+        throw new Error(`Finnhub crypto news HTTP ${response.status}`);
+      }
+      cryptoMarketNewsCache = {
+        at: now,
+        articles: data
+          .filter((item) => item?.headline)
+          .sort((a, b) => Number(b.datetime || 0) - Number(a.datetime || 0))
+          .slice(0, 150),
+        available: true,
+      };
+      updateApiHealth("finnhubCryptoNews", true);
+    } catch (error) {
+      updateApiHealth("finnhubCryptoNews", false, error.message);
+      if (now - Number(cryptoMarketNewsCache.at || 0) > 60 * 60 * 1000) {
+        cryptoMarketNewsCache = { at: now, articles: [], available: false };
+      }
+    }
+  }
+  const aliases = cryptoNewsAliases(symbol);
+  const articles = cryptoMarketNewsCache.articles
+    .filter((article) => articleMatchesCrypto(article, aliases))
+    .slice(0, 20);
+  return calculateNewsCatalyst({
+    articles,
+    dataAvailable: cryptoMarketNewsCache.available,
+    maxAgeHours: 48,
+    source: "finnhub_crypto_market_news",
+  });
 }
 let benchmarkBarsCache = {
   symbol: "",
@@ -14713,7 +14794,42 @@ function calculateDailyAtrExpansion(q = {}, dailyBars = []) {
   );
   return averageTrueRange > 0 ? currentTrueRange / averageTrueRange : 0;
 }
-async function getAdvancedConfirmations(q) {
+function mergeNewsConfirmationFields(confirmations, newsRisk) {
+  const availability = newsRisk?.available === null
+    ? null
+    : newsRisk?.available === true;
+  return {
+    ...confirmations,
+    newsRisk: newsRisk?.risk === true,
+    newsRiskAvailable: availability,
+    newsRiskReason: newsRisk?.reason || "News review unavailable",
+    riskyNewsHeadlines: newsRisk?.headlines || [],
+    newsHeadlines: newsRisk?.allHeadlines || [],
+    newsArticles: newsRisk?.articles || [],
+    newsCatalyst: newsRisk?.catalyst || calculateNewsCatalyst({ dataAvailable: false }),
+    newsCacheStatus: newsRisk?.cacheStatus || "unavailable",
+  };
+}
+
+async function getAdvancedConfirmations(
+  q,
+  { includeNews = true, baseConfirmations = null } = {}
+) {
+  if (baseConfirmations && typeof baseConfirmations === "object") {
+    const newsRisk = includeNews
+      ? await getNewsRisk(q.symbol)
+      : {
+        available: null,
+        risk: false,
+        reason: "News review deferred until Entry shortlist",
+        headlines: [],
+        allHeadlines: [],
+        articles: [],
+        catalyst: calculateNewsCatalyst({ dataAvailable: false }),
+        cacheStatus: "deferred",
+      };
+    return mergeNewsConfirmationFields(baseConfirmations, newsRisk);
+  }
   const bars = await getRecentBars(q.symbol, "5Min", 30);
   const stats = computeBarStats(bars);
   let dailyBars = [];
@@ -14794,8 +14910,19 @@ async function getAdvancedConfirmations(q) {
       hasPremarketContinuationRelief &&
       gapUpPercent <= CONFIG.maxGapUpPercent * 1.75
     );
-  const newsRisk = await getNewsRisk(q.symbol);
-  return {
+  const newsRisk = includeNews
+    ? await getNewsRisk(q.symbol)
+    : {
+      available: null,
+      risk: false,
+      reason: "News review deferred until Entry shortlist",
+      headlines: [],
+      allHeadlines: [],
+      articles: [],
+      catalyst: calculateNewsCatalyst({ dataAvailable: false }),
+      cacheStatus: "deferred",
+    };
+  return mergeNewsConfirmationFields({
     barsFound: bars.length,
     avgVolume: Math.round(stats.avgVolume),
     lastVolume: Math.round(stats.lastVolume),
@@ -14827,10 +14954,7 @@ async function getAdvancedConfirmations(q) {
     closeNearHigh,
     fakeBreakout,
     gapTooHigh,
-    newsRisk: newsRisk.risk,
-    newsRiskReason: newsRisk.reason,
-    riskyNewsHeadlines: newsRisk.headlines,
-  };
+  }, newsRisk);
 }
 function calculateSignalQuality(q = {}) {
   const confirmations = q.confirmations || {};
@@ -17179,7 +17303,9 @@ const { scoreCrypto, calculateCryptoInstitutionalQualification, scanCryptoMarket
   clampScore,
   engineState,
   getBestCryptoBars,
+  getCryptoDailyBarsForDiscovery,
   getCryptoAssets,
+  getCryptoNewsIntelligence,
   getCryptoLatestQuote,
   getFreshLiveCryptoQuote,
   isCrypto,
@@ -17187,7 +17313,40 @@ const { scoreCrypto, calculateCryptoInstitutionalQualification, scanCryptoMarket
   updateQuoteCache,
   getRuntime: () => ({ TRADING_MODE, LIVE_ORDER_MAX_QUOTE_AGE_SECONDS }),
 });
+const cryptoDailyDiscoveryBarsCache = new Map();
+const cryptoIntradayBarsCache = new Map();
+const CRYPTO_DISCOVERY_CACHE_MAX_SYMBOLS = Math.max(
+  50,
+  Math.min(300, Number(process.env.CRYPTO_DISCOVERY_CACHE_MAX_SYMBOLS || 250))
+);
+async function getCryptoDailyBarsForDiscovery(symbol) {
+  const clean = normalizeSymbol(symbol);
+  const cached = cryptoDailyDiscoveryBarsCache.get(clean);
+  if (cached && Date.now() - cached.at <= 30 * 60 * 1000) {
+    return cached.bars;
+  }
+  const bars = await getCryptoRecentBars(clean, "1Day", 30);
+  cryptoDailyDiscoveryBarsCache.set(clean, {
+    at: Date.now(),
+    bars: Array.isArray(bars) ? bars.slice(-30) : [],
+  });
+  if (cryptoDailyDiscoveryBarsCache.size > CRYPTO_DISCOVERY_CACHE_MAX_SYMBOLS) {
+    const retained = [...cryptoDailyDiscoveryBarsCache.entries()]
+      .sort((a, b) => Number(b[1]?.at || 0) - Number(a[1]?.at || 0))
+      .slice(0, CRYPTO_DISCOVERY_CACHE_MAX_SYMBOLS);
+    cryptoDailyDiscoveryBarsCache.clear();
+    for (const [cachedSymbol, value] of retained) {
+      cryptoDailyDiscoveryBarsCache.set(cachedSymbol, value);
+    }
+  }
+  return cryptoDailyDiscoveryBarsCache.get(clean)?.bars || [];
+}
 async function getBestCryptoBars(symbol) {
+  const clean = normalizeSymbol(symbol);
+  const cached = cryptoIntradayBarsCache.get(clean);
+  if (cached && Date.now() - cached.at <= 2 * 60 * 1000) {
+    return cached.bars;
+  }
   const attempts = [
     ["5Min", 30],
     ["1Min", 30],
@@ -17196,10 +17355,21 @@ async function getBestCryptoBars(symbol) {
   for (const [timeframe, limit] of attempts) {
     const bars = await getCryptoRecentBars(symbol, timeframe, limit);
     if (Array.isArray(bars) && bars.length >= 10) {
+      cryptoIntradayBarsCache.set(clean, { at: Date.now(), bars: bars.slice(-30) });
+      if (cryptoIntradayBarsCache.size > CRYPTO_DISCOVERY_CACHE_MAX_SYMBOLS) {
+        const oldest = [...cryptoIntradayBarsCache.entries()]
+          .sort((left, right) => Number(left[1]?.at || 0) - Number(right[1]?.at || 0))[0];
+        if (oldest) cryptoIntradayBarsCache.delete(oldest[0]);
+      }
       return bars;
     }
   }
-  return await getCryptoRecentBars(symbol, "1Min", 30);
+  const fallbackBars = await getCryptoRecentBars(symbol, "1Min", 30);
+  cryptoIntradayBarsCache.set(clean, {
+    at: Date.now(),
+    bars: Array.isArray(fallbackBars) ? fallbackBars.slice(-30) : [],
+  });
+  return fallbackBars;
 }
 async function placeCryptoMarketBuy(symbol, dollars, options = {}) {
   if (CONFIG.realCashTradingUnlocked !== true) {
@@ -17648,7 +17818,7 @@ function calculatePreMoverScore({ symbol, dailyBars = [], intradayBars = [] } = 
   const floatShares = 0; // caller provides via signal — placeholder if not passed
   const isLowFloatStock = floatShares > 0 && floatShares <= 5000000;
 
-  const preMoveScore = clampScore(
+  const rawPreMoveScore = clampScore(
     compressionScore * 0.22 +
     accumulationScore * 0.22 +
     volumeDryUpScore * 0.18 +   // FIX-B: volume dry-up now a first-class signal
@@ -17657,6 +17827,13 @@ function calculatePreMoverScore({ symbol, dailyBars = [], intradayBars = [] } = 
     notExtendedScore * 0.08 +
     liquidityScore * 0.03
   );
+  const extension = calculateMultiHorizonExtension({
+    bars: cleanDailyBars,
+    currentPrice: latestClose,
+    assetClass: "stock",
+  });
+  let preMoveScore = clampScore(rawPreMoveScore - extension.extensionPenalty);
+  if (extension.alreadyExtended) preMoveScore = Math.min(preMoveScore, 55);
   const reason =
     preMoveScore >= 78
       ? "Pre-mover setup: compression + accumulation + volume wake-up."
@@ -17671,6 +17848,7 @@ function calculatePreMoverScore({ symbol, dailyBars = [], intradayBars = [] } = 
   return {
     symbol: cleanSymbol,
     preMoveScore,
+    rawPreMoveScore,
     preMoveLabel,
     compressionScore,
     accumulationScore,
@@ -17687,7 +17865,70 @@ function calculatePreMoverScore({ symbol, dailyBars = [], intradayBars = [] } = 
     baseRangePercent: Number(baseRangePercent.toFixed(2)),
     latestClose,
     latestVolume,
+    extension,
+    extensionAdjusted: true,
     reason,
+    updatedAt: new Date().toISOString(),
+  };
+}
+
+function calculateCanonicalPreMoverScore({
+  symbol,
+  dailyBars = [],
+  intradayBars = [],
+} = {}) {
+  const cleanSymbol = normalizeSymbol(symbol);
+  const history = (Array.isArray(dailyBars) ? dailyBars : [])
+    .map((bar) => ({
+      s: cleanSymbol,
+      d: bar.d || bar.date || null,
+      o: Number(bar.o ?? bar.open ?? 0),
+      h: Number(bar.h ?? bar.high ?? 0),
+      l: Number(bar.l ?? bar.low ?? 0),
+      c: Number(bar.c ?? bar.close ?? 0),
+      v: Math.max(0, Number(bar.v ?? bar.volume ?? 0) || 0),
+    }))
+    .filter((bar) => bar.c > 0 && bar.h >= bar.l);
+  const features = calculateQuietPreMoveFeatures(history, {
+    learning: engineState.quietCandidateOutcomeLearning?.stock || null,
+  });
+  if (!features) {
+    return {
+      symbol: cleanSymbol,
+      preMoveScore: 0,
+      reason: "Not enough daily bars for canonical pre-mover discovery.",
+      source: "canonical_quiet_discovery",
+    };
+  }
+  const cleanIntraday = (Array.isArray(intradayBars) ? intradayBars : [])
+    .map((bar) => ({
+      close: Number(bar.c ?? bar.close ?? 0),
+      volume: Math.max(0, Number(bar.v ?? bar.volume ?? 0) || 0),
+    }))
+    .filter((bar) => bar.close > 0);
+  const recentIntraday = cleanIntraday.slice(-12);
+  const latestIntradayVolume = recentIntraday.at(-1)?.volume || 0;
+  const priorIntradayVolumes = recentIntraday
+    .slice(0, -1)
+    .map((bar) => bar.volume)
+    .filter((volume) => volume > 0);
+  const priorIntradayAverage = priorIntradayVolumes.length > 0
+    ? priorIntradayVolumes.reduce((sum, volume) => sum + volume, 0) /
+      priorIntradayVolumes.length
+    : 0;
+  const intradayVolumeWakeupRatio = priorIntradayAverage > 0
+    ? latestIntradayVolume / priorIntradayAverage
+    : null;
+  return {
+    ...features,
+    preMoveLabel: features.discoveryTier,
+    intradayVolumeWakeupRatio: intradayVolumeWakeupRatio === null
+      ? null
+      : Number(intradayVolumeWakeupRatio.toFixed(3)),
+    // Intraday awakening is telemetry for Entry Quality. It is intentionally
+    // not another Early Discovery bonus on top of daily volume lifecycle.
+    intradayAwakeningAvailable: intradayVolumeWakeupRatio !== null,
+    source: "canonical_quiet_discovery",
     updatedAt: new Date().toISOString(),
   };
 }
@@ -17843,8 +18084,31 @@ async function runBoundedQuietDiscoveryScan({ force = false } = {}) {
       feed: alpaca.feed,
     };
   }
-  const result = await runBoundedQuietDiscovery({ groupedResults, dateKey, featureStore: discoveryFeatureStore, budgets: DISCOVERY_BUDGETS, downloadedBytes });
+  const result = await runBoundedQuietDiscovery({
+    groupedResults,
+    dateKey,
+    featureStore: discoveryFeatureStore,
+    budgets: DISCOVERY_BUDGETS,
+    downloadedBytes,
+    learning: engineState.quietCandidateOutcomeLearning?.stock || null,
+  });
   const state = { ...result, ok: true, provider, providerTelemetry, resourceUsage: { ...result.resourceUsage, downloadedBytes, maxDownloadBytes: DISCOVERY_MAX_DOWNLOAD_BYTES } };
+  engineState.quietCandidateOutcomeState = updateQuietCandidateOutcomes(
+    engineState.quietCandidateOutcomeState,
+    state.watchlist,
+    groupedResults,
+    {
+      assetClass: "stock",
+      dayKey,
+      tradedSymbols: engineState.aiManagedSymbols || [],
+    }
+  );
+  engineState.quietCandidateOutcomeLearning =
+    engineState.quietCandidateOutcomeState.learning;
+  state.outcomeTracking = {
+    observationCount: engineState.quietCandidateOutcomeState.observationCount,
+    learning: engineState.quietCandidateOutcomeLearning.stock,
+  };
   engineState.boundedQuietDiscoveryState = state;
   engineState.boundedQuietDiscoveryHistory = [state, ...(engineState.boundedQuietDiscoveryHistory || [])].slice(0, 30);
   engineState.preMoverDiscoveryState = {
@@ -17904,10 +18168,10 @@ async function discoverPreMovers(seedSymbols = []) {
   const reviewed = await processBatches(candidates, batchSize, async (symbol) => {
     try {
       const [dailyBars, intradayBars] = await Promise.all([
-        getRecentBars(symbol, "1Day", 20),
+        getRecentBars(symbol, "1Day", 30),
         getRecentBars(symbol, "5Min", 30),
       ]);
-      return calculatePreMoverScore({
+      return calculateCanonicalPreMoverScore({
         symbol,
         dailyBars,
         intradayBars,
@@ -23042,6 +23306,7 @@ const { executeEngineCycleBody } = createEngineCycle({
   updateCryptoPositionSizingState,
   updateInstitutionalWatchlist,
   updateMultiTimeframeCryptoState,
+  updateQuietCandidateOutcomes,
   updateStockScoreOutcomes,
   updateWhaleSmartMoneyState,
   getRuntime: () => ({
@@ -26120,12 +26385,15 @@ function calculateCentralAutonomousDecisionCore(stockSignals = [], cryptoSignals
     const profitAggressionScore = components.profitAggression.value;
     const personalityScore = components.personality.value;
     const strategyEvolutionDecisionScore = components.strategyEvolution.value;
-    const riskPenalty =
-      (signal.confirmations?.fakeBreakout ? 18 : 0) +
-      (signal.confirmations?.gapTooHigh ? 12 : 0) +
-      (signal.confirmations?.newsRisk ? 20 : 0) +
-      (marketStress >= 75 ? 18 : 0) +
-      (signal.globalRiskOffDefense?.shouldBlock ? 30 : 0);
+    // These are overlapping views of execution risk. Apply the strongest one
+    // once instead of summing correlated penalties on top of hard safety gates.
+    const riskPenalty = Math.max(
+      signal.confirmations?.fakeBreakout ? 18 : 0,
+      signal.confirmations?.gapTooHigh ? 12 : 0,
+      signal.confirmations?.newsRisk ? 20 : 0,
+      marketStress >= 75 ? 18 : 0,
+      signal.globalRiskOffDefense?.shouldBlock ? 30 : 0
+    );
     const archetypeDecision = isCryptoSignal
       ? calculateArchetypeWeightedDecisionScore({
         signal,
@@ -27285,15 +27553,14 @@ function updateQuoteCache(symbol, quote = {}) {
   }
   const previous = engineState.liveQuoteCache[cleanSymbol] || {};
   const previousPrice = Number(previous.price || 0);
-  const bid = Number(quote.bid || quote.bp || previous.bid || 0);
-  const ask = Number(quote.ask || quote.ap || previous.ask || 0);
+  const bid = Number(quote.bid || quote.bp || 0);
+  const ask = Number(quote.ask || quote.ap || 0);
   const size = Number(quote.size || quote.s || quote.volume || quote.v || 0);
   const tradeVolume = Number(quote.volume || quote.v || quote.size || quote.s || 0);
-  const { spread, spreadPercent } = calculateSpread({
+  const { spread, spreadPercent, spreadAvailable } = calculateSpread({
     bid,
     ask,
     price,
-    previous,
   });
   const liveMoveFromPreviousPercent = calculateLiveMovePercent(
     previousPrice,
@@ -27303,7 +27570,7 @@ function updateQuoteCache(symbol, quote = {}) {
     quote.liveQuoteUpdatedAt ||
     quote.quoteFetchedAt ||
     quote.updatedAt ||
-    new Date().toISOString();
+    null;
   const quoteSource =
     quote.liveQuoteSource ||
     quote.source ||
@@ -27357,6 +27624,7 @@ function updateQuoteCache(symbol, quote = {}) {
       0,
     spread,
     spreadPercent,
+    spreadAvailable,
     volume: tradeVolume,
     size,
     source: quote.source || "live_stream",
@@ -27379,6 +27647,7 @@ function updateQuoteCache(symbol, quote = {}) {
     ask,
     spread,
     spreadPercent,
+    spreadAvailable,
     volume: tradeVolume,
     source: quote.source || "live_stream",
     liveQuoteSource:
@@ -28527,7 +28796,12 @@ function calculateQuickInstitutionalGate(candidate = {}) {
   const symbol = normalizeSymbol(candidate.symbol);
   const fastScore = Number(candidate.fastRunnerScore || 0);
   const cryptoAsset = isCrypto(symbol);
-  const spreadPercent = Number(candidate.spreadPercent || 0);
+  const spreadPercent = Number(candidate.spreadPercent);
+  const spreadAvailable = candidate.spreadAvailable === true || (
+    candidate.spreadPercent !== null &&
+    candidate.spreadPercent !== undefined &&
+    Number.isFinite(spreadPercent)
+  );
   const liquidityPressure = Number(candidate.liquidityPressure || 0);
   const fakeBreakoutRisk = Number(candidate.fakeBreakoutRisk || 0);
   const momentum = Number(candidate.liveMomentumPercent || 0);
@@ -28771,6 +29045,9 @@ function validateLiveBuyQuality(candidate = {}) {
   const symbol = normalizeSymbol(candidate.symbol);
   const cryptoAsset = isCrypto(symbol);
   const confirmations = candidate.confirmations || {};
+  if (!spreadAvailable) {
+    blockReasons.push("Live bid/ask spread unavailable");
+  }
   const earlyProfile =
     candidate.earlyTechnicalProfile ||
     confirmations.earlyTechnicalProfile ||
@@ -28992,6 +29269,22 @@ function buildLiveStarterBuyDecision(candidate = {}, account = {}, managedPositi
   });
   const openTradeCount = sameAssetOpenPositions.length;
   const blockReasons = [];
+  const liveQuote = engineState.liveQuoteCache?.[symbol] || {};
+  const canonicalStockGate = !cryptoAsset
+    ? evaluateStockTradeCandidate({
+      ...candidate,
+      liveQuote,
+    }, {
+      requireCentralDecision: true,
+      maxQuoteAgeSeconds: LIVE_ORDER_MAX_QUOTE_AGE_SECONDS,
+      maxSpreadPercent: LIVE_ORDER_MAX_SPREAD_PERCENT,
+    })
+    : null;
+  if (canonicalStockGate && !canonicalStockGate.approved) {
+    blockReasons.push(
+      ...canonicalStockGate.reasons.map((reason) => `Stock evidence: ${reason}`)
+    );
+  }
   const cryptoExecutionGate = cryptoAsset
     ? evaluateCryptoTradeCandidate(candidate, {
       minimumScore: Math.max(70, Number(CONFIG.minScoreToBuy || 70)),
@@ -29123,6 +29416,7 @@ function buildLiveStarterBuyDecision(candidate = {}, account = {}, managedPositi
     remainingBudget: Number(remainingBudget.toFixed(2)),
     openTradeCount,
     liveSafety,
+    canonicalStockGate,
     cryptoExecutionGate,
     softMasterBlockRestored,
     masterExecutionDecision:
@@ -29271,6 +29565,30 @@ async function runLiveStarterBuyGate() {
         }
         decision.candidate = refreshedCandidate;
         decision.cryptoExecutionGate = refreshedCryptoGate;
+      } else {
+        const refreshedStockCandidate = {
+          ...(decision.candidate || { symbol }),
+          liveQuote: engineState.liveQuoteCache?.[symbol] || {},
+        };
+        const refreshedStockGate = evaluateStockTradeCandidate(
+          refreshedStockCandidate,
+          {
+            requireCentralDecision: true,
+            maxQuoteAgeSeconds: LIVE_ORDER_MAX_QUOTE_AGE_SECONDS,
+            maxSpreadPercent: LIVE_ORDER_MAX_SPREAD_PERCENT,
+          }
+        );
+        if (!refreshedStockGate.approved) {
+          recordFailedOrder(
+            "LIVE_STARTER_STOCK_EVIDENCE_BLOCKED",
+            symbol,
+            `Stock evidence changed before order: ${refreshedStockGate.reasons.join(", ")}`,
+            { refreshedStockGate }
+          );
+          continue;
+        }
+        decision.candidate = refreshedStockCandidate;
+        decision.stockExecutionGate = refreshedStockGate;
       }
       const duplicateCheck = checkAndMarkLiveDuplicateOrder(
         symbol,
@@ -30322,6 +30640,7 @@ function isPreTradeQuoteReady(quote = {}, cryptoAsset = false) {
   return (
     quote.priceIsLive === true &&
     isFreshLiveQuote(quote) &&
+    quote.spreadAvailable === true &&
     providerEvidence.connected === true
   );
 }
@@ -30392,7 +30711,11 @@ function validateLiveOrder(symbol, side = "BUY") {
     {};
 
   const price = Number(quote.price || quote.current || 0);
-  const spreadPercent = Number(quote.spreadPercent || 0);
+  const spreadAvailable = quote.spreadAvailable === true || (
+    Number(quote.bid || 0) > 0 &&
+    Number(quote.ask || 0) >= Number(quote.bid || 0)
+  );
+  const spreadPercent = spreadAvailable ? Number(quote.spreadPercent) : null;
   const quoteAgeSeconds = getLiveQuoteAgeSeconds(cleanSymbol);
   const quoteSource = quote.liveQuoteSource || quote.source || "";
   const quoteIsLive =
@@ -30417,6 +30740,7 @@ function validateLiveOrder(symbol, side = "BUY") {
       marketOpen: true,
       price,
       spreadPercent,
+      spreadAvailable,
       quoteAgeSeconds,
       quoteIsLive,
       requireLiveProvider,
@@ -30438,6 +30762,7 @@ function validateLiveOrder(symbol, side = "BUY") {
     side: cleanSide,
     price,
     spreadPercent,
+    spreadAvailable,
     quoteAgeSeconds,
     quoteSource,
     quoteIsLive,

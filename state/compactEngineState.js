@@ -160,6 +160,94 @@ function boundStockScoreOutcomeState(outcomeState) {
   };
 }
 
+function compactQuietCandidateObservation(observation = {}) {
+  const extension = observation.extensionProfile || null;
+  const news = observation.newsCatalyst || null;
+  return {
+    id: observation.id || null,
+    assetClass: observation.assetClass || null,
+    symbol: observation.symbol || null,
+    observedDay: observation.observedDay || null,
+    observedAt: Number(observation.observedAt || 0),
+    baselinePrice: Number(observation.baselinePrice || 0),
+    trackingPeakPrice: Number(observation.trackingPeakPrice || 0),
+    lastTrackedDay: observation.lastTrackedDay || null,
+    discoveryScore: Number(observation.discoveryScore || 0),
+    discoveryTier: observation.discoveryTier || null,
+    componentScores: observation.componentScores || {},
+    extensionProfile: extension
+      ? {
+        assetClass: extension.assetClass || observation.assetClass || null,
+        changes: extension.changes || {},
+        availableHorizons: Number(extension.availableHorizons || 0),
+        coverage: Number(extension.coverage || 0),
+        maximumSeverity: Number(extension.maximumSeverity || 0),
+        extensionPenalty: Number(extension.extensionPenalty || 0),
+        alreadyExtended: extension.alreadyExtended === true,
+        penaltyMethod: extension.penaltyMethod || null,
+      }
+      : null,
+    newsCatalyst: news
+      ? {
+        source: news.source || null,
+        dataAvailable: news.dataAvailable === true,
+        catalystAvailable: news.catalystAvailable === true,
+        catalystScore: Number(news.catalystScore || 0),
+        riskDetected: news.riskDetected === true,
+        label: news.label || null,
+      }
+      : null,
+    selectedQuietCandidate: observation.selectedQuietCandidate === true,
+    alreadyTradedAtSelection: observation.alreadyTradedAtSelection === true,
+    becameTrade: observation.becameTrade === true,
+    becameTradeAt: observation.becameTradeAt || null,
+    targets: observation.targets || {},
+    targetTimestamps: observation.targetTimestamps || {},
+    measurements: observation.measurements || {},
+  };
+}
+
+function boundQuietCandidateOutcomeState(outcomeState) {
+  if (!outcomeState || typeof outcomeState !== "object") return outcomeState;
+  const safeMax = Math.max(
+    50,
+    Math.min(600, Number(outcomeState.maxObservations || 600))
+  );
+  const observations = (Array.isArray(outcomeState.observations)
+    ? outcomeState.observations
+    : [])
+    .slice(0, safeMax)
+    .map(compactQuietCandidateObservation);
+  return {
+    ...outcomeState,
+    maxObservations: safeMax,
+    observationCount: observations.length,
+    observations,
+  };
+}
+
+function boundCryptoQuietDiscoveryState(discoveryState) {
+  if (!discoveryState || typeof discoveryState !== "object") return discoveryState;
+  const topCandidates = Array.isArray(discoveryState.topCandidates)
+    ? discoveryState.topCandidates.slice(0, 25).map((candidate) => {
+      const {
+        chartBars: _chartBars,
+        historicalBars: _historicalBars,
+        stockChartBars: _stockChartBars,
+        sparkline: _sparkline,
+        raw: _raw,
+        ...compactCandidate
+      } = candidate || {};
+      return compactCandidate;
+    })
+    : [];
+  return {
+    ...discoveryState,
+    selectedCount: topCandidates.length,
+    topCandidates,
+  };
+}
+
 export function compactLiveEngineStateHistories(
   state = {},
   {
@@ -184,6 +272,12 @@ export function compactLiveEngineStateHistories(
   }
   state.stockScoreOutcomeState = boundStockScoreOutcomeState(
     state.stockScoreOutcomeState
+  );
+  state.quietCandidateOutcomeState = boundQuietCandidateOutcomeState(
+    state.quietCandidateOutcomeState
+  );
+  state.cryptoQuietDiscoveryState = boundCryptoQuietDiscoveryState(
+    state.cryptoQuietDiscoveryState
   );
   return state;
 }

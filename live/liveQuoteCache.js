@@ -52,17 +52,15 @@ export function evaluateLiveQuoteProviderReadiness(
 }
 
 export function calculateSpread({ bid = 0, ask = 0, price = 0, previous = {} }) {
-  const spread =
-    bid > 0 && ask > 0
-      ? Number((ask - bid).toFixed(4))
-      : Number(previous.spread || 0);
+  const spreadAvailable = bid > 0 && ask >= bid && price > 0;
+  const spread = spreadAvailable
+    ? Number((ask - bid).toFixed(4))
+    : null;
+  const spreadPercent = spreadAvailable
+    ? Number((((ask - bid) / ((ask + bid) / 2)) * 100).toFixed(4))
+    : null;
 
-  const spreadPercent =
-    spread > 0 && price > 0
-      ? Number(((spread / price) * 100).toFixed(4))
-      : Number(previous.spreadPercent || 0);
-
-  return { spread, spreadPercent };
+  return { spread, spreadPercent, spreadAvailable };
 }
 
 export function calculateLiveMovePercent(previousPrice = 0, price = 0) {

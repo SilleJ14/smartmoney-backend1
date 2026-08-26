@@ -1,4 +1,4 @@
-const BACKEND_RELEASE_ID = "live-provider-fallback-2026-08-25";
+const BACKEND_RELEASE_ID = "discovery-scoring-safety-2026-08-26";
 
 function getBackendRelease() {
   return {

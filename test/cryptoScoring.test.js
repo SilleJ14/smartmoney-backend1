@@ -51,7 +51,14 @@ test("sparse crypto bars produce a neutral normalized score instead of raw perce
 test("quiet liquid major crypto keeps its score and reports missing statistics as unavailable", () => {
   const signal = {
     symbol: "BTC/USD",
-    rawCryptoScore: 82,
+    cryptoDiscoveryScorecard: {
+      stage: "CRYPTO_EARLY_DISCOVERY",
+      score: 82,
+      coverage: 1,
+      calculatedAt: new Date().toISOString(),
+      extension: { alreadyExtended: false },
+    },
+    newsCatalyst: { dataAvailable: true, riskDetected: false },
     score: 12,
     current: 100,
     bid: 99.95,
@@ -323,7 +330,14 @@ test("component coverage reports unavailable weight even when score weights are 
 test("crypto decision score uses independent discovery, entry, continuation, and context families", () => {
   const result = buildCryptoDecisionScore({
     symbol: "BTC/USD",
-    rawCryptoScore: 82,
+    cryptoDiscoveryScorecard: {
+      stage: "CRYPTO_EARLY_DISCOVERY",
+      score: 82,
+      coverage: 1,
+      calculatedAt: new Date().toISOString(),
+      extension: { alreadyExtended: false },
+    },
+    newsCatalyst: { dataAvailable: true, riskDetected: false },
     barsFound: 30,
     current: 100,
     bid: 99.9,
@@ -388,7 +402,14 @@ test("score-derived crypto phase observations cannot become context points", () 
 test("shared crypto execution gate requires central and freshly complete evidence", () => {
   const complete = {
     symbol: "BTC/USD",
-    rawCryptoScore: 90,
+    cryptoDiscoveryScorecard: {
+      stage: "CRYPTO_EARLY_DISCOVERY",
+      score: 90,
+      coverage: 1,
+      calculatedAt: new Date().toISOString(),
+      extension: { alreadyExtended: false },
+    },
+    newsCatalyst: { dataAvailable: true, riskDetected: false },
     masterFinalScore: 90,
     qualifiedToBuy: true,
     autoTradeApproved: true,
@@ -513,4 +534,56 @@ test("crypto phase observations no longer mutate the canonical score sequentiall
   assert.equal(noHistoryLearning.learningAvailable, false);
   assert.equal(noHistoryLearning.learningAdjustment, 0);
   assert.equal(noHistoryLearning.shouldBoostCrypto, false);
+});
+
+test("legacy crypto scores cannot replace a canonical discovery scorecard", () => {
+  const result = evaluateCryptoTradeCandidate({
+    symbol: "BTC/USD",
+    rawCryptoScore: 99,
+    masterFinalScore: 99,
+    qualifiedToBuy: true,
+    autoTradeApproved: true,
+    barsFound: 30,
+    current: 100,
+    bid: 99.95,
+    ask: 100.05,
+    windowDollarVolume: 1_000_000,
+    newsCatalyst: { dataAvailable: true, riskDetected: false },
+    centralAutonomousDecisionCore: {
+      cryptoDecisionEvidence: { coreEvidencePass: true },
+    },
+  });
+
+  assert.equal(result.approved, false);
+  assert.ok(result.reasons.includes("discovery"));
+  assert.ok(result.reasons.includes("discoveryCoverage"));
+});
+
+test("stale crypto discovery evidence cannot be refreshed by only a new quote", () => {
+  const now = Date.parse("2026-08-26T12:00:00Z");
+  const result = evaluateCryptoTradeCandidate({
+    symbol: "BTC/USD",
+    cryptoDiscoveryScorecard: {
+      stage: "CRYPTO_EARLY_DISCOVERY",
+      score: 90,
+      coverage: 1,
+      calculatedAt: "2026-08-26T11:00:00Z",
+      extension: { alreadyExtended: false },
+    },
+    newsCatalyst: { dataAvailable: true, riskDetected: false },
+    masterFinalScore: 90,
+    qualifiedToBuy: true,
+    autoTradeApproved: true,
+    barsFound: 30,
+    current: 100,
+    bid: 99.95,
+    ask: 100.05,
+    windowDollarVolume: 1_000_000,
+    centralAutonomousDecisionCore: {
+      cryptoDecisionEvidence: { coreEvidencePass: true },
+    },
+  }, { now, maxDiscoveryAgeMinutes: 15 });
+
+  assert.equal(result.approved, false);
+  assert.ok(result.reasons.includes("freshDiscoveryScorecard"));
 });

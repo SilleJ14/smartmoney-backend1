@@ -33,6 +33,12 @@ export function createInitialEngineState({ effectiveMode = "live_stock", maxRota
   stockScoreOutcomeSummary: {},
   stockScoreOutcomeFollowupState: null,
   stockScoreOutcomeLearning: null,
+  quietCandidateOutcomeState: null,
+  quietCandidateOutcomeLearning: {
+    stock: null,
+    crypto: null,
+  },
+  cryptoQuietDiscoveryState: null,
   topAutonomousCandidates: [],
     effectiveMode,
   marketRegime: null,

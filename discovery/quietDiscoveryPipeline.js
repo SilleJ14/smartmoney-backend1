@@ -1,3 +1,5 @@
+import { calculateMultiHorizonExtension } from "../scoring/earlyDiscovery.js";
+
 const clamp = (value) => Math.max(0, Math.min(100, Number(value) || 0));
 const avg = (values) => values.length ? values.reduce((sum, value) => sum + Number(value || 0), 0) / values.length : 0;
 
@@ -23,7 +25,7 @@ export function compactGroupedRows(results = [], dateKey, maxUniverse = 5000) {
   })).filter((row) => row.s && row.c > 0 && row.h >= row.l && row.v >= 0);
 }
 
-export function calculateQuietPreMoveFeatures(history = []) {
+export function calculateQuietPreMoveFeatures(history = [], { learning = null } = {}) {
   if (history.length < 10) return null;
   const recent = history.slice(-5);
   const baseline = history.slice(-20, -5);
@@ -47,11 +49,109 @@ export function calculateQuietPreMoveFeatures(history = []) {
   const twentyDayChange = history.at(-Math.min(20, history.length))?.c > 0 ? ((latest.c - history.at(-Math.min(20, history.length)).c) / history.at(-Math.min(20, history.length)).c) * 100 : 0;
   const quietScore = clamp(100 - Math.abs(dayChangePercent) * 22);
   const liquidityScore = clamp(Math.log10(Math.max(1, latest.c * avg(history.slice(-20).map((row) => row.v)))) * 12);
-  const preMoveScore = clamp(compressionScore * 0.28 + accumulationScore * 0.27 + structureScore * 0.2 + quietScore * 0.15 + liquidityScore * 0.1);
-  return { symbol: latest.s, preMoveScore: Number(preMoveScore.toFixed(2)), compressionScore: Number(compressionScore.toFixed(2)), accumulationScore: Number(accumulationScore.toFixed(2)), structureScore: Number(structureScore.toFixed(2)), quietScore: Number(quietScore.toFixed(2)), liquidityScore: Number(liquidityScore.toFixed(2)), dayChangePercent: Number(dayChangePercent.toFixed(2)), twentyDayChange: Number(twentyDayChange.toFixed(2)), averageDollarVolume: Number((latest.c * avg(history.slice(-20).map((row) => row.v))).toFixed(2)), historyDays: history.length };
+  const supportHoldingScore = clamp(
+    35 + (latest.c >= avg(recent.map((row) => row.c)) ? 30 : 0) + higherLowCount * 8
+  );
+  const volumeDryUpScore = volumeTrendRatio >= 0.45 && volumeTrendRatio <= 0.9
+    ? 88
+    : volumeTrendRatio > 0.9 && volumeTrendRatio <= 1.15
+      ? 65
+      : volumeTrendRatio > 2.5
+        ? 25
+        : volumeTrendRatio > 0
+          ? 48
+          : 0;
+  const structureFamilyScore = clamp(
+    compressionScore * 0.5 + structureScore * 0.3 + supportHoldingScore * 0.2
+  );
+  const baseComponents = [
+    { name: "structure", source: "compression_higher_lows_support", value: structureFamilyScore, weight: 0.45, available: true },
+    { name: "accumulation", source: "up_volume_accumulation", value: accumulationScore, weight: 0.3, available: totalVolume > 0 },
+    { name: "volumeLifecycle", source: "volume_dry_up", value: volumeDryUpScore, weight: 0.15, available: baselineVolume > 0 },
+    { name: "liquidity", source: "average_dollar_volume", value: liquidityScore, weight: 0.1, available: latest.c > 0 },
+  ];
+  const activeLearning = learning?.active === true;
+  const adjustedComponents = baseComponents.map((component) => {
+    const learningMultiplier = activeLearning
+      ? Math.max(0.9, Math.min(1.1, Number(learning?.componentMultipliers?.[component.name] || 1)))
+      : 1;
+    return {
+      ...component,
+      learningMultiplier,
+      adjustedWeight: component.weight * learningMultiplier,
+    };
+  });
+  const availableAdjustedWeight = adjustedComponents
+    .filter((component) => component.available)
+    .reduce((sum, component) => sum + component.adjustedWeight, 0);
+  const components = adjustedComponents.map((component) => {
+    const effectiveWeight = component.available && availableAdjustedWeight > 0
+      ? component.adjustedWeight / availableAdjustedWeight
+      : 0;
+    return {
+      ...component,
+      effectiveWeight: Number(effectiveWeight.toFixed(4)),
+      contribution: Number((component.value * effectiveWeight).toFixed(2)),
+    };
+  });
+  const rawPreMoveScore = clamp(
+    components.reduce((sum, component) => sum + component.contribution, 0)
+  );
+  const extension = calculateMultiHorizonExtension({
+    bars: history,
+    currentPrice: latest.c,
+    assetClass: "stock",
+  });
+  let preMoveScore = clamp(rawPreMoveScore - extension.extensionPenalty);
+  if (extension.alreadyExtended) preMoveScore = Math.min(preMoveScore, 55);
+  return {
+    symbol: latest.s,
+    price: latest.c,
+    current: latest.c,
+    high: latest.h,
+    preMoveScore: Number(preMoveScore.toFixed(2)),
+    rawPreMoveScore: Number(rawPreMoveScore.toFixed(2)),
+    discoveryScore: Number(preMoveScore.toFixed(2)),
+    discoveryTier: extension.alreadyExtended
+      ? "LATE_MOVE_NOT_DISCOVERY"
+      : preMoveScore >= 82
+        ? "ELITE_DISCOVERY"
+        : preMoveScore >= 70
+          ? "STRONG_DISCOVERY"
+          : preMoveScore >= 58
+            ? "DEVELOPING_DISCOVERY"
+            : "LOW_DISCOVERY",
+    discoveryScorecard: {
+      stage: "BOUNDED_STOCK_QUIET_DISCOVERY",
+      score: Number(preMoveScore.toFixed(2)),
+      rawScore: Number(rawPreMoveScore.toFixed(2)),
+      coverage: Number((baseComponents.filter((component) => component.available).reduce((sum, component) => sum + component.weight, 0)).toFixed(2)),
+      components,
+      missingComponents: baseComponents.filter((component) => !component.available).map((component) => component.name),
+      gates: extension.alreadyExtended ? ["ALREADY_EXTENDED_MULTI_HORIZON"] : [],
+      extension,
+      learningApplied: activeLearning,
+      learningSampleCount: Number(learning?.sampleCount || 0),
+    },
+    components,
+    compressionScore: Number(compressionScore.toFixed(2)),
+    accumulationScore: Number(accumulationScore.toFixed(2)),
+    structureScore: Number(structureScore.toFixed(2)),
+    structureFamilyScore: Number(structureFamilyScore.toFixed(2)),
+    supportHoldingScore: Number(supportHoldingScore.toFixed(2)),
+    volumeDryUpScore: Number(volumeDryUpScore.toFixed(2)),
+    quietScore: Number(quietScore.toFixed(2)),
+    liquidityScore: Number(liquidityScore.toFixed(2)),
+    extension,
+    extensionAdjusted: true,
+    dayChangePercent: Number(dayChangePercent.toFixed(2)),
+    twentyDayChange: Number(twentyDayChange.toFixed(2)),
+    averageDollarVolume: Number((latest.c * avg(history.slice(-20).map((row) => row.v))).toFixed(2)),
+    historyDays: history.length,
+  };
 }
 
-export async function runBoundedQuietDiscovery({ groupedResults = [], dateKey, featureStore, budgets = {}, downloadedBytes = 0, now = () => Date.now() } = {}) {
+export async function runBoundedQuietDiscovery({ groupedResults = [], dateKey, featureStore, budgets = {}, downloadedBytes = 0, learning = null, now = () => Date.now() } = {}) {
   const config = { ...DEFAULT_DISCOVERY_BUDGETS, ...budgets };
   const startedAt = now();
   const startingHeapBytes = process.memoryUsage().heapUsed;
@@ -63,7 +163,7 @@ export async function runBoundedQuietDiscovery({ groupedResults = [], dateKey, f
   const histories = [...read.histories.values()];
   for (let index = 0; index < histories.length; index += config.batchSize) {
     for (const history of histories.slice(index, index + config.batchSize)) {
-      const features = calculateQuietPreMoveFeatures(history);
+      const features = calculateQuietPreMoveFeatures(history, { learning });
       if (!features) continue;
       if (Math.abs(features.dayChangePercent) > config.maxCurrentMovePercent) continue;
       if (history.at(-1).c < config.minPrice || features.averageDollarVolume < config.minAverageDollarVolume) continue;
