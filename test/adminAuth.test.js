@@ -69,7 +69,8 @@ test("owner recovery codes are admin-only, expire, are single-use, and invalidat
   run("/auth/admin/recovery-code", { method: "POST", headers: {}, ip: "1", body: { email: "owner@example.com" } }, denied);
   assert.equal(denied.code, 401);
   const issued = response();
-  run("/auth/admin/recovery-code", { method: "POST", headers: { authorization: "Bearer server-secret" }, ip: "1", body: { email: "owner@example.com" } }, issued);
+  run("/auth/admin/recovery-code", { method: "POST", headers: { authorization: "Bearer server-secret" }, ip: "1", body: {} }, issued);
+  assert.equal(issued.body.email, "owner@example.com");
   assert.match(issued.body.code, /^\d{8}$/);
   const reset = response();
   run("/auth/reset-password", { headers: {}, ip: "2", body: { email: "owner@example.com", code: issued.body.code, newPassword: "new-password!" } }, reset);

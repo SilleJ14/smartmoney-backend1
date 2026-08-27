@@ -116,11 +116,11 @@ export function createAdminAuth({ adminToken, userFile = "", sessionTtlMs = 12 *
     app.post("/auth/admin/recovery-code", requireAdmin, (req, res) => {
       if (req.authUser) return res.status(403).json({ ok: false, error: "The backend administrator token is required" });
       const email = normalizeIdentity(req.body?.email);
-      const user = users.find((candidate) => candidate.email === email);
+      const user = email ? users.find((candidate) => candidate.email === email) : users.length === 1 ? users[0] : null;
       if (!user) return res.status(404).json({ ok: false, error: "Account not found" });
       const code = crypto.randomInt(0, 100000000).toString().padStart(8, "0");
       recoveryCodes.set(user.id, { digest: recoveryDigest(code), expiresAt: now() + recoveryTtlMs, attempts: 0 });
-      return res.json({ ok: true, code, expiresInSeconds: recoveryTtlMs / 1000 });
+      return res.json({ ok: true, email: user.email, code, expiresInSeconds: recoveryTtlMs / 1000 });
     });
     app.post("/auth/reset-password", (req, res) => {
       const email = normalizeIdentity(req.body?.email);
