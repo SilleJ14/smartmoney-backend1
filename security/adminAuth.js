@@ -32,14 +32,15 @@ function persistUsers(file, users) {
 }
 
 export function createAdminAuth({ adminToken, userFile = "", sessionTtlMs = 12 * 60 * 60 * 1000,
-  failureWindowMs = 15 * 60 * 1000, failureLimit = 20, ticketTtlMs = 30 * 1000, now = () => Date.now() }) {
-  const failures = new Map(), tickets = new Map();
+  failureWindowMs = 15 * 60 * 1000, failureLimit = 20, ticketTtlMs = 30 * 1000,
+  recoveryTtlMs = 10 * 60 * 1000, now = () => Date.now() }) {
+  const failures = new Map(), tickets = new Map(), recoveryCodes = new Map();
   let users = userFile ? safeUsers(userFile) : [];
   const signingKey = crypto.createHash("sha256").update(String(adminToken || "missing-admin-token")).digest();
   const getClientIp = (req) => String(req.headers["x-forwarded-for"] || req.ip || "unknown").split(",")[0].trim();
   const publicUser = (user) => ({ id: user.id, name: user.name, email: user.email, createdAt: user.createdAt });
   const signSession = (user) => {
-    const payload = encode({ sub: user.id, email: user.email, ver: user.passwordChangedAt || user.createdAt,
+    const payload = encode({ sub: user.id, email: user.email, ver: user.authVersion || user.passwordChangedAt || user.createdAt,
       iat: now(), exp: now() + sessionTtlMs });
     const signature = crypto.createHmac("sha256", signingKey).update(payload).digest("base64url");
     return `${payload}.${signature}`;
@@ -54,12 +55,18 @@ export function createAdminAuth({ adminToken, userFile = "", sessionTtlMs = 12 *
       const claims = JSON.parse(Buffer.from(payload, "base64url").toString("utf8"));
       if (!claims.sub || Number(claims.exp) <= now()) return null;
       const user = users.find((candidate) => candidate.id === claims.sub) || null;
-      return user && claims.ver === (user.passwordChangedAt || user.createdAt) ? user : null;
+      return user && claims.ver === (user.authVersion || user.passwordChangedAt || user.createdAt) ? user : null;
     } catch { return null; }
   };
   const bearerOf = (req) => {
     const auth = String(req.headers.authorization || "");
     return auth.startsWith("Bearer ") ? auth.slice(7).trim() : "";
+  };
+  const recoveryDigest = (code) => crypto.createHmac("sha256", signingKey).update(String(code)).digest();
+  const recoveryCodeIsValid = (provided, record) => {
+    if (!record || record.expiresAt <= now() || record.attempts >= 5) return false;
+    const actual = recoveryDigest(provided);
+    return actual.length === record.digest.length && crypto.timingSafeEqual(actual, record.digest);
   };
   const recordFailure = (req, res, message = "Invalid email or password") => {
     const clientIp = getClientIp(req), timestamp = now();
@@ -106,6 +113,34 @@ export function createAdminAuth({ adminToken, userFile = "", sessionTtlMs = 12 *
       failures.delete(getClientIp(req));
       return res.json({ ok: true, token: signSession(user), expiresInSeconds: sessionTtlMs / 1000, user: publicUser(user) });
     });
+    app.post("/auth/admin/recovery-code", requireAdmin, (req, res) => {
+      if (req.authUser) return res.status(403).json({ ok: false, error: "The backend administrator token is required" });
+      const email = normalizeIdentity(req.body?.email);
+      const user = users.find((candidate) => candidate.email === email);
+      if (!user) return res.status(404).json({ ok: false, error: "Account not found" });
+      const code = crypto.randomInt(0, 100000000).toString().padStart(8, "0");
+      recoveryCodes.set(user.id, { digest: recoveryDigest(code), expiresAt: now() + recoveryTtlMs, attempts: 0 });
+      return res.json({ ok: true, code, expiresInSeconds: recoveryTtlMs / 1000 });
+    });
+    app.post("/auth/reset-password", (req, res) => {
+      const email = normalizeIdentity(req.body?.email);
+      const code = String(req.body?.code || "").trim();
+      const newPassword = String(req.body?.newPassword || "");
+      const user = users.find((candidate) => candidate.email === email);
+      const record = user ? recoveryCodes.get(user.id) : null;
+      if (!user || !recoveryCodeIsValid(code, record)) {
+        if (record) record.attempts += 1;
+        return recordFailure(req, res, "Invalid or expired recovery code");
+      }
+      if (newPassword.length < 12) return res.status(400).json({ ok: false, error: "New password must contain at least 12 characters" });
+      const passwordRecord = passwordDigest(newPassword);
+      Object.assign(user, { salt: passwordRecord.salt, passwordDigest: passwordRecord.digest,
+        passwordChangedAt: new Date(now()).toISOString(), authVersion: crypto.randomUUID() });
+      recoveryCodes.delete(user.id);
+      failures.delete(getClientIp(req));
+      persistUsers(userFile, users);
+      return res.json({ ok: true, token: signSession(user), expiresInSeconds: sessionTtlMs / 1000, user: publicUser(user) });
+    });
     if (typeof app.get === "function") {
       app.get("/auth/session", requireAdmin, (req, res) => res.json({ ok: true, user: req.authUser || null }));
     }
@@ -116,7 +151,8 @@ export function createAdminAuth({ adminToken, userFile = "", sessionTtlMs = 12 *
       if (!passwordIsValid(currentPassword, user)) return recordFailure(req, res, "Current password is incorrect");
       if (newPassword.length < 12) return res.status(400).json({ ok: false, error: "New password must contain at least 12 characters" });
       const passwordRecord = passwordDigest(newPassword);
-      Object.assign(user, { salt: passwordRecord.salt, passwordDigest: passwordRecord.digest, passwordChangedAt: new Date(now()).toISOString() });
+      Object.assign(user, { salt: passwordRecord.salt, passwordDigest: passwordRecord.digest,
+        passwordChangedAt: new Date(now()).toISOString(), authVersion: crypto.randomUUID() });
       persistUsers(userFile, users);
       return res.json({ ok: true, token: signSession(user), expiresInSeconds: sessionTtlMs / 1000, user: publicUser(user) });
     });
