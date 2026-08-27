@@ -17,7 +17,7 @@ function safeContext(overrides = {}) {
     quoteIsLive: true,
     requireLiveProvider: true,
     liveProviderConnected: true,
-    maxQuoteAgeSeconds: 15,
+    maxQuoteAgeSeconds: 5,
     maxSpreadPercent: 2.5,
     maxExposurePercent: 80,
     maxOpenTrades: 10,
@@ -58,6 +58,21 @@ test("rejects stale, non-live, wide-spread quotes", () => {
   assert.deepEqual(result.reasons.filter((reason) =>
     /stale|live source|Spread/.test(reason)
   ).length, 3);
+});
+
+test("requires the order quote to be no older than five seconds", () => {
+  const fiveSeconds = evaluatePreTradeRisk({
+    order: { symbol: "AAPL", side: "buy", notional: 25 },
+    context: safeContext({ quoteAgeSeconds: 5 }),
+  });
+  const sixSeconds = evaluatePreTradeRisk({
+    order: { symbol: "AAPL", side: "buy", notional: 25 },
+    context: safeContext({ quoteAgeSeconds: 6 }),
+  });
+
+  assert.equal(fiveSeconds.approved, true);
+  assert.equal(sixSeconds.approved, false);
+  assert.ok(sixSeconds.reasons.includes("Live quote stale: 6s old"));
 });
 
 test("rejects exposure and open-position limit violations", () => {

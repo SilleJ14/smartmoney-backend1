@@ -16,6 +16,8 @@ test("keeps a ready cached quote without spending fallback bandwidth", async () 
   assert.equal(result.quote, cachedQuote);
   assert.equal(result.usedFallback, false);
   assert.equal(result.fallbackAttempted, false);
+  assert.equal(result.fallbackAttempts, 0);
+  assert.equal(result.quoteReady, true);
   assert.equal(fallbackCalls, 0);
 });
 
@@ -40,6 +42,8 @@ test("replaces an unavailable provider quote with Alpaca at order time", async (
   assert.equal(result.fallbackAttempted, true);
   assert.equal(result.quote, stored);
   assert.equal(result.quote.source, "alpaca_latest_stock_quote");
+  assert.equal(result.quoteReady, false);
+  assert.equal(result.fallbackAttempts, 1);
 });
 
 test("fails closed on fallback failure while retaining diagnostic evidence", async () => {
@@ -54,5 +58,51 @@ test("fails closed on fallback failure while retaining diagnostic evidence", asy
   assert.equal(result.quote, cachedQuote);
   assert.equal(result.usedFallback, false);
   assert.equal(result.fallbackAttempted, true);
+  assert.equal(result.fallbackAttempts, 1);
   assert.equal(result.fallbackError, "Alpaca unavailable");
+});
+
+test("retries only until a quote is five-second ready", async () => {
+  let calls = 0;
+  let sleeps = 0;
+  const result = await resolvePreTradeQuote({
+    cachedQuote: { source: "finnhub_ws_trade", age: 20 },
+    isQuoteReady: (quote) => Number(quote.age) <= 5,
+    fetchFallback: async () => ({
+      source: "alpaca_latest_stock_quote",
+      price: 100,
+      bid: 99.9,
+      ask: 100.1,
+      age: ++calls === 3 ? 4 : 8,
+    }),
+    maxFallbackAttempts: 3,
+    retryDelayMs: 2_000,
+    sleep: async (ms) => {
+      assert.equal(ms, 2_000);
+      sleeps += 1;
+    },
+  });
+
+  assert.equal(result.quoteReady, true);
+  assert.equal(result.fallbackAttempts, 3);
+  assert.equal(calls, 3);
+  assert.equal(sleeps, 2);
+  assert.equal(result.quote.age, 4);
+});
+
+test("fails closed after three stale quote attempts", async () => {
+  let calls = 0;
+  const result = await resolvePreTradeQuote({
+    isQuoteReady: (quote) => Number(quote.age) <= 5,
+    fetchFallback: async () => {
+      calls += 1;
+      return { source: "alpaca_latest_stock_quote", price: 100, age: 6 };
+    },
+    maxFallbackAttempts: 99,
+    sleep: async () => {},
+  });
+
+  assert.equal(result.quoteReady, false);
+  assert.equal(result.fallbackAttempts, 3);
+  assert.equal(calls, 3);
 });

@@ -400,11 +400,14 @@ let LIVE_STARTER_MAX_BUYS_PER_CYCLE = runtimeNumber(
   "LIVE_STARTER_MAX_BUYS_PER_CYCLE",
   5
 );
-let LIVE_ORDER_MAX_QUOTE_AGE_SECONDS = runtimeNumber(
-  "liveOrderMaxQuoteAgeSeconds",
-  "LIVE_ORDER_MAX_QUOTE_AGE_SECONDS",
-  15
-);
+function resolveLiveOrderQuoteAgeSeconds() {
+  return Math.max(1, Math.min(5, runtimeNumber(
+    "liveOrderMaxQuoteAgeSeconds",
+    "LIVE_ORDER_MAX_QUOTE_AGE_SECONDS",
+    5
+  )));
+}
+let LIVE_ORDER_MAX_QUOTE_AGE_SECONDS = resolveLiveOrderQuoteAgeSeconds();
 let LIVE_ORDER_MAX_SPREAD_PERCENT = runtimeNumber(
   "liveOrderMaxSpreadPercent",
   "LIVE_ORDER_MAX_SPREAD_PERCENT",
@@ -497,7 +500,7 @@ function applyRuntimeLiveSettings() {
   LIVE_STARTER_MIN_GATE_SCORE = runtimeNumber("liveStarterMinGateScore", "LIVE_STARTER_MIN_GATE_SCORE", 78);
   LIVE_STARTER_MIN_FINAL_SCORE = runtimeNumber("liveStarterMinFinalScore", "LIVE_STARTER_MIN_FINAL_SCORE", 86);
   LIVE_STARTER_MAX_BUYS_PER_CYCLE = runtimeNumber("liveStarterMaxBuysPerCycle", "LIVE_STARTER_MAX_BUYS_PER_CYCLE", 5);
-  LIVE_ORDER_MAX_QUOTE_AGE_SECONDS = runtimeNumber("liveOrderMaxQuoteAgeSeconds", "LIVE_ORDER_MAX_QUOTE_AGE_SECONDS", 15);
+  LIVE_ORDER_MAX_QUOTE_AGE_SECONDS = resolveLiveOrderQuoteAgeSeconds();
   LIVE_ORDER_MAX_SPREAD_PERCENT = runtimeNumber("liveOrderMaxSpreadPercent", "LIVE_ORDER_MAX_SPREAD_PERCENT", 1);
   LIVE_ORDER_REQUIRE_POLYGON_CONNECTED = runtimeBoolean("liveOrderRequirePolygonConnected", "LIVE_ORDER_REQUIRE_POLYGON_CONNECTED", true);
   LIVE_ORDER_LOCK_MS = runtimeNumber("liveOrderLockMs", "LIVE_ORDER_LOCK_MS", 15000);
@@ -13545,6 +13548,8 @@ const preTradeRiskGuard = {
         liveProvider: liveProviderEvidence.provider,
         liveProviderReason: liveProviderEvidence.reason,
         liveProviderFallbackUsed: quoteResolution.usedFallback,
+        liveProviderFallbackAttempts: quoteResolution.fallbackAttempts,
+        liveProviderFallbackReady: quoteResolution.quoteReady,
         liveProviderFallbackError: quoteResolution.fallbackError,
         maxQuoteAgeSeconds: LIVE_ORDER_MAX_QUOTE_AGE_SECONDS,
         maxSpreadPercent: LIVE_ORDER_MAX_SPREAD_PERCENT,
@@ -30661,6 +30666,8 @@ async function resolveVerifiedPreTradeQuote(symbol, cryptoAsset = false) {
       ? alpacaCryptoMarketData.getLatestQuote(symbol)
       : getAlpacaStockPrice(symbol),
     storeFallback: (quote) => updateQuoteCache(symbol, quote) || quote,
+    maxFallbackAttempts: 3,
+    retryDelayMs: 2_000,
   });
 }
 function buildLiveOrderDedupKey(symbol, side, action = "LIVE_ORDER") {

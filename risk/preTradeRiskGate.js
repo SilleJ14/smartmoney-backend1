@@ -51,7 +51,7 @@ export function evaluatePreTradeRisk({ order = {}, context = {}, options = {} } 
     if (price <= 0) reasons.push("Missing valid live price");
     if (!context.quoteIsLive) reasons.push("Quote is not from a live source");
     if (!spreadAvailable) reasons.push("Live bid/ask spread is unavailable");
-    if (quoteAgeSeconds > finiteNumber(context.maxQuoteAgeSeconds, 15)) {
+    if (quoteAgeSeconds > finiteNumber(context.maxQuoteAgeSeconds, 5)) {
       reasons.push(`Live quote stale: ${quoteAgeSeconds}s old`);
     }
     if (spreadPercent > finiteNumber(context.maxSpreadPercent, 2.5)) {
