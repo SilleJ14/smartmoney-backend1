@@ -31646,6 +31646,11 @@ registerConfigRoutes(app, {
   getConfig: () => CONFIG,
   getRuntimeConfig: () => runtimeConfig,
   isEmergencyStopped: () => emergencyStopActive,
+  getControlState: () => ({
+    emergencyStopActive,
+    dailyLossLocked: engineState.dailyLossLocked,
+    profitLocked: engineState.profitLocked,
+  }),
   resetRuntimeConfig: () => {
     const preserved = { alpacaLiveKey: runtimeConfig.alpacaLiveKey, alpacaLiveSecret: runtimeConfig.alpacaLiveSecret };
     if (fs.existsSync(CONFIG_FILE)) fs.unlinkSync(CONFIG_FILE);

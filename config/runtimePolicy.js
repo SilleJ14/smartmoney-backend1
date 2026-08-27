@@ -13,8 +13,11 @@ export function getEffectiveTradingMode(selectedMode) {
 }
 
 export function resolveAutoTradingEnabled(config = {}, environmentValue) {
+  if (typeof config.autoTradingEnabled === "boolean") {
+    return config.autoTradingEnabled;
+  }
   if (environmentValue !== undefined) {
     return String(environmentValue).trim().toLowerCase() === "true";
   }
-  return config.autoTradingEnabled ?? false;
+  return false;
 }

@@ -16,7 +16,9 @@ test("unknown trading modes fail safely to stocks", () => {
   assert.equal(getEffectiveTradingMode("unknown"), "live_stock");
 });
 
-test("environment automation setting overrides persisted config", () => {
-  assert.equal(resolveAutoTradingEnabled({ autoTradingEnabled: true }, "false"), false);
+test("persisted automation choice overrides the environment bootstrap default", () => {
+  assert.equal(resolveAutoTradingEnabled({ autoTradingEnabled: true }, "false"), true);
+  assert.equal(resolveAutoTradingEnabled({ autoTradingEnabled: false }, "true"), false);
   assert.equal(resolveAutoTradingEnabled({ autoTradingEnabled: true }, undefined), true);
+  assert.equal(resolveAutoTradingEnabled({}, "true"), true);
 });
