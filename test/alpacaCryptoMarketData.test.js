@@ -15,3 +15,23 @@ test("normalizes and filters crypto bars", async () => {
   const service = createAlpacaCryptoMarketData({ dataRequest: async () => ({ bars: { "BTC/USD": [{ c: 100, o: 90, h: 110, l: 80, v: 4 }, { c: 0 }] } }), normalizeSymbol });
   assert.deepEqual(await service.getRecentBars("BTC/USD"), [{ t: undefined, o: 90, h: 110, l: 80, c: 100, v: 4, source: "alpaca_crypto_bars" }]);
 });
+
+test("requests a bounded newest-first lookback instead of Alpaca's current-day default", async () => {
+  let requestedPath = "";
+  const service = createAlpacaCryptoMarketData({
+    dataRequest: async (path) => {
+      requestedPath = path;
+      return { bars: { "BTC/USD": [] } };
+    },
+    normalizeSymbol,
+    now: () => new Date("2026-08-26T22:00:00.000Z"),
+  });
+  await service.getRecentBars("BTC/USD", "1Day", 30);
+  const url = new URL(`https://data.alpaca.markets${requestedPath}`);
+  assert.equal(url.searchParams.get("symbols"), "BTC/USD");
+  assert.equal(url.searchParams.get("timeframe"), "1Day");
+  assert.equal(url.searchParams.get("limit"), "30");
+  assert.equal(url.searchParams.get("sort"), "desc");
+  assert.equal(url.searchParams.get("end"), "2026-08-26T22:00:00.000Z");
+  assert.equal(url.searchParams.get("start"), "2026-07-21T22:00:00.000Z");
+});
