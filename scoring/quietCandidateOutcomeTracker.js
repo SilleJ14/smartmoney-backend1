@@ -25,7 +25,7 @@ function targetDay(dayKey, days, assetClass) {
 }
 
 function symbolOf(candidate = {}) {
-  return String(candidate.symbol || candidate.s || "").trim().toUpperCase();
+  return String(candidate.symbol || candidate.s || candidate.T || "").trim().toUpperCase();
 }
 
 function priceOf(candidate = {}) {
@@ -67,6 +67,156 @@ function pearson(pairs = []) {
   }
   const denominator = Math.sqrt(varianceX * varianceY);
   return denominator > 0 ? covariance / denominator : 0;
+}
+
+function roundedAverage(values = []) {
+  const finiteValues = values
+    .filter((value) => value !== null && value !== undefined && value !== "")
+    .map(Number)
+    .filter(Number.isFinite);
+  if (finiteValues.length === 0) return null;
+  return Number((
+    finiteValues.reduce((sum, value) => sum + value, 0) /
+    finiteValues.length
+  ).toFixed(2));
+}
+
+function summarizeOutcomeHorizon(observations = [], horizonDays) {
+  const measurements = observations
+    .map((observation) => observation?.measurements?.[horizonDays])
+    .filter((measurement) =>
+      measurement &&
+      measurement.peakReturnPercent !== null &&
+      measurement.peakReturnPercent !== undefined &&
+      Number.isFinite(Number(measurement.peakReturnPercent))
+    );
+  const breakoutHitCount = measurements.filter(
+    (measurement) => measurement.breakoutHit === true
+  ).length;
+
+  return {
+    horizonDays,
+    measuredCount: measurements.length,
+    breakoutHitCount,
+    breakoutHitRatePercent: measurements.length > 0
+      ? Number(((breakoutHitCount / measurements.length) * 100).toFixed(1))
+      : null,
+    averageCloseReturnPercent: roundedAverage(
+      measurements.map((measurement) => measurement.closeReturnPercent)
+    ),
+    averagePeakReturnPercent: roundedAverage(
+      measurements.map((measurement) => measurement.peakReturnPercent)
+    ),
+  };
+}
+
+function compactLearningStatus(learning = {}, fallbackAssetClass) {
+  const minimumSamples = Math.max(1, Number(learning?.minimumSamples || 30));
+  const sampleCount = Math.max(0, Number(learning?.sampleCount || 0));
+  return {
+    assetClass: learning?.assetClass || fallbackAssetClass,
+    active: learning?.active === true,
+    sampleCount,
+    dueCount: Math.max(0, Number(learning?.dueCount || 0)),
+    minimumSamples,
+    measurementCoverage: Number.isFinite(Number(learning?.measurementCoverage))
+      ? Number(learning.measurementCoverage)
+      : 0,
+    uniqueSymbolCount: Math.max(0, Number(learning?.uniqueSymbolCount || 0)),
+    progressPercent: Number(
+      Math.min(100, (sampleCount / minimumSamples) * 100).toFixed(1)
+    ),
+    reason: learning?.reason || "WAITING_FOR_MINIMUM_QUIET_CANDIDATE_SAMPLES",
+  };
+}
+
+function compactDiscoveryStatus(discoveryState = {}) {
+  const state = discoveryState && typeof discoveryState === "object"
+    ? discoveryState
+    : {};
+  return {
+    updatedAt: state.updatedAt || null,
+    provider: state.provider || state.source || null,
+    reviewedCount: Math.max(
+      0,
+      Number(state.universeRows || state.reviewedCount || 0)
+    ),
+    eligibleCount: Math.max(0, Number(state.eligibleCount || 0)),
+    selectedCount: Math.max(
+      0,
+      Number(state.watchlistCount || state.selectedCount || 0)
+    ),
+  };
+}
+
+export function summarizeQuietCandidateOutcomes(
+  outcomeState = {},
+  {
+    learning,
+    stockDiscoveryState,
+    cryptoDiscoveryState,
+    now = Date.now(),
+  } = {}
+) {
+  const safeState = outcomeState && typeof outcomeState === "object"
+    ? outcomeState
+    : {};
+  const observations = Array.isArray(safeState.observations)
+    ? safeState.observations
+    : [];
+  const outcomeLearning = learning || safeState.learning || {};
+  const summarizeAsset = (assetClass) => {
+    const assetObservations = observations.filter(
+      (observation) => observation?.assetClass === assetClass
+    );
+    const measuredObservationCount = assetObservations.filter(
+      (observation) => HORIZONS.some((days) =>
+        observation?.measurements?.[days]?.peakReturnPercent !== null &&
+        observation?.measurements?.[days]?.peakReturnPercent !== undefined &&
+        Number.isFinite(
+          Number(observation?.measurements?.[days]?.peakReturnPercent)
+        )
+      )
+    ).length;
+    const becameTradeCount = assetObservations.filter(
+      (observation) => observation?.becameTrade === true
+    ).length;
+    return {
+      assetClass,
+      observationCount: assetObservations.length,
+      measuredObservationCount,
+      becameTradeCount,
+      becameTradeRatePercent: assetObservations.length > 0
+        ? Number(((becameTradeCount / assetObservations.length) * 100).toFixed(1))
+        : null,
+      horizons: Object.fromEntries(
+        HORIZONS.map((days) => [
+          days,
+          summarizeOutcomeHorizon(assetObservations, days),
+        ])
+      ),
+    };
+  };
+
+  return {
+    version: 1,
+    generatedAt: new Date(now).toISOString(),
+    updatedAt: safeState.updatedAt || null,
+    breakoutDefinition: {
+      stockPeakReturnPercent: 8,
+      cryptoPeakReturnPercent: 10,
+    },
+    stock: summarizeAsset("stock"),
+    crypto: summarizeAsset("crypto"),
+    learning: {
+      stock: compactLearningStatus(outcomeLearning.stock, "stock"),
+      crypto: compactLearningStatus(outcomeLearning.crypto, "crypto"),
+    },
+    discovery: {
+      stock: compactDiscoveryStatus(stockDiscoveryState),
+      crypto: compactDiscoveryStatus(cryptoDiscoveryState),
+    },
+  };
 }
 
 export function calculateQuietCandidateLearning(
@@ -185,6 +335,17 @@ export function updateQuietCandidateOutcomes(
       }])
       .filter(([symbol, value]) => symbol && value.price > 0)
   );
+  const benchmarkSymbol = assetClass === "stock"
+    ? [...prices.keys()].find((symbol) => symbol === "SPY")
+    : [...prices.keys()].find((symbol) => ["BTC/USD", "BTCUSD", "BTC-USD"].includes(symbol));
+  const momentumCandidate = (Array.isArray(priceUniverse) ? priceUniverse : [])
+    .map((candidate) => ({
+      symbol: symbolOf(candidate),
+      price: priceOf(candidate),
+      momentum: Number(candidate.percentChange ?? candidate.changePercent ?? candidate.todaysChangePerc ?? -Infinity),
+    }))
+    .filter((candidate) => candidate.symbol && candidate.price > 0 && Number.isFinite(candidate.momentum))
+    .sort((a, b) => b.momentum - a.momentum)[0] || null;
   const observations = (Array.isArray(safePreviousState.observations)
     ? safePreviousState.observations
     : []).map((observation) => ({
@@ -204,9 +365,15 @@ export function updateQuietCandidateOutcomes(
     }
     const current = prices.get(observation.symbol);
     if (!current) continue;
+    // Crypto provider highs are commonly rolling 24-hour highs and may have
+    // occurred before this candidate was selected. Only observed scan prices
+    // are eligible for post-selection crypto peak tracking.
+    const observedPeakPrice = assetClass === "crypto"
+      ? current.price
+      : current.high;
     const peakPrice = Math.max(
       Number(observation.trackingPeakPrice || observation.baselinePrice),
-      current.high,
+      observedPeakPrice,
       current.price
     );
     observation.trackingPeakPrice = Number(peakPrice.toFixed(8));
@@ -233,6 +400,16 @@ export function updateQuietCandidateOutcomes(
         peakReturnPercent: Number(peakReturnPercent.toFixed(4)),
         breakoutHit: peakReturnPercent >= (assetClass === "crypto" ? 10 : 8),
       };
+      observation.benchmarkMeasurements ||= {};
+      observation.benchmarkMeasurements[days] = Object.fromEntries(
+        Object.entries(observation.benchmarks || {}).map(([name, benchmark]) => {
+          const currentBenchmark = prices.get(benchmark.symbol);
+          const baseline = Number(benchmark.baselinePrice || 0);
+          return [name, currentBenchmark && baseline > 0
+            ? Number((((currentBenchmark.price - baseline) / baseline) * 100).toFixed(4))
+            : null];
+        })
+      );
     }
   }
 
@@ -277,6 +454,15 @@ export function updateQuietCandidateOutcomes(
         )
         : {},
       measurements: {},
+      benchmarks: {
+        ...(benchmarkSymbol && prices.get(benchmarkSymbol)
+          ? { [assetClass === "stock" ? "SPY" : "Bitcoin"]: { symbol: benchmarkSymbol, baselinePrice: prices.get(benchmarkSymbol).price } }
+          : {}),
+        ...(momentumCandidate
+          ? { simpleMomentum: { symbol: momentumCandidate.symbol, baselinePrice: momentumCandidate.price } }
+          : {}),
+      },
+      benchmarkMeasurements: {},
     });
     existing.add(id);
   }

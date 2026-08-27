@@ -8,6 +8,16 @@ function orderValue(order, price) {
   return finiteNumber(order?.qty) * finiteNumber(price);
 }
 
+export function hasMeasuredLiveSpread(context = {}) {
+  return context.spreadAvailable === true || (
+    context.spreadAvailable !== false &&
+    context.spreadPercent !== null &&
+    context.spreadPercent !== undefined &&
+    context.spreadPercent !== "" &&
+    Number.isFinite(Number(context.spreadPercent))
+  );
+}
+
 export function evaluatePreTradeRisk({ order = {}, context = {}, options = {} } = {}) {
   const side = String(order.side || "").toLowerCase();
   const symbol = String(order.symbol || "").trim().toUpperCase();
@@ -25,13 +35,7 @@ export function evaluatePreTradeRisk({ order = {}, context = {}, options = {} } 
     const price = finiteNumber(context.price);
     const quoteAgeSeconds = finiteNumber(context.quoteAgeSeconds, Infinity);
     const spreadPercent = finiteNumber(context.spreadPercent);
-    const spreadAvailable = context.spreadAvailable === true || (
-      context.spreadAvailable !== false &&
-      context.spreadPercent !== null &&
-      context.spreadPercent !== undefined &&
-      context.spreadPercent !== "" &&
-      Number.isFinite(Number(context.spreadPercent))
-    );
+    const spreadAvailable = hasMeasuredLiveSpread(context);
     const value = orderValue(order, price);
     const equity = finiteNumber(context.account?.equity || context.account?.portfolio_value);
     const exposure = (context.positions || []).reduce(
@@ -51,6 +55,9 @@ export function evaluatePreTradeRisk({ order = {}, context = {}, options = {} } 
     if (price <= 0) reasons.push("Missing valid live price");
     if (!context.quoteIsLive) reasons.push("Quote is not from a live source");
     if (!spreadAvailable) reasons.push("Live bid/ask spread is unavailable");
+    if (quoteAgeSeconds < -5) {
+      reasons.push(`Live quote timestamp is in the future: ${quoteAgeSeconds}s old`);
+    }
     if (quoteAgeSeconds > finiteNumber(context.maxQuoteAgeSeconds, 5)) {
       reasons.push(`Live quote stale: ${quoteAgeSeconds}s old`);
     }

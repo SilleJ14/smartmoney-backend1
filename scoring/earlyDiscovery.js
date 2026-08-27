@@ -362,6 +362,7 @@ export function calculateCryptoEarlyDiscoveryScore({
   if (newsCatalyst?.riskDetected === true) score = Math.min(score, 35);
   return {
     stage: "CRYPTO_EARLY_DISCOVERY",
+    candidateSource: "EARLY_DISCOVERY",
     calculatedAt: new Date(now).toISOString(),
     symbol,
     score: Number(score.toFixed(2)),

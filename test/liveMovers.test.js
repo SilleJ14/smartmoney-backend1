@@ -36,3 +36,49 @@ test("buildLiveMovers deduplicates symbols and keeps the largest absolute move",
   assert.equal(movers.length, 1);
   assert.equal(movers[0].changePercent, -10);
 });
+
+test("live movers preserve provider quote time and never manufacture live freshness", () => {
+  const providerTime = "2026-08-27T14:30:00.000Z";
+  const movers = buildLiveMovers({
+    state: {
+      topStockSignals: [{
+        symbol: "AAPL",
+        price: 110,
+        previousClose: 100,
+        priceIsLive: false,
+      }],
+      liveQuoteCache: {
+        AAPL: {
+          price: 111,
+          bid: 110.9,
+          ask: 111.1,
+          spreadPercent: 0.18,
+          spreadAvailable: true,
+          liveQuoteUpdatedAt: providerTime,
+          liveQuoteSource: "alpaca_latest_stock_quote",
+          priceIsLive: true,
+        },
+      },
+    },
+    normalizeSymbol,
+    mergeLiveQuote: (signal) => signal,
+    isCrypto,
+    now: () => new Date("2026-08-27T15:00:00.000Z"),
+  });
+
+  assert.equal(movers[0].liveQuoteUpdatedAt, providerTime);
+  assert.equal(movers[0].spreadAvailable, true);
+  assert.equal(movers[0].priceIsLive, true);
+
+  const snapshot = buildLiveMovers({
+    state: { topStockSignals: [{ symbol: "MSFT", price: 200, previousClose: 190 }] },
+    normalizeSymbol,
+    mergeLiveQuote: (signal) => signal,
+    isCrypto,
+    now: () => new Date("2026-08-27T15:00:00.000Z"),
+  });
+  assert.equal(snapshot[0].liveQuoteUpdatedAt, null);
+  assert.equal(snapshot[0].liveQuoteSource, "scan_snapshot");
+  assert.equal(snapshot[0].priceIsLive, false);
+  assert.equal(snapshot[0].spreadAvailable, false);
+});

@@ -3,6 +3,7 @@ import assert from "node:assert/strict";
 import {
   evaluateLiveQuoteProviderReadiness,
   getLiveQuoteProvider,
+  isFreshLiveQuote,
   isLiveQuoteSource,
 } from "../live/liveQuoteCache.js";
 
@@ -57,4 +58,16 @@ test("accepts Alpaca latest quotes while rejecting unknown or unsupported crypto
   });
   assert.equal(unknown.provider, null);
   assert.equal(unknown.connected, false);
+});
+
+test("future provider timestamps cannot be treated as fresh live quotes", () => {
+  const futureQuote = {
+    liveQuoteUpdatedAt: new Date(Date.now() + 60_000).toISOString(),
+    liveQuoteSource: "alpaca_latest_stock_quote",
+  };
+
+  assert.equal(isFreshLiveQuote(futureQuote, {
+    maxAgeSeconds: 5,
+    isLiveQuoteSource,
+  }), false);
 });

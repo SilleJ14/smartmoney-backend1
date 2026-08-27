@@ -5,6 +5,7 @@ export function clearClosedPositionState(state, symbol, closedAt) {
 
 export function registerManualExecutionRoutes(app, dependencies) {
   const { requireAdmin, normalizeSymbol, getAsset, getStockQuote, manualStockBuy,
+    manualCryptoBuy,
     markManagedSymbol, getState, closePosition, recordOrder, recordFailedOrder,
     now = () => new Date(), logger = console } = dependencies;
   app.post("/manual-buy-stock", requireAdmin, async (req, res) => {
@@ -25,6 +26,33 @@ export function registerManualExecutionRoutes(app, dependencies) {
       return res.json({ ok: true, message: `${cleanSymbol} manual buy placed. Bot can manage exit.`,
         symbol: cleanSymbol, dollars: amount, aiManagedSymbols: getState().aiManagedSymbols, order });
     } catch (error) { res.status(500).json({ ok: false, error: error.message }); }
+  });
+  app.post("/manual-buy-crypto", requireAdmin, async (req, res) => {
+    const cleanSymbol = normalizeSymbol(req.body?.symbol);
+    const dollars = Number(req.body?.dollars);
+    try {
+      if (!cleanSymbol) return res.status(400).json({ ok: false, error: "Missing crypto symbol" });
+      if (!Number.isFinite(dollars) || dollars < 1) return res.status(400).json({ ok: false, error: "Invalid dollar amount" });
+      const state = getState();
+      const candidates = Array.isArray(state.lastCryptoSignals) ? state.lastCryptoSignals : [];
+      const candidate = candidates.find((item) => normalizeSymbol(item?.symbol) === cleanSymbol);
+      if (!candidate) return res.status(409).json({ ok: false, error: "Crypto candidate is no longer in the verified live set" });
+      if (candidate.qualifiedToBuy !== true || candidate.priceIsLive !== true || candidate.spreadAvailable !== true) {
+        return res.status(409).json({ ok: false, error: "Crypto candidate no longer passes entry and live-spread gates" });
+      }
+      const sizingLimit = Number(candidate.recommendedTradeAmount || candidate.suggestedTradeAmount || 0);
+      if (!Number.isFinite(sizingLimit) || sizingLimit < 1 || dollars > sizingLimit + 0.01) {
+        return res.status(409).json({ ok: false, error: "Requested crypto amount exceeds the current verified sizing limit" });
+      }
+      const order = await manualCryptoBuy({ symbol: cleanSymbol, dollars });
+      if (!order?.id) return res.status(502).json({ ok: false, error: "Crypto order was not created" });
+      markManagedSymbol(cleanSymbol);
+      recordOrder("MANUAL_CRYPTO_BUY", cleanSymbol, { orderId: order.id, dollars, source: "VERIFIED_CRYPTO_ROUTE" });
+      return res.json({ ok: true, symbol: cleanSymbol, dollars, order });
+    } catch (error) {
+      recordFailedOrder("MANUAL_CRYPTO_BUY_FAILED", cleanSymbol, error.message);
+      return res.status(409).json({ ok: false, error: error.message });
+    }
   });
   app.post("/close-position", requireAdmin, async (req, res) => {
     const { symbol } = req.body;

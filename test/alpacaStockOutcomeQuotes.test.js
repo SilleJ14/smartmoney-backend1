@@ -9,7 +9,12 @@ test("outcome quote follow-up batches symbols and returns only measured quotes",
     {
       dataRequest: async (path) => {
         paths.push(path);
-        return { quotes: { AAA: { bp: 10, ap: 10.1 }, BBB: {} } };
+        return {
+          quotes: {
+            AAA: { bp: 10, ap: 10.1, t: "2026-08-27T14:30:00.000Z" },
+            BBB: {},
+          },
+        };
       },
     }
   );
@@ -19,4 +24,14 @@ test("outcome quote follow-up batches symbols and returns only measured quotes",
   assert.equal(results.length, 1);
   assert.equal(results[0].symbol, "AAA");
   assert.equal(results[0].outcomeFollowupOnly, true);
+  assert.equal(results[0].liveQuoteUpdatedAt, "2026-08-27T14:30:00.000Z");
+  assert.equal(results[0].quoteTimestampMs, Date.parse("2026-08-27T14:30:00.000Z"));
+});
+
+test("outcome quote follow-up rejects quotes without provider timestamps", async () => {
+  const results = await fetchAlpacaStockOutcomeQuotes(["AAA"], {
+    dataRequest: async () => ({ quotes: { AAA: { bp: 10, ap: 10.1 } } }),
+  });
+
+  assert.deepEqual(results, []);
 });

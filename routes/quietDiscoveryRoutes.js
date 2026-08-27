@@ -1,4 +1,11 @@
-export function registerQuietDiscoveryRoutes(app, { requireAdmin, getState, getStoreStats, runDiscovery }) {
+export function registerQuietDiscoveryRoutes(app, {
+  requireAdmin,
+  getState,
+  getStoreStats,
+  runDiscovery,
+  summarizeQuietCandidateOutcomes = () => null,
+  buildProofReport = () => null,
+}) {
   app.get("/discovery/quiet", requireAdmin, (_req, res) => {
     const state = getState();
     res.json({
@@ -25,6 +32,26 @@ export function registerQuietDiscoveryRoutes(app, { requireAdmin, getState, getS
       returnedCount: observations.length,
       observations,
     });
+  });
+  app.get("/discovery/quiet/proof", requireAdmin, (_req, res) => {
+    const state = getState();
+    res.json({
+      ok: true,
+      proof: summarizeQuietCandidateOutcomes(
+        state.quietCandidateOutcomeState,
+        {
+          learning: state.quietCandidateOutcomeLearning,
+          stockDiscoveryState: state.boundedQuietDiscoveryState,
+          cryptoDiscoveryState: state.cryptoQuietDiscoveryState,
+        }
+      ),
+    });
+  });
+  app.get("/discovery/quiet/proof/advanced", requireAdmin, (req, res) => {
+    const state = getState();
+    const feePercent = Math.max(0, Math.min(5, Number(req.query?.feePercent ?? 0.15)));
+    const slippagePercent = Math.max(0, Math.min(5, Number(req.query?.slippagePercent ?? 0.1)));
+    res.json({ ok: true, proof: buildProofReport(state.quietCandidateOutcomeState, { feePercent, slippagePercent }) });
   });
   app.post("/discovery/quiet/run", requireAdmin, async (_req, res) => {
     try {

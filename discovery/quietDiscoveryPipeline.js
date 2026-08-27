@@ -16,16 +16,76 @@ export const DEFAULT_DISCOVERY_BUDGETS = Object.freeze({
   maxWorkingMemoryMb: 96,
 });
 
+function normalizeQuietHistory(history = []) {
+  const bySession = new Map();
+  (Array.isArray(history) ? history : []).forEach((item, index) => {
+    const symbol = String(item?.s || item?.T || item?.symbol || "").toUpperCase();
+    const dayKey = String(item?.d || item?.date || "").slice(0, 10);
+    const open = Number(item?.o ?? item?.open);
+    const high = Number(item?.h ?? item?.high);
+    const low = Number(item?.l ?? item?.low);
+    const close = Number(item?.c ?? item?.close);
+    const volume = Number(item?.v ?? item?.volume ?? 0);
+    const valid =
+      symbol &&
+      open > 0 &&
+      high > 0 &&
+      low > 0 &&
+      close > 0 &&
+      volume >= 0 &&
+      high >= Math.max(open, low, close) &&
+      low <= Math.min(open, high, close);
+    if (!valid) return;
+    const key = dayKey ? `${symbol}:${dayKey}` : `${symbol}:index:${index}`;
+    bySession.set(key, {
+      s: symbol,
+      d: dayKey || null,
+      o: open,
+      h: high,
+      l: low,
+      c: close,
+      v: volume,
+      _order: index,
+    });
+  });
+  return [...bySession.values()]
+    .sort((a, b) => {
+      if (a.d && b.d && a.d !== b.d) return a.d.localeCompare(b.d);
+      return a._order - b._order;
+    })
+    .map(({ _order, ...row }) => row);
+}
+
 export function compactGroupedRows(results = [], dateKey, maxUniverse = 5000) {
-  return results.slice(0, maxUniverse).map((item) => ({
-    s: String(item.T || item.symbol || "").toUpperCase(), d: dateKey,
-    o: Number(item.o || item.open || 0), h: Number(item.h || item.high || 0),
-    l: Number(item.l || item.low || 0), c: Number(item.c || item.close || 0),
-    v: Number(item.v || item.volume || 0),
-  })).filter((row) => row.s && row.c > 0 && row.h >= row.l && row.v >= 0);
+  const bySymbol = new Map();
+  for (const item of (Array.isArray(results) ? results : []).slice(0, maxUniverse)) {
+    const symbol = String(item?.T || item?.symbol || "").toUpperCase();
+    const row = {
+      s: symbol,
+      d: dateKey,
+      o: Number(item?.o ?? item?.open),
+      h: Number(item?.h ?? item?.high),
+      l: Number(item?.l ?? item?.low),
+      c: Number(item?.c ?? item?.close),
+      v: Number(item?.v ?? item?.volume ?? 0),
+    };
+    if (
+      !row.s ||
+      !(row.o > 0) ||
+      !(row.h > 0) ||
+      !(row.l > 0) ||
+      !(row.c > 0) ||
+      row.v < 0 ||
+      row.h < Math.max(row.o, row.l, row.c) ||
+      row.l > Math.min(row.o, row.h, row.c)
+    ) continue;
+    bySymbol.set(row.s, row);
+  }
+  return [...bySymbol.values()];
 }
 
 export function calculateQuietPreMoveFeatures(history = [], { learning = null } = {}) {
+  history = normalizeQuietHistory(history);
   if (history.length < 10) return null;
   const recent = history.slice(-5);
   const baseline = history.slice(-20, -5);
@@ -104,8 +164,16 @@ export function calculateQuietPreMoveFeatures(history = [], { learning = null } 
   });
   let preMoveScore = clamp(rawPreMoveScore - extension.extensionPenalty);
   if (extension.alreadyExtended) preMoveScore = Math.min(preMoveScore, 55);
+  const fullExtensionEvidence = history.length >= 21 && extension.coverage >= 1;
+  if (!fullExtensionEvidence) preMoveScore = Math.min(preMoveScore, 55);
+  const extensionGates = [
+    ...(history.length >= 21 ? [] : ["INSUFFICIENT_COMPLETED_DAILY_HISTORY"]),
+    ...(extension.coverage >= 1 ? [] : ["INCOMPLETE_MULTI_HORIZON_EXTENSION_EVIDENCE"]),
+    ...(extension.alreadyExtended ? ["ALREADY_EXTENDED_MULTI_HORIZON"] : []),
+  ];
   return {
     symbol: latest.s,
+    candidateSource: "EARLY_DISCOVERY",
     price: latest.c,
     current: latest.c,
     high: latest.h,
@@ -114,6 +182,8 @@ export function calculateQuietPreMoveFeatures(history = [], { learning = null } 
     discoveryScore: Number(preMoveScore.toFixed(2)),
     discoveryTier: extension.alreadyExtended
       ? "LATE_MOVE_NOT_DISCOVERY"
+      : !fullExtensionEvidence
+        ? "INSUFFICIENT_EXTENSION_EVIDENCE"
       : preMoveScore >= 82
         ? "ELITE_DISCOVERY"
         : preMoveScore >= 70
@@ -123,13 +193,18 @@ export function calculateQuietPreMoveFeatures(history = [], { learning = null } 
             : "LOW_DISCOVERY",
     discoveryScorecard: {
       stage: "BOUNDED_STOCK_QUIET_DISCOVERY",
+      candidateSource: "EARLY_DISCOVERY",
       score: Number(preMoveScore.toFixed(2)),
       rawScore: Number(rawPreMoveScore.toFixed(2)),
       coverage: Number((baseComponents.filter((component) => component.available).reduce((sum, component) => sum + component.weight, 0)).toFixed(2)),
       components,
       missingComponents: baseComponents.filter((component) => !component.available).map((component) => component.name),
-      gates: extension.alreadyExtended ? ["ALREADY_EXTENDED_MULTI_HORIZON"] : [],
+      gates: extensionGates,
       extension,
+      dataQuality: {
+        completedValidDailyBars: history.length,
+        fullExtensionCoverage: fullExtensionEvidence,
+      },
       learningApplied: activeLearning,
       learningSampleCount: Number(learning?.sampleCount || 0),
     },
@@ -163,6 +238,7 @@ export async function runBoundedQuietDiscovery({ groupedResults = [], dateKey, f
   const histories = [...read.histories.values()];
   for (let index = 0; index < histories.length; index += config.batchSize) {
     for (const history of histories.slice(index, index + config.batchSize)) {
+      if (history.at(-1)?.d !== dateKey) continue;
       const features = calculateQuietPreMoveFeatures(history, { learning });
       if (!features) continue;
       if (Math.abs(features.dayChangePercent) > config.maxCurrentMovePercent) continue;

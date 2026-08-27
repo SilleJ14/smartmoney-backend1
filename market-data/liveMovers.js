@@ -161,6 +161,40 @@ export function buildLiveMovers({
         Number(cryptoMemory.cryptoInstitutionalScore || 0)
       )
       : Number(merged.quickInstitutionalScore || merged.institutionalScore || merged.score || 0);
+    const bid = Number(liveQuote.bid || merged.bid || 0);
+    const ask = Number(liveQuote.ask || merged.ask || 0);
+    const spreadAvailable = liveQuote.spreadAvailable === true || (
+      liveQuote.spreadAvailable !== false &&
+      merged.spreadAvailable !== false &&
+      bid > 0 &&
+      ask >= bid
+    );
+    const rawSpreadPercent = liveQuote.spreadPercent ?? merged.spreadPercent;
+    const spreadPercent = spreadAvailable && Number.isFinite(Number(rawSpreadPercent))
+      ? Number(rawSpreadPercent)
+      : spreadAvailable && bid > 0 && ask >= bid
+        ? ((ask - bid) / ((ask + bid) / 2)) * 100
+        : null;
+    const liveQuoteUpdatedAt =
+      liveQuote.liveQuoteUpdatedAt ||
+      liveQuote.updatedAt ||
+      liveQuote.quoteFetchedAt ||
+      merged.liveQuoteUpdatedAt ||
+      merged.updatedAt ||
+      merged.quoteFetchedAt ||
+      null;
+    const liveQuoteSource =
+      liveQuote.liveQuoteSource ||
+      liveQuote.source ||
+      liveQuote.dataSource ||
+      merged.liveQuoteSource ||
+      merged.source ||
+      merged.dataSource ||
+      "scan_snapshot";
+    const providerMarkedLive =
+      liveQuote.priceIsLive === true ||
+      merged.priceIsLive === true;
+    const priceIsLive = providerMarkedLive && Boolean(liveQuoteUpdatedAt);
     const next = {
       symbol,
       assetClass: merged.assetClass || merged.asset_class || (cryptoAsset ? "crypto" : "stock"),
@@ -174,19 +208,13 @@ export function buildLiveMovers({
       changePercent,
       dayChangePercent: changePercent,
       percentChange: changePercent,
-      bid: Number(liveQuote.bid || merged.bid || 0),
-      ask: Number(liveQuote.ask || merged.ask || 0),
-      spreadPercent: Number(liveQuote.spreadPercent || merged.spreadPercent || 0),
-      liveQuoteUpdatedAt: now().toISOString(),
-      liveQuoteSource:
-        liveQuote.liveQuoteSource ||
-        liveQuote.source ||
-        liveQuote.dataSource ||
-        merged.liveQuoteSource ||
-        merged.source ||
-        merged.dataSource ||
-        "live_movers",
-      priceIsLive: true,
+      bid,
+      ask,
+      spreadPercent,
+      spreadAvailable,
+      liveQuoteUpdatedAt,
+      liveQuoteSource,
+      priceIsLive,
       score: displayScore,
       institutionalScore: displayScore,
       aiConfidence: displayScore,

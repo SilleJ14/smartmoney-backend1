@@ -2,6 +2,7 @@ import test from "node:test";
 import assert from "node:assert/strict";
 import {
   calculateQuietCandidateLearning,
+  summarizeQuietCandidateOutcomes,
   updateQuietCandidateOutcomes,
 } from "../scoring/quietCandidateOutcomeTracker.js";
 
@@ -110,6 +111,32 @@ test("outcome tracking excludes the discovery bar high from future peak returns"
   );
 
   assert.equal(state.observations[0].measurements[1].peakReturnPercent, 0);
+  assert.equal(state.observations[0].measurements[1].breakoutHit, false);
+});
+
+test("rolling 24-hour crypto highs cannot leak into post-selection peak outcomes", () => {
+  let state = updateQuietCandidateOutcomes(
+    {},
+    [{ symbol: "NO24H", current: 100, high: 100, cryptoDiscoveryScore: 80 }],
+    [],
+    {
+      assetClass: "crypto",
+      dayKey: "2026-08-20",
+      now: Date.parse("2026-08-20T00:00:00Z"),
+    }
+  );
+  state = updateQuietCandidateOutcomes(
+    state,
+    [],
+    [{ symbol: "NO24H", current: 101, high: 130 }],
+    {
+      assetClass: "crypto",
+      dayKey: "2026-08-21",
+      now: Date.parse("2026-08-21T00:00:00Z"),
+    }
+  );
+
+  assert.equal(state.observations[0].measurements[1].peakReturnPercent, 1);
   assert.equal(state.observations[0].measurements[1].breakoutHit, false);
 });
 
@@ -229,4 +256,62 @@ test("crypto one-day outcomes require a full 24 hours rather than a date rollove
     now: Date.parse("2026-08-21T23:59:00Z"),
   });
   assert.ok(state.observations[0].measurements[1]);
+});
+
+test("quiet discovery proof summarizes every measured candidate without exposing symbols", () => {
+  const outcomeState = {
+    updatedAt: "2026-08-26T20:15:00.000Z",
+    observations: [
+      {
+        assetClass: "stock",
+        symbol: "AAA",
+        becameTrade: true,
+        measurements: {
+          1: { closeReturnPercent: 4, peakReturnPercent: 9, breakoutHit: true },
+          3: { closeReturnPercent: 6, peakReturnPercent: 12, breakoutHit: true },
+        },
+      },
+      {
+        assetClass: "stock",
+        symbol: "BBB",
+        becameTrade: false,
+        measurements: {
+          1: { closeReturnPercent: -2, peakReturnPercent: 3, breakoutHit: false },
+        },
+      },
+      {
+        assetClass: "crypto",
+        symbol: "CCC/USD",
+        becameTrade: false,
+        measurements: {
+          1: { closeReturnPercent: 7, peakReturnPercent: 11, breakoutHit: true },
+        },
+      },
+    ],
+    learning: {
+      stock: { assetClass: "stock", sampleCount: 2, minimumSamples: 30 },
+      crypto: { assetClass: "crypto", sampleCount: 1, minimumSamples: 30 },
+    },
+  };
+  const proof = summarizeQuietCandidateOutcomes(outcomeState, {
+    stockDiscoveryState: {
+      updatedAt: "2026-08-26T20:10:00.000Z",
+      provider: "alpaca_multi_symbol_daily_fallback",
+      universeRows: 5000,
+      watchlistCount: 15,
+    },
+    now: Date.parse("2026-08-27T12:00:00.000Z"),
+  });
+
+  assert.equal(proof.stock.observationCount, 2);
+  assert.equal(proof.stock.becameTradeCount, 1);
+  assert.equal(proof.stock.horizons[1].measuredCount, 2);
+  assert.equal(proof.stock.horizons[1].breakoutHitRatePercent, 50);
+  assert.equal(proof.stock.horizons[1].averageCloseReturnPercent, 1);
+  assert.equal(proof.stock.horizons[1].averagePeakReturnPercent, 6);
+  assert.equal(proof.stock.horizons[5].breakoutHitRatePercent, null);
+  assert.equal(proof.crypto.horizons[1].breakoutHitRatePercent, 100);
+  assert.equal(proof.learning.stock.progressPercent, 6.7);
+  assert.equal(proof.discovery.stock.selectedCount, 15);
+  assert.equal(JSON.stringify(proof).includes("AAA"), false);
 });

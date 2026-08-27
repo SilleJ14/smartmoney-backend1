@@ -642,8 +642,8 @@ export function createCryptoMarketScanner(dependencies) {
     const compactQuietCandidates = quietCandidates.map((signal) => ({
       symbol: signal.symbol,
       assetClass: "crypto",
+      candidateSource: "EARLY_DISCOVERY",
       current: Number(signal.current || 0),
-      high: Number(signal.high || signal.current || 0),
       cryptoDiscoveryScore: Number(signal.cryptoDiscoveryScore || 0),
       cryptoDiscoveryTier: signal.cryptoDiscoveryTier,
       cryptoDiscoveryScorecard: {

@@ -57,4 +57,26 @@ export function registerSignalObservabilityRoutes(app, dependencies) {
       res.json({ ok: true, generatedAt: now().toISOString(), count: pendingExits.length, pendingExits });
     } catch (error) { fail(res, "Failed to load pending exits", error, { fallbackPendingExits: getState().pendingExits || [] }); }
   });
+  app.get("/decision-audit", requireAdmin, (req, res) => {
+    const state = getState();
+    const limit = Math.min(50, Math.max(1, Number(req.query?.limit || 20)));
+    const signals = [...(state.lastStockSignals || []), ...(state.lastCryptoSignals || [])]
+      .slice(0, limit)
+      .map((signal) => ({
+        symbol: signal.symbol,
+        assetClass: signal.isCrypto ? "crypto" : "stock",
+        candidateSource: signal.candidateSource || signal.source || null,
+        discoveredBecause: signal.discoveryScorecard || signal.cryptoDiscoveryScorecard || null,
+        entryDecision: signal.entryScorecard || signal.entryQuality || null,
+        continuationDecision: signal.continuationScorecard || signal.multiDayContinuation || null,
+        finalDecision: signal.decisionScoreTelemetry || signal.finalMasterDecision || null,
+        sizing: signal.positionSizing || { recommendedTradeAmount: signal.recommendedTradeAmount || 0 },
+        executionGate: signal.finalStockExecutionGate || signal.sharedCryptoExecutionGate || null,
+        buyBlockReasons: signal.buyBlockReasons || signal.blockReasons || [],
+      }));
+    res.json({ ok: true, generatedAt: now().toISOString(), signals,
+      recentOrderDecisions: (state.recentOrders || []).slice(0, limit),
+      rejectedOrderDecisions: (state.failedOrders || []).slice(0, limit),
+      pendingExitDecisions: (state.pendingExits || []).slice(0, limit) });
+  });
 }

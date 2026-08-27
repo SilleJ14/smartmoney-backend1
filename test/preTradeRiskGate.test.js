@@ -1,6 +1,9 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import { evaluatePreTradeRisk } from "../risk/preTradeRiskGate.js";
+import {
+  evaluatePreTradeRisk,
+  hasMeasuredLiveSpread,
+} from "../risk/preTradeRiskGate.js";
 
 function safeContext(overrides = {}) {
   return {
@@ -75,6 +78,16 @@ test("requires the order quote to be no older than five seconds", () => {
   assert.ok(sixSeconds.reasons.includes("Live quote stale: 6s old"));
 });
 
+test("rejects quotes whose timestamps are materially in the future", () => {
+  const result = evaluatePreTradeRisk({
+    order: { symbol: "AAPL", side: "buy", notional: 25 },
+    context: safeContext({ quoteAgeSeconds: -60 }),
+  });
+
+  assert.equal(result.approved, false);
+  assert.ok(result.reasons.includes("Live quote timestamp is in the future: -60s old"));
+});
+
 test("rejects exposure and open-position limit violations", () => {
   const positions = [
     { symbol: "MSFT", market_value: 790 },
@@ -138,4 +151,14 @@ test("automated buys fail closed when a live bid/ask spread is unavailable", () 
 
   assert.equal(result.approved, false);
   assert.ok(result.reasons.includes("Live bid/ask spread is unavailable"));
+});
+
+test("live starter spread evidence cannot treat a missing or explicitly unavailable spread as measured", () => {
+  assert.equal(hasMeasuredLiveSpread({}), false);
+  assert.equal(hasMeasuredLiveSpread({ spreadPercent: 0.12 }), true);
+  assert.equal(
+    hasMeasuredLiveSpread({ spreadPercent: 0.12, spreadAvailable: false }),
+    false
+  );
+  assert.equal(hasMeasuredLiveSpread({ spreadAvailable: true }), true);
 });

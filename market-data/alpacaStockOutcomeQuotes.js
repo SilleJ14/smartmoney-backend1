@@ -21,7 +21,13 @@ export async function fetchAlpacaStockOutcomeQuotes(
     const quote = quotes[symbol] || {};
     const bid = Number(quote.bp || quote.bid || 0);
     const ask = Number(quote.ap || quote.ask || 0);
-    if (!(bid > 0) || !(ask >= bid)) return [];
+    const liveQuoteUpdatedAt = quote.t || quote.timestamp || quote.updatedAt || null;
+    const quoteTimestampMs = Date.parse(String(liveQuoteUpdatedAt || ""));
+    if (
+      !(bid > 0) ||
+      !(ask >= bid) ||
+      !Number.isFinite(quoteTimestampMs)
+    ) return [];
     const price = (bid + ask) / 2;
     return [{
       symbol,
@@ -30,9 +36,10 @@ export async function fetchAlpacaStockOutcomeQuotes(
       bid,
       ask,
       spreadPercent: price > 0 ? ((ask - bid) / price) * 100 : null,
+      liveQuoteUpdatedAt,
+      quoteTimestampMs,
       liveQuoteSource: "alpaca_outcome_followup",
       outcomeFollowupOnly: true,
     }];
   });
 }
-

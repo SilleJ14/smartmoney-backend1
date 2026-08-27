@@ -47,6 +47,8 @@ export function registerStatusRoutes(app, dependencies) {
     buildInstitutionalDashboard,
     buildHighConvictionSummary,
     buildTopBrains,
+    summarizeQuietCandidateOutcomes = () => null,
+    buildProofReport = () => null,
   } = dependencies;
 
   app.get("/status", requireAdmin, async (req, res) => {
@@ -55,6 +57,14 @@ export function registerStatusRoutes(app, dependencies) {
       const latestStatus = getLatestStatus();
       const state = getState();
       const runtime = getRuntime();
+      const quietDiscoveryProof = summarizeQuietCandidateOutcomes(
+        state.quietCandidateOutcomeState,
+        {
+          learning: state.quietCandidateOutcomeLearning,
+          stockDiscoveryState: state.boundedQuietDiscoveryState,
+          cryptoDiscoveryState: state.cryptoQuietDiscoveryState,
+        }
+      );
       res.json({
         ok: true,
         lightweight: true,
@@ -65,6 +75,7 @@ export function registerStatusRoutes(app, dependencies) {
         tradingModeLocked: runtime.tradingModeLocked,
         autoTradingEnabled: runtime.autoTradingEnabled,
         emergencyStopActive: runtime.emergencyStopActive,
+        config: runtime.config || {},
         marketOpen: state.marketOpen,
         marketRegime: state.marketRegime,
         marketStressLevel: state.marketStressLevel,
@@ -88,9 +99,28 @@ export function registerStatusRoutes(app, dependencies) {
         fastRunnerCandidates: (state.fastRunnerCandidates || []).slice(0, 25).map(mergeLiveQuote),
         quickInstitutionalCandidates: (state.quickInstitutionalCandidates || []).slice(0, 25).map(mergeLiveQuote),
         liveStarterBuyGateState: state.liveStarterBuyGateState || null,
+        institutionalDashboard: latestStatus.institutionalDashboard || {},
+        engineState: {
+          marketOpen: state.marketOpen === true,
+          marketRegime: state.marketRegime || null,
+          marketStressLevel: state.marketStressLevel ?? null,
+          marketMomentumScore: state.marketMomentumScore ?? null,
+          marketVolatility: state.marketVolatility ?? null,
+          marketBreadth: state.marketBreadth ?? null,
+          lastScanAt: state.lastScanAt || null,
+          lastHeartbeatAt: state.lastHeartbeatAt || null,
+          lastSuccessfulCycleAt: state.lastSuccessfulCycleAt || null,
+          dailyLossLocked: state.dailyLossLocked === true,
+          profitLocked: state.profitLocked === true,
+          liveStarterBuyGateState: state.liveStarterBuyGateState || null,
+          fastRunnerEngineState: state.fastRunnerEngineState || null,
+          quickInstitutionalGateState: state.quickInstitutionalGateState || null,
+        },
         stockScoreOutcomeSummary: state.stockScoreOutcomeSummary || {},
         stockScoreOutcomeStatus: compactOutcomeStatus(state),
         stockScoreOutcomeLearning: state.stockScoreOutcomeLearning || null,
+        quietDiscoveryProof,
+        quietDiscoveryAdvancedProof: buildProofReport(state.quietCandidateOutcomeState),
         account: latestStatus?.account || state.cachedAccount || null,
         risk: latestStatus?.risk || null,
         statusAccountRefresh: accountRefresh,

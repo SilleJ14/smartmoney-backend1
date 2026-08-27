@@ -82,10 +82,10 @@ export function isFreshLiveQuote(quote = {}, {
 
   if (!updatedAt) return false;
 
-  const ageSeconds = Math.max(
-    0,
-    Math.round((Date.now() - new Date(updatedAt).getTime()) / 1000)
-  );
+  const quoteTimestamp = new Date(updatedAt).getTime();
+  const rawAgeSeconds = (Date.now() - quoteTimestamp) / 1000;
+  if (!Number.isFinite(rawAgeSeconds) || rawAgeSeconds < -5) return false;
+  const ageSeconds = Math.max(0, Math.round(rawAgeSeconds));
 
   const source =
     quote.liveQuoteSource ||

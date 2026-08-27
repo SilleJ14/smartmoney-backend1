@@ -213,6 +213,7 @@ export function updateStockScoreOutcomes(
     now = Date.now(),
     maxObservations = DEFAULT_MAX_OBSERVATIONS,
     maxNewPerCycle = DEFAULT_MAX_NEW_PER_CYCLE,
+    maxFollowupQuoteAgeMs = 30 * 60 * 1000,
   } = {}
 ) {
   const safeMax = Math.max(1, Number(maxObservations || DEFAULT_MAX_OBSERVATIONS));
@@ -227,6 +228,15 @@ export function updateStockScoreOutcomes(
             signal?.source ||
             (signal?.outcomeFollowupOnly ? "outcome_followup" : "current_scan")
           ),
+          outcomeFollowupOnly: signal?.outcomeFollowupOnly === true,
+          quoteTimestampMs: Number.isFinite(Number(signal?.quoteTimestampMs))
+            ? Number(signal.quoteTimestampMs)
+            : Date.parse(String(
+              signal?.liveQuoteUpdatedAt ||
+              signal?.quoteFetchedAt ||
+              signal?.updatedAt ||
+              ""
+            )),
         },
       ])
       .filter(([symbol, value]) => symbol && value.price > 0)
@@ -245,17 +255,29 @@ export function updateStockScoreOutcomes(
     const currentQuote = pricesBySymbol.get(normalizeSymbol(observation.symbol));
     if (!currentQuote?.price) continue;
     const currentPrice = currentQuote.price;
+    const providerTimestampMs = Number(currentQuote.quoteTimestampMs);
+    const providerTimestampAvailable = Number.isFinite(providerTimestampMs);
+    if (
+      currentQuote.outcomeFollowupOnly &&
+      (
+        !providerTimestampAvailable ||
+        providerTimestampMs > now + 5_000 ||
+        now - providerTimestampMs > Math.max(1, Number(maxFollowupQuoteAgeMs))
+      )
+    ) continue;
+    const measuredAt = providerTimestampAvailable ? providerTimestampMs : now;
     for (const [horizon] of HORIZONS) {
       const targetAt = Number(observation.targets?.[horizon] || 0);
       if (
         targetAt > 0 &&
         now >= targetAt &&
+        measuredAt >= targetAt &&
         !observation.measurements[horizon]
       ) {
         observation.measurements[horizon] = {
           targetAt,
-          measuredAt: now,
-          delayMinutes: round((now - targetAt) / (60 * 1000), 2),
+          measuredAt,
+          delayMinutes: round((measuredAt - targetAt) / (60 * 1000), 2),
           price: round(currentPrice, 6),
           quoteSource: currentQuote.source,
           returnPercent: round(

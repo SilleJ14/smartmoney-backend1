@@ -76,6 +76,7 @@ test("vanished candidates receive bounded independent follow-up measurements", (
     current: 95,
     outcomeFollowupOnly: true,
     liveQuoteSource: "alpaca_outcome_followup",
+    liveQuoteUpdatedAt: new Date(dueAt).toISOString(),
   }, {
     symbol: "ORPHAN",
     current: 20,
@@ -88,6 +89,40 @@ test("vanished candidates receive bounded independent follow-up measurements", (
     measured.observations[0].measurements.oneHour.quoteSource,
     "alpaca_outcome_followup"
   );
+});
+
+test("stale or future Alpaca follow-up quotes cannot become outcome evidence", () => {
+  const started = updateStockScoreOutcomes({}, [stock("TIMED", 100, 80)], {
+    now: mondayMorning,
+  });
+  const dueAt = mondayMorning + 2 * 60 * 60 * 1000;
+  const stale = updateStockScoreOutcomes(started, [{
+    symbol: "TIMED",
+    current: 110,
+    outcomeFollowupOnly: true,
+    liveQuoteSource: "alpaca_outcome_followup",
+    liveQuoteUpdatedAt: new Date(dueAt - 31 * 60 * 1000).toISOString(),
+  }], { now: dueAt });
+  assert.equal(stale.observations[0].measurements.oneHour, undefined);
+
+  const future = updateStockScoreOutcomes(started, [{
+    symbol: "TIMED",
+    current: 110,
+    outcomeFollowupOnly: true,
+    liveQuoteSource: "alpaca_outcome_followup",
+    liveQuoteUpdatedAt: new Date(dueAt + 60 * 1000).toISOString(),
+  }], { now: dueAt });
+  assert.equal(future.observations[0].measurements.oneHour, undefined);
+
+  const fresh = updateStockScoreOutcomes(started, [{
+    symbol: "TIMED",
+    current: 105,
+    outcomeFollowupOnly: true,
+    liveQuoteSource: "alpaca_outcome_followup",
+    liveQuoteUpdatedAt: new Date(dueAt).toISOString(),
+  }], { now: dueAt });
+  assert.equal(fresh.observations[0].measurements.oneHour.returnPercent, 5);
+  assert.equal(fresh.observations[0].measurements.oneHour.measuredAt, dueAt);
 });
 
 function learningState(sampleCount, measuredCount = sampleCount) {

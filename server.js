@@ -75,6 +75,7 @@ import { createDuplicateOrderGuard } from "./execution/duplicateOrderGuard.js";
 import {
   assertPreTradeRisk,
   evaluatePreTradeRisk,
+  hasMeasuredLiveSpread,
 } from "./risk/preTradeRiskGate.js";
 import {
   evaluateLiveTradeLimits,
@@ -128,7 +129,11 @@ import {
 } from "./scoring/fundamentalValidation.js";
 import { calculateMultiHorizonExtension } from "./scoring/earlyDiscovery.js";
 import { calculateNewsCatalyst } from "./scoring/newsCatalyst.js";
-import { updateQuietCandidateOutcomes } from "./scoring/quietCandidateOutcomeTracker.js";
+import {
+  summarizeQuietCandidateOutcomes,
+  updateQuietCandidateOutcomes,
+} from "./scoring/quietCandidateOutcomeTracker.js";
+import { buildProofReport } from "./analytics/proofReport.js";
 import {
   buildStrategyExecutionPlan,
   getEnabledStrategyModes,
@@ -252,7 +257,11 @@ const corsOptions = {
 };
 app.use(cors(corsOptions));
 app.use(express.json({ limit: "100kb" }));
-const adminAuth = createAdminAuth({ adminToken: process.env.ADMIN_API_TOKEN || "" });
+const adminAuth = createAdminAuth({
+  adminToken: process.env.ADMIN_API_TOKEN || "",
+  userFile: path.resolve(DATA_DIR, "users.json"),
+  sessionTtlMs: Math.max(15 * 60 * 1000, Number(process.env.AUTH_SESSION_TTL_HOURS || 12) * 60 * 60 * 1000),
+});
 const { requireAdmin, getClientIp } = adminAuth;
 adminAuth.registerRoutes(app);
 let alpacaCredentials = {
@@ -2957,14 +2966,25 @@ function buildLiveQuotesPayload(symbols = []) {
     })
     .map(([symbol, quote]) => {
       const memory = engineState.liveMarketMemory?.[symbol] || {};
+      const bid = Number(quote?.bid || memory.bid || 0);
+      const ask = Number(quote?.ask || memory.ask || 0);
+      const spreadAvailable = quote?.spreadAvailable === true || (
+        quote?.spreadAvailable !== false &&
+        memory?.spreadAvailable !== false &&
+        bid > 0 &&
+        ask >= bid
+      );
       return {
         symbol,
         price: Number(quote?.price || quote?.current || 0),
         current: Number(quote?.current || quote?.price || 0),
-        bid: Number(quote?.bid || memory.bid || 0),
-        ask: Number(quote?.ask || memory.ask || 0),
+        bid,
+        ask,
         spread: Number(quote?.spread || memory.spread || 0),
-        spreadPercent: Number(quote?.spreadPercent || memory.spreadPercent || 0),
+        spreadPercent: spreadAvailable
+          ? Number(quote?.spreadPercent ?? memory.spreadPercent ?? 0)
+          : null,
+        spreadAvailable,
         volume: Number(quote?.volume || memory.lastVolume || 0),
         change: Number(quote?.change || 0),
         percentChange: Number(
@@ -18041,6 +18061,20 @@ async function runBoundedQuietDiscoveryScan({ force = false } = {}) {
   if (!force && (!afterClose || ["Sat", "Sun"].includes(clock.weekday))) {
     return { ok: false, skipped: true, dateKey, reason: "Quiet discovery runs once after 4:10 PM ET on trading weekdays." };
   }
+  const memoryGuard = buildMemoryGuardSnapshot();
+  engineState.memoryGuardState = {
+    ...memoryGuard,
+    checkedAt: new Date().toISOString(),
+  };
+  if (memoryGuard.shouldPauseHeavyWork) {
+    return {
+      ok: false,
+      skipped: true,
+      dateKey,
+      reason: "Quiet discovery paused before download because memory pressure is elevated.",
+      memoryGuard,
+    };
+  }
   let provider = "polygon_grouped_daily";
   let groupedResults = [];
   let downloadedBytes = 0;
@@ -28498,6 +28532,7 @@ function buildFastRunnerCandidateFromMemory(symbol, memory = {}) {
     symbol: cleanSymbol,
     assetClass: cryptoAsset ? "crypto" : "stock",
     source: "FAST_RUNNER_ENGINE",
+    candidateSource: "RUNNER",
     price,
     current: price,
     fastRunnerScore: fastScore,
@@ -29048,6 +29083,7 @@ function validateLiveBuyQuality(candidate = {}) {
   const chaseRisk = Number(candidate.chaseRisk || candidate.chaseProtection?.chaseRisk || 0);
   const fakeBreakoutRisk = Number(candidate.fakeBreakoutRisk || candidate.fastRunnerBreakdown?.fakeBreakoutRisk || 0);
   const spreadPercent = Number(candidate.spreadPercent || 0);
+  const spreadAvailable = hasMeasuredLiveSpread(candidate);
   const volumeSpikeRatio = Number(candidate.volumeSpikeRatio || 0);
   const momentum = Number(candidate.liveMomentumPercent || 0);
   const closeNearHighPercent = Number(candidate.closeNearHighPercent || 0);
@@ -31522,6 +31558,8 @@ registerStatusRoutes(app, {
   buildInstitutionalDashboard: buildInstitutionalDashboardPayload,
   buildHighConvictionSummary: buildHighConvictionInstitutionalSummary,
   buildTopBrains: buildTopAiBrains,
+  summarizeQuietCandidateOutcomes,
+  buildProofReport,
 });
 
 registerSignalRoutes(app, {
@@ -31549,6 +31587,30 @@ registerQuoteDiagnosticRoutes(app, {
   requireAdmin,
   normalizeSymbol,
   getStockQuote,
+  getVerifiedStockQuote: (symbol) => resolveVerifiedPreTradeQuote(symbol, false),
+  validateStockBuyability: (symbol) => {
+    const quoteDecision = validateLiveOrder(symbol, "BUY");
+    const blockReasons = [...(quoteDecision.blockReasons || [])];
+    if (emergencyStopActive) blockReasons.push("Emergency stop is active");
+    if (CONFIG.realCashTradingUnlocked !== true) {
+      blockReasons.push("Real cash trading is locked");
+    }
+    if (engineState.dailyLossLocked === true) {
+      blockReasons.push("Daily loss lock is active");
+    }
+    if (engineState.profitLocked === true) {
+      blockReasons.push("Profit lock is active");
+    }
+    if (engineState.marketOpen !== true) {
+      blockReasons.push("Stock market is closed");
+    }
+    return {
+      ...quoteDecision,
+      quoteApproved: quoteDecision.approved === true,
+      approved: quoteDecision.approved === true && blockReasons.length === 0,
+      blockReasons: [...new Set(blockReasons)],
+    };
+  },
   getAsset,
   polygonQuote,
   getPolygonContext: () => ({
@@ -31615,6 +31677,8 @@ registerQuietDiscoveryRoutes(app, {
   getState: () => engineState,
   getStoreStats: () => discoveryFeatureStore.stats(),
   runDiscovery: runBoundedQuietDiscoveryScan,
+  summarizeQuietCandidateOutcomes,
+  buildProofReport,
 });
 
 registerMemoryWatchlistRoutes(app, {
@@ -31633,6 +31697,9 @@ registerManualExecutionRoutes(app, {
   getAsset,
   getStockQuote,
   manualStockBuy: (input) => orderService.manualStockBuy(input),
+  manualCryptoBuy: (input) => placeCryptoMarketBuy(input.symbol, input.dollars, {
+    source: "MANUAL_VERIFIED_CRYPTO_ROUTE",
+  }),
   markManagedSymbol: markAiManagedSymbol,
   getState: () => engineState,
   closePosition,
