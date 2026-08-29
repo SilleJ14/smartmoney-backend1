@@ -101,6 +101,25 @@ test("crypto liquidity uses reported 24-hour volume or the full bar window, not 
   assert.equal(explicitLowMetrics.liquidityPass, false);
 });
 
+test("aggregated crypto liquidity normalizes different bar windows to the same duration", () => {
+  const start = Date.UTC(2026, 7, 20);
+  const oneMinuteBars = Array.from({ length: 30 }, (_, index) => ({
+    t: start + index * 60_000,
+    c: 100,
+    v: 2,
+  }));
+  const fiveMinuteBars = Array.from({ length: 30 }, (_, index) => ({
+    t: start + index * 5 * 60_000,
+    c: 100,
+    v: 10,
+  }));
+  const oneMinute = calculateCryptoLiquidityFromBars(oneMinuteBars, 100);
+  const fiveMinute = calculateCryptoLiquidityFromBars(fiveMinuteBars, 100);
+  assert.equal(oneMinute.liquidityWindowMinutes, 30);
+  assert.equal(fiveMinute.liquidityWindowMinutes, 150);
+  assert.equal(oneMinute.normalizedWindowDollarVolume, fiveMinute.normalizedWindowDollarVolume);
+});
+
 test("crypto liquidity applies source-aware thresholds", () => {
   const bars = Array.from({ length: 30 }, () => ({ c: 100, v: 10 }));
   const windowMetrics = calculateCryptoLiquidityFromBars(bars, 100);
@@ -340,6 +359,8 @@ test("crypto decision score uses independent discovery, entry, continuation, and
     newsCatalyst: { dataAvailable: true, riskDetected: false },
     barsFound: 30,
     current: 100,
+    priceIsLive: true,
+    liveQuoteUpdatedAt: new Date().toISOString(),
     bid: 99.9,
     ask: 100,
     spreadAvailable: true,
@@ -415,9 +436,13 @@ test("shared crypto execution gate requires central and freshly complete evidenc
     autoTradeApproved: true,
     barsFound: 30,
     current: 100,
+    priceIsLive: true,
+    liveQuoteUpdatedAt: new Date().toISOString(),
     bid: 99.95,
     ask: 100.05,
     windowDollarVolume: 1_000_000,
+    multiDayContinuationScore: 75,
+    multiDayAccumulation: { seenDays: ["2026-08-20", "2026-08-21"] },
   };
 
   const missingCentral = evaluateCryptoTradeCandidate(complete, { minimumScore: 85 });
@@ -443,6 +468,56 @@ test("shared crypto execution gate requires central and freshly complete evidenc
   }, { minimumScore: 85 });
   assert.equal(staleCentralWideQuote.approved, false);
   assert.ok(staleCentralWideQuote.reasons.includes("acceptableSpread"));
+});
+
+test("crypto cannot finalize from discovery and entry evidence alone", () => {
+  const now = Date.now();
+  const result = buildCryptoDecisionScore({
+    symbol: "BTC/USD",
+    cryptoDiscoveryScorecard: {
+      score: 90,
+      coverage: 1,
+      calculatedAt: new Date(now).toISOString(),
+      extension: { alreadyExtended: false },
+    },
+    newsCatalyst: { dataAvailable: true, riskDetected: false },
+    barsFound: 30,
+    current: 100,
+    priceIsLive: true,
+    liveQuoteUpdatedAt: new Date(now).toISOString(),
+    bid: 99.95,
+    ask: 100.05,
+    windowDollarVolume: 1_000_000,
+  }, { now });
+  assert.equal(result.coverage, 0.65);
+  assert.equal(result.coreEvidencePass, false);
+  assert.equal(result.scoreStatus, "PROVISIONAL_INCOMPLETE_EVIDENCE");
+  assert.ok(result.missingCriticalEvidence.includes("decisionCoverage"));
+});
+
+test("crypto decision evidence rejects a stale quote before order submission", () => {
+  const now = Date.now();
+  const result = buildCryptoDecisionScore({
+    symbol: "BTC/USD",
+    cryptoDiscoveryScorecard: {
+      score: 90,
+      coverage: 1,
+      calculatedAt: new Date(now).toISOString(),
+      extension: { alreadyExtended: false },
+    },
+    newsCatalyst: { dataAvailable: true, riskDetected: false },
+    barsFound: 30,
+    current: 100,
+    priceIsLive: true,
+    liveQuoteUpdatedAt: new Date(now - 6_000).toISOString(),
+    bid: 99.95,
+    ask: 100.05,
+    windowDollarVolume: 1_000_000,
+    multiDayContinuationScore: 75,
+    multiDayAccumulation: { seenDays: ["2026-08-20", "2026-08-21"] },
+  }, { now });
+  assert.equal(result.quoteFreshness.fresh, false);
+  assert.ok(result.missingCriticalEvidence.includes("freshLiveQuote"));
 });
 
 test("derived runner strength is not reused as independent continuation evidence", () => {

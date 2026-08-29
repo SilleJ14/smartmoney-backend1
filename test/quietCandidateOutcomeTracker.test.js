@@ -83,6 +83,22 @@ test("quiet candidates receive 1, 3 and 5 day measurements", () => {
   assert.equal(state.observations[0].measurements[3].breakoutHit, true);
 });
 
+test("late outcome quotes are marked missed instead of mislabeled as the target horizon", () => {
+  let state = updateQuietCandidateOutcomes({}, candidates(1), candidates(1), {
+    assetClass: "crypto",
+    dayKey: "2026-08-20",
+    now: Date.parse("2026-08-20T00:00:00Z"),
+  });
+  state = updateQuietCandidateOutcomes(state, [], candidates(1, 110), {
+    assetClass: "crypto",
+    dayKey: "2026-08-22",
+    now: Date.parse("2026-08-22T00:00:00Z"),
+  });
+  assert.equal(state.observations[0].measurements[1].status, "MISSED_TARGET_WINDOW");
+  assert.equal(state.observations[0].measurements[1].closeReturnPercent, null);
+  assert.equal(state.learning.crypto.sampleCount, 0);
+});
+
 test("outcome tracking excludes the discovery bar high from future peak returns", () => {
   let state = updateQuietCandidateOutcomes(
     {},

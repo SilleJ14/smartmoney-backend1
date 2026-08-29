@@ -1,5 +1,7 @@
 import {
   CRYPTO_MAX_ENTRY_SPREAD_PERCENT,
+  calculateCryptoEntryQualityFromEvidence,
+  resolveCryptoLiquidityEvidence,
   scoreSparseCryptoMarket,
 } from "../scoring/cryptoScoring.js";
 import { calculateCryptoEarlyDiscoveryScore } from "../scoring/earlyDiscovery.js";
@@ -228,7 +230,7 @@ export function createCryptoMarketScanner(dependencies) {
   function calculateCryptoInstitutionalQualification({
     quote = {},
     score = 0,
-    entryTimingScore = 0,
+    entryQualityScore = 0,
     bars = [],
     discoveryScorecard = null,
     liquidityMetrics = {},
@@ -317,7 +319,10 @@ export function createCryptoMarketScanner(dependencies) {
         Number(CONFIG.minScoreToBuy || 70),
         Number(engineState.selfOptimizationState?.adaptiveMinScoreToBuy || 0)
       );
-    const entryTimingPass = Number(entryTimingScore || 0) >= 60;
+    // Use the same measured spread/liquidity Entry Quality shown to the user.
+    // The legacy momentum timing score remains telemetry only and cannot act
+    // as a hidden approval gate.
+    const entryQualityPass = Number(entryQualityScore || 0) >= 75;
     const dataPass =
       barsFound >= 10 &&
       Number(quote.current || 0) > 0;
@@ -339,7 +344,7 @@ export function createCryptoMarketScanner(dependencies) {
     const qualifiedToBuy =
       dataPass &&
       discoveryPass &&
-      entryTimingPass &&
+      entryQualityPass &&
       liquidityPass &&
       macroPass &&
       institutionalStructurePass &&
@@ -352,8 +357,8 @@ export function createCryptoMarketScanner(dependencies) {
         dataPass,
         discoveryPass,
         momentumPass: discoveryPass,
-        entryTimingPass,
-        entryTimingScore: Number(entryTimingScore || 0),
+        entryQualityPass,
+        entryQualityScore: Number(entryQualityScore || 0),
         liquidityPass,
         macroPass,
         spreadPass,
@@ -510,6 +515,11 @@ export function createCryptoMarketScanner(dependencies) {
           learning: engineState.quietCandidateOutcomeLearning?.crypto || null,
         });
         const score = cryptoDiscoveryScorecard.score;
+        const canonicalCryptoEntryQuality = calculateCryptoEntryQualityFromEvidence({
+          spreadAvailable,
+          spreadPercent,
+          liquidityEvidence: resolveCryptoLiquidityEvidence(liquidityMetrics),
+        });
         const cryptoChartBars = Array.isArray(bars)
           ? bars
             .map((bar) => {
@@ -535,7 +545,7 @@ export function createCryptoMarketScanner(dependencies) {
           calculateCryptoInstitutionalQualification({
             quote,
             score,
-            entryTimingScore: legacyMomentumScore,
+            entryQualityScore: canonicalCryptoEntryQuality.score,
             bars,
             discoveryScorecard: cryptoDiscoveryScorecard,
             liquidityMetrics,
@@ -544,6 +554,7 @@ export function createCryptoMarketScanner(dependencies) {
           });
         results.push({
           ...quote,
+          scoringModelVersion: "SMARTMONEY_CRYPTO_DECISION_V3",
           assetClass: "crypto",
           asset_class: "crypto",
           livePrice: latestPrice,
@@ -568,6 +579,8 @@ export function createCryptoMarketScanner(dependencies) {
           scannerScore: score,
           score,
           legacyMomentumScore,
+          cryptoEntryScore: canonicalCryptoEntryQuality.score,
+          cryptoEntryScorecard: canonicalCryptoEntryQuality,
           cryptoDiscoveryScore: score,
           cryptoDiscoveryTier: cryptoDiscoveryScorecard.tier,
           cryptoDiscoveryScorecard,
@@ -591,6 +604,10 @@ export function createCryptoMarketScanner(dependencies) {
           dollarVolume: liquidityMetrics.dollarVolume,
           dollarVolume24h: liquidityMetrics.dollarVolume24h,
           windowDollarVolume: liquidityMetrics.windowDollarVolume,
+          normalizedWindowDollarVolume:
+            liquidityMetrics.normalizedWindowDollarVolume,
+          liquidityWindowMinutes: liquidityMetrics.liquidityWindowMinutes,
+          medianBarMinutes: liquidityMetrics.medianBarMinutes,
           latestBarDollarVolume: liquidityMetrics.latestBarDollarVolume,
           averageBarDollarVolume: liquidityMetrics.averageBarDollarVolume,
           liquiditySource: liquidityMetrics.liquiditySource,

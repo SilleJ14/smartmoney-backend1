@@ -99,10 +99,10 @@ function resolvePrice(signal = {}) {
 
 function resolveScore(signal = {}) {
   const value = Number(
-    signal.stockDecisionScore ||
-    signal.masterFinalScore ||
-    signal.finalAutonomousDecisionScore ||
-    signal.score ||
+    signal.masterFinalScore ??
+    signal.finalAutonomousDecisionScore ??
+    signal.stockDecisionScore ??
+    signal.score ??
     0
   );
   return Number.isFinite(value) ? Math.max(0, Math.min(100, value)) : 0;

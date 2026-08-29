@@ -35,7 +35,7 @@ export function buildStrategyExecutionPlan({
     ),
     shouldRunCryptoAutoBuy: Boolean(
       cryptoEnabled && approvedCryptoCount > 0 &&
-      !tradingStoppedForDay && !cryptoTradingStoppedForDay
+      !cryptoTradingStoppedForDay
     ),
   };
 }

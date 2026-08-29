@@ -15,6 +15,11 @@ export function registerQuoteDiagnosticRoutes(app, dependencies) {
       const buyability = typeof validateStockBuyability === "function"
         ? await validateStockBuyability(symbol)
         : { approved: false, blockReasons: ["Live buyability was not verified"] };
+      const assetApproved = asset?.status === "active" && asset?.tradable === true;
+      const buyBlockReasons = [
+        ...(buyability.blockReasons || []),
+        ...(assetApproved ? [] : [`${symbol} is not an active tradable asset`]),
+      ];
       const current = Number(liveQuote?.current || liveQuote?.price || quote?.current || 0);
       if (!current) return res.status(404).json({ ok: false, error: "No quote found", symbol });
       res.json({ ok: true, stock: {
@@ -37,8 +42,8 @@ export function registerQuoteDiagnosticRoutes(app, dependencies) {
         historicalBars: quote.historicalBars || quote.chartBars || [], sparkline: quote.sparkline || [],
         source: quote.source || "polygon_first_manual_search", autoTradeAllowed: false,
         quoteExecutable: (buyability.quoteApproved ?? buyability.approved) === true,
-        manuallyBuyable: buyability.approved === true,
-        buyBlockReasons: buyability.blockReasons || [],
+        manuallyBuyable: buyability.approved === true && assetApproved,
+        buyBlockReasons,
         buyabilityCheckedAt: buyability.checkedAt || new Date().toISOString(),
         fractionable: asset?.fractionable === true,
         assetClass: asset?.asset_class || "us_equity",

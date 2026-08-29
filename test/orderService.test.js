@@ -63,20 +63,29 @@ test("rejects a whole-share buy that cannot afford one share", async () => {
   assert.equal(requests.length, 0);
 });
 
-test("builds after-hours stock sells as conservative limit orders", async () => {
+test("rejects stock buys while the regular market is closed", () => {
   const { service, requests } = harness();
-  await service.stockSell({
+  assert.throws(() => service.stockBuy({
+    symbol: "AAPL",
+    dollars: 25,
+    marketOpen: false,
+    fractionable: true,
+    referencePrice: 100,
+  }), /regular market is open/i);
+  assert.equal(requests.length, 0);
+});
+
+test("rejects stock sells while the regular market is closed", () => {
+  const { service, requests } = harness();
+  assert.throws(() => service.stockSell({
     symbol: "AAPL",
     qty: 2.75,
     reason: "RISK_EXIT",
     marketOpen: false,
     fractionable: true,
     referencePrice: 100,
-  });
-  assert.equal(requests[0].body.qty, "2.75");
-  assert.equal(requests[0].body.type, "limit");
-  assert.equal(requests[0].body.limit_price, "99");
-  assert.equal(requests[0].body.extended_hours, true);
+  }), /regular market is open/i);
+  assert.equal(requests.length, 0);
 });
 
 test("rounds non-fractionable sell quantities down", async () => {
@@ -97,8 +106,21 @@ test("manual dollar buys use notional only for fractionable assets", async () =>
     dollars: 50.126,
     buyMode: "dollars",
     fractionable: true,
+    marketOpen: true,
   });
   assert.equal(requests[0].body.notional, 50.13);
+});
+
+test("manual stock buys also reject a closed regular market", () => {
+  const { service, requests } = harness();
+  assert.throws(() => service.manualStockBuy({
+    symbol: "AAPL",
+    dollars: 50,
+    buyMode: "dollars",
+    fractionable: true,
+    marketOpen: false,
+  }), /regular market is open/i);
+  assert.equal(requests.length, 0);
 });
 
 test("builds crypto orders with GTC time in force", async () => {
@@ -109,6 +131,7 @@ test("builds crypto orders with GTC time in force", async () => {
   assert.equal(requests[0].body.side, "buy");
   assert.equal(requests[1].body.time_in_force, "gtc");
   assert.equal(requests[1].body.side, "sell");
+  assert.equal(requests.some((request) => request.body?.extended_hours === true), false);
 });
 
 test("close position encodes the normalized symbol", async () => {

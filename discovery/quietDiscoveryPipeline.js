@@ -173,6 +173,7 @@ export function calculateQuietPreMoveFeatures(history = [], { learning = null } 
   ];
   return {
     symbol: latest.s,
+    scoringModelVersion: "SMARTMONEY_STOCK_DECISION_V3",
     candidateSource: "EARLY_DISCOVERY",
     price: latest.c,
     current: latest.c,
@@ -201,6 +202,7 @@ export function calculateQuietPreMoveFeatures(history = [], { learning = null } 
       missingComponents: baseComponents.filter((component) => !component.available).map((component) => component.name),
       gates: extensionGates,
       extension,
+      canonicalExtensionEvidencePass: fullExtensionEvidence,
       dataQuality: {
         completedValidDailyBars: history.length,
         fullExtensionCoverage: fullExtensionEvidence,

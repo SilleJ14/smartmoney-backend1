@@ -142,6 +142,7 @@ export const STOCK_EXECUTION_THRESHOLDS = Object.freeze({
   acceleratedEntryScore: 82,
   maxSpreadPercent: 1,
   maxQuoteAgeSeconds: 15,
+  maxDecisionAgeSeconds: 300,
   riskQualityScore: 55,
 });
 
@@ -149,8 +150,10 @@ export function evaluateStockTradeCandidate(
   signal = {},
   {
     requireCentralDecision = false,
+    requireFreshDecision = false,
     maxSpreadPercent = STOCK_EXECUTION_THRESHOLDS.maxSpreadPercent,
     maxQuoteAgeSeconds = STOCK_EXECUTION_THRESHOLDS.maxQuoteAgeSeconds,
+    maxDecisionAgeSeconds = STOCK_EXECUTION_THRESHOLDS.maxDecisionAgeSeconds,
     now = Date.now(),
   } = {}
 ) {
@@ -235,6 +238,31 @@ export function evaluateStockTradeCandidate(
     quoteAgeSeconds >= -5 &&
     quoteAgeSeconds <= effectiveMaxQuoteAgeSeconds
   );
+  const decisionTimestampRaw =
+    signal.decisionUpdatedAt ??
+    signal.decisionTimestamp ??
+    signal.decisionScoreTelemetry?.calculatedAt ??
+    signal.centralAutonomousDecisionCore?.updatedAt ??
+    signal.finalMasterDecisionProfile?.updatedAt ??
+    signal.scanCompletedAt ??
+    signal.updatedAt;
+  const decisionTimestamp = Number.isFinite(Number(decisionTimestampRaw))
+    ? Number(decisionTimestampRaw)
+    : decisionTimestampRaw
+      ? Date.parse(decisionTimestampRaw)
+      : NaN;
+  const decisionAgeSeconds = Number.isFinite(decisionTimestamp)
+    ? (Number(now) - decisionTimestamp) / 1000
+    : null;
+  const effectiveMaxDecisionAgeSeconds = Number.isFinite(Number(maxDecisionAgeSeconds))
+    ? Math.max(1, Number(maxDecisionAgeSeconds))
+    : STOCK_EXECUTION_THRESHOLDS.maxDecisionAgeSeconds;
+  const decisionFreshnessAvailable = decisionAgeSeconds !== null;
+  const decisionFreshnessPass = !requireFreshDecision || (
+    decisionFreshnessAvailable &&
+    decisionAgeSeconds >= -5 &&
+    decisionAgeSeconds <= effectiveMaxDecisionAgeSeconds
+  );
   const explicitBuyBlock =
     signal.blockBuying === true ||
     signal.buyBlocked === true ||
@@ -298,6 +326,16 @@ export function evaluateStockTradeCandidate(
         ? ["QUOTE_STALE"]
         : []
     ),
+    ...(
+      requireFreshDecision && !decisionFreshnessAvailable
+        ? ["DECISION_FRESHNESS_UNAVAILABLE"]
+        : []
+    ),
+    ...(
+      requireFreshDecision && decisionFreshnessAvailable && !decisionFreshnessPass
+        ? [decisionAgeSeconds < -5 ? "DECISION_TIMESTAMP_IN_FUTURE" : "DECISION_STALE"]
+        : []
+    ),
     ...(blockingState ? ["BLOCKING_RISK_STATE"] : []),
     ...(!finalScoreAvailable ? ["FINAL_SCORE_INVALID"] : []),
     ...(finalScore < STOCK_EXECUTION_THRESHOLDS.finalScore ? ["FINAL_SCORE_BELOW_78"] : []),
@@ -315,6 +353,7 @@ export function evaluateStockTradeCandidate(
       coreEvidencePass &&
       riskQualityPass &&
       quoteFreshnessPass &&
+      decisionFreshnessPass &&
       finalScoreAvailable &&
       spreadAvailable &&
       !blockingState &&
@@ -351,10 +390,19 @@ export function evaluateStockTradeCandidate(
       : Number(quoteAgeSeconds.toFixed(2)),
     quoteFreshnessAvailable,
     quoteFreshnessPass,
+    decisionTimestamp: Number.isFinite(decisionTimestamp)
+      ? new Date(decisionTimestamp).toISOString()
+      : null,
+    decisionAgeSeconds: decisionAgeSeconds === null
+      ? null
+      : Number(decisionAgeSeconds.toFixed(2)),
+    decisionFreshnessAvailable,
+    decisionFreshnessPass,
     thresholds: {
       ...STOCK_EXECUTION_THRESHOLDS,
       maxSpreadPercent: effectiveMaxSpread,
       maxQuoteAgeSeconds: effectiveMaxQuoteAgeSeconds,
+      maxDecisionAgeSeconds: effectiveMaxDecisionAgeSeconds,
     },
     reasons,
   };
@@ -419,6 +467,16 @@ export function calculateEarlyDiscoveryScore(signal = {}) {
     signal.preMoverDiscovery?.extension ||
     signal.preMoverDiscovery?.extensionProfile ||
     null;
+  const completedDailyBars = firstFinite(
+    signal.discoveryScorecard?.dataQuality?.completedValidDailyBars,
+    signal.preMoverDiscovery?.discoveryScorecard?.dataQuality?.completedValidDailyBars,
+    signal.historyDays,
+    signal.preMoverDiscovery?.historyDays
+  );
+  const canonicalExtensionEvidencePass =
+    extensionProfile !== null &&
+    Number(extensionProfile?.coverage || 0) >= 1 &&
+    Number(completedDailyBars || 0) >= 21;
   const extensionAlreadyApplied = signal.extensionAdjusted === true ||
     signal.preMoverDiscovery?.extensionAdjusted === true;
   if (!extensionAlreadyApplied && Number(extensionProfile?.extensionPenalty || 0) > 0) {
@@ -427,21 +485,31 @@ export function calculateEarlyDiscoveryScore(signal = {}) {
       Math.max(0, card.score - Number(extensionProfile.extensionPenalty || 0))
     );
   }
-  const multiHorizonLateCap = extensionProfile?.alreadyExtended === true ? 55 : 100;
+  const multiHorizonLateCap =
+    extensionProfile?.alreadyExtended === true || !canonicalExtensionEvidencePass
+      ? 55
+      : 100;
   const effectiveLateCap = Math.min(lateMoveCap, multiHorizonLateCap);
   if (card.score > effectiveLateCap) {
     card = rescaleScorecard(card, effectiveLateCap);
-    card.gates = [
-      ...card.gates,
-      ...(lateMoveCap < 100 ? ["ALREADY_LOUD_MOVE"] : []),
-      ...(multiHorizonLateCap < 100 ? ["ALREADY_EXTENDED_MULTI_HORIZON"] : []),
-    ];
   }
+  card.gates = [...new Set([
+    ...card.gates,
+    ...(lateMoveCap < 100 ? ["ALREADY_LOUD_MOVE"] : []),
+    ...(extensionProfile?.alreadyExtended === true
+      ? ["ALREADY_EXTENDED_MULTI_HORIZON"]
+      : []),
+    ...(!canonicalExtensionEvidencePass
+      ? ["MISSING_CANONICAL_MULTI_HORIZON_EVIDENCE"]
+      : []),
+  ])];
   return {
     ...card,
     technicalBaseScore: baseCard.score,
     catalystBonus: Number(catalystBonus.toFixed(2)),
     extensionProfile,
+    canonicalExtensionEvidencePass,
+    completedValidDailyBars: Number(completedDailyBars || 0),
     tier: effectiveLateCap < 72
       ? "LATE_MOVE_NOT_DISCOVERY"
       : card.score >= 85 && card.coverage >= 0.8
@@ -468,10 +536,12 @@ export function calculateEntryQualityScore(signal = {}) {
   const technicalBarsFound = firstFinite(
     signal.technicalBarsFound,
     Array.isArray(signal.stockChartBars) ? signal.stockChartBars.length : undefined,
+    Array.isArray(signal.chartBars) ? signal.chartBars.length : undefined,
+    Array.isArray(signal.historicalBars) ? signal.historicalBars.length : undefined,
     confirmations.barsFound
   );
   const trendAvailable = [ema9, ema20, macd, macdSignal, rsiValue].every((value) => value !== undefined)
-    && (technicalBarsFound === undefined || Number(technicalBarsFound) >= 20);
+    && Number(technicalBarsFound || 0) >= 20;
   const rsi = Number(rsiValue || 50);
   const trendAlignment = clamp(
     35 +
@@ -738,9 +808,32 @@ export function buildStockDecisionScore(signal = {}) {
     component("riskPortfolio", riskPortfolioScore, effectiveWeights.riskPortfolio, riskPortfolioSource, riskPortfolioScore !== undefined),
     component("fundamentals", fundamentalScore, effectiveWeights.fundamentals, "validated_fundamentals", fundamentalDataValid && fundamentalScore !== undefined),
   ];
-  const card = scorecard("STOCK_DECISION", components);
+  const rawCard = scorecard("STOCK_DECISION", components);
+  // Missing optional evidence must never improve the final score. Preserve
+  // normalized component telemetry, then apply a small conservative penalty
+  // proportional to unavailable configured weight.
+  const missingEvidencePenalty = Math.max(
+    0,
+    Number(((1 - rawCard.coverage) * 25).toFixed(2))
+  );
+  const card = rescaleScorecard(
+    rawCard,
+    Math.max(0, rawCard.score - missingEvidencePenalty)
+  );
+  const canonicalDiscoveryRequired = [
+    "EARLY_DISCOVERY",
+    "BOUNDED_STOCK_QUIET_DISCOVERY",
+  ].includes(String(discovery.stage || "").toUpperCase());
+  const canonicalDiscoveryPass =
+    !canonicalDiscoveryRequired ||
+    discovery.canonicalExtensionEvidencePass === true ||
+    (
+      discovery.dataQuality?.fullExtensionCoverage === true &&
+      Number(discovery.dataQuality?.completedValidDailyBars || 0) >= 21
+    );
   const missingCriticalEvidence = [
     ...(discovery.coverage < 0.65 ? ["discoveryEvidence"] : []),
+    ...(canonicalDiscoveryPass ? [] : ["canonicalDiscoveryExtensionEvidence"]),
     ...(entry.coverage < 0.8 ? ["entryEvidence"] : []),
     ...(entry.approved !== true ? ["approvedEntry"] : []),
     ...(card.coverage < 0.8 ? ["decisionCoverage"] : []),
@@ -749,6 +842,8 @@ export function buildStockDecisionScore(signal = {}) {
     ...card,
     coreEvidencePass: missingCriticalEvidence.length === 0,
     missingCriticalEvidence,
+    missingEvidencePenalty,
+    canonicalDiscoveryPass,
     effectiveWeights,
     reinforcementWeightsApplied: Object.keys(reinforcementWeights).length > 0,
     reinforcementLearningActive,

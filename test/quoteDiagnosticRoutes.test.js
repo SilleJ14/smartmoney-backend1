@@ -23,7 +23,7 @@ test("stock quote route normalizes a live manual-search payload", async () => {
       quoteAgeSeconds: 1, quoteIsLive: true, blockReasons: [],
       checkedAt: "2026-08-27T13:00:01.000Z",
     }),
-    getAsset: async () => ({ fractionable: true }), polygonQuote: async () => null,
+    getAsset: async () => ({ status: "active", tradable: true, fractionable: true }), polygonQuote: async () => null,
     getPolygonContext: () => ({}) });
   const res = { status(code) { this.statusCode = code; return this; }, json(body) { this.body = body; } };
   await routes.get("/stock-quote/:symbol")({ params: { symbol: "aapl" } }, res);
@@ -53,7 +53,7 @@ test("stock quote route marks stale or wide-spread quotes as not manually buyabl
       blockReasons: ["Live quote stale: 90s old", "Spread too wide: 30%"],
       checkedAt: "2026-08-27T13:00:00.000Z",
     }),
-    getAsset: async () => ({ fractionable: true }), polygonQuote: async () => null,
+    getAsset: async () => ({ status: "active", tradable: true, fractionable: true }), polygonQuote: async () => null,
     getPolygonContext: () => ({}),
   });
   const res = { status(code) { this.statusCode = code; return this; }, json(body) { this.body = body; } };

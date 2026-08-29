@@ -13,7 +13,6 @@ export function createEngineCycle(dependencies) {
     applyWhaleSmartMoneyToSignals,
     autoBuyCryptoSignals,
     autoBuySignals,
-    autoCloseCryptoBeforeMarketOpen,
     autoExitCryptoPositions,
     autoExitPositions,
     broadcastTapeEvent,
@@ -84,7 +83,7 @@ export function createEngineCycle(dependencies) {
     engineState,
     evaluateStockTradeCandidate,
     executePendingExits,
-    flattenStocksAndCryptoBeforeMarketClose,
+    flattenStocksBeforeMarketClose,
     getAccount,
     getAlpacaKeys,
     getBotOwnedSymbols,
@@ -178,6 +177,8 @@ export function createEngineCycle(dependencies) {
       }
       engineState.effectiveMode = effectiveMode;
       engineState.marketOpen = marketOpen;
+      // Crypto has no dependency on the U.S. equity-session clock.
+      engineState.cryptoTradingStoppedForDay = false;
       const openingBellJustTriggered =
         engineState.lastMarketOpen === false && marketOpen === true;
       if (openingBellJustTriggered) {
@@ -216,8 +217,7 @@ export function createEngineCycle(dependencies) {
         await executePendingExits();
       }
       const tradingStoppedForDay =
-        await flattenStocksAndCryptoBeforeMarketClose(clock);
-      await autoCloseCryptoBeforeMarketOpen(clock);
+        await flattenStocksBeforeMarketClose(clock);
       await autoExitPositions(marketOpen);
       const { stockModeEnabled, cryptoModeEnabled } =
         getEnabledStrategyModes(effectiveMode);
@@ -558,6 +558,7 @@ export function createEngineCycle(dependencies) {
         );
         if (!matchingSignal) continue;
         matchingSignal.centralAutonomousDecisionCore = decision;
+        matchingSignal.decisionUpdatedAt = new Date().toISOString();
         matchingSignal.finalAutonomousDecisionScore =
           decision.finalDecisionScore;
         if (cryptoSignals.includes(matchingSignal)) {
@@ -1242,6 +1243,7 @@ export function createEngineCycle(dependencies) {
         );
         if (!matchingSignal) continue;
         matchingSignal.centralAutonomousDecisionCore = decision;
+        matchingSignal.decisionUpdatedAt = new Date().toISOString();
         matchingSignal.tradeArchetype = decision.tradeArchetype;
         matchingSignal.dynamicEngineWeights = decision.dynamicEngineWeights;
         matchingSignal.archetypeAdjustedScore = decision.archetypeAdjustedScore;
@@ -2502,6 +2504,7 @@ export function createEngineCycle(dependencies) {
         }
         const finalStockExecutionGate = evaluateStockTradeCandidate(signal, {
           requireCentralDecision: true,
+          requireFreshDecision: true,
           maxQuoteAgeSeconds: Number(
             getRuntime()?.LIVE_ORDER_MAX_QUOTE_AGE_SECONDS ||
             15
@@ -2774,9 +2777,7 @@ export function createEngineCycle(dependencies) {
           await autoBuySignals(stockSignals);
           engineState.aiDecisionHistory.unshift({
             timestamp: new Date().toISOString(),
-            type: marketOpen
-              ? "AUTO_STOCK_BUY_EXECUTED"
-              : "AUTO_STOCK_BUY_EXTENDED_HOURS_EXECUTED",
+            type: "AUTO_STOCK_BUY_EXECUTED",
             signalCount: stockSignals.length,
             approvedSignalCount: approvedStockSignals.length,
             tradingMode: TRADING_MODE,
@@ -2816,9 +2817,9 @@ export function createEngineCycle(dependencies) {
         !shouldRunStockAutoBuy &&
         !shouldRunCryptoAutoBuy
       ) {
-        recordOrder("BUY_SKIPPED_NO_APPROVED_EXTENDED_HOURS_SIGNAL", "ALL", {
+        recordOrder("BUY_SKIPPED_MARKET_POLICY", "ALL", {
           message:
-            "Market closed, but extended-hours stock buying is allowed when approved stock signals exist.",
+            "Stocks are paused until the regular market opens; crypto remains eligible 24/7.",
         });
       }
   }

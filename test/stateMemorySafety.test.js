@@ -112,6 +112,12 @@ test("state saver persists bounded stock and quiet-candidate learning history", 
     baselinePrice: 100,
     trackingPeakPrice: 101,
     componentScores: { structure: 70 },
+    scoringModelVersion: "SMARTMONEY_CRYPTO_DECISION_V3",
+    marketRegime: "RISK_ON",
+    liquidityBucket: "HIGH",
+    marketCapBucket: "LARGE",
+    benchmarks: { Bitcoin: { symbol: "BTCUSD", baselinePrice: 100 } },
+    benchmarkMeasurements: { 1: { Bitcoin: 2 } },
     targets: { 1: "2026-08-21", 3: "2026-08-23", 5: "2026-08-25" },
     measurements: {},
   }));
@@ -145,6 +151,9 @@ test("state saver persists bounded stock and quiet-candidate learning history", 
   const snapshot = saver.saveEngineState("PERSIST_SCORING_LEARNING");
 
   assert.equal(snapshot.quietCandidateOutcomeState.observations.length, 600);
+  assert.equal(snapshot.quietCandidateOutcomeState.observations[0].marketRegime, "RISK_ON");
+  assert.equal(snapshot.quietCandidateOutcomeState.observations[0].scoringModelVersion, "SMARTMONEY_CRYPTO_DECISION_V3");
+  assert.equal(snapshot.quietCandidateOutcomeState.observations[0].benchmarkMeasurements[1].Bitcoin, 2);
   assert.equal(snapshot.quietCandidateOutcomeLearning.crypto.active, true);
   assert.equal(snapshot.stockScoreOutcomeLearning.sampleCount, 30);
   assert.equal(snapshot.cryptoQuietDiscoveryState.topCandidates.length, 25);

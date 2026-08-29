@@ -43,6 +43,15 @@ test("score outcomes record one observation per stock per ET day and measure due
   assert.equal(completed.summary.QUALIFIED.oneHour.count, 1);
 });
 
+test("score outcomes record the canonical master score before stale aliases", () => {
+  const state = updateStockScoreOutcomes({}, [{
+    ...stock("MASTER", 100, 40),
+    masterFinalScore: 88,
+    finalAutonomousDecisionScore: 84,
+  }], { now: mondayMorning });
+  assert.equal(state.observations[0].finalScore, 88);
+});
+
 test("score outcome state is strictly bounded", () => {
   const state = updateStockScoreOutcomes(
     {},

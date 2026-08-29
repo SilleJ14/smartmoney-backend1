@@ -24,6 +24,7 @@ export function evaluateCanonicalStockAutoBuyEligibility(
   const evidence = evaluateStockTradeCandidate(signal, {
     ...options,
     requireCentralDecision: true,
+    requireFreshDecision: true,
   });
   const canonicalScore = resolveCanonicalStockDecisionScore(signal);
   return {
@@ -388,7 +389,10 @@ export function createAutoBuyStrategies(dependencies) {
     let stockBudgetReservedThisCycle = 0;
     for (const candidate of candidates) {
       const symbol = normalizeSymbol(candidate.symbol);
-      const stockTradeEvidence = evaluateStockTradeCandidate(candidate, { requireCentralDecision: true });
+      const stockTradeEvidence = evaluateStockTradeCandidate(candidate, {
+        requireCentralDecision: true,
+        requireFreshDecision: true,
+      });
       if (!stockTradeEvidence.approved) {
         recordOrder("STOCK_SKIPPED_ENTRY_EVIDENCE", symbol, {
           ...stockTradeEvidence,
@@ -1522,7 +1526,7 @@ export function createAutoBuyStrategies(dependencies) {
         const totalBotExposure = getBotExposure(managedPositions);
         const totalMaxBotBudget =
           Number(account?.equity || 0) *
-          (Number(CONFIG.maxBotExposurePercent || 80) / 100);
+          (Number(CONFIG.maxBotExposurePercent || 15) / 100);
         const remainingTotalBotBudget = Math.max(
           0,
           totalMaxBotBudget - totalBotExposure - cryptoBudgetReservedThisCycle

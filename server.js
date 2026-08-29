@@ -113,6 +113,7 @@ import {
   updateStockScoreOutcomes,
 } from "./scoring/stockScoreOutcomeTracker.js";
 import {
+  CRYPTO_MAX_ENTRY_SPREAD_PERCENT,
   calculateCryptoLiquidityFromBars,
   calculateCryptoSignalRealism,
   getCryptoBaseAsset,
@@ -752,7 +753,7 @@ const CONFIG = {
     process.env.MIN_CRYPTO_TRADE_AMOUNT || 25
   ),
   maxBotExposurePercent: Number(
-    process.env.MAX_BOT_EXPOSURE_PERCENT || 80
+    process.env.MAX_BOT_EXPOSURE_PERCENT || 15
   ),
   enableAutonomousCompounding:
     process.env.ENABLE_AUTONOMOUS_COMPOUNDING !== "false",
@@ -987,7 +988,7 @@ const NUMERIC_CONFIG_DEFAULTS = {
   replaceWeakestMinScoreGap: 8,
   maxRotationsPerDay: 6,
   minCryptoTradeAmount: 25,
-  maxBotExposurePercent: 80,
+  maxBotExposurePercent: 15,
   takeProfitPercent: 8,
   stopLossPercent: 2,
   trailingStopPercent: 2,
@@ -11372,7 +11373,7 @@ function calculateFinalPositionSizingReconciliation({
   const cash = Number(account?.cash || 0);
   const buyingPower = Number(account?.buying_power || cash || 0);
   const currentBotExposure = getBotExposure(managedPositions);
-  const maxBotBudget = equity * (Number(CONFIG.maxBotExposurePercent || 80) / 100);
+  const maxBotBudget = equity * (Number(CONFIG.maxBotExposurePercent || 15) / 100);
   const remainingBotBudget = Math.max(0, maxBotBudget - currentBotExposure);
   const perTradeMax = Math.max(
     Number(CONFIG.minAutonomousTradeAmount || CONFIG.eliteConcentrationMinTradeAmount || 25),
@@ -13516,10 +13517,11 @@ const preTradeRiskGuard = {
       cryptoAsset
     );
     const quote = quoteResolution.quote;
-    const [account, positions, botOwnedSymbols] = await Promise.all([
+    const [account, positions, botOwnedSymbols, clock] = await Promise.all([
       getAccount(),
       getPositions(),
       getBotOwnedSymbols(),
+      getClock(),
     ]);
     const managedPositions = positions.filter((position) =>
       isAiManagedOpenPosition(position, botOwnedSymbols)
@@ -13555,7 +13557,7 @@ const preTradeRiskGuard = {
         dailyLossLocked: engineState.dailyLossLocked === true,
         profitLocked: engineState.profitLocked === true,
         isCrypto: cryptoAsset,
-        marketOpen: engineState.marketOpen === true,
+        marketOpen: clock?.is_open === true,
         price: Number(quote.price || quote.current || 0),
         quoteAgeSeconds: getLiveQuoteAgeSeconds(symbol),
         spreadPercent: quote.spreadAvailable === true
@@ -13572,7 +13574,9 @@ const preTradeRiskGuard = {
         liveProviderFallbackReady: quoteResolution.quoteReady,
         liveProviderFallbackError: quoteResolution.fallbackError,
         maxQuoteAgeSeconds: LIVE_ORDER_MAX_QUOTE_AGE_SECONDS,
-        maxSpreadPercent: LIVE_ORDER_MAX_SPREAD_PERCENT,
+        maxSpreadPercent: cryptoAsset
+          ? Math.min(LIVE_ORDER_MAX_SPREAD_PERCENT, CRYPTO_MAX_ENTRY_SPREAD_PERCENT)
+          : LIVE_ORDER_MAX_SPREAD_PERCENT,
         maxExposurePercent: CONFIG.maxBotExposurePercent,
         maxOpenTrades: CONFIG.maxOpenTrades,
         account,
@@ -18915,19 +18919,10 @@ async function placeMarketSell(symbol, qty, reason = "AI_EXIT") {
     const fractionable = asset.fractionable === true;
     const clock = await getClock();
     const marketOpen = Boolean(clock?.is_open);
-    let referencePrice;
     if (!marketOpen) {
-      const latestQuote = await getStockQuote(normalizedSymbol);
-      referencePrice = Number(
-        latestQuote.bid ||
-        latestQuote.current ||
-        latestQuote.price ||
-        latestQuote.ask ||
-        0
+      throw new Error(
+        `${normalizedSymbol} stock sell blocked because the regular market is closed`
       );
-      if (!referencePrice || referencePrice <= 0) {
-        throw new Error(`No valid after-hours limit price for ${normalizedSymbol}`);
-      }
     }
     return await orderService.stockSell({
       symbol: normalizedSymbol,
@@ -18935,7 +18930,6 @@ async function placeMarketSell(symbol, qty, reason = "AI_EXIT") {
       reason,
       marketOpen,
       fractionable,
-      referencePrice,
     });
   } finally {
     setTimeout(
@@ -18949,6 +18943,16 @@ async function closePosition(symbol) {
   const assetCheck = await isAssetSellEligible(normalizedSymbol);
   if (!assetCheck.ok) {
     throw new Error(assetCheck.reason);
+  }
+  if (!isCrypto(normalizedSymbol)) {
+    const clock = await getClock();
+    if (clock?.is_open !== true) {
+      const error = new Error(
+        `${normalizedSymbol} stock close blocked because the regular market is closed`
+      );
+      error.statusCode = 409;
+      throw error;
+    }
   }
   return orderService.closePosition(normalizedSymbol);
 }
@@ -18988,13 +18992,12 @@ function minutesUntil(dateString) {
   const now = Date.now();
   return (target - now) / 1000 / 60;
 }
-async function flattenStocksAndCryptoBeforeMarketClose(clock) {
+async function flattenStocksBeforeMarketClose(clock) {
   if (!clock?.is_open || !clock?.next_close) return false;
   const minsUntilClose = minutesUntil(clock.next_close);
   const todayKey = new Date().toISOString().slice(0, 10);
   if (minsUntilClose > 60 || minsUntilClose <= 0) return false;
   engineState.stockTradingStoppedForDay = true;
-  engineState.cryptoTradingStoppedForDay = true;
   if (engineState.lastFlattenAllBeforeCloseAt === todayKey) {
     return true;
   }
@@ -19003,11 +19006,14 @@ async function flattenStocksAndCryptoBeforeMarketClose(clock) {
     const orders = await getOrders();
     const openOrders = orders.filter((order) => {
       const status = String(order.status || "").toLowerCase();
+      const symbol = normalizeSymbol(order.symbol);
+      const cryptoOrder = isCrypto(symbol);
       return (
-        status === "new" ||
-        status === "accepted" ||
-        status === "partially_filled" ||
-        status === "pending_new"
+        !cryptoOrder &&
+        (status === "new" ||
+          status === "accepted" ||
+          status === "partially_filled" ||
+          status === "pending_new")
       );
     });
     for (const order of openOrders) {
@@ -19037,22 +19043,17 @@ async function flattenStocksAndCryptoBeforeMarketClose(clock) {
     const symbol = normalizeSymbol(pos.symbol);
     const qty = Number(pos.qty);
     if (!qty || qty <= 0) continue;
-    const isCrypto = symbol.includes("/") || symbol.endsWith("USD");
+    const cryptoPosition = isCrypto(symbol);
+    if (cryptoPosition) continue;
     try {
-      const order = isCrypto
-        ? await placeCryptoMarketSell(
-          symbol,
-          qty,
-          "CRYPTO_FLATTEN_1_HOUR_BEFORE_MARKET_CLOSE"
-        )
-        : await placeMarketSell(
-          symbol,
-          qty,
-          "STOCK_FLATTEN_1_HOUR_BEFORE_MARKET_CLOSE"
-        );
+      const order = await placeMarketSell(
+        symbol,
+        qty,
+        "STOCK_FLATTEN_1_HOUR_BEFORE_MARKET_CLOSE"
+      );
       recordOrder("POSITION_CLOSED_1_HOUR_BEFORE_CLOSE", symbol, {
         qty,
-        assetClass: isCrypto ? "crypto" : "stock",
+        assetClass: "stock",
         minutesUntilClose: Number(minsUntilClose.toFixed(2)),
         order,
       });
@@ -19066,50 +19067,12 @@ async function flattenStocksAndCryptoBeforeMarketClose(clock) {
         err.message,
         {
           qty,
-          assetClass: isCrypto ? "crypto" : "stock",
+          assetClass: "stock",
         }
       );
     }
   }
   return true;
-}
-async function autoCloseCryptoBeforeMarketOpen(clock) {
-  const nextOpen = clock?.next_open;
-  if (!nextOpen) return;
-  const minsUntilOpen = minutesUntil(nextOpen);
-  if (minsUntilOpen > 5 || minsUntilOpen <= 0) return;
-  const todayKey = new Date().toISOString().slice(0, 10);
-  if (engineState.lastCryptoCloseAllBeforeOpenAt === todayKey) return;
-  engineState.lastCryptoCloseAllBeforeOpenAt = todayKey;
-  engineState.cryptoTradingStoppedForDay = true;
-  const positions = await getPositions();
-  for (const pos of positions) {
-    const symbol = normalizeSymbol(pos.symbol);
-    if (!symbol.endsWith("USD")) continue;
-    const qty = Number(pos.qty);
-    if (!qty || qty <= 0) continue;
-    try {
-      const order = await placeCryptoMarketSell(
-        symbol,
-        qty,
-        "CRYPTO_CLOSE_5_MIN_BEFORE_MARKET_OPEN"
-      );
-      recordOrder("CRYPTO_CLOSED_BEFORE_MARKET_OPEN", symbol, {
-        qty,
-        minutesUntilOpen: Number(minsUntilOpen.toFixed(2)),
-        order,
-      });
-      delete engineState.highWaterMarks[symbol];
-      delete engineState.runnerPositions[symbol];
-    } catch (err) {
-      recordFailedOrder(
-        "CRYPTO_CLOSE_BEFORE_MARKET_OPEN_FAILED",
-        symbol,
-        err.message,
-        { qty }
-      );
-    }
-  }
 }
 async function forceCloseAllPositions(reason, marketOpen) {
   const positions = await getPositions();
@@ -20578,7 +20541,7 @@ function calculateAutonomousCapitalPressure({
   const buyingPower = Number(account?.buying_power || cash);
   const equity = Number(account?.equity || 0);
   const maxBotBudget =
-    equity * (Number(CONFIG.maxBotExposurePercent || 80) / 100);
+    equity * (Number(CONFIG.maxBotExposurePercent || 15) / 100);
   const currentBotExposure = getBotExposure(managedPositions);
   const remainingBotBudget = Math.max(0, maxBotBudget - currentBotExposure);
   const asymmetricOpportunityScore = clampScore(
@@ -22807,6 +22770,13 @@ function hydrateCryptoExecutionCandidate(candidate = {}) {
   const spreadPercent = spreadAvailable
     ? ((ask - bid) / ((ask + bid) / 2)) * 100
     : null;
+  const quoteUpdatedAt =
+    quote.updatedAt || quote.liveQuoteUpdatedAt || quote.quoteFetchedAt ||
+    candidate.liveQuoteUpdatedAt || candidate.quoteFetchedAt || null;
+  const quoteSource = String(
+    quote.liveQuoteSource || quote.source || "live_quote_cache"
+  );
+  const priceIsLive = quote.priceIsLive === true && isFreshLiveQuote(quote);
 
   return {
     ...candidate,
@@ -22821,8 +22791,14 @@ function hydrateCryptoExecutionCandidate(candidate = {}) {
     spreadAvailable,
     spreadPercent,
     spreadSource: spreadAvailable
-      ? String(quote.liveQuoteSource || quote.source || "live_quote_cache")
+      ? quoteSource
       : "unavailable",
+    priceIsLive,
+    priceStale: !priceIsLive,
+    liveQuoteUpdatedAt: quoteUpdatedAt,
+    quoteFetchedAt: quoteUpdatedAt,
+    liveQuoteSource: quoteSource,
+    liveQuote: { ...quote, updatedAt: quoteUpdatedAt },
   };
 }
 
@@ -22877,18 +22853,6 @@ async function rotateWeakCryptoIfBetter(signals, positions) {
     );
     return posScore < weakScore ? pos : weak;
   });
-  const clock = await getClock();
-  const marketOpen = clock?.is_open === true;
-  if (!marketOpen && TRADING_MODE !== "live_crypto") {
-    recordOrder(
-      "ROTATION_SKIPPED_MARKET_CLOSED",
-      weakest?.symbol || "UNKNOWN",
-      {
-        replacementCandidate: topCandidate?.symbol,
-      }
-    );
-    return false;
-  }
   const weakestProfitPercent =
     Number(weakest.unrealized_plpc || 0) * 100;
   const weakestSymbol = normalizeSymbol(weakest.symbol);
@@ -23064,7 +23028,7 @@ async function rotateWeakCryptoIfBetter(signals, positions) {
         const totalBotExposure = getBotExposure(freshAiPositions);
         const totalMaxBotBudget =
           Number(account?.equity || 0) *
-          (Number(CONFIG.maxBotExposurePercent || 80) / 100);
+          (Number(CONFIG.maxBotExposurePercent || 15) / 100);
         const remainingTotalBotBudget = Math.max(
           0,
           totalMaxBotBudget - totalBotExposure
@@ -23243,7 +23207,6 @@ const { executeEngineCycleBody } = createEngineCycle({
   applyWhaleSmartMoneyToSignals,
   autoBuyCryptoSignals,
   autoBuySignals,
-  autoCloseCryptoBeforeMarketOpen,
   autoExitCryptoPositions,
   autoExitPositions,
   broadcastTapeEvent,
@@ -23314,7 +23277,7 @@ const { executeEngineCycleBody } = createEngineCycle({
   engineState,
   evaluateStockTradeCandidate,
   executePendingExits,
-  flattenStocksAndCryptoBeforeMarketClose,
+  flattenStocksBeforeMarketClose,
   getAccount,
   getAlpacaKeys,
   getBotOwnedSymbols,
@@ -26344,6 +26307,9 @@ function calculateCentralAutonomousDecisionCore(stockSignals = [], cryptoSignals
       signal.assetClass === "crypto" ||
       signal.asset_class === "crypto" ||
       isCrypto(signal.symbol);
+    if (isCryptoSignal) {
+      Object.assign(signal, hydrateCryptoExecutionCandidate(signal));
+    }
     const cryptoDecisionEvidence = isCryptoSignal
       ? buildCryptoDecisionScore(signal)
       : null;
@@ -26646,11 +26612,16 @@ function calculateCentralAutonomousDecisionCore(stockSignals = [], cryptoSignals
         },
       cryptoDecisionEvidence: isCryptoSignal
         ? {
+          score: cryptoDecisionEvidence.score,
+          coverage: cryptoDecisionEvidence.coverage,
+          scoreStatus: cryptoDecisionEvidence.scoreStatus,
           coreEvidencePass: cryptoDecisionEvidence.coreEvidencePass,
           missingCriticalEvidence: cryptoDecisionEvidence.missingCriticalEvidence,
+          componentsByName: cryptoDecisionEvidence.componentsByName,
           barsFound: cryptoDecisionEvidence.barsFound,
           spread: cryptoDecisionEvidence.spread,
           liquidity: cryptoDecisionEvidence.liquidity,
+          quoteFreshness: cryptoDecisionEvidence.quoteFreshness,
           contextObservations: cryptoDecisionEvidence.contextObservations,
         }
         : null,
@@ -29322,8 +29293,11 @@ function buildLiveStarterBuyDecision(candidate = {}, account = {}, managedPositi
       liveQuote,
     }, {
       requireCentralDecision: true,
+      requireFreshDecision: true,
       maxQuoteAgeSeconds: LIVE_ORDER_MAX_QUOTE_AGE_SECONDS,
-      maxSpreadPercent: LIVE_ORDER_MAX_SPREAD_PERCENT,
+      maxSpreadPercent: cryptoAsset
+        ? Math.min(LIVE_ORDER_MAX_SPREAD_PERCENT, CRYPTO_MAX_ENTRY_SPREAD_PERCENT)
+        : LIVE_ORDER_MAX_SPREAD_PERCENT,
     })
     : null;
   if (canonicalStockGate && !canonicalStockGate.approved) {
@@ -29620,6 +29594,7 @@ async function runLiveStarterBuyGate() {
           refreshedStockCandidate,
           {
             requireCentralDecision: true,
+            requireFreshDecision: true,
             maxQuoteAgeSeconds: LIVE_ORDER_MAX_QUOTE_AGE_SECONDS,
             maxSpreadPercent: LIVE_ORDER_MAX_SPREAD_PERCENT,
           }
@@ -30039,7 +30014,7 @@ function buildLiveScaleInDecision(position = {}, account = {}, managedPositions 
   const totalExposure = getBotExposure(managedPositions);
   const maxBotBudget =
     Number(account?.equity || account?.portfolio_value || 0) *
-    (Number(CONFIG.maxBotExposurePercent || 80) / 100);
+    (Number(CONFIG.maxBotExposurePercent || 15) / 100);
   const remainingTotalBotBudget = Math.max(
     0,
     maxBotBudget - totalExposure
@@ -30052,7 +30027,7 @@ function buildLiveScaleInDecision(position = {}, account = {}, managedPositions 
   }, 0);
   const cryptoMaxBudget =
     Number(account?.equity || account?.portfolio_value || 0) *
-    (Number(CONFIG.maxBotExposurePercent || 80) / 100) *
+    (Number(CONFIG.maxBotExposurePercent || 15) / 100) *
     (Number(CONFIG.cryptoMaxExposureShareOfBotExposure || 30) / 100);
   const remainingCryptoBudget = isCrypto
     ? Math.max(0, cryptoMaxBudget - cryptoExposure)
@@ -30785,7 +30760,7 @@ function validateLiveOrder(symbol, side = "BUY") {
       dailyLossLocked: false,
       profitLocked: false,
       isCrypto: cryptoAsset,
-      marketOpen: true,
+      marketOpen: engineState.marketOpen === true,
       price,
       spreadPercent,
       spreadAvailable,
@@ -30796,10 +30771,12 @@ function validateLiveOrder(symbol, side = "BUY") {
       liveProvider: liveProviderEvidence.provider,
       liveProviderReason: liveProviderEvidence.reason,
       maxQuoteAgeSeconds: LIVE_ORDER_MAX_QUOTE_AGE_SECONDS,
-      maxSpreadPercent: LIVE_ORDER_MAX_SPREAD_PERCENT,
+      maxSpreadPercent: cryptoAsset
+        ? Math.min(LIVE_ORDER_MAX_SPREAD_PERCENT, CRYPTO_MAX_ENTRY_SPREAD_PERCENT)
+        : LIVE_ORDER_MAX_SPREAD_PERCENT,
       maxExposurePercent: 100,
       maxOpenTrades: 0,
-      account: { equity: Math.max(1, price) },
+      account: { equity: Math.max(1, price), cash: Math.max(1, price), buying_power: Math.max(1, price) },
       positions: [],
     },
   });
@@ -31696,12 +31673,25 @@ registerManualExecutionRoutes(app, {
   normalizeSymbol,
   getAsset,
   getStockQuote,
+  getVerifiedStockQuote: (symbol) => resolveVerifiedPreTradeQuote(symbol, false),
+  getVerifiedCryptoQuote: (symbol) => resolveVerifiedPreTradeQuote(symbol, true),
   manualStockBuy: (input) => orderService.manualStockBuy(input),
   manualCryptoBuy: (input) => placeCryptoMarketBuy(input.symbol, input.dollars, {
     source: "MANUAL_VERIFIED_CRYPTO_ROUTE",
   }),
+  evaluateCryptoCandidate: (candidate) => evaluateCryptoTradeCandidate(candidate, {
+    minimumScore: Math.max(70, Number(CONFIG.minScoreToBuy || 70)),
+  }),
+  evaluateStockCandidate: (candidate) => evaluateStockTradeCandidate(candidate, {
+    requireCentralDecision: true,
+    requireFreshDecision: true,
+    maxQuoteAgeSeconds: Math.min(5, LIVE_ORDER_MAX_QUOTE_AGE_SECONDS),
+    maxSpreadPercent: LIVE_ORDER_MAX_SPREAD_PERCENT,
+  }),
   markManagedSymbol: markAiManagedSymbol,
   getState: () => engineState,
+  getMarketOpen: async () => Boolean((await getClock())?.is_open),
+  isCryptoSymbol: isCrypto,
   closePosition,
   recordOrder,
   recordFailedOrder,

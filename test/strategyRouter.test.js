@@ -9,3 +9,17 @@ test("stock execution requires an open market", () => {
   const plan = buildStrategyExecutionPlan({ selectedMode: "smart", effectiveMode: "live_stock", marketOpen: false, approvedStockCount: 2, approvedCryptoCount: 0 });
   assert.equal(plan.shouldRunStockAutoBuy, false);
 });
+test("crypto execution remains eligible when the stock market is closed", () => {
+  const plan = buildStrategyExecutionPlan({
+    selectedMode: "smart",
+    effectiveMode: "live_crypto",
+    marketOpen: false,
+    approvedStockCount: 2,
+    approvedCryptoCount: 1,
+    tradingStoppedForDay: true,
+    stockTradingStoppedForDay: true,
+    cryptoTradingStoppedForDay: false,
+  });
+  assert.equal(plan.shouldRunStockAutoBuy, false);
+  assert.equal(plan.shouldRunCryptoAutoBuy, true);
+});

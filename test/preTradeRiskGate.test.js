@@ -24,7 +24,7 @@ function safeContext(overrides = {}) {
     maxSpreadPercent: 2.5,
     maxExposurePercent: 80,
     maxOpenTrades: 10,
-    account: { equity: 1000 },
+    account: { equity: 1000, cash: 1000, buying_power: 1000 },
     positions: [],
     ...overrides,
   };
@@ -110,6 +110,29 @@ test("manual buys may proceed while automation is disabled", () => {
   assert.equal(result.approved, true);
 });
 
+test("closed equity market blocks stock buys but not crypto buys", () => {
+  const stock = evaluatePreTradeRisk({
+    order: { symbol: "AAPL", side: "buy", notional: 25 },
+    context: safeContext({ marketOpen: false }),
+  });
+  const crypto = evaluatePreTradeRisk({
+    order: { symbol: "BTCUSD", side: "buy", notional: 25 },
+    context: safeContext({ marketOpen: false, isCrypto: true }),
+  });
+  assert.equal(stock.approved, false);
+  assert.ok(stock.reasons.includes("Stock market is closed"));
+  assert.equal(crypto.approved, true);
+});
+
+test("cash-only buys cannot consume margin or stale buying power", () => {
+  const result = evaluatePreTradeRisk({
+    order: { symbol: "AAPL", side: "buy", notional: 25 },
+    context: safeContext({ account: { equity: 1000, cash: 20, buying_power: 2000 } }),
+  });
+  assert.equal(result.approved, false);
+  assert.match(result.reasons.join(" "), /Insufficient cash/);
+});
+
 test("sells remain available during emergency and account-data failures", () => {
   const result = evaluatePreTradeRisk({
     order: { symbol: "AAPL", side: "sell", qty: 1 },
@@ -130,7 +153,7 @@ test("central pre-trade gate enforces strategy position limits only for buys", (
     context: {
       realCashTradingUnlocked: true, marketOpen: true, price: 10, quoteIsLive: true,
       quoteAgeSeconds: 1, maxQuoteAgeSeconds: 15, spreadPercent: 0.1,
-      account: { equity: 1000 }, maxExposurePercent: 100, positions: [],
+      account: { equity: 1000, cash: 1000, buying_power: 1000 }, maxExposurePercent: 100, positions: [],
       liveTradeLimitDecision: { approved: false, reasons: ["Maximum intraday stock trades reached for today (2)"] },
     },
   });

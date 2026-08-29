@@ -15,6 +15,8 @@ export const CRYPTO_DECISION_WEIGHTS = Object.freeze({
   runner: 0.20,
   strategyEvolution: 0.15,
 });
+export const CRYPTO_MIN_DECISION_COVERAGE = 0.8;
+export const CRYPTO_MAX_DECISION_QUOTE_AGE_SECONDS = 5;
 
 function finiteNumber(...values) {
   for (const value of values) {
@@ -134,7 +136,11 @@ function calculateBoundedContext(signal = {}) {
 
 export function buildCryptoDecisionScore(
   signal = {},
-  { now = Date.now(), maxDiscoveryAgeMinutes = 15 } = {}
+  {
+    now = Date.now(),
+    maxDiscoveryAgeMinutes = 15,
+    maxQuoteAgeSeconds = CRYPTO_MAX_DECISION_QUOTE_AGE_SECONDS,
+  } = {}
 ) {
   const barsFound = Math.max(0, finiteNumber(signal.barsFound) || 0);
   const discovery = resolveComponent([
@@ -150,6 +156,22 @@ export function buildCryptoDecisionScore(
   const discoveryFresh = discoveryAgeMinutes !== null &&
     discoveryAgeMinutes >= -1 &&
     discoveryAgeMinutes <= Math.max(1, Number(maxDiscoveryAgeMinutes || 15));
+  const quoteTimestampRaw =
+    signal.liveQuote?.updatedAt ??
+    signal.liveQuoteUpdatedAt ??
+    signal.quoteFetchedAt;
+  const quoteTimestamp = quoteTimestampRaw ? Date.parse(quoteTimestampRaw) : NaN;
+  const quoteAgeSeconds = Number.isFinite(quoteTimestamp)
+    ? (Number(now) - quoteTimestamp) / 1000
+    : null;
+  const quoteFresh =
+    signal.priceIsLive === true &&
+    quoteAgeSeconds !== null &&
+    quoteAgeSeconds >= -5 &&
+    quoteAgeSeconds <= Math.max(
+      1,
+      Number(maxQuoteAgeSeconds || CRYPTO_MAX_DECISION_QUOTE_AGE_SECONDS)
+    );
   const spread = calculateMeasuredSpread(signal);
   const liquidity = resolveCryptoLiquidityEvidence(signal);
   const measuredEntryQuality = calculateCryptoEntryQualityFromEvidence({
@@ -245,6 +267,10 @@ export function buildCryptoDecisionScore(
     ...(liquidity.available ? [] : ["liquidity"]),
     ...(liquidity.pass ? [] : ["minimumLiquidity"]),
     ...(entryQuality.available ? [] : ["entryQuality"]),
+    ...(weighted.coverage >= CRYPTO_MIN_DECISION_COVERAGE
+      ? []
+      : ["decisionCoverage"]),
+    ...(quoteFresh ? [] : ["freshLiveQuote"]),
   ];
 
   return {
@@ -262,6 +288,25 @@ export function buildCryptoDecisionScore(
     liquidity,
     contextObservations: context.observations || [],
     continuationEvidence: { seenDays },
+    scoreStatus:
+      weighted.coverage >= CRYPTO_MIN_DECISION_COVERAGE
+        ? "FINAL"
+        : "PROVISIONAL_INCOMPLETE_EVIDENCE",
+    minimumDecisionCoverage: CRYPTO_MIN_DECISION_COVERAGE,
+    quoteFreshness: {
+      timestamp: Number.isFinite(quoteTimestamp)
+        ? new Date(quoteTimestamp).toISOString()
+        : null,
+      ageSeconds: quoteAgeSeconds === null
+        ? null
+        : Number(quoteAgeSeconds.toFixed(2)),
+      maximumAgeSeconds: Math.max(
+        1,
+        Number(maxQuoteAgeSeconds || CRYPTO_MAX_DECISION_QUOTE_AGE_SECONDS)
+      ),
+      priceIsLive: signal.priceIsLive === true,
+      fresh: quoteFresh,
+    },
     discoveryFreshness: {
       calculatedAt: Number.isFinite(discoveryTimestamp)
         ? new Date(discoveryTimestamp).toISOString()

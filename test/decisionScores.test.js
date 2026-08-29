@@ -2,8 +2,17 @@ import test from "node:test";
 import assert from "node:assert/strict";
 import { buildDecisionScoreTelemetry, buildStockDecisionScore, calculateEarlyDiscoveryScore, calculateEntryQualityScore, calculateMultiDayContinuationScore, evaluateStockTradeCandidate } from "../scoring/decisionScores.js";
 
+const canonicalDiscoveryEvidence = {
+  historyDays: 30,
+  multiHorizonExtension: {
+    coverage: 1,
+    alreadyExtended: false,
+    extensionPenalty: 0,
+  },
+};
+
 test("early discovery is independent from unsafe entry timing", () => {
-  const signal = { percentChange: 7, volumeRatio: 3, preMoveScore: 88, accumulationIntelligence: { accumulationScore: 82 }, catalystScore: 75, lateChaseRisk: true };
+  const signal = { ...canonicalDiscoveryEvidence, percentChange: 7, volumeRatio: 3, preMoveScore: 88, accumulationIntelligence: { accumulationScore: 82 }, catalystScore: 75, lateChaseRisk: true };
   const discovery = calculateEarlyDiscoveryScore(signal);
   const entry = calculateEntryQualityScore({ ...signal, phase5SignalQuality: { hardReject: true, liquidityStabilityScore: 80 } });
   assert.ok(discovery.score >= 75);
@@ -11,7 +20,7 @@ test("early discovery is independent from unsafe entry timing", () => {
 });
 
 test("quiet pre-move evidence outranks an already-loud sparse mover", () => {
-  const quiet = calculateEarlyDiscoveryScore({ percentChange: 0.4, relativeVolume: 0.7, preMoveScore: 88, accumulationIntelligence: { accumulationScore: 84 }, catalystScore: 65 });
+  const quiet = calculateEarlyDiscoveryScore({ ...canonicalDiscoveryEvidence, percentChange: 0.4, relativeVolume: 0.7, preMoveScore: 88, accumulationIntelligence: { accumulationScore: 84 }, catalystScore: 65 });
   const loudAndSparse = calculateEarlyDiscoveryScore({ percentChange: 15 });
   assert.ok(quiet.score >= 72);
   assert.ok(["STRONG_DISCOVERY", "ELITE_DISCOVERY"].includes(quiet.tier));
@@ -19,8 +28,20 @@ test("quiet pre-move evidence outranks an already-loud sparse mover", () => {
   assert.equal(loudAndSparse.tier, "LATE_MOVE_NOT_DISCOVERY");
 });
 
+test("stock discovery without canonical multi-horizon evidence stays watch-only", () => {
+  const result = calculateEarlyDiscoveryScore({
+    percentChange: 0.2,
+    preMoveScore: 95,
+    catalystScore: 90,
+  });
+  assert.equal(result.score, 55);
+  assert.equal(result.canonicalExtensionEvidencePass, false);
+  assert.equal(result.tier, "LATE_MOVE_NOT_DISCOVERY");
+});
+
 test("stock technical discovery is not reduced when no catalyst is available", () => {
   const discovery = calculateEarlyDiscoveryScore({
+    ...canonicalDiscoveryEvidence,
     percentChange: 0.4,
     preMoveScore: 84,
     catalystRanking: {
@@ -36,12 +57,14 @@ test("stock technical discovery is not reduced when no catalyst is available", (
 
 test("extreme relative volume is not treated as quiet early discovery", () => {
   const awakening = calculateEarlyDiscoveryScore({
+    ...canonicalDiscoveryEvidence,
     percentChange: 0.4,
     relativeVolume: 3,
     accumulationIntelligence: { accumulationScore: 80 },
     catalystScore: 65,
   });
   const alreadyLoud = calculateEarlyDiscoveryScore({
+    ...canonicalDiscoveryEvidence,
     percentChange: 0.4,
     relativeVolume: 8,
     accumulationIntelligence: { accumulationScore: 80 },
@@ -82,6 +105,7 @@ test("entry approval fails closed when execution evidence is missing", () => {
 
 test("explicitly unavailable news-risk data blocks stock entry but not discovery", () => {
   const signal = {
+    ...canonicalDiscoveryEvidence,
     percentChange: 0.3,
     preMoveScore: 85,
     requireNewsRiskForEntry: true,
@@ -282,6 +306,25 @@ test("stock final decision uses independent score families and requires entry ev
   assert.equal(incomplete.coreEvidencePass, false);
 });
 
+test("missing optional stock evidence cannot improve the final score", () => {
+  const complete = buildStockDecisionScore({
+    discoveryScorecard: { score: 80, coverage: 1 },
+    entryQualityScorecard: { score: 80, coverage: 1, approved: true },
+    contextScore: 70,
+    riskPortfolioScore: 70,
+    fundamentalBlendScore: 70,
+    fundamentalDataValid: true,
+  });
+  const missingFundamentals = buildStockDecisionScore({
+    discoveryScorecard: { score: 80, coverage: 1 },
+    entryQualityScorecard: { score: 80, coverage: 1, approved: true },
+    contextScore: 70,
+    riskPortfolioScore: 70,
+  });
+  assert.ok(missingFundamentals.score < complete.score);
+  assert.ok(missingFundamentals.missingEvidencePenalty > 0);
+});
+
 test("bounded reinforcement changes the canonical stock decision score", () => {
   const base = {
     discoveryScorecard: { score: 92, coverage: 1 },
@@ -417,6 +460,33 @@ test("stock execution enforces final, entry, coverage, and acceleration threshol
   });
   assert.equal(watchOnly.watchlistEligible, true);
   assert.equal(watchOnly.qualifiedCandidate, false);
+});
+
+test("server execution rejects stale and future stock decisions even with a fresh quote", () => {
+  const now = Date.parse("2026-08-29T14:00:00.000Z");
+  const base = {
+    masterFinalScore: 90,
+    entryQualityScore: 90,
+    entryQualityScorecard: { approved: true, coverage: 1 },
+    discoveryScorecard: { coverage: 1 },
+    decisionScoreCoverage: 1,
+    centralAutonomousAction: "ALLOW",
+    riskScore: 70,
+    spreadPercent: 0.2,
+    quoteFetchedAt: new Date(now).toISOString(),
+  };
+  const stale = evaluateStockTradeCandidate({
+    ...base,
+    decisionUpdatedAt: "2020-01-01T00:00:00.000Z",
+  }, { requireCentralDecision: true, requireFreshDecision: true, now });
+  assert.equal(stale.approved, false);
+  assert.ok(stale.reasons.includes("DECISION_STALE"));
+
+  const fresh = evaluateStockTradeCandidate({
+    ...base,
+    decisionUpdatedAt: new Date(now).toISOString(),
+  }, { requireCentralDecision: true, requireFreshDecision: true, now });
+  assert.equal(fresh.approved, true);
 });
 
 test("final stock gate cannot approve incomplete core evidence or a central block", () => {

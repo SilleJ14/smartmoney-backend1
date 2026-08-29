@@ -11,3 +11,11 @@ test("remote config rejects invalid numbers and emergency activation", () => {
   assert.match(parseRemoteConfigUpdates({ maxOpenTrades: "bad" }).error, /Invalid number/);
   assert.equal(parseRemoteConfigUpdates({ autoTradingEnabled: true }, true).locked, true);
 });
+
+test("remote config cannot re-enable stock trading outside regular hours", () => {
+  const result = parseRemoteConfigUpdates({
+    allowClosedMarketAutoTrade: true,
+    autoTradingEnabled: true,
+  });
+  assert.deepEqual(result.updates, { autoTradingEnabled: true });
+});

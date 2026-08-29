@@ -51,6 +51,30 @@ function componentScores(candidate = {}) {
   );
 }
 
+function liquidityBucket(candidate = {}) {
+  const dollarVolume = Number(
+    candidate.dollarVolume24h ??
+    candidate.dollarVolume ??
+    candidate.averageDollarVolume ??
+    0
+  );
+  if (!Number.isFinite(dollarVolume) || dollarVolume <= 0) return "UNKNOWN";
+  if (dollarVolume >= 100_000_000) return "VERY_HIGH";
+  if (dollarVolume >= 10_000_000) return "HIGH";
+  if (dollarVolume >= 1_000_000) return "MEDIUM";
+  return "LOW";
+}
+
+function marketCapBucket(candidate = {}) {
+  const marketCap = Number(candidate.marketCap ?? candidate.market_cap ?? 0);
+  if (!Number.isFinite(marketCap) || marketCap <= 0) return "UNKNOWN";
+  if (marketCap >= 200_000_000_000) return "MEGA";
+  if (marketCap >= 10_000_000_000) return "LARGE";
+  if (marketCap >= 2_000_000_000) return "MID";
+  if (marketCap >= 300_000_000) return "SMALL";
+  return "MICRO";
+}
+
 function pearson(pairs = []) {
   if (pairs.length < 2) return 0;
   const meanX = pairs.reduce((sum, pair) => sum + pair.x, 0) / pairs.length;
@@ -244,7 +268,11 @@ export function calculateQuietCandidateLearning(
         safeState.updatedDayKey >= observation.targets[horizonDays]
   );
   const measured = due.filter(
-    (observation) => Number.isFinite(Number(observation.measurements?.[horizonDays]?.peakReturnPercent))
+    (observation) => {
+      const value = observation.measurements?.[horizonDays]?.peakReturnPercent;
+      return value !== null && value !== undefined && value !== "" &&
+        Number.isFinite(Number(value));
+    }
   );
   const measurementCoverage = due.length > 0 ? measured.length / due.length : 0;
   const uniqueSymbols = new Set(measured.map((observation) => observation.symbol)).size;
@@ -306,6 +334,7 @@ export function updateQuietCandidateOutcomes(
     maxObservations = 600,
     maxObservationsPerAsset = 300,
     tradedSymbols = [],
+    cryptoMeasurementMaxLagMs = 6 * 60 * 60 * 1000,
   } = {}
 ) {
   const safePreviousState = previousState && typeof previousState === "object"
@@ -388,6 +417,22 @@ export function updateQuietCandidateOutcomes(
             : dayKey < observation.targets[days]
         )
       ) continue;
+      const targetTimestamp = Number(observation.targetTimestamps?.[days] || 0);
+      const missedTargetWindow = assetClass === "crypto"
+        ? targetTimestamp > 0 && Number(now) > targetTimestamp + cryptoMeasurementMaxLagMs
+        : dayKey > observation.targets[days];
+      if (missedTargetWindow) {
+        observation.measurements[days] = {
+          status: "MISSED_TARGET_WINDOW",
+          targetDay: observation.targets[days],
+          measuredDay: null,
+          closePrice: null,
+          closeReturnPercent: null,
+          peakReturnPercent: null,
+          breakoutHit: null,
+        };
+        continue;
+      }
       const closeReturnPercent = ((current.price - observation.baselinePrice) /
         observation.baselinePrice) * 100;
       const peakReturnPercent = ((peakPrice - observation.baselinePrice) /
@@ -437,6 +482,13 @@ export function updateQuietCandidateOutcomes(
       trackingPeakPrice: Number(price.toFixed(8)),
       discoveryScore: Number(clamp(discoveryScore).toFixed(2)),
       discoveryTier: candidate.discoveryTier || candidate.cryptoDiscoveryTier || candidate.tier || null,
+      scoringModelVersion: candidate.scoringModelVersion ||
+        (assetClass === "crypto" ? "SMARTMONEY_CRYPTO_DECISION_V3" : "SMARTMONEY_STOCK_DECISION_V3"),
+      marketRegime: String(
+        candidate.marketRegime || candidate.cryptoRegime || candidate.regime || "UNKNOWN"
+      ).toUpperCase(),
+      liquidityBucket: liquidityBucket(candidate),
+      marketCapBucket: marketCapBucket(candidate),
       componentScores: componentScores(candidate),
       extensionProfile: candidate.extension || candidate.extensionProfile ||
         candidate.cryptoDiscoveryScorecard?.extension || null,

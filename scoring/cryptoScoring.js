@@ -274,6 +274,7 @@ export function resolveCryptoLiquidityEvidence(marketData = {}) {
     realism.liquiditySource === "reported_24h" ? realism.dollarVolume : undefined
   );
   const windowDollarVolume = finiteNumber(
+    marketData.normalizedWindowDollarVolume,
     marketData.windowDollarVolume,
     hintedSource === "aggregated_bar_window" ? marketData.dollarVolume : undefined,
     realism.liquiditySource === "aggregated_bar_window" ? realism.dollarVolume : undefined
@@ -394,7 +395,8 @@ export function calculateCryptoLiquidityFromBars(
           bar.quoteVolume,
           bar.dollarVolume
         );
-        return { close, volume, quoteVolume };
+        const timestamp = finiteNumber(bar.t, bar.timestamp, bar.time);
+        return { close, volume, quoteVolume, timestamp };
       })
       .filter((bar) => bar.close > 0)
     : [];
@@ -420,6 +422,27 @@ export function calculateCryptoLiquidityFromBars(
       : bar.volume * bar.close;
     return sum + Math.max(0, barDollarVolume);
   }, 0);
+  const timestampDeltasMinutes = cleanBars
+    .slice(1)
+    .map((bar, index) => {
+      const current = Number(bar.timestamp);
+      const previous = Number(cleanBars[index].timestamp);
+      if (!Number.isFinite(current) || !Number.isFinite(previous)) return null;
+      // Providers may use seconds or milliseconds.
+      const rawDelta = current - previous;
+      const timestampsUseSeconds = Math.max(Math.abs(current), Math.abs(previous)) < 100_000_000_000;
+      const deltaMs = timestampsUseSeconds ? rawDelta * 1000 : rawDelta;
+      return deltaMs > 0 ? deltaMs / 60_000 : null;
+    })
+    .filter((value) => Number.isFinite(value) && value > 0)
+    .sort((a, b) => a - b);
+  const medianBarMinutes = timestampDeltasMinutes.length
+    ? timestampDeltasMinutes[Math.floor(timestampDeltasMinutes.length / 2)]
+    : 5;
+  const windowMinutes = Math.max(1, cleanBars.length * medianBarMinutes);
+  // Normalize every aggregated window to a 30x5-minute equivalent so a
+  // 30-minute 1m fallback is not treated like a 450-minute 15m window.
+  const normalizedWindowDollarVolume = windowDollarVolume * (150 / windowMinutes);
   const latestBarDollarVolume = Number.isFinite(latestBar.quoteVolume)
     ? Number(latestBar.quoteVolume)
     : latestVolume * Number(latestBar.close || effectivePrice || 0);
@@ -445,7 +468,7 @@ export function calculateCryptoLiquidityFromBars(
   );
   const dollarVolume = dollarVolume24h !== undefined
     ? Math.max(0, dollarVolume24h)
-    : windowDollarVolume;
+    : normalizedWindowDollarVolume;
   const liquiditySource = dollarVolume24h !== undefined
     ? "reported_24h"
     : windowDollarVolume > 0
@@ -474,6 +497,9 @@ export function calculateCryptoLiquidityFromBars(
     latestBarDollarVolume: Number(Math.max(0, latestBarDollarVolume || 0).toFixed(2)),
     averageBarDollarVolume: Number(averageBarDollarVolume.toFixed(2)),
     windowDollarVolume: Number(windowDollarVolume.toFixed(2)),
+    normalizedWindowDollarVolume: Number(normalizedWindowDollarVolume.toFixed(2)),
+    liquidityWindowMinutes: Number(windowMinutes.toFixed(2)),
+    medianBarMinutes: Number(medianBarMinutes.toFixed(2)),
     dollarVolume24h: dollarVolume24h === undefined
       ? null
       : Number(Math.max(0, dollarVolume24h).toFixed(2)),

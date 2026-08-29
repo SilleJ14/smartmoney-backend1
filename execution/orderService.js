@@ -75,6 +75,11 @@ export function createOrderService({
     holdCategory = "intraday",
   }) {
     const cleanSymbol = normalizeSymbol(symbol);
+    if (marketOpen !== true) {
+      throw new Error(
+        `${cleanSymbol || "Stock"} order blocked: stocks trade only while the regular market is open`
+      );
+    }
     const cleanNotional = Math.max(
       1,
       Number(positiveNumber(dollars, `buy amount for ${cleanSymbol}`).toFixed(2))
@@ -88,31 +93,24 @@ export function createOrderService({
         `${clientOrderPrefix}_BUY_${cleanSymbol}_${Math.round(score)}_${now()}`,
     };
 
-    if (marketOpen && fractionable) {
+    if (fractionable) {
       return submit(
         { ...payload, notional: cleanNotional, type: "market" },
         { allowExistingOpenOrder, holdCategory }
       );
     }
 
-    const buyPrice = marketOpen ? price : Number((price * 1.01).toFixed(2));
-    const qty = Math.floor(cleanNotional / buyPrice);
+    const qty = Math.floor(cleanNotional / price);
     if (qty < 1) {
       throw new Error(
         `${cleanSymbol} is not fractionable or requires whole-share buying. ` +
-        `$${cleanNotional} is not enough for 1 share at about $${buyPrice}.`
+        `$${cleanNotional} is not enough for 1 share at about $${price}.`
       );
     }
     return submit({
       ...payload,
       qty: String(qty),
-      type: marketOpen ? "market" : "limit",
-      ...(marketOpen
-        ? {}
-        : {
-          limit_price: String(buyPrice),
-          extended_hours: true,
-        }),
+      type: "market",
     }, { allowExistingOpenOrder, holdCategory });
   }
 
@@ -122,9 +120,13 @@ export function createOrderService({
     reason = "AI_EXIT",
     marketOpen,
     fractionable,
-    referencePrice,
   }) {
     const cleanSymbol = normalizeSymbol(symbol);
+    if (marketOpen !== true) {
+      throw new Error(
+        `${cleanSymbol || "Stock"} order blocked: stocks trade only while the regular market is open`
+      );
+    }
     const rawQty = positiveNumber(qty, `sell quantity for ${cleanSymbol}`);
     const cleanQty = fractionable ? Number(rawQty.toFixed(8)) : Math.floor(rawQty);
     if (cleanQty <= 0) throw new Error(`Invalid sell quantity for ${cleanSymbol}`);
@@ -137,18 +139,7 @@ export function createOrderService({
       client_order_id:
         `${clientOrderPrefix}_SELL_${cleanSymbol}_${reason}_${now()}`,
     };
-    if (marketOpen) return submit({ ...payload, type: "market" });
-
-    const price = positiveNumber(
-      referencePrice,
-      `after-hours limit price for ${cleanSymbol}`
-    );
-    return submit({
-      ...payload,
-      type: "limit",
-      limit_price: String(Number((price * 0.99).toFixed(2))),
-      extended_hours: true,
-    });
+    return submit({ ...payload, type: "market" });
   }
 
   function manualStockBuy({
@@ -159,9 +150,15 @@ export function createOrderService({
     fractionable,
     referencePrice,
     holdCategory = "intraday",
+    marketOpen,
   }) {
     const cleanSymbol = normalizeSymbol(symbol);
     if (!cleanSymbol) throw new Error("Missing symbol");
+    if (marketOpen !== true) {
+      throw new Error(
+        `${cleanSymbol} order blocked: stocks trade only while the regular market is open`
+      );
+    }
     const payload = {
       symbol: cleanSymbol,
       side: "buy",

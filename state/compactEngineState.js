@@ -174,6 +174,10 @@ function compactQuietCandidateObservation(observation = {}) {
     lastTrackedDay: observation.lastTrackedDay || null,
     discoveryScore: Number(observation.discoveryScore || 0),
     discoveryTier: observation.discoveryTier || null,
+    scoringModelVersion: observation.scoringModelVersion || null,
+    marketRegime: observation.marketRegime || "UNKNOWN",
+    liquidityBucket: observation.liquidityBucket || "UNKNOWN",
+    marketCapBucket: observation.marketCapBucket || "UNKNOWN",
     componentScores: observation.componentScores || {},
     extensionProfile: extension
       ? {
@@ -204,6 +208,8 @@ function compactQuietCandidateObservation(observation = {}) {
     targets: observation.targets || {},
     targetTimestamps: observation.targetTimestamps || {},
     measurements: observation.measurements || {},
+    benchmarks: observation.benchmarks || {},
+    benchmarkMeasurements: observation.benchmarkMeasurements || {},
   };
 }
 

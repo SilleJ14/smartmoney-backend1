@@ -38,6 +38,8 @@ export function evaluatePreTradeRisk({ order = {}, context = {}, options = {} } 
     const spreadAvailable = hasMeasuredLiveSpread(context);
     const value = orderValue(order, price);
     const equity = finiteNumber(context.account?.equity || context.account?.portfolio_value);
+    const cash = Number(context.account?.cash);
+    const buyingPower = Number(context.account?.buying_power);
     const exposure = (context.positions || []).reduce(
       (sum, position) => sum + Math.abs(finiteNumber(position.market_value)),
       0
@@ -68,6 +70,16 @@ export function evaluatePreTradeRisk({ order = {}, context = {}, options = {} } 
       reasons.push("Required live market-data provider is disconnected");
     }
     if (equity <= 0) reasons.push("Broker equity is unavailable");
+    if (!Number.isFinite(cash) || cash < 0) {
+      reasons.push("Broker cash balance is unavailable");
+    } else if (value > cash) {
+      reasons.push(`Insufficient cash: ${Number(value.toFixed(2))} > ${Number(cash.toFixed(2))}`);
+    }
+    if (Number.isFinite(buyingPower) && buyingPower >= 0 && value > buyingPower) {
+      reasons.push(
+        `Insufficient buying power: ${Number(value.toFixed(2))} > ${Number(buyingPower.toFixed(2))}`
+      );
+    }
     if (value <= 0) reasons.push("Order value cannot be calculated");
     if (maxExposure > 0 && exposure + value > maxExposure) {
       reasons.push(
