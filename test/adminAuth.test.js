@@ -83,3 +83,70 @@ test("owner recovery codes are admin-only, expire, are single-use, and invalidat
   timestamp += 11 * 60 * 1000;
   fs.rmSync(directory, { recursive: true, force: true });
 });
+
+test("admin owner repair replaces inconsistent account state and issues a recovery code", () => {
+  const directory = fs.mkdtempSync(path.join(os.tmpdir(), "smartmoney-owner-repair-"));
+  const routes = new Map();
+  const app = {
+    post(route, ...handlers) { routes.set(`POST ${route}`, handlers); },
+    get(route, ...handlers) { routes.set(`GET ${route}`, handlers); },
+  };
+  const auth = createAdminAuth({
+    adminToken: "server-secret",
+    userFile: path.join(directory, "users.json"),
+    now: () => 1000,
+  });
+  auth.registerRoutes(app);
+  const response = () => ({ status(code) { this.code = code; return this; }, json(body) { this.body = body; return this; } });
+  const run = (route, req, res) => {
+    const handlers = routes.get(`POST ${route}`); let index = 0;
+    const next = () => handlers[index++](req, res, next);
+    next();
+  };
+
+  const signup = response();
+  run("/auth/signup", { headers: {}, ip: "1", body: { email: "wrong@example.com", password: "old-password!", name: "Old Owner" } }, signup);
+
+  const missingConfirmation = response();
+  run("/auth/admin/repair-owner", {
+    method: "POST",
+    headers: { authorization: "Bearer server-secret" },
+    ip: "1",
+    body: { email: "owner@example.com" },
+  }, missingConfirmation);
+  assert.equal(missingConfirmation.code, 400);
+
+  const repaired = response();
+  run("/auth/admin/repair-owner", {
+    method: "POST",
+    headers: { authorization: "Bearer server-secret" },
+    ip: "1",
+    body: {
+      email: "owner@example.com",
+      name: "Owner",
+      confirmation: "REPAIR_SMARTMONEY_OWNER",
+    },
+  }, repaired);
+  assert.equal(repaired.body.repaired, true);
+  assert.equal(repaired.body.email, "owner@example.com");
+  assert.match(repaired.body.code, /^\d{8}$/);
+  assert.equal(auth.sessionUser(signup.body.token), null);
+
+  const persisted = JSON.parse(fs.readFileSync(path.join(directory, "users.json"), "utf8"));
+  assert.deepEqual(persisted.users.map((user) => user.email), ["owner@example.com"]);
+
+  const reset = response();
+  run("/auth/reset-password", {
+    headers: {},
+    ip: "2",
+    body: {
+      email: "owner@example.com",
+      code: repaired.body.code,
+      newPassword: "new-password!",
+    },
+  }, reset);
+  assert.ok(reset.body.token);
+  assert.ok(auth.sessionUser(reset.body.token));
+
+  fs.rmSync(directory, { recursive: true, force: true });
+});

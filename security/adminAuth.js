@@ -122,6 +122,45 @@ export function createAdminAuth({ adminToken, userFile = "", sessionTtlMs = 12 *
       recoveryCodes.set(user.id, { digest: recoveryDigest(code), expiresAt: now() + recoveryTtlMs, attempts: 0 });
       return res.json({ ok: true, email: user.email, code, expiresInSeconds: recoveryTtlMs / 1000 });
     });
+    app.post("/auth/admin/repair-owner", requireAdmin, (req, res) => {
+      if (req.authUser) return res.status(403).json({ ok: false, error: "The backend administrator token is required" });
+      if (String(req.body?.confirmation || "") !== "REPAIR_SMARTMONEY_OWNER") {
+        return res.status(400).json({ ok: false, error: "Exact owner-repair confirmation is required" });
+      }
+      const email = normalizeIdentity(req.body?.email);
+      const name = String(req.body?.name || "").trim().slice(0, 80) || "SmartMoney Owner";
+      if (!/^\S+@\S+\.\S+$/.test(email)) {
+        return res.status(400).json({ ok: false, error: "Enter a valid email address" });
+      }
+
+      const existing = users.find((candidate) => candidate.email === email) || users[0] || {};
+      const placeholderPassword = passwordDigest(crypto.randomBytes(48).toString("base64url"));
+      const repairedAt = new Date(now()).toISOString();
+      const user = {
+        id: existing.id || crypto.randomUUID(),
+        email,
+        name,
+        salt: placeholderPassword.salt,
+        passwordDigest: placeholderPassword.digest,
+        createdAt: existing.createdAt || repairedAt,
+        passwordChangedAt: repairedAt,
+        authVersion: crypto.randomUUID(),
+      };
+
+      users = [user];
+      recoveryCodes.clear();
+      persistUsers(userFile, users);
+      const code = crypto.randomInt(0, 100000000).toString().padStart(8, "0");
+      recoveryCodes.set(user.id, { digest: recoveryDigest(code), expiresAt: now() + recoveryTtlMs, attempts: 0 });
+      failures.delete(getClientIp(req));
+      return res.json({
+        ok: true,
+        repaired: true,
+        email: user.email,
+        code,
+        expiresInSeconds: recoveryTtlMs / 1000,
+      });
+    });
     app.post("/auth/reset-password", (req, res) => {
       const email = normalizeIdentity(req.body?.email);
       const code = String(req.body?.code || "").trim();
