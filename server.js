@@ -262,6 +262,17 @@ const adminAuth = createAdminAuth({
   adminToken: process.env.ADMIN_API_TOKEN || "",
   userFile: path.resolve(DATA_DIR, "users.json"),
   sessionTtlMs: Math.max(15 * 60 * 1000, Number(process.env.AUTH_SESSION_TTL_HOURS || 12) * 60 * 60 * 1000),
+  googleClientIds: [
+    process.env.GOOGLE_WEB_CLIENT_ID,
+    process.env.GOOGLE_IOS_CLIENT_ID,
+    process.env.GOOGLE_ANDROID_CLIENT_ID,
+    ...(process.env.GOOGLE_OAUTH_CLIENT_IDS || "").split(","),
+  ],
+  appleClientIds: [
+    process.env.APPLE_IOS_CLIENT_ID || "com.sille14.smartmoney",
+    process.env.APPLE_SERVICE_ID,
+    ...(process.env.APPLE_OAUTH_CLIENT_IDS || "").split(","),
+  ],
 });
 const { requireAdmin, getClientIp } = adminAuth;
 adminAuth.registerRoutes(app);
@@ -14592,8 +14603,17 @@ function calculateEarlyMoverProfile({
 }
 const STOCK_NEWS_CACHE_TTL_MS = 15 * 60 * 1000;
 const STOCK_NEWS_CACHE_STALE_MS = 60 * 60 * 1000;
+const MARKET_NEWS_CACHE_TTL_MS = 10 * 60 * 1000;
+const MARKET_NEWS_CACHE_STALE_MS = 6 * 60 * 60 * 1000;
 const stockNewsCache = new Map();
 let cryptoMarketNewsCache = { at: 0, articles: [], available: false };
+let marketNewsFeedCache = {
+  at: 0,
+  articles: [],
+  available: false,
+  fetchedAt: null,
+  reason: "News feed has not loaded yet",
+};
 
 function pruneStockNewsCache(maxEntries = 250) {
   if (stockNewsCache.size <= maxEntries) return;
@@ -14614,6 +14634,120 @@ function unavailableNewsResult(reason) {
     articles: [],
     catalyst: calculateNewsCatalyst({ dataAvailable: false }),
   };
+}
+
+function normalizeMarketNewsArticle(article, category) {
+  const headline = String(article?.headline || article?.title || "")
+    .replace(/\s+/g, " ")
+    .trim()
+    .slice(0, 240);
+  if (!headline) return null;
+
+  const relatedSymbols = String(article?.related || "")
+    .split(",")
+    .map((value) => normalizeSymbol(value))
+    .filter(Boolean);
+  const symbol = relatedSymbols[0] || (category === "crypto" ? "CRYPTO" : "MARKET");
+  const publishedAtSeconds = Number(article?.datetime || article?.timestamp || 0);
+  const publishedAt = Number.isFinite(publishedAtSeconds) && publishedAtSeconds > 0
+    ? publishedAtSeconds < 10_000_000_000
+      ? publishedAtSeconds * 1000
+      : publishedAtSeconds
+    : Date.parse(String(article?.publishedAt || article?.published_at || ""));
+
+  return {
+    symbol,
+    headline,
+    source: String(article?.source || "Finnhub")
+      .replace(/\s+/g, " ")
+      .trim()
+      .slice(0, 80) || "Finnhub",
+    publishedAt: Number.isFinite(publishedAt) ? publishedAt : 0,
+    category: category === "crypto" ? "CRYPTO" : "MARKET",
+  };
+}
+
+async function getMarketNewsFeed() {
+  const now = Date.now();
+  if (!FINNHUB_API_KEY) {
+    return {
+      available: false,
+      articles: [],
+      stale: false,
+      reason: "Finnhub API key missing",
+      fetchedAt: null,
+    };
+  }
+
+  if (
+    marketNewsFeedCache.available === true &&
+    now - Number(marketNewsFeedCache.at || 0) <= MARKET_NEWS_CACHE_TTL_MS
+  ) {
+    return { ...marketNewsFeedCache, stale: false, reason: "Live market news" };
+  }
+
+  try {
+    const categoryResults = await Promise.allSettled(
+      ["general", "crypto"].map(async (category) => {
+        const url = `https://finnhub.io/api/v1/news?category=${category}&minId=0&token=${FINNHUB_API_KEY}`;
+        const response = await fetchWithTimeout(url, {}, 15000);
+        const data = await response.json();
+        if (!response.ok || !Array.isArray(data)) {
+          throw new Error(`Finnhub ${category} news HTTP ${response.status}`);
+        }
+        return { category, data };
+      })
+    );
+
+    const articles = [];
+    const seen = new Set();
+    for (const result of categoryResults) {
+      if (result.status !== "fulfilled") continue;
+      for (const value of result.value.data.slice(0, 50)) {
+        const article = normalizeMarketNewsArticle(value, result.value.category);
+        if (!article) continue;
+        const key = article.headline.toLowerCase();
+        if (seen.has(key)) continue;
+        seen.add(key);
+        articles.push(article);
+      }
+    }
+
+    articles.sort((a, b) => Number(b.publishedAt || 0) - Number(a.publishedAt || 0));
+    if (articles.length === 0) {
+      throw new Error("Finnhub returned no usable market headlines");
+    }
+
+    marketNewsFeedCache = {
+      at: now,
+      articles: articles.slice(0, 48),
+      available: true,
+      fetchedAt: new Date(now).toISOString(),
+      reason: "Live market news",
+    };
+    updateApiHealth("finnhubMarketNews", true);
+    return { ...marketNewsFeedCache, stale: false };
+  } catch (error) {
+    updateApiHealth("finnhubMarketNews", false, error.message);
+    if (
+      marketNewsFeedCache.articles.length > 0 &&
+      now - Number(marketNewsFeedCache.at || 0) <= MARKET_NEWS_CACHE_STALE_MS
+    ) {
+      return {
+        ...marketNewsFeedCache,
+        available: false,
+        stale: true,
+        reason: "News provider unavailable; showing recent cached headlines",
+      };
+    }
+    return {
+      available: false,
+      articles: [],
+      stale: false,
+      reason: error.message || "News feed unavailable",
+      fetchedAt: marketNewsFeedCache.fetchedAt,
+    };
+  }
 }
 
 async function getNewsRisk(symbol) {
@@ -31507,6 +31641,7 @@ registerFrontendRoutes(app, {
   normalizeSymbol,
   mergeLiveQuote: mergeLiveQuoteIntoSignal,
   getTopSignals,
+  getMarketNewsFeed,
 });
 
 registerStatusRoutes(app, {
@@ -31737,8 +31872,12 @@ registerConfigRoutes(app, {
     if (updates.tradingMode) TRADING_MODE = runtimeConfig.tradingMode = String(updates.tradingMode);
     if (updates.tradingModeLocked !== undefined) tradingModeLocked = runtimeConfig.tradingModeLocked = updates.tradingModeLocked === true || updates.tradingModeLocked === "true";
     if (updates.autoTradingEnabled !== undefined) autoTradingEnabled = runtimeConfig.autoTradingEnabled = updates.autoTradingEnabled === true || updates.autoTradingEnabled === "true";
-    saveRuntimeConfig(CONFIG_FILE, runtimeConfig);
-    return { runtimeConfig, tradingMode: TRADING_MODE, effectiveMode: getEffectiveTradingMode(engineState.marketOpen),
+    runtimeConfig = sanitizeRuntimeConfig(saveRuntimeConfig(CONFIG_FILE, runtimeConfig));
+    Object.assign(CONFIG, runtimeConfig);
+    CONFIG.minScoreToBuy = Math.max(70, Number(CONFIG.minScoreToBuy || 70));
+    applyRuntimeLiveSettings();
+    saveEngineState("MANUAL_CONFIG_UPDATED");
+    return { permanent: true, config: CONFIG, runtimeConfig, tradingMode: TRADING_MODE, effectiveMode: getEffectiveTradingMode(engineState.marketOpen),
       tradingModeLocked, autoTradingEnabled };
   },
 });

@@ -39,10 +39,12 @@ export function registerConfigRoutes(app, dependencies) {
   });
   app.post("/api/config", requireAdmin, (req, res) => {
     try {
-      const updates = req.body || {};
-      const blocked = automationBlock(updates);
+      const state = controlState();
+      const parsed = parseRemoteConfigUpdates(req.body, state.emergencyStopActive);
+      if (parsed.error) return res.status(parsed.locked ? 423 : 400).json({ ok: false, error: parsed.error, ...(parsed.received !== undefined ? { received: parsed.received } : {}) });
+      const blocked = automationBlock(parsed.updates);
       if (blocked) return res.status(blocked.status).json({ ok: false, error: blocked.error });
-      res.json({ ok: true, updatedAt: now().toISOString(), ...applyApiUpdates(updates, getRuntimeConfig()) });
+      res.json({ ok: true, updatedAt: now().toISOString(), ...applyApiUpdates(parsed.updates, getRuntimeConfig()) });
     } catch (error) { res.status(500).json({ ok: false, error: error.message }); }
   });
 }

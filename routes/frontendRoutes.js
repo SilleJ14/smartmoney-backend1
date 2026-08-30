@@ -40,6 +40,7 @@ export function registerFrontendRoutes(app, dependencies) {
     normalizeSymbol,
     mergeLiveQuote,
     getTopSignals,
+    getMarketNewsFeed,
   } = dependencies;
 
   app.get("/frontend/portfolio", requireAdmin, async (req, res) => {
@@ -131,6 +132,92 @@ export function registerFrontendRoutes(app, dependencies) {
       const orchestration = latestStatus?.phase20AutonomousOrchestration || {};
       const autonomous = latestStatus?.autonomousTradingSystem || {};
       const governor = latestStatus?.institutionalDashboard?.portfolioGovernor || {};
+      const newsCandidates = uniqueSignals(
+        [
+          ...(Array.isArray(brain.topAutonomousCandidates) ? brain.topAutonomousCandidates : []),
+          ...collectSignals(getState(), latestStatus, normalizeSymbol, true),
+        ],
+        normalizeSymbol
+      ).map(mergeLiveQuote).slice(0, 50);
+      const newsFeed = [];
+      const seenHeadlines = new Set();
+      const addNewsItem = (signal, value) => {
+        const article = typeof value === "string" ? { headline: value } : value || {};
+        const headline = String(article.headline || article.title || "")
+          .replace(/\s+/g, " ")
+          .trim()
+          .slice(0, 240);
+        if (!headline) return;
+        const dedupeKey = headline.toLowerCase();
+        if (seenHeadlines.has(dedupeKey)) return;
+        seenHeadlines.add(dedupeKey);
+
+        const rawTimestamp =
+          article.publishedAt ||
+          article.published_at ||
+          article.datetime ||
+          article.timestamp ||
+          0;
+        const numericTimestamp = Number(rawTimestamp);
+        const parsedTimestamp = Number.isFinite(numericTimestamp) && numericTimestamp > 0
+          ? numericTimestamp < 10_000_000_000
+            ? numericTimestamp * 1000
+            : numericTimestamp
+          : Date.parse(String(rawTimestamp || ""));
+
+        newsFeed.push({
+          symbol: normalizeSymbol(signal?.symbol) || "MARKET",
+          headline,
+          source: String(article.source || article.provider || signal?.newsSource || "Market news")
+            .replace(/\s+/g, " ")
+            .trim()
+            .slice(0, 80),
+          publishedAt: Number.isFinite(parsedTimestamp) ? parsedTimestamp : 0,
+        });
+      };
+
+      let marketNews = { available: false, articles: [], stale: false, reason: "News feed unavailable" };
+      if (typeof getMarketNewsFeed === "function") {
+        try {
+          const result = await getMarketNewsFeed();
+          if (result && typeof result === "object") marketNews = result;
+        } catch (error) {
+          marketNews = {
+            available: false,
+            articles: [],
+            stale: false,
+            reason: error?.message || "News feed unavailable",
+          };
+        }
+      }
+
+      (Array.isArray(marketNews.articles) ? marketNews.articles : [])
+        .slice(0, 24)
+        .forEach((article) => {
+          addNewsItem(
+            { symbol: article?.symbol || article?.related || article?.category || "MARKET" },
+            article
+          );
+        });
+
+      newsCandidates.forEach((signal) => {
+        const confirmations = signal?.confirmations || {};
+        [
+          ...(Array.isArray(confirmations.newsArticles) ? confirmations.newsArticles : []),
+          ...(Array.isArray(signal?.newsArticles) ? signal.newsArticles : []),
+        ].slice(0, 8).forEach((article) => addNewsItem(signal, article));
+
+        [
+          confirmations.newsHeadlines,
+          confirmations.riskyNewsHeadlines,
+          signal?.newsHeadlines,
+        ].forEach((headlines) => {
+          if (!Array.isArray(headlines)) return;
+          headlines.slice(0, 8).forEach((headline) => addNewsItem(signal, headline));
+        });
+      });
+
+      newsFeed.sort((a, b) => b.publishedAt - a.publishedAt);
       res.json({
         success: true,
         ai: {
@@ -146,6 +233,13 @@ export function registerFrontendRoutes(app, dependencies) {
           finalSystemReason: autonomous.finalSystemReason,
           governorReason: governor.governorReason,
           topCandidates: brain.topAutonomousCandidates || [],
+          newsFeed: newsFeed.slice(0, 12),
+          newsFeedStatus: {
+            available: marketNews.available === true,
+            stale: marketNews.stale === true,
+            reason: marketNews.reason || "",
+            fetchedAt: marketNews.fetchedAt || null,
+          },
         },
       });
     } catch (err) {

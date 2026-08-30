@@ -55,3 +55,19 @@ test("generic config endpoints still allow pausing automation", async () => {
   assert.equal(response.statusCode, 200);
   assert.deepEqual(api.applied, [{ autoTradingEnabled: false }]);
 });
+
+test("api config validates numeric values and strips non-config persistence flags", async () => {
+  const api = harness();
+  const invalid = await api.invoke("/api/config", { maxBotExposurePercent: "bad" });
+  assert.equal(invalid.statusCode, 400);
+  assert.equal(api.applied.length, 0);
+
+  const valid = await api.invoke("/api/config", {
+    maxBotExposurePercent: "15",
+    dailyLossLimitPercent: "2",
+    persist: true,
+    permanent: true,
+  });
+  assert.equal(valid.statusCode, 200);
+  assert.deepEqual(api.applied, [{ maxBotExposurePercent: 15, dailyLossLimitPercent: 2 }]);
+});

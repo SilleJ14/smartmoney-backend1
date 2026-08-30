@@ -1,9 +1,44 @@
 import crypto from "crypto";
 import fs from "fs";
 import path from "path";
+import { OAuth2Client } from "google-auth-library";
+import { createRemoteJWKSet, jwtVerify } from "jose";
 
 const normalizeIdentity = (value) => String(value || "").trim().toLowerCase();
 const encode = (value) => Buffer.from(JSON.stringify(value)).toString("base64url");
+const googleOAuthClient = new OAuth2Client();
+const appleJwks = createRemoteJWKSet(new URL("https://appleid.apple.com/auth/keys"));
+
+async function verifyGoogleIdToken({ idToken, clientIds }) {
+  const ticket = await googleOAuthClient.verifyIdToken({
+    idToken,
+    audience: clientIds,
+  });
+  const payload = ticket.getPayload();
+  if (!payload?.sub || !payload?.email || payload.email_verified !== true) {
+    throw new Error("Google did not return a verified identity");
+  }
+  return {
+    sub: String(payload.sub),
+    email: normalizeIdentity(payload.email),
+    name: String(payload.name || "").trim().slice(0, 80),
+  };
+}
+
+async function verifyAppleIdentityToken({ identityToken, clientIds }) {
+  const { payload } = await jwtVerify(identityToken, appleJwks, {
+    issuer: "https://appleid.apple.com",
+    audience: clientIds,
+  });
+  if (!payload?.sub) throw new Error("Apple did not return a verified identity");
+  const email = normalizeIdentity(payload.email);
+  const emailVerified = payload.email_verified === true || payload.email_verified === "true";
+  return {
+    sub: String(payload.sub),
+    email: emailVerified ? email : "",
+    emailVerified,
+  };
+}
 
 function passwordDigest(password, salt = crypto.randomBytes(16).toString("base64url")) {
   return { salt, digest: crypto.scryptSync(String(password), salt, 64).toString("base64url") };
@@ -33,9 +68,23 @@ function persistUsers(file, users) {
 
 export function createAdminAuth({ adminToken, userFile = "", sessionTtlMs = 12 * 60 * 60 * 1000,
   failureWindowMs = 15 * 60 * 1000, failureLimit = 20, ticketTtlMs = 30 * 1000,
-  recoveryTtlMs = 10 * 60 * 1000, now = () => Date.now() }) {
+  recoveryTtlMs = 10 * 60 * 1000, now = () => Date.now(), googleClientIds = [],
+  googleTokenVerifier = verifyGoogleIdToken, appleClientIds = [],
+  appleTokenVerifier = verifyAppleIdentityToken }) {
   const failures = new Map(), tickets = new Map(), recoveryCodes = new Map();
   let users = userFile ? safeUsers(userFile) : [];
+  const allowedGoogleClientIds = [...new Set(
+    (Array.isArray(googleClientIds) ? googleClientIds : String(googleClientIds || "").split(","))
+      .map((value) => String(value || "").trim())
+      .filter(Boolean)
+      .slice(0, 10)
+  )];
+  const allowedAppleClientIds = [...new Set(
+    (Array.isArray(appleClientIds) ? appleClientIds : String(appleClientIds || "").split(","))
+      .map((value) => String(value || "").trim())
+      .filter(Boolean)
+      .slice(0, 10)
+  )];
   const signingKey = crypto.createHash("sha256").update(String(adminToken || "missing-admin-token")).digest();
   const getClientIp = (req) => String(req.headers["x-forwarded-for"] || req.ip || "unknown").split(",")[0].trim();
   const publicUser = (user) => ({ id: user.id, name: user.name, email: user.email, createdAt: user.createdAt });
@@ -112,6 +161,71 @@ export function createAdminAuth({ adminToken, userFile = "", sessionTtlMs = 12 *
       if (!user || !passwordIsValid(password, user)) return recordFailure(req, res);
       failures.delete(getClientIp(req));
       return res.json({ ok: true, token: signSession(user), expiresInSeconds: sessionTtlMs / 1000, user: publicUser(user) });
+    });
+    app.post("/auth/google", async (req, res) => {
+      if (allowedGoogleClientIds.length === 0) {
+        return res.status(503).json({ ok: false, error: "Google login is not configured on the server" });
+      }
+      const idToken = String(req.body?.idToken || "").trim();
+      if (!idToken || idToken.length > 12000) {
+        return res.status(400).json({ ok: false, error: "A valid Google identity token is required" });
+      }
+      try {
+        const identity = await googleTokenVerifier({ idToken, clientIds: allowedGoogleClientIds });
+        const user = users.find((candidate) => candidate.email === normalizeIdentity(identity?.email));
+        if (!user) {
+          return res.status(403).json({ ok: false, error: "This Google account is not provisioned for SmartMoney" });
+        }
+        if (user.googleSubject && user.googleSubject !== identity.sub) {
+          return recordFailure(req, res, "This Google identity does not match the linked SmartMoney account");
+        }
+        if (!user.googleSubject) {
+          user.googleSubject = identity.sub;
+          user.googleLinkedAt = new Date(now()).toISOString();
+          persistUsers(userFile, users);
+        }
+        failures.delete(getClientIp(req));
+        return res.json({ ok: true, token: signSession(user), expiresInSeconds: sessionTtlMs / 1000, user: publicUser(user) });
+      } catch {
+        return recordFailure(req, res, "Google sign-in could not be verified");
+      }
+    });
+    app.post("/auth/apple", async (req, res) => {
+      if (allowedAppleClientIds.length === 0) {
+        return res.status(503).json({ ok: false, error: "Apple login is not configured on the server" });
+      }
+      const identityToken = String(req.body?.identityToken || "").trim();
+      if (!identityToken || identityToken.length > 12000) {
+        return res.status(400).json({ ok: false, error: "A valid Apple identity token is required" });
+      }
+      try {
+        const identity = await appleTokenVerifier({ identityToken, clientIds: allowedAppleClientIds });
+        const linkedUser = users.find((candidate) => candidate.appleSubject === identity?.sub) || null;
+        const emailUser = identity?.email && identity?.emailVerified
+          ? users.find((candidate) => candidate.email === normalizeIdentity(identity.email)) || null
+          : null;
+        const sessionLinkedUser = sessionUser(bearerOf(req));
+        const user = linkedUser || emailUser || sessionLinkedUser;
+
+        if (!user) {
+          return res.status(403).json({
+            ok: false,
+            error: "This Apple ID is not linked to the SmartMoney owner. Log in with email once, then connect Apple.",
+          });
+        }
+        if (user.appleSubject && user.appleSubject !== identity.sub) {
+          return recordFailure(req, res, "This Apple identity does not match the linked SmartMoney account");
+        }
+        if (!user.appleSubject) {
+          user.appleSubject = identity.sub;
+          user.appleLinkedAt = new Date(now()).toISOString();
+          persistUsers(userFile, users);
+        }
+        failures.delete(getClientIp(req));
+        return res.json({ ok: true, token: signSession(user), expiresInSeconds: sessionTtlMs / 1000, user: publicUser(user) });
+      } catch {
+        return recordFailure(req, res, "Apple sign-in could not be verified");
+      }
     });
     app.post("/auth/admin/recovery-code", requireAdmin, (req, res) => {
       if (req.authUser) return res.status(403).json({ ok: false, error: "The backend administrator token is required" });
