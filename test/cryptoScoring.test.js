@@ -7,6 +7,7 @@ import {
 } from "../scoring/cryptoScoring.js";
 import {
   CRYPTO_DECISION_WEIGHTS,
+  CRYPTO_MIN_FINAL_SCORE_TO_BUY,
   buildCryptoDecisionScore,
   calculateAvailableWeightedScore,
   evaluateCryptoTradeCandidate,
@@ -470,6 +471,47 @@ test("shared crypto execution gate requires central and freshly complete evidenc
   assert.ok(staleCentralWideQuote.reasons.includes("acceptableSpread"));
 });
 
+test("crypto execution gate uses a 65 minimum Final Decision score", () => {
+  const now = Date.now();
+  const candidate = {
+    symbol: "BTC/USD",
+    cryptoDiscoveryScorecard: {
+      stage: "CRYPTO_EARLY_DISCOVERY",
+      score: 90,
+      coverage: 1,
+      calculatedAt: new Date(now).toISOString(),
+      extension: { alreadyExtended: false },
+    },
+    newsCatalyst: { dataAvailable: true, riskDetected: false },
+    qualifiedToBuy: true,
+    autoTradeApproved: true,
+    barsFound: 30,
+    current: 100,
+    priceIsLive: true,
+    liveQuoteUpdatedAt: new Date(now).toISOString(),
+    bid: 99.95,
+    ask: 100.05,
+    windowDollarVolume: 1_000_000,
+    multiDayContinuationScore: 75,
+    multiDayAccumulation: { seenDays: ["2026-08-20", "2026-08-21"] },
+    centralAutonomousDecisionCore: {
+      cryptoDecisionEvidence: { coreEvidencePass: true },
+    },
+  };
+
+  assert.equal(CRYPTO_MIN_FINAL_SCORE_TO_BUY, 65);
+  assert.equal(evaluateCryptoTradeCandidate({
+    ...candidate,
+    masterFinalScore: 65,
+  }).approved, true);
+  const belowThreshold = evaluateCryptoTradeCandidate({
+    ...candidate,
+    masterFinalScore: 64,
+  });
+  assert.equal(belowThreshold.approved, false);
+  assert.ok(belowThreshold.reasons.includes("DECISION_SCORE_BELOW_THRESHOLD"));
+});
+
 test("crypto cannot finalize from discovery and entry evidence alone", () => {
   const now = Date.now();
   const result = buildCryptoDecisionScore({
@@ -632,6 +674,46 @@ test("legacy crypto scores cannot replace a canonical discovery scorecard", () =
   assert.equal(result.approved, false);
   assert.ok(result.reasons.includes("discovery"));
   assert.ok(result.reasons.includes("discoveryCoverage"));
+});
+
+test("a Discovery 67 with unavailable Entry evidence never becomes a finalized F 67", () => {
+  const now = Date.parse("2026-08-30T12:00:00.000Z");
+  const candidate = {
+    symbol: "BTC/USD",
+    cryptoDiscoveryScorecard: {
+      score: 67,
+      coverage: 1,
+      calculatedAt: new Date(now).toISOString(),
+      extension: { alreadyExtended: false },
+    },
+    cryptoContextScorecard: {
+      score: 67,
+      independent: true,
+      source: "independent_crypto_context",
+    },
+    newsCatalyst: { dataAvailable: true, riskDetected: false },
+    barsFound: 30,
+    current: 100,
+    priceIsLive: true,
+    liveQuoteUpdatedAt: new Date(now).toISOString(),
+    masterFinalScore: 67,
+    qualifiedToBuy: true,
+    autoTradeApproved: true,
+    centralAutonomousDecisionCore: {
+      cryptoDecisionEvidence: { coreEvidencePass: false },
+    },
+  };
+
+  const evidence = buildCryptoDecisionScore(candidate, { now });
+  assert.equal(evidence.score, 67, "the partial score may remain available for diagnostics");
+  assert.equal(evidence.componentsByName.execution.available, false);
+  assert.equal(evidence.coreEvidencePass, false);
+  assert.equal(evidence.scoreStatus, "PROVISIONAL_INCOMPLETE_EVIDENCE");
+
+  const gate = evaluateCryptoTradeCandidate(candidate, { now });
+  assert.equal(gate.scoreAvailable, false);
+  assert.equal(gate.approved, false);
+  assert.ok(gate.reasons.includes("entryQuality"));
 });
 
 test("stale crypto discovery evidence cannot be refreshed by only a new quote", () => {

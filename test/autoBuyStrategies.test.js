@@ -214,7 +214,7 @@ test("crypto auto-buy fails closed without source-aware liquidity evidence", asy
   );
 });
 
-test("crypto auto-buy accepts complete evidence and trusts a narrow live quote over stale spread", async () => {
+test("crypto auto-buy accepts Final Decision 65 with complete evidence and a narrow live quote", async () => {
   let executionCalls = 0;
   const strategies = createAutoBuyStrategies({
     CONFIG: {
@@ -268,8 +268,8 @@ test("crypto auto-buy accepts complete evidence and trusts a narrow live quote o
 
   await strategies.autoBuyCryptoSignals([{
     symbol: "BTC/USD",
-    score: 90,
-    masterFinalScore: 90,
+    score: 65,
+    masterFinalScore: 65,
     qualifiedToBuy: true,
     autoTradeApproved: true,
     barsFound: 30,

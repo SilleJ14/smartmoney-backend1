@@ -1,7 +1,10 @@
 import {
   CRYPTO_MAX_ENTRY_SPREAD_PERCENT,
 } from "../scoring/cryptoScoring.js";
-import { evaluateCryptoTradeCandidate } from "../scoring/componentScore.js";
+import {
+  CRYPTO_MIN_FINAL_SCORE_TO_BUY,
+  evaluateCryptoTradeCandidate,
+} from "../scoring/componentScore.js";
 import { evaluateStockTradeCandidate } from "../scoring/decisionScores.js";
 
 export function resolveCanonicalStockDecisionScore(signal = {}) {
@@ -1357,11 +1360,7 @@ export function createAutoBuyStrategies(dependencies) {
     else if (bestCandidateScore >= 85) scoreMultiplier = 0.7;
     else if (bestCandidateScore >= 75) scoreMultiplier = 0.55;
     const tradeAmount = baseTradeAmount * scoreMultiplier;
-    const effectiveCryptoBuyThreshold = Math.max(
-      70,
-      getEffectiveBuyThreshold(signals),
-      Number(CONFIG.minScoreToBuy || 70)
-    );
+    const effectiveCryptoBuyThreshold = CRYPTO_MIN_FINAL_SCORE_TO_BUY;
     if (tradeAmount < 1) {
       recordFailedOrder("AUTO_CRYPTO_BUY_SKIPPED", "CRYPTO", "Not enough budget");
       return;

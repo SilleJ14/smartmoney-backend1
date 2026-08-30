@@ -11,6 +11,27 @@ test("falls back to latest trade when quote is empty", async () => {
   const service = createAlpacaCryptoMarketData({ dataRequest: async () => ++calls === 1 ? { quotes: {} } : { trades: { "BTC/USD": { p: 105 } } }, normalizeSymbol });
   assert.equal((await service.getLatestQuote("BTC/USD")).price, 105);
 });
+test("batches visible crypto quote refreshes into one provider request", async () => {
+  const requestedPaths = [];
+  const service = createAlpacaCryptoMarketData({
+    dataRequest: async (path) => {
+      requestedPaths.push(path);
+      return {
+        quotes: {
+          "BTC/USD": { bp: 99, ap: 101, t: "2026-08-30T12:00:00.000Z" },
+          "ETH/USD": { bp: 199, ap: 201, t: "2026-08-30T12:00:01.000Z" },
+        },
+      };
+    },
+    normalizeSymbol,
+    now: () => new Date("2026-08-30T12:00:02.000Z"),
+  });
+  const quotes = await service.getLatestQuotes(["BTC/USD", "ETH/USD"]);
+  assert.equal(requestedPaths.length, 1);
+  assert.match(requestedPaths[0], /BTC%2FUSD%2CETH%2FUSD/);
+  assert.deepEqual(quotes.map((quote) => quote.price), [100, 200]);
+  assert.ok(quotes.every((quote) => quote.priceIsLive === true));
+});
 test("normalizes and filters crypto bars", async () => {
   const service = createAlpacaCryptoMarketData({ dataRequest: async () => ({ bars: { "BTC/USD": [{ c: 100, o: 90, h: 110, l: 80, v: 4 }, { c: 0 }] } }), normalizeSymbol });
   assert.deepEqual(await service.getRecentBars("BTC/USD"), [{ t: undefined, o: 90, h: 110, l: 80, c: 100, v: 4, source: "alpaca_crypto_bars" }]);

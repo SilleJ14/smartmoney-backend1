@@ -121,6 +121,7 @@ import {
 } from "./scoring/cryptoScoring.js";
 import {
   CRYPTO_DECISION_WEIGHTS,
+  CRYPTO_MIN_FINAL_SCORE_TO_BUY,
   buildCryptoDecisionScore,
   calculateAvailableWeightedScore,
   evaluateCryptoTradeCandidate,
@@ -353,6 +354,14 @@ const ENABLE_FAST_RUNNER_ENGINE =
   process.env.ENABLE_FAST_RUNNER_ENGINE !== "false";
 const FAST_RUNNER_ENGINE_INTERVAL_MS = Number(
   process.env.FAST_RUNNER_ENGINE_INTERVAL_MS || 2000
+);
+const ACTIVE_CANDIDATE_QUOTE_REFRESH_INTERVAL_MS = Math.max(
+  5000,
+  Number(process.env.ACTIVE_CANDIDATE_QUOTE_REFRESH_INTERVAL_MS || 5000)
+);
+const ACTIVE_CANDIDATE_QUOTE_REFRESH_LIMIT = Math.min(
+  20,
+  Math.max(1, Number(process.env.ACTIVE_CANDIDATE_QUOTE_REFRESH_LIMIT || 12))
 );
 const FAST_RUNNER_MIN_SCORE = Number(
   process.env.FAST_RUNNER_MIN_SCORE || 78
@@ -1091,6 +1100,17 @@ let polygonCryptoSocketReconnectTimer = null;
 let polygonCryptoSubscribedSymbols = new Set();
 let polygonCryptoSocketReconnectAttempts = 0;
 let polygonCryptoAuthenticated = false;
+let activeCandidateQuoteRefreshInFlight = null;
+let activeCandidateQuoteRefreshLastStartedAt = 0;
+let activeCandidateQuoteRefreshState = {
+  ok: true,
+  refreshedAt: null,
+  requestedCount: 0,
+  refreshedCount: 0,
+  freshCount: 0,
+  failedSymbols: [],
+  reason: "Not requested yet",
+};
 let WebSocketImpl = globalThis.WebSocket || null;
 if (!WebSocketImpl) {
   try {
@@ -14001,13 +14021,8 @@ async function polygonQuote(symbol) {
     return null;
   }
 }
-async function getAlpacaStockPrice(symbol) {
-  const cleanSymbol = normalizeSymbol(symbol);
-  try {
-    const data = await alpacaDataRequest(
-      `/v2/stocks/${encodeURIComponent(cleanSymbol)}/quotes/latest`
-    );
-    const quote = data?.quote || {};
+function normalizeAlpacaLatestStockQuote(symbol, quote = {}) {
+    const cleanSymbol = normalizeSymbol(symbol);
     const bid = Number(quote.bp || 0);
     const ask = Number(quote.ap || 0);
     const price =
@@ -14021,6 +14036,7 @@ async function getAlpacaStockPrice(symbol) {
     const quoteFetchedAt = Number.isFinite(providerTimestampMs)
       ? new Date(providerTimestampMs).toISOString()
       : null;
+    if (price <= 0) return null;
     return {
       symbol: cleanSymbol,
       price,
@@ -14032,8 +14048,38 @@ async function getAlpacaStockPrice(symbol) {
       priceIsLive: price > 0 && Boolean(quoteFetchedAt),
       priceStale: !quoteFetchedAt,
       quoteFetchedAt,
+      liveQuoteUpdatedAt: quoteFetchedAt,
       fetchedAt: new Date().toISOString(),
     };
+}
+
+async function getAlpacaLatestStockQuotes(symbols = []) {
+  const cleanSymbols = [...new Set(
+    (Array.isArray(symbols) ? symbols : [symbols])
+      .map(normalizeSymbol)
+      .filter(Boolean)
+  )];
+  if (cleanSymbols.length === 0) return [];
+  const data = await alpacaDataRequest(
+    `/v2/stocks/quotes/latest?symbols=${encodeURIComponent(cleanSymbols.join(","))}`
+  );
+  return cleanSymbols
+    .map((symbol) => normalizeAlpacaLatestStockQuote(
+      symbol,
+      data?.quotes?.[symbol] || data?.quotes?.[symbol.replace(".", "-")] || {}
+    ))
+    .filter(Boolean);
+}
+
+async function getAlpacaStockPrice(symbol) {
+  const cleanSymbol = normalizeSymbol(symbol);
+  try {
+    const data = await alpacaDataRequest(
+      `/v2/stocks/${encodeURIComponent(cleanSymbol)}/quotes/latest`
+    );
+    const normalizedQuote = normalizeAlpacaLatestStockQuote(cleanSymbol, data?.quote || {});
+    if (!normalizedQuote) throw new Error("Invalid Alpaca stock quote");
+    return normalizedQuote;
   } catch (err) {
     console.error("Alpaca latest stock quote failed:", cleanSymbol, err.message);
     return {
@@ -25659,6 +25705,9 @@ function calculateAiParliamentVote({
   marketStress,
 }) {
   const votes = [];
+  const minimumFinalScore = isCrypto(signal)
+    ? CRYPTO_MIN_FINAL_SCORE_TO_BUY
+    : Number(CONFIG.minScoreToBuy || 70);
   function addVote(engine, vote, confidence, reason) {
     votes.push({
       engine,
@@ -25699,7 +25748,7 @@ function calculateAiParliamentVote({
   );
   addVote(
     "CENTRAL_CORE",
-    finalDecisionScore >= 82 ? "ACCELERATE" : finalDecisionScore >= CONFIG.minScoreToBuy ? "ALLOW" : "WATCH",
+    finalDecisionScore >= 82 ? "ACCELERATE" : finalDecisionScore >= minimumFinalScore ? "ALLOW" : "WATCH",
     finalDecisionScore,
     `Final central score ${finalDecisionScore}/100`
   );
@@ -26628,7 +26677,7 @@ function calculateCentralAutonomousDecisionCore(stockSignals = [], cryptoSignals
     const stockEvidenceBlock =
       !isCryptoSignal && stockDecisionEvidence?.coreEvidencePass !== true;
     const requiredDecisionScore = isCryptoSignal
-      ? Number(CONFIG.minScoreToBuy || 0)
+      ? CRYPTO_MIN_FINAL_SCORE_TO_BUY
       : STOCK_EXECUTION_THRESHOLDS.finalScore;
     const softBlock =
       signal.autoTradeApproved === false ||
@@ -26724,7 +26773,12 @@ function calculateCentralAutonomousDecisionCore(stockSignals = [], cryptoSignals
       scoreCoverage: archetypeDecision.scoreCoverage,
       missingScoreComponents,
       scoreComponents: decisionScoreComponents,
-      cryptoDecisionScore: isCryptoSignal ? finalDecisionScore : null,
+      cryptoDecisionScore: isCryptoSignal && !cryptoEvidenceBlock
+        ? finalDecisionScore
+        : null,
+      provisionalCryptoDecisionScore: isCryptoSignal && cryptoEvidenceBlock
+        ? finalDecisionScore
+        : null,
       stockDecisionScore: isCryptoSignal ? null : finalDecisionScore,
       watchlistEligible: isCryptoSignal
         ? null
@@ -29446,7 +29500,7 @@ function buildLiveStarterBuyDecision(candidate = {}, account = {}, managedPositi
   }
   const cryptoExecutionGate = cryptoAsset
     ? evaluateCryptoTradeCandidate(candidate, {
-      minimumScore: Math.max(70, Number(CONFIG.minScoreToBuy || 70)),
+      minimumScore: CRYPTO_MIN_FINAL_SCORE_TO_BUY,
     })
     : null;
   if (cryptoExecutionGate && !cryptoExecutionGate.approved) {
@@ -29711,7 +29765,7 @@ async function runLiveStarterBuyGate() {
         );
         const refreshedCryptoGate = evaluateCryptoTradeCandidate(
           refreshedCandidate,
-          { minimumScore: Math.max(70, Number(CONFIG.minScoreToBuy || 70)) }
+          { minimumScore: CRYPTO_MIN_FINAL_SCORE_TO_BUY }
         );
         if (!refreshedCryptoGate.approved) {
           recordFailedOrder(
@@ -30820,6 +30874,124 @@ async function resolveVerifiedPreTradeQuote(symbol, cryptoAsset = false) {
     retryDelayMs: 2_000,
   });
 }
+
+function getProviderQuoteTimestampMs(quote = {}) {
+  const raw =
+    quote.liveQuoteUpdatedAt ||
+    quote.quoteFetchedAt ||
+    quote.updatedAt ||
+    null;
+  const timestamp = raw ? Date.parse(raw) : NaN;
+  return Number.isFinite(timestamp) ? timestamp : null;
+}
+
+async function refreshActiveCandidateQuotes(symbols = []) {
+  const requestedSymbols = [...new Set(
+    (Array.isArray(symbols) ? symbols : [symbols])
+      .map(normalizeSymbol)
+      .filter(Boolean)
+  )].slice(0, ACTIVE_CANDIDATE_QUOTE_REFRESH_LIMIT);
+  const staleSymbols = requestedSymbols.filter((symbol) => {
+    if (!isCrypto(symbol) && engineState.marketOpen !== true) return false;
+    const ageSeconds = getLiveQuoteAgeSeconds(symbol);
+    return ageSeconds === null || ageSeconds > 4;
+  });
+  if (staleSymbols.length === 0) {
+    return {
+      ...activeCandidateQuoteRefreshState,
+      ok: true,
+      requestedCount: requestedSymbols.length,
+      refreshedCount: 0,
+      freshCount: requestedSymbols.filter((symbol) => {
+        const ageSeconds = getLiveQuoteAgeSeconds(symbol);
+        return ageSeconds !== null && ageSeconds <= LIVE_ORDER_MAX_QUOTE_AGE_SECONDS;
+      }).length,
+      reason: requestedSymbols.length > 0
+        ? "Visible candidate quotes are already fresh or the stock market is closed."
+        : "No visible candidate symbols were supplied.",
+    };
+  }
+  if (activeCandidateQuoteRefreshInFlight) {
+    return activeCandidateQuoteRefreshInFlight;
+  }
+  const nowMs = Date.now();
+  if (
+    activeCandidateQuoteRefreshLastStartedAt > 0 &&
+    nowMs - activeCandidateQuoteRefreshLastStartedAt < ACTIVE_CANDIDATE_QUOTE_REFRESH_INTERVAL_MS
+  ) {
+    return {
+      ...activeCandidateQuoteRefreshState,
+      throttled: true,
+      reason: "Visible candidate refresh is within its bounded cooldown.",
+    };
+  }
+  activeCandidateQuoteRefreshLastStartedAt = nowMs;
+  activeCandidateQuoteRefreshInFlight = (async () => {
+    const stockSymbols = staleSymbols.filter((symbol) => !isCrypto(symbol));
+    const cryptoSymbols = staleSymbols.filter((symbol) => isCrypto(symbol));
+    const requests = [];
+    if (stockSymbols.length > 0) {
+      requests.push(
+        getAlpacaLatestStockQuotes(stockSymbols)
+          .then((quotes) => ({ assetClass: "stock", quotes }))
+      );
+    }
+    if (cryptoSymbols.length > 0) {
+      requests.push(
+        alpacaCryptoMarketData.getLatestQuotes(cryptoSymbols)
+          .then((quotes) => ({ assetClass: "crypto", quotes }))
+      );
+    }
+    const settled = await Promise.allSettled(requests);
+    const receivedQuotes = settled
+      .filter((result) => result.status === "fulfilled")
+      .flatMap((result) => result.value.quotes || []);
+    const acceptedSymbols = new Set();
+    for (const quote of receivedQuotes) {
+      const symbol = normalizeSymbol(quote?.symbol);
+      const incomingTimestamp = getProviderQuoteTimestampMs(quote);
+      const currentTimestamp = getProviderQuoteTimestampMs(
+        engineState.liveQuoteCache?.[symbol] || {}
+      );
+      if (
+        !symbol ||
+        quote?.priceIsLive !== true ||
+        incomingTimestamp === null ||
+        incomingTimestamp > Date.now() + 5000 ||
+        (currentTimestamp !== null && incomingTimestamp < currentTimestamp)
+      ) {
+        continue;
+      }
+      if (updateQuoteCache(symbol, quote)) acceptedSymbols.add(symbol);
+    }
+    const freshCount = staleSymbols.filter((symbol) => {
+      const ageSeconds = getLiveQuoteAgeSeconds(symbol);
+      return ageSeconds !== null && ageSeconds <= LIVE_ORDER_MAX_QUOTE_AGE_SECONDS;
+    }).length;
+    const failedSymbols = staleSymbols.filter((symbol) => !acceptedSymbols.has(symbol));
+    const errors = settled
+      .filter((result) => result.status === "rejected")
+      .map((result) => String(result.reason?.message || result.reason || "Quote refresh failed"));
+    activeCandidateQuoteRefreshState = {
+      ok: errors.length === 0,
+      refreshedAt: new Date().toISOString(),
+      requestedCount: staleSymbols.length,
+      refreshedCount: acceptedSymbols.size,
+      freshCount,
+      failedSymbols: failedSymbols.slice(0, ACTIVE_CANDIDATE_QUOTE_REFRESH_LIMIT),
+      errors: errors.slice(0, 2),
+      reason: freshCount > 0
+        ? `Actively refreshed ${freshCount} visible candidate quote${freshCount === 1 ? "" : "s"}.`
+        : "Provider returned no quote within the five-second freshness window.",
+    };
+    return activeCandidateQuoteRefreshState;
+  })();
+  try {
+    return await activeCandidateQuoteRefreshInFlight;
+  } finally {
+    activeCandidateQuoteRefreshInFlight = null;
+  }
+}
 function buildLiveOrderDedupKey(symbol, side, action = "LIVE_ORDER") {
   return `${normalizeSymbol(symbol)}_${String(side || "").toUpperCase()}_${String(action || "").toUpperCase()}`;
 }
@@ -31605,6 +31777,7 @@ registerLiveMoversRoutes(app, {
   normalizeSymbol,
   mergeLiveQuote: mergeLiveQuoteIntoSignal,
   isCrypto,
+  refreshQuotes: refreshActiveCandidateQuotes,
   getRuntimeStatus: () => ({
     autoTradingEnabled,
     emergencyStopActive,
@@ -31820,7 +31993,7 @@ registerManualExecutionRoutes(app, {
     source: "MANUAL_VERIFIED_CRYPTO_ROUTE",
   }),
   evaluateCryptoCandidate: (candidate) => evaluateCryptoTradeCandidate(candidate, {
-    minimumScore: Math.max(70, Number(CONFIG.minScoreToBuy || 70)),
+    minimumScore: CRYPTO_MIN_FINAL_SCORE_TO_BUY,
   }),
   evaluateStockCandidate: (candidate) => evaluateStockTradeCandidate(candidate, {
     requireCentralDecision: true,

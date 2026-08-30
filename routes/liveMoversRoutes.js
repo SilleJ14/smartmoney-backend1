@@ -7,12 +7,30 @@ export function registerLiveMoversRoutes(app, dependencies) {
     normalizeSymbol,
     mergeLiveQuote,
     isCrypto,
+    refreshQuotes,
     getRuntimeStatus,
   } = dependencies;
 
-  app.get("/live-movers", requireAdmin, (req, res) => {
+  app.get("/live-movers", requireAdmin, async (req, res) => {
     try {
       const state = getState();
+      let activeQuoteRefresh = null;
+      if (String(req.query.refresh || "").toLowerCase() === "true" && typeof refreshQuotes === "function") {
+        const refreshCandidates = buildLiveMovers({
+          state,
+          limit: 100,
+          normalizeSymbol,
+          mergeLiveQuote,
+          isCrypto,
+        }).sort((a, b) => {
+          const approvalGap = Number(b.qualifiedToBuy === true) - Number(a.qualifiedToBuy === true);
+          if (approvalGap !== 0) return approvalGap;
+          return Number(b.score || 0) - Number(a.score || 0);
+        });
+        activeQuoteRefresh = await refreshQuotes(
+          refreshCandidates.map((candidate) => candidate.symbol)
+        );
+      }
       const movers = buildLiveMovers({
         state,
         limit: req.query.limit,
@@ -30,6 +48,7 @@ export function registerLiveMoversRoutes(app, dependencies) {
         signals: movers,
         stockSignals: movers.filter((signal) => !isCrypto(signal.symbol)),
         cryptoSignals: movers.filter((signal) => isCrypto(signal.symbol)),
+        activeQuoteRefresh,
         ...runtime,
         effectiveMode: state.effectiveMode,
       });

@@ -17,6 +17,7 @@ export const CRYPTO_DECISION_WEIGHTS = Object.freeze({
 });
 export const CRYPTO_MIN_DECISION_COVERAGE = 0.8;
 export const CRYPTO_MAX_DECISION_QUOTE_AGE_SECONDS = 5;
+export const CRYPTO_MIN_FINAL_SCORE_TO_BUY = 65;
 
 function finiteNumber(...values) {
   for (const value of values) {
@@ -272,6 +273,8 @@ export function buildCryptoDecisionScore(
       : ["decisionCoverage"]),
     ...(quoteFresh ? [] : ["freshLiveQuote"]),
   ];
+  const uniqueMissingCriticalEvidence = [...new Set(missingCriticalEvidence)];
+  const coreEvidencePass = uniqueMissingCriticalEvidence.length === 0;
 
   return {
     score: weighted.score,
@@ -281,17 +284,16 @@ export function buildCryptoDecisionScore(
       componentsWithSemantics.map((component) => [component.name, component])
     ),
     missingComponents: weighted.missingComponents,
-    missingCriticalEvidence: [...new Set(missingCriticalEvidence)],
-    coreEvidencePass: missingCriticalEvidence.length === 0,
+    missingCriticalEvidence: uniqueMissingCriticalEvidence,
+    coreEvidencePass,
     barsFound,
     spread,
     liquidity,
     contextObservations: context.observations || [],
     continuationEvidence: { seenDays },
-    scoreStatus:
-      weighted.coverage >= CRYPTO_MIN_DECISION_COVERAGE
-        ? "FINAL"
-        : "PROVISIONAL_INCOMPLETE_EVIDENCE",
+    scoreStatus: coreEvidencePass
+      ? "FINAL"
+      : "PROVISIONAL_INCOMPLETE_EVIDENCE",
     minimumDecisionCoverage: CRYPTO_MIN_DECISION_COVERAGE,
     quoteFreshness: {
       timestamp: Number.isFinite(quoteTimestamp)
@@ -322,7 +324,11 @@ export function buildCryptoDecisionScore(
 
 export function evaluateCryptoTradeCandidate(
   signal = {},
-  { minimumScore = 70, now = Date.now(), maxDiscoveryAgeMinutes = 15 } = {}
+  {
+    minimumScore = CRYPTO_MIN_FINAL_SCORE_TO_BUY,
+    now = Date.now(),
+    maxDiscoveryAgeMinutes = 15,
+  } = {}
 ) {
   const evidence = buildCryptoDecisionScore(signal, { now, maxDiscoveryAgeMinutes });
   const centralEvidence = signal.centralAutonomousDecisionCore
@@ -333,7 +339,10 @@ export function evaluateCryptoTradeCandidate(
     signal.finalAutonomousDecisionScore,
     signal.score
   );
-  const scoreAvailable = resolvedScore !== undefined;
+  const scoreAvailable =
+    resolvedScore !== undefined &&
+    evidence.coreEvidencePass === true &&
+    centralEvidence?.coreEvidencePass === true;
   const score = scoreAvailable ? resolvedScore : 0;
   const reasons = [
     ...(centralEvidence?.coreEvidencePass === true

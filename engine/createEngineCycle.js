@@ -1,3 +1,5 @@
+import { CRYPTO_MIN_FINAL_SCORE_TO_BUY } from "../scoring/componentScore.js";
+
 export function createEngineCycle(dependencies) {
   const {
     CONFIG,
@@ -562,7 +564,9 @@ export function createEngineCycle(dependencies) {
         matchingSignal.finalAutonomousDecisionScore =
           decision.finalDecisionScore;
         if (cryptoSignals.includes(matchingSignal)) {
-          matchingSignal.cryptoDecisionScore = decision.finalDecisionScore;
+          matchingSignal.cryptoDecisionScore = decision.cryptoDecisionScore;
+          matchingSignal.provisionalCryptoDecisionScore =
+            decision.provisionalCryptoDecisionScore;
         } else {
           matchingSignal.stockDecisionScore = decision.finalDecisionScore;
         }
@@ -1263,7 +1267,9 @@ export function createEngineCycle(dependencies) {
         matchingSignal.finalAutonomousDecisionScore =
           decision.finalDecisionScore;
         if (cryptoSignals.includes(matchingSignal)) {
-          matchingSignal.cryptoDecisionScore = decision.finalDecisionScore;
+          matchingSignal.cryptoDecisionScore = decision.cryptoDecisionScore;
+          matchingSignal.provisionalCryptoDecisionScore =
+            decision.provisionalCryptoDecisionScore;
         }
         matchingSignal.centralAutonomousAction = decision.action;
         const finalMasterDecisionProfile =
@@ -1566,24 +1572,34 @@ export function createEngineCycle(dependencies) {
           ...(signal.cryptoScoreTelemetry || {}),
           entry: {
             score: cryptoRealism.entryQualityScore,
+            available:
+              signal.centralAutonomousDecisionCore?.cryptoDecisionEvidence
+                ?.componentsByName?.execution?.available === true,
             coverage: cryptoRealism.coverage,
             penalties: cryptoRealism.penaltyComponents,
             missingComponents: cryptoRealism.missingComponents,
             gates: cryptoRealism.entryBlockReasons,
           },
           decision: {
-            score: Number(
-              signal.masterFinalScore ??
+            score: signal.cryptoDecisionScore,
+            provisionalScore:
+              signal.provisionalCryptoDecisionScore ??
               signal.finalAutonomousDecisionScore ??
-              signal.score ??
-              cryptoRealism.realismScore
-            ),
-            source: signal.masterFinalScore !== undefined
-              ? "master_final_score"
-              : "central_autonomous_decision",
+              null,
+            source: "central_crypto_decision",
             coverage: Number(
-              signal.centralAutonomousDecisionCore?.scoreCoverage || 0
+              signal.centralAutonomousDecisionCore?.cryptoDecisionEvidence
+                ?.coverage || 0
             ),
+            scoreStatus:
+              signal.centralAutonomousDecisionCore?.cryptoDecisionEvidence
+                ?.scoreStatus || "PROVISIONAL_INCOMPLETE_EVIDENCE",
+            coreEvidencePass:
+              signal.centralAutonomousDecisionCore?.cryptoDecisionEvidence
+                ?.coreEvidencePass === true,
+            componentsByName:
+              signal.centralAutonomousDecisionCore?.cryptoDecisionEvidence
+                ?.componentsByName || {},
             components:
               signal.centralAutonomousDecisionCore?.scoreComponents || [],
             missingComponents:
@@ -1591,22 +1607,13 @@ export function createEngineCycle(dependencies) {
           },
         };
         const cryptoLiquidityPass = cryptoRealism.liquidityPass === true;
-        const decisionScore = Number(
-          signal.masterFinalScore ??
-          signal.finalAutonomousDecisionScore ??
-          cryptoRealism.realismScore
-        );
+        const decisionScore = Number(signal.cryptoDecisionScore ?? 0);
         signal.qualifiedToBuy =
           signal.qualifiedToBuy === true &&
           cryptoLiquidityPass &&
           cryptoRealism.spreadAvailable === true &&
           Number(cryptoRealism.barsFound || 0) >= 10 &&
-          decisionScore >=
-          Number(
-            engineState.selfOptimizationState?.adaptiveMinScoreToBuy ||
-            CONFIG.minScoreToBuy ||
-            70
-          );
+          decisionScore >= CRYPTO_MIN_FINAL_SCORE_TO_BUY;
         if (!cryptoLiquidityPass || cryptoRealism.spreadAvailable !== true) {
           signal.autoTradeApproved = false;
           signal.approved = false;
@@ -2747,7 +2754,8 @@ export function createEngineCycle(dependencies) {
         (signal) =>
           signal.qualifiedToBuy === true &&
           signal.autoTradeApproved !== false &&
-          Number(signal.score || 0) >= CONFIG.minScoreToBuy
+          Number(signal.cryptoDecisionScore ?? 0) >=
+            CRYPTO_MIN_FINAL_SCORE_TO_BUY
       );
       effectiveMode = selectSmartTradingMode({
         selectedMode: TRADING_MODE,
