@@ -84,6 +84,96 @@ test("owner recovery codes are admin-only, expire, are single-use, and invalidat
   fs.rmSync(directory, { recursive: true, force: true });
 });
 
+test("public password recovery emails a one-time code without exposing account existence", async () => {
+  const directory = fs.mkdtempSync(path.join(os.tmpdir(), "smartmoney-email-recovery-"));
+  const routes = new Map();
+  const deliveries = [];
+  const app = {
+    post(route, ...handlers) { routes.set(`POST ${route}`, handlers); },
+    get(route, ...handlers) { routes.set(`GET ${route}`, handlers); },
+  };
+  const auth = createAdminAuth({
+    adminToken: "server-secret",
+    userFile: path.join(directory, "users.json"),
+    now: () => 1000,
+    recoveryEmailSender: async (delivery) => { deliveries.push(delivery); },
+  });
+  auth.registerRoutes(app);
+  const response = () => ({ status(code) { this.code = code; return this; }, json(body) { this.body = body; return this; } });
+  const run = async (route, req, res) => {
+    const handlers = routes.get(`POST ${route}`); let index = 0;
+    const next = () => Promise.resolve(handlers[index++](req, res, next));
+    await next();
+  };
+
+  const signup = response();
+  await run("/auth/signup", { headers: {}, ip: "1", body: { email: "owner@example.com", password: "old-password!", name: "Owner" } }, signup);
+
+  const requested = response();
+  await run("/auth/request-password-reset", { headers: {}, ip: "2", body: { email: "owner@example.com" } }, requested);
+  assert.equal(requested.code, 202);
+  assert.equal(requested.body.ok, true);
+  assert.equal("code" in requested.body, false);
+  assert.equal(deliveries.length, 1);
+  assert.equal(deliveries[0].to, "owner@example.com");
+  assert.match(deliveries[0].code, /^\d{8}$/);
+
+  const unknown = response();
+  await run("/auth/request-password-reset", { headers: {}, ip: "3", body: { email: "unknown@example.com" } }, unknown);
+  assert.equal(unknown.code, 202);
+  assert.deepEqual(unknown.body, requested.body);
+  assert.equal(deliveries.length, 1);
+
+  const reset = response();
+  await run("/auth/reset-password", {
+    headers: {}, ip: "2", body: { email: "owner@example.com", code: deliveries[0].code, newPassword: "new-password!" },
+  }, reset);
+  assert.ok(reset.body.token);
+  assert.equal(auth.sessionUser(signup.body.token), null);
+
+  fs.rmSync(directory, { recursive: true, force: true });
+});
+
+test("public password recovery is rate limited and requires email delivery configuration", async () => {
+  const directory = fs.mkdtempSync(path.join(os.tmpdir(), "smartmoney-email-recovery-limit-"));
+  const routes = new Map();
+  const app = { post(route, ...handlers) { routes.set(`POST ${route}`, handlers); } };
+  const response = () => ({ status(code) { this.code = code; return this; }, json(body) { this.body = body; return this; } });
+  const run = async (route, req, res) => {
+    const handlers = routes.get(`POST ${route}`); let index = 0;
+    const next = () => Promise.resolve(handlers[index++](req, res, next));
+    await next();
+  };
+
+  const unconfiguredAuth = createAdminAuth({ adminToken: "server-secret", userFile: path.join(directory, "users.json") });
+  unconfiguredAuth.registerRoutes(app);
+  const unconfigured = response();
+  await run("/auth/request-password-reset", { headers: {}, ip: "1", body: { email: "owner@example.com" } }, unconfigured);
+  assert.equal(unconfigured.code, 503);
+
+  routes.clear();
+  const configuredAuth = createAdminAuth({
+    adminToken: "server-secret",
+    userFile: path.join(directory, "users.json"),
+    recoveryRequestLimit: 2,
+    recoveryEmailSender: async () => {},
+  });
+  configuredAuth.registerRoutes(app);
+  for (let attempt = 0; attempt < 2; attempt += 1) {
+    const accepted = response();
+    await run("/auth/request-password-reset", { headers: {}, ip: "same-ip", body: { email: "owner@example.com" } }, accepted);
+    assert.equal(accepted.code, 202);
+  }
+  const emailLimited = response();
+  await run("/auth/request-password-reset", { headers: {}, ip: "different-ip", body: { email: "owner@example.com" } }, emailLimited);
+  assert.equal(emailLimited.code, 429);
+  const ipLimited = response();
+  await run("/auth/request-password-reset", { headers: {}, ip: "same-ip", body: { email: "different@example.com" } }, ipLimited);
+  assert.equal(ipLimited.code, 429);
+
+  fs.rmSync(directory, { recursive: true, force: true });
+});
+
 test("admin owner repair replaces inconsistent account state and issues a recovery code", () => {
   const directory = fs.mkdtempSync(path.join(os.tmpdir(), "smartmoney-owner-repair-"));
   const routes = new Map();

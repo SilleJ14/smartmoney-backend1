@@ -70,8 +70,9 @@ export function createAdminAuth({ adminToken, userFile = "", sessionTtlMs = 12 *
   failureWindowMs = 15 * 60 * 1000, failureLimit = 20, ticketTtlMs = 30 * 1000,
   recoveryTtlMs = 10 * 60 * 1000, now = () => Date.now(), googleClientIds = [],
   googleTokenVerifier = verifyGoogleIdToken, appleClientIds = [],
-  appleTokenVerifier = verifyAppleIdentityToken }) {
-  const failures = new Map(), tickets = new Map(), recoveryCodes = new Map();
+  appleTokenVerifier = verifyAppleIdentityToken, recoveryEmailSender = null,
+  recoveryRequestWindowMs = 60 * 60 * 1000, recoveryRequestLimit = 3 }) {
+  const failures = new Map(), tickets = new Map(), recoveryCodes = new Map(), recoveryRequests = new Map();
   let users = userFile ? safeUsers(userFile) : [];
   const allowedGoogleClientIds = [...new Set(
     (Array.isArray(googleClientIds) ? googleClientIds : String(googleClientIds || "").split(","))
@@ -116,6 +117,33 @@ export function createAdminAuth({ adminToken, userFile = "", sessionTtlMs = 12 *
     if (!record || record.expiresAt <= now() || record.attempts >= 5) return false;
     const actual = recoveryDigest(provided);
     return actual.length === record.digest.length && crypto.timingSafeEqual(actual, record.digest);
+  };
+  const recoveryRequestKey = (scope, value) => `${scope}:${crypto.createHash("sha256")
+    .update(String(value || ""))
+    .digest("base64url")}`;
+  const consumeRecoveryRequest = (req, email) => {
+    const timestamp = now();
+    const keys = [
+      recoveryRequestKey("ip", getClientIp(req)),
+      recoveryRequestKey("email", email),
+    ];
+    const activeRecords = keys.map((key) => {
+      const existing = recoveryRequests.get(key);
+      return [key, existing && existing.resetAt > timestamp
+        ? existing
+        : { count: 0, resetAt: timestamp + recoveryRequestWindowMs }];
+    });
+    if (activeRecords.some(([, record]) => record.count >= recoveryRequestLimit)) return false;
+    for (const [key, record] of activeRecords) {
+      record.count += 1;
+      recoveryRequests.set(key, record);
+    }
+    if (recoveryRequests.size > 500) {
+      for (const [candidateKey, record] of recoveryRequests) {
+        if (record.resetAt <= timestamp || recoveryRequests.size > 400) recoveryRequests.delete(candidateKey);
+      }
+    }
+    return true;
   };
   const recordFailure = (req, res, message = "Invalid email or password") => {
     const clientIp = getClientIp(req), timestamp = now();
@@ -226,6 +254,37 @@ export function createAdminAuth({ adminToken, userFile = "", sessionTtlMs = 12 *
       } catch {
         return recordFailure(req, res, "Apple sign-in could not be verified");
       }
+    });
+    app.post("/auth/request-password-reset", async (req, res) => {
+      const email = normalizeIdentity(req.body?.email);
+      const genericMessage = "If this email belongs to the SmartMoney owner, an 8-digit recovery code has been sent.";
+      if (!/^\S+@\S+\.\S+$/.test(email)) {
+        return res.status(400).json({ ok: false, error: "Enter a valid email address" });
+      }
+      if (typeof recoveryEmailSender !== "function") {
+        return res.status(503).json({ ok: false, error: "Email recovery is not configured yet" });
+      }
+      if (!consumeRecoveryRequest(req, email)) {
+        return res.status(429).json({ ok: false, error: "Too many recovery requests. Try again later." });
+      }
+
+      const user = users.find((candidate) => candidate.email === email) || null;
+      if (user) {
+        const code = crypto.randomInt(0, 100000000).toString().padStart(8, "0");
+        try {
+          await recoveryEmailSender({
+            to: user.email,
+            name: user.name || "SmartMoney Owner",
+            code,
+            expiresInMinutes: Math.max(1, Math.round(recoveryTtlMs / 60000)),
+          });
+          recoveryCodes.set(user.id, { digest: recoveryDigest(code), expiresAt: now() + recoveryTtlMs, attempts: 0 });
+        } catch (error) {
+          console.error("SmartMoney recovery email delivery failed", error instanceof Error ? error.message : "Unknown error");
+        }
+      }
+
+      return res.status(202).json({ ok: true, message: genericMessage });
     });
     app.post("/auth/admin/recovery-code", requireAdmin, (req, res) => {
       if (req.authUser) return res.status(403).json({ ok: false, error: "The backend administrator token is required" });

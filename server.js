@@ -4,6 +4,7 @@ import dotenv from "dotenv";
 import path from "path";
 import fs from "fs";
 import { createAdminAuth } from "./security/adminAuth.js";
+import { createRecoveryEmailSender } from "./security/recoveryEmail.js";
 import {
   fetchWithTimeout,
 } from "./utils/fetchWithTimeout.js";
@@ -273,6 +274,10 @@ const adminAuth = createAdminAuth({
     process.env.APPLE_SERVICE_ID,
     ...(process.env.APPLE_OAUTH_CLIENT_IDS || "").split(","),
   ],
+  recoveryEmailSender: createRecoveryEmailSender({
+    apiKey: process.env.RESEND_API_KEY,
+    from: process.env.RECOVERY_EMAIL_FROM || "SmartMoney <onboarding@resend.dev>",
+  }),
 });
 const { requireAdmin, getClientIp } = adminAuth;
 adminAuth.registerRoutes(app);
