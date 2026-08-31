@@ -263,3 +263,92 @@ test("live movers finalize crypto F when discovery entry context and quote evide
   assert.equal(movers[0].provisionalCryptoDecisionScore, null);
   assert.ok(movers[0].cryptoDecisionCoverage >= 0.8);
 });
+
+test("live movers do not replace an authoritative stock F with a sparse quote-only recalculation", () => {
+  const now = new Date("2026-08-31T15:00:00.000Z");
+  const movers = buildLiveMovers({
+    state: {
+      marketOpen: true,
+      topStockSignals: [{
+        symbol: "MSFT",
+        price: 510,
+        previousClose: 500,
+        discoveryScore: 76,
+        discoveryScorecard: { score: 76, coverage: 0.85 },
+        entryQualityScore: 81,
+        entryQualityScorecard: { score: 81, coverage: 0.9, approved: true },
+        stockDecisionScore: 44,
+        masterFinalScore: 83,
+        decisionScoreTelemetry: {
+          scores: { discovery: 76, entry: 81, decision: 83 },
+          stages: { decision: { score: 83, coverage: 0.9, coreEvidencePass: true } },
+        },
+      }],
+      liveQuoteCache: {
+        MSFT: {
+          price: 510,
+          bid: 509.98,
+          ask: 510.02,
+          spreadAvailable: true,
+          spreadPercent: 0.0078,
+          liveQuoteUpdatedAt: now.toISOString(),
+          liveQuoteSource: "alpaca_latest_stock_quote",
+          priceIsLive: true,
+        },
+      },
+    },
+    normalizeSymbol,
+    mergeLiveQuote: (signal) => signal,
+    isCrypto,
+    now: () => now,
+  });
+
+  assert.equal(movers[0].stockDecisionScore, 83);
+  assert.equal(movers[0].stockDecisionScoreAvailable, true);
+  assert.equal(movers[0].stockDecisionScoreSource, "engine_final_decision");
+  assert.equal(movers[0].decisionScoreTelemetry.scores.decision, 83);
+});
+
+test("crypto Discovery remains visible after its execution freshness window expires", () => {
+  const now = new Date("2026-08-31T15:00:00.000Z");
+  const calculatedAt = new Date(now.getTime() - 20 * 60 * 1000).toISOString();
+  const candidate = {
+    symbol: "ETH/USD",
+    price: 4500,
+    previousClose: 4400,
+    priceIsLive: true,
+    liveQuoteUpdatedAt: now.toISOString(),
+    cryptoDiscoveryScorecard: {
+      score: 74,
+      coverage: 0.85,
+      calculatedAt,
+      extension: { alreadyExtended: false },
+    },
+    barsFound: 30,
+    windowDollarVolume: 2_000_000,
+    newsCatalyst: { dataAvailable: true, riskDetected: false },
+  };
+  const movers = buildLiveMovers({
+    state: {
+      topCryptoSignals: [candidate],
+      liveQuoteCache: {
+        "ETH/USD": {
+          ...candidate,
+          bid: 4499,
+          ask: 4501,
+          spreadAvailable: true,
+          spreadPercent: 0.044,
+        },
+      },
+    },
+    normalizeSymbol,
+    mergeLiveQuote: (signal) => signal,
+    isCrypto,
+    now: () => now,
+  });
+
+  assert.equal(movers[0].rawCryptoScore, 74);
+  assert.equal(movers[0].cryptoDiscoveryScoreAvailable, true);
+  assert.equal(movers[0].cryptoDiscoveryScoreFresh, false);
+  assert.ok(Number.isFinite(movers[0].provisionalCryptoDecisionScore));
+});

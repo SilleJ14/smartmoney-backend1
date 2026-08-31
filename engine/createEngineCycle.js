@@ -1283,6 +1283,13 @@ export function createEngineCycle(dependencies) {
           finalMasterDecisionProfile;
         matchingSignal.masterFinalScore =
           finalMasterDecisionProfile.finalScore;
+        if (!cryptoSignals.includes(matchingSignal)) {
+          // `stockDecisionScore` is the public F score. Keep it synchronized
+          // with the final master decision instead of leaving the earlier
+          // pre-final central score in this field.
+          matchingSignal.stockDecisionScore =
+            finalMasterDecisionProfile.finalScore;
+        }
         matchingSignal.masterFinalSizingMultiplier =
           finalMasterDecisionProfile.finalSizingMultiplier;
         matchingSignal.masterExecutionDecision =
