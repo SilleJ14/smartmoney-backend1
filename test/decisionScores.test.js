@@ -627,6 +627,17 @@ test("final stock gate requires a fresh quote for executable approval", () => {
     now,
   });
   assert.equal(fresh.approved, true);
+  const staleSpread = evaluateStockTradeCandidate({
+    ...base,
+    quoteFetchedAt: "2026-08-25T13:59:59Z",
+    spreadUpdatedAt: "2026-08-25T13:59:00Z",
+  }, {
+    requireCentralDecision: true,
+    maxQuoteAgeSeconds: 15,
+    now,
+  });
+  assert.equal(staleSpread.approved, false);
+  assert.ok(staleSpread.reasons.includes("SPREAD_STALE"));
 });
 
 test("qualified band requires an approved Entry score", () => {

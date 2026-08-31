@@ -47,6 +47,9 @@ import {
 import {
   calculateSpread,
   calculateLiveMovePercent,
+  getSpreadAgeSeconds,
+  isFreshMeasuredSpread,
+  mergeLiveQuoteEvidence,
   isFreshLiveQuote as isFreshLiveQuoteHelper,
   getAuthoritativeLiveQuote as getAuthoritativeLiveQuoteHelper,
   getLiveQuoteAgeSeconds as getLiveQuoteAgeSecondsHelper,
@@ -59,6 +62,7 @@ import {
   calculateFastRunnerScoreFromMemory,
 } from "./live/liveMarketMemory.js";
 import { resolvePreTradeQuote } from "./live/preTradeQuoteResolver.js";
+import { filterAndRankStockCandidatesByExecutionQuality } from "./market-data/stockCandidateQuality.js";
 import { createEngineStateSaver } from "./state/saveEngineState.js";
 import { createTradingMode } from "./engine/tradingMode.js";
 import {
@@ -325,6 +329,18 @@ const POLYGON_MOVERS_LIMIT = Number(
 );
 const POLYGON_MOVERS_CACHE_MS = Number(
   process.env.POLYGON_MOVERS_CACHE_MS || 15000
+);
+const STOCK_MOVER_MAX_QUOTE_AGE_SECONDS = Math.max(
+  5,
+  Number(process.env.STOCK_MOVER_MAX_QUOTE_AGE_SECONDS || 120)
+);
+const STOCK_MOVER_MAX_SPREAD_PERCENT = Math.max(
+  0.1,
+  Number(process.env.STOCK_MOVER_MAX_SPREAD_PERCENT || 2)
+);
+const STOCK_MOVER_MIN_DOLLAR_VOLUME = Math.max(
+  0,
+  Number(process.env.STOCK_MOVER_MIN_DOLLAR_VOLUME || 250000)
 );
 let moversCache = createEmptyPolygonMoversCache("");
 const ENABLE_POLYGON_WEBSOCKET =
@@ -2963,6 +2979,9 @@ function buildBackendHealthPayload(clock = {}) {
       polygonLiveStreamState: engineState.polygonLiveStreamState || null,
       liveEarlyMoverSymbols: engineState.liveEarlyMoverSymbols || [],
       liveEarlyMoverRefreshState: engineState.liveEarlyMoverRefreshState || null,
+      stockMoverExecutionQualityState:
+        engineState.stockMoverExecutionQualityState || null,
+      activeCandidateQuoteRefreshState,
       liveMemoryCleanupState: engineState.liveMemoryCleanupState || null,
       liveMarketMemoryCount: Object.keys(engineState.liveMarketMemory || {}).length,
     },
@@ -13579,10 +13598,17 @@ const preTradeRiskGuard = {
     });
     options.liveTradeLimitDecision = liveTradeLimitDecision;
     const quoteSource = quote.liveQuoteSource || quote.source || "";
+    const spreadSource = quote.spreadSource || quoteSource;
     const liveProviderEvidence = getLiveProviderEvidence(
       quoteSource,
       cryptoAsset
     );
+    const spreadProviderEvidence = getLiveProviderEvidence(
+      spreadSource,
+      cryptoAsset
+    );
+    const priceAgeSeconds = getLiveQuoteAgeSeconds(symbol);
+    const spreadAgeSeconds = getSpreadAgeSeconds(quote);
     return assertPreTradeRisk({
       order,
       options,
@@ -13595,14 +13621,19 @@ const preTradeRiskGuard = {
         isCrypto: cryptoAsset,
         marketOpen: clock?.is_open === true,
         price: Number(quote.price || quote.current || 0),
-        quoteAgeSeconds: getLiveQuoteAgeSeconds(symbol),
+        quoteAgeSeconds:
+          spreadAgeSeconds === null
+            ? priceAgeSeconds
+            : Math.max(priceAgeSeconds, spreadAgeSeconds),
+        spreadAgeSeconds,
         spreadPercent: quote.spreadAvailable === true
           ? Number(quote.spreadPercent)
           : null,
         spreadAvailable: quote.spreadAvailable === true,
         quoteIsLive: quote.priceIsLive === true && isLiveQuoteSource(quoteSource),
         requireLiveProvider: LIVE_ORDER_REQUIRE_POLYGON_CONNECTED,
-        liveProviderConnected: liveProviderEvidence.connected,
+        liveProviderConnected:
+          liveProviderEvidence.connected && spreadProviderEvidence.connected,
         liveProvider: liveProviderEvidence.provider,
         liveProviderReason: liveProviderEvidence.reason,
         liveProviderFallbackUsed: quoteResolution.usedFallback,
@@ -14037,12 +14068,23 @@ function normalizeAlpacaLatestStockQuote(symbol, quote = {}) {
       ? new Date(providerTimestampMs).toISOString()
       : null;
     if (price <= 0) return null;
+    const { spread, spreadPercent, spreadAvailable } = calculateSpread({
+      bid,
+      ask,
+      price,
+    });
     return {
       symbol: cleanSymbol,
       price,
       current: price,
       bid,
       ask,
+      spread,
+      spreadPercent,
+      spreadAvailable,
+      spreadUpdatedAt: spreadAvailable ? quoteFetchedAt : null,
+      bidAskUpdatedAt: spreadAvailable ? quoteFetchedAt : null,
+      spreadSource: spreadAvailable ? "alpaca_latest_stock_quote" : null,
       source: "alpaca_latest_stock_quote",
       liveQuoteSource: "alpaca_latest_stock_quote",
       priceIsLive: price > 0 && Boolean(quoteFetchedAt),
@@ -14209,6 +14251,23 @@ async function getStockQuote(symbol) {
   const spreadPercent = spreadMid > 0
     ? Number((((ask - bid) / spreadMid) * 100).toFixed(4))
     : null;
+  const providerQuoteUpdatedAt =
+    primary?.liveQuoteUpdatedAt ||
+    primary?.quoteFetchedAt ||
+    primary?.updatedAt ||
+    null;
+  const spreadUpdatedAt = bid > 0 && ask > 0
+    ? spreadQuote?.spreadUpdatedAt ||
+      spreadQuote?.bidAskUpdatedAt ||
+      spreadQuote?.liveQuoteUpdatedAt ||
+      spreadQuote?.quoteFetchedAt ||
+      spreadQuote?.updatedAt ||
+      null
+    : null;
+  const combinedPriceIsLive = Boolean(providerQuoteUpdatedAt) && (
+    primary?.priceIsLive === true ||
+    isLiveQuoteSource(primary?.liveQuoteSource || primary?.source || "")
+  );
   let current = Number(
     primary?.current ||
     primary?.price ||
@@ -14306,7 +14365,14 @@ async function getStockQuote(symbol) {
     volumeRatio: Number(
       barStats.volumeSpikeRatio || 0
     ),
-    quoteFetchedAt: new Date().toISOString(),
+    quoteFetchedAt: providerQuoteUpdatedAt,
+    liveQuoteUpdatedAt: providerQuoteUpdatedAt,
+    spreadUpdatedAt,
+    bidAskUpdatedAt: spreadUpdatedAt,
+    spreadSource:
+      bid > 0 && ask > 0
+        ? String(spreadQuote?.spreadSource || spreadQuote?.liveQuoteSource || spreadQuote?.source || "unknown")
+        : null,
     quoteAuthority:
       primary?.quoteAuthorityRank === 1
         ? "polygon_websocket"
@@ -14322,13 +14388,8 @@ async function getStockQuote(symbol) {
       primary?.source ||
       (polygon ? "polygon_rest" : finnhub ? "finnhub_rest" : "none"),
     priceIsLive:
-      primary?.priceIsLive === true ||
-      isLiveQuoteSource(primary?.liveQuoteSource || primary?.source || ""),
-    priceStale:
-      !(
-        primary?.priceIsLive === true ||
-        isLiveQuoteSource(primary?.liveQuoteSource || primary?.source || "")
-      ),
+      combinedPriceIsLive,
+    priceStale: !combinedPriceIsLive,
     dataSource:
       isLiveQuoteSource(primary?.liveQuoteSource || primary?.source || "")
         ? "Live websocket + Alpaca bars"
@@ -17709,7 +17770,7 @@ async function getPolygonMoverSymbols(limit = POLYGON_MOVERS_LIMIT, forceRefresh
     }
     const data = await response.json();
     const tickers = Array.isArray(data?.tickers) ? data.tickers : [];
-    const rankedRaw = parsePolygonSnapshotTickers({
+    let rankedRaw = parsePolygonSnapshotTickers({
       tickers,
       normalizeSymbol,
       isValidStockSymbol,
@@ -17736,6 +17797,52 @@ async function getPolygonMoverSymbols(limit = POLYGON_MOVERS_LIMIT, forceRefresh
         Number(item.volume || 0) >= 500
       );
     });
+    if (engineState.marketOpen === true && rankedRaw.length > 0) {
+      const quoteReviewCandidates = [...rankedRaw]
+        .sort((a, b) => {
+          const moveDifference =
+            Math.abs(Number(b.percentChange || 0)) -
+            Math.abs(Number(a.percentChange || 0));
+          if (moveDifference !== 0) return moveDifference;
+          return Number(b.volume || 0) - Number(a.volume || 0);
+        })
+        .slice(0, Math.min(100, Math.max(Number(limit || 0) * 2, 50)));
+      const executionQuotes = await getAlpacaLatestStockQuotes(
+        quoteReviewCandidates.map((item) => item.symbol)
+      );
+      const executionQuality = filterAndRankStockCandidatesByExecutionQuality({
+        candidates: quoteReviewCandidates,
+        quotes: executionQuotes,
+        normalizeSymbol,
+        now,
+        maxQuoteAgeSeconds: STOCK_MOVER_MAX_QUOTE_AGE_SECONDS,
+        maxSpreadPercent: STOCK_MOVER_MAX_SPREAD_PERCENT,
+        minDollarVolume: STOCK_MOVER_MIN_DOLLAR_VOLUME,
+      });
+      rankedRaw = executionQuality.accepted;
+      const acceptedSymbols = new Set(
+        rankedRaw.map((item) => normalizeSymbol(item.symbol))
+      );
+      for (const quote of executionQuotes) {
+        if (acceptedSymbols.has(normalizeSymbol(quote.symbol))) {
+          updateQuoteCache(quote.symbol, quote);
+        }
+      }
+      engineState.stockMoverExecutionQualityState = {
+        ok: true,
+        updatedAt: new Date(now).toISOString(),
+        reviewedCount: executionQuality.reviewedCount,
+        acceptedCount: executionQuality.acceptedCount,
+        rejectedCount: executionQuality.rejectedCount,
+        rejectionCounts: executionQuality.rejectionCounts,
+        thresholds: {
+          maxQuoteAgeSeconds: STOCK_MOVER_MAX_QUOTE_AGE_SECONDS,
+          maxSpreadPercent: STOCK_MOVER_MAX_SPREAD_PERCENT,
+          minDollarVolume: STOCK_MOVER_MIN_DOLLAR_VOLUME,
+        },
+        acceptedSymbols: rankedRaw.slice(0, 25).map((item) => item.symbol),
+      };
+    }
     const { gainers, losers, ranked } = rankPolygonMovers({
       rankedRaw,
       limit,
@@ -17764,11 +17871,12 @@ async function getPolygonMoverSymbols(limit = POLYGON_MOVERS_LIMIT, forceRefresh
       isValidStockSymbol,
     });
     const earlySymbolBudget = Math.max(10, Math.floor(limit * 0.45));
+    const regularMarket = engineState.marketOpen === true;
     const cleanSymbols = [
       ...new Set([
-        ...preMoverFallbackSymbols.slice(0, earlySymbolBudget),
+        ...(regularMarket ? [] : preMoverFallbackSymbols.slice(0, earlySymbolBudget)),
         ...rankedSymbols,
-        ...runnerFallbackSymbols,
+        ...(regularMarket ? [] : runnerFallbackSymbols),
       ]),
     ]
       .filter(
@@ -27619,6 +27727,11 @@ function mergeLiveQuoteIntoSignal(signal = {}) {
     ask: liveQuote.ask,
     spread: liveQuote.spread,
     spreadPercent: liveQuote.spreadPercent,
+    spreadAvailable: liveQuote.spreadAvailable === true,
+    spreadUpdatedAt: liveQuote.spreadUpdatedAt || liveQuote.bidAskUpdatedAt || null,
+    bidAskUpdatedAt: liveQuote.bidAskUpdatedAt || liveQuote.spreadUpdatedAt || null,
+    spreadSource: liveQuote.spreadSource || null,
+    spreadAgeSeconds: getSpreadAgeSeconds(liveQuote),
     liveMoveFromPreviousPercent:
       liveQuote.liveMoveFromPreviousPercent,
     percentChange:
@@ -27761,15 +27874,8 @@ function updateQuoteCache(symbol, quote = {}) {
   }
   const previous = engineState.liveQuoteCache[cleanSymbol] || {};
   const previousPrice = Number(previous.price || 0);
-  const bid = Number(quote.bid || quote.bp || 0);
-  const ask = Number(quote.ask || quote.ap || 0);
   const size = Number(quote.size || quote.s || quote.volume || quote.v || 0);
   const tradeVolume = Number(quote.volume || quote.v || quote.size || quote.s || 0);
-  const { spread, spreadPercent, spreadAvailable } = calculateSpread({
-    bid,
-    ask,
-    price,
-  });
   const liveMoveFromPreviousPercent = calculateLiveMovePercent(
     previousPrice,
     price
@@ -27783,6 +27889,21 @@ function updateQuoteCache(symbol, quote = {}) {
     quote.liveQuoteSource ||
     quote.source ||
     "live_stream";
+  const {
+    bid,
+    ask,
+    spread,
+    spreadPercent,
+    spreadAvailable,
+    spreadUpdatedAt,
+    bidAskUpdatedAt,
+    spreadSource,
+    spreadPreservedFromPrevious,
+  } = mergeLiveQuoteEvidence(previous, quote, {
+    price,
+    quoteUpdatedAt,
+    quoteSource,
+  });
   const quoteIsActuallyLive =
     quote.priceIsLive === true &&
     !!quoteUpdatedAt &&
@@ -27833,6 +27954,10 @@ function updateQuoteCache(symbol, quote = {}) {
     spread,
     spreadPercent,
     spreadAvailable,
+    spreadUpdatedAt,
+    bidAskUpdatedAt,
+    spreadSource,
+    spreadPreservedFromPrevious,
     volume: tradeVolume,
     size,
     source: quote.source || "live_stream",
@@ -27856,6 +27981,10 @@ function updateQuoteCache(symbol, quote = {}) {
     spread,
     spreadPercent,
     spreadAvailable,
+    spreadUpdatedAt,
+    bidAskUpdatedAt,
+    spreadSource,
+    spreadPreservedFromPrevious,
     volume: tradeVolume,
     source: quote.source || "live_stream",
     liveQuoteSource:
@@ -30855,15 +30984,23 @@ function getLiveProviderEvidence(quoteSource, cryptoAsset = false) {
 }
 function isPreTradeQuoteReady(quote = {}, cryptoAsset = false) {
   const quoteSource = quote.liveQuoteSource || quote.source || "";
+  const spreadSource = quote.spreadSource || quoteSource;
   const providerEvidence = getLiveProviderEvidence(
     quoteSource,
+    cryptoAsset
+  );
+  const spreadProviderEvidence = getLiveProviderEvidence(
+    spreadSource,
     cryptoAsset
   );
   return (
     quote.priceIsLive === true &&
     isFreshLiveQuote(quote) &&
-    quote.spreadAvailable === true &&
-    providerEvidence.connected === true
+    isFreshMeasuredSpread(quote, {
+      maxAgeSeconds: LIVE_ORDER_MAX_QUOTE_AGE_SECONDS,
+    }) &&
+    providerEvidence.connected === true &&
+    spreadProviderEvidence.connected === true
   );
 }
 async function resolveVerifiedPreTradeQuote(symbol, cryptoAsset = false) {
@@ -31102,8 +31239,13 @@ function validateLiveOrder(symbol, side = "BUY") {
     Number(quote.ask || 0) >= Number(quote.bid || 0)
   );
   const spreadPercent = spreadAvailable ? Number(quote.spreadPercent) : null;
-  const quoteAgeSeconds = getLiveQuoteAgeSeconds(cleanSymbol);
+  const priceAgeSeconds = getLiveQuoteAgeSeconds(cleanSymbol);
+  const spreadAgeSeconds = getSpreadAgeSeconds(quote);
+  const quoteAgeSeconds = spreadAvailable && spreadAgeSeconds !== null
+    ? Math.max(priceAgeSeconds, spreadAgeSeconds)
+    : priceAgeSeconds;
   const quoteSource = quote.liveQuoteSource || quote.source || "";
+  const spreadSource = quote.spreadSource || quoteSource;
   const quoteIsLive =
     quote.priceIsLive === true &&
     isLiveQuoteSource(quoteSource);
@@ -31111,6 +31253,10 @@ function validateLiveOrder(symbol, side = "BUY") {
   const requireLiveProvider = LIVE_ORDER_REQUIRE_POLYGON_CONNECTED;
   const liveProviderEvidence = getLiveProviderEvidence(
     quoteSource,
+    cryptoAsset
+  );
+  const spreadProviderEvidence = getLiveProviderEvidence(
+    spreadSource,
     cryptoAsset
   );
   const decision = evaluatePreTradeRisk({
@@ -31130,7 +31276,8 @@ function validateLiveOrder(symbol, side = "BUY") {
       quoteAgeSeconds,
       quoteIsLive,
       requireLiveProvider,
-      liveProviderConnected: liveProviderEvidence.connected,
+      liveProviderConnected:
+        liveProviderEvidence.connected && spreadProviderEvidence.connected,
       liveProvider: liveProviderEvidence.provider,
       liveProviderReason: liveProviderEvidence.reason,
       maxQuoteAgeSeconds: LIVE_ORDER_MAX_QUOTE_AGE_SECONDS,
@@ -31152,10 +31299,14 @@ function validateLiveOrder(symbol, side = "BUY") {
     spreadPercent,
     spreadAvailable,
     quoteAgeSeconds,
+    priceAgeSeconds,
+    spreadAgeSeconds,
     quoteSource,
+    spreadSource,
     quoteIsLive,
     liveProvider: liveProviderEvidence.provider,
-    liveProviderConnected: liveProviderEvidence.connected,
+    liveProviderConnected:
+      liveProviderEvidence.connected && spreadProviderEvidence.connected,
     liveProviderReason: liveProviderEvidence.reason,
     polygonConnected: cryptoAsset
       ? isPolygonCryptoLiveConnected()

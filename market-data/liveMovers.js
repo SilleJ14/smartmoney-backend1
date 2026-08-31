@@ -222,6 +222,13 @@ export function buildLiveMovers({
       merged.updatedAt ||
       merged.quoteFetchedAt ||
       null;
+    const spreadUpdatedAt = spreadAvailable
+      ? liveQuote.spreadUpdatedAt ||
+        liveQuote.bidAskUpdatedAt ||
+        merged.spreadUpdatedAt ||
+        merged.bidAskUpdatedAt ||
+        liveQuoteUpdatedAt
+      : null;
     const liveQuoteSource =
       liveQuote.liveQuoteSource ||
       liveQuote.source ||
@@ -240,11 +247,22 @@ export function buildLiveMovers({
     const liveQuoteAgeSeconds = Number.isFinite(liveQuoteTimestamp)
       ? (scoringNow.getTime() - liveQuoteTimestamp) / 1000
       : null;
+    const spreadTimestamp = spreadUpdatedAt
+      ? Date.parse(spreadUpdatedAt)
+      : NaN;
+    const spreadAgeSeconds = Number.isFinite(spreadTimestamp)
+      ? (scoringNow.getTime() - spreadTimestamp) / 1000
+      : null;
     const liveQuoteFresh =
       priceIsLive &&
       liveQuoteAgeSeconds !== null &&
       liveQuoteAgeSeconds >= -5 &&
       liveQuoteAgeSeconds <= 5;
+    const liveSpreadFresh =
+      spreadAvailable &&
+      spreadAgeSeconds !== null &&
+      spreadAgeSeconds >= -5 &&
+      spreadAgeSeconds <= 5;
     const scoringSignal = {
       ...merged,
       symbol,
@@ -261,6 +279,7 @@ export function buildLiveMovers({
       ask,
       spreadPercent,
       spreadAvailable,
+      spreadUpdatedAt,
       liveQuoteUpdatedAt,
       liveQuoteSource,
       priceIsLive,
@@ -315,7 +334,8 @@ export function buildLiveMovers({
     const stockEntryAvailable =
       !cryptoAsset &&
       Number(stockEntry?.coverage || 0) >= 0.8 &&
-      liveQuoteFresh;
+      liveQuoteFresh &&
+      liveSpreadFresh;
     const stockDecisionMissingEvidence = (
       stockDecision?.missingCriticalEvidence || []
     ).filter((reason) => reason !== "approvedEntry");
@@ -377,7 +397,8 @@ export function buildLiveMovers({
       cryptoDiscoveryCoverage >= 0.5;
     const cryptoEntryAvailable =
       cryptoDecision?.componentsByName?.execution?.available === true &&
-      liveQuoteFresh;
+      liveQuoteFresh &&
+      liveSpreadFresh;
     const preservedCryptoDecisionEvidence =
       merged.centralAutonomousDecisionCore?.cryptoDecisionEvidence ??
       merged.cryptoScoreTelemetry?.decision ??
@@ -429,6 +450,11 @@ export function buildLiveMovers({
       ask,
       spreadPercent,
       spreadAvailable,
+      spreadUpdatedAt,
+      spreadAgeSeconds: spreadAgeSeconds === null
+        ? null
+        : Number(spreadAgeSeconds.toFixed(2)),
+      liveSpreadFresh,
       liveQuoteUpdatedAt,
       liveQuoteSource,
       liveQuoteAgeSeconds: liveQuoteAgeSeconds === null

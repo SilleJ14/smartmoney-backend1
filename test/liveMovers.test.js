@@ -214,6 +214,55 @@ test("live movers never copy Discovery into F when Entry evidence is unavailable
   assert.notEqual(movers[0].stockDecisionScore, movers[0].discoveryScore);
 });
 
+test("live movers do not finalize Entry from a fresh trade carrying stale bid/ask", () => {
+  const now = new Date("2026-08-31T15:00:20.000Z");
+  const signal = {
+    symbol: "AAPL",
+    price: 103,
+    previousClose: 100,
+    historyDays: 30,
+    extensionProfile: { coverage: 1, alreadyExtended: false, extensionPenalty: 0 },
+    technicalBarsFound: 30,
+    technicals: { ema9: 103, ema20: 101, macd: 2, macdSignal: 1, rsi: 61 },
+    confirmations: { closeNearHighPercent: 86, aboveVwap: true, fakeBreakout: false },
+    phase5SignalQuality: {
+      breakoutRetestConfirmation: true,
+      liquidityStabilityScore: 88,
+      antiChaseRisk: 18,
+      exhaustionRisk: 14,
+      spreadWideningRisk: 10,
+    },
+  };
+  const movers = buildLiveMovers({
+    state: {
+      marketOpen: true,
+      topStockSignals: [signal],
+      liveQuoteCache: {
+        AAPL: {
+          price: 103,
+          bid: 102.98,
+          ask: 103.02,
+          spreadAvailable: true,
+          spreadPercent: 0.0388,
+          liveQuoteUpdatedAt: now.toISOString(),
+          spreadUpdatedAt: "2026-08-31T15:00:00.000Z",
+          liveQuoteSource: "finnhub_ws_trade",
+          spreadSource: "alpaca_latest_stock_quote",
+          priceIsLive: true,
+        },
+      },
+    },
+    normalizeSymbol,
+    mergeLiveQuote: (value) => value,
+    isCrypto,
+    now: () => now,
+  });
+
+  assert.equal(movers[0].liveQuoteFresh, true);
+  assert.equal(movers[0].liveSpreadFresh, false);
+  assert.equal(movers[0].entryQualityScoreAvailable, false);
+});
+
 test("live movers finalize crypto F when discovery entry context and quote evidence are complete", () => {
   const now = new Date("2026-08-31T15:00:00.000Z");
   const candidate = {

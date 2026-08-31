@@ -238,6 +238,24 @@ export function evaluateStockTradeCandidate(
     quoteAgeSeconds >= -5 &&
     quoteAgeSeconds <= effectiveMaxQuoteAgeSeconds
   );
+  const spreadTimestampRaw =
+    signal.spreadUpdatedAt ??
+    signal.bidAskUpdatedAt ??
+    (spreadAvailable ? quoteTimestampRaw : null);
+  const spreadTimestamp = Number.isFinite(Number(spreadTimestampRaw))
+    ? Number(spreadTimestampRaw)
+    : spreadTimestampRaw
+      ? Date.parse(spreadTimestampRaw)
+      : NaN;
+  const spreadAgeSeconds = Number.isFinite(spreadTimestamp)
+    ? (Number(now) - spreadTimestamp) / 1000
+    : null;
+  const spreadFreshnessAvailable = spreadAvailable && spreadAgeSeconds !== null;
+  const spreadFreshnessPass = !requireCentralDecision || (
+    spreadFreshnessAvailable &&
+    spreadAgeSeconds >= -5 &&
+    spreadAgeSeconds <= effectiveMaxQuoteAgeSeconds
+  );
   const decisionTimestampRaw =
     signal.decisionUpdatedAt ??
     signal.decisionTimestamp ??
@@ -327,6 +345,16 @@ export function evaluateStockTradeCandidate(
         : []
     ),
     ...(
+      requireCentralDecision && spreadAvailable && !spreadFreshnessAvailable
+        ? ["SPREAD_FRESHNESS_UNAVAILABLE"]
+        : []
+    ),
+    ...(
+      requireCentralDecision && spreadFreshnessAvailable && !spreadFreshnessPass
+        ? [spreadAgeSeconds < -5 ? "SPREAD_TIMESTAMP_IN_FUTURE" : "SPREAD_STALE"]
+        : []
+    ),
+    ...(
       requireFreshDecision && !decisionFreshnessAvailable
         ? ["DECISION_FRESHNESS_UNAVAILABLE"]
         : []
@@ -353,6 +381,7 @@ export function evaluateStockTradeCandidate(
       coreEvidencePass &&
       riskQualityPass &&
       quoteFreshnessPass &&
+      spreadFreshnessPass &&
       decisionFreshnessPass &&
       finalScoreAvailable &&
       spreadAvailable &&
@@ -390,6 +419,14 @@ export function evaluateStockTradeCandidate(
       : Number(quoteAgeSeconds.toFixed(2)),
     quoteFreshnessAvailable,
     quoteFreshnessPass,
+    spreadTimestamp: Number.isFinite(spreadTimestamp)
+      ? new Date(spreadTimestamp).toISOString()
+      : null,
+    spreadAgeSeconds: spreadAgeSeconds === null
+      ? null
+      : Number(spreadAgeSeconds.toFixed(2)),
+    spreadFreshnessAvailable,
+    spreadFreshnessPass,
     decisionTimestamp: Number.isFinite(decisionTimestamp)
       ? new Date(decisionTimestamp).toISOString()
       : null,

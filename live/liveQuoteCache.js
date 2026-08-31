@@ -63,6 +63,96 @@ export function calculateSpread({ bid = 0, ask = 0, price = 0, previous = {} }) 
   return { spread, spreadPercent, spreadAvailable };
 }
 
+function parsedTimestamp(value) {
+  if (!value) return null;
+  const timestamp = Number.isFinite(Number(value))
+    ? Number(value)
+    : Date.parse(String(value));
+  return Number.isFinite(timestamp) ? timestamp : null;
+}
+
+export function getSpreadTimestamp(quote = {}) {
+  return (
+    quote.spreadUpdatedAt ||
+    quote.bidAskUpdatedAt ||
+    (
+      quote.spreadAvailable === true
+        ? quote.liveQuoteUpdatedAt || quote.quoteFetchedAt || quote.updatedAt || null
+        : null
+    )
+  );
+}
+
+export function getSpreadAgeSeconds(quote = {}, now = Date.now()) {
+  const timestamp = parsedTimestamp(getSpreadTimestamp(quote));
+  if (timestamp === null) return null;
+  return (Number(now) - timestamp) / 1000;
+}
+
+export function isFreshMeasuredSpread(
+  quote = {},
+  { maxAgeSeconds = 5, now = Date.now() } = {}
+) {
+  const bid = Number(quote.bid || quote.bp || 0);
+  const ask = Number(quote.ask || quote.ap || 0);
+  const ageSeconds = getSpreadAgeSeconds(quote, now);
+  return (
+    quote.spreadAvailable === true &&
+    bid > 0 &&
+    ask >= bid &&
+    ageSeconds !== null &&
+    ageSeconds >= -5 &&
+    ageSeconds <= Number(maxAgeSeconds || 5)
+  );
+}
+
+export function mergeLiveQuoteEvidence(
+  previous = {},
+  incoming = {},
+  { price = 0, quoteUpdatedAt = null, quoteSource = "live_stream" } = {}
+) {
+  const incomingBid = Number(incoming.bid || incoming.bp || 0);
+  const incomingAsk = Number(incoming.ask || incoming.ap || 0);
+  const incomingHasSpread = incomingBid > 0 && incomingAsk >= incomingBid;
+  const previousBid = Number(previous.bid || previous.bp || 0);
+  const previousAsk = Number(previous.ask || previous.ap || 0);
+  const previousHasSpread =
+    previous.spreadAvailable === true &&
+    previousBid > 0 &&
+    previousAsk >= previousBid;
+  const bid = incomingHasSpread
+    ? incomingBid
+    : previousHasSpread
+      ? previousBid
+      : 0;
+  const ask = incomingHasSpread
+    ? incomingAsk
+    : previousHasSpread
+      ? previousAsk
+      : 0;
+  const spreadEvidence = calculateSpread({ bid, ask, price });
+  const spreadUpdatedAt = incomingHasSpread
+    ? quoteUpdatedAt
+    : previousHasSpread
+      ? getSpreadTimestamp(previous)
+      : null;
+  const spreadSource = incomingHasSpread
+    ? incoming.spreadSource || quoteSource
+    : previousHasSpread
+      ? previous.spreadSource || previous.liveQuoteSource || previous.source || null
+      : null;
+
+  return {
+    bid,
+    ask,
+    ...spreadEvidence,
+    spreadUpdatedAt,
+    bidAskUpdatedAt: spreadUpdatedAt,
+    spreadSource,
+    spreadPreservedFromPrevious: !incomingHasSpread && previousHasSpread,
+  };
+}
+
 export function calculateLiveMovePercent(previousPrice = 0, price = 0) {
   return previousPrice > 0 && price > 0
     ? Number((((price - previousPrice) / previousPrice) * 100).toFixed(4))
