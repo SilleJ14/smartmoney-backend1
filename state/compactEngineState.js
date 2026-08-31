@@ -33,16 +33,50 @@ function removeDuplicatedSignalBars(signal = {}) {
   return compactSignal;
 }
 
+function optionalFiniteNumber(...values) {
+  for (const value of values) {
+    if (value === null || value === undefined || value === "") continue;
+    const parsed = Number(value);
+    if (Number.isFinite(parsed)) return parsed;
+  }
+  return null;
+}
+
 function compactSignalForHistory(signal = {}) {
   if (!signal || typeof signal !== "object") return signal;
+  const assetClass = signal.assetClass || signal.asset_class || signal.assetType || null;
+  const symbol = String(signal.symbol || "").toUpperCase();
+  const cryptoAsset = String(assetClass || "").toLowerCase() === "crypto" ||
+    symbol.includes("/") || symbol.endsWith("USD");
   return {
     symbol: signal.symbol || null,
-    assetClass: signal.assetClass || signal.asset_class || signal.assetType || null,
+    assetClass,
     score: Number(signal.score || 0),
-    rawCryptoScore: Number(signal.rawCryptoScore || 0),
-    cryptoEntryScore: Number(signal.cryptoEntryScore || 0),
-    cryptoDecisionScore: Number(signal.cryptoDecisionScore || 0),
-    multiDayScore: Number(signal.multiDayScore || signal.multiDayProbability || 0),
+    stockDecisionScore: cryptoAsset
+      ? null
+      : optionalFiniteNumber(
+        signal.masterFinalScore,
+        signal.finalAutonomousDecisionScore,
+        signal.stockDecisionScore
+      ),
+    stockDecisionScoreAvailable:
+      !cryptoAsset && signal.stockDecisionScoreAvailable === true,
+    rawCryptoScore: optionalFiniteNumber(signal.rawCryptoScore),
+    cryptoEntryScore: optionalFiniteNumber(signal.cryptoEntryScore),
+    cryptoDecisionScore: cryptoAsset
+      ? optionalFiniteNumber(
+        signal.cryptoDecisionScore,
+        signal.masterFinalScore,
+        signal.finalAutonomousDecisionScore
+      )
+      : null,
+    cryptoDecisionScoreAvailable:
+      cryptoAsset && signal.cryptoDecisionScoreAvailable === true,
+    multiDayScore: optionalFiniteNumber(
+      signal.multiDayScore,
+      signal.multiDayProbability
+    ),
+    multiDayScoreAvailable: signal.multiDayScoreAvailable === true,
     runnerScore: Number(
       signal.runnerScore ||
       signal.explosiveRunnerScore ||

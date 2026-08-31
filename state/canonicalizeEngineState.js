@@ -1,3 +1,5 @@
+import { compareCanonicalSignals } from "../scoring/canonicalSignalRank.js";
+
 export function canonicalizeEngineStateAliases(
   engineState,
   CONFIG
@@ -37,32 +39,20 @@ export function canonicalizeEngineStateAliases(
   engineState.topStockSignals = [
     ...engineState.lastStockSignals,
   ]
-    .sort(
-      (a, b) =>
-        Number(b.score || 0) -
-        Number(a.score || 0)
-    )
+    .sort(compareCanonicalSignals)
     .slice(0, 25);
 
   engineState.topCryptoSignals = [
     ...engineState.lastCryptoSignals,
   ]
-    .sort(
-      (a, b) =>
-        Number(b.score || 0) -
-        Number(a.score || 0)
-    )
+    .sort(compareCanonicalSignals)
     .slice(0, 25);
 
   engineState.topSignals = [
     ...engineState.topStockSignals,
     ...engineState.topCryptoSignals,
   ]
-    .sort(
-      (a, b) =>
-        Number(b.score || 0) -
-        Number(a.score || 0)
-    )
+    .sort(compareCanonicalSignals)
     .slice(
       0,
       CONFIG.maxSignalsToReturn || 75

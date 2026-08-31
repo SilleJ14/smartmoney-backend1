@@ -1,5 +1,10 @@
 import { CRYPTO_MIN_FINAL_SCORE_TO_BUY } from "../scoring/componentScore.js";
 import { applyCrossAssetCryptoContext } from "../scoring/cryptoContext.js";
+import {
+  compareCanonicalSignals,
+  getCanonicalFinalScore,
+  hasExplicitTradeApproval,
+} from "../scoring/canonicalSignalRank.js";
 
 export function createEngineCycle(dependencies) {
   const {
@@ -1478,7 +1483,7 @@ export function createEngineCycle(dependencies) {
       ) {
         engineState.institutionalDashboardSnapshots = [];
       }
-      engineState.lastSignals = signals;
+      engineState.lastSignals = [...signals].sort(compareCanonicalSignals);
       refreshFinnhubLiveSubscriptions();
       engineState.institutionalDashboardSnapshots.unshift({
         createdAt: new Date().toISOString(),
@@ -2539,6 +2544,7 @@ export function createEngineCycle(dependencies) {
           signal.qualifiedToBuy = false;
           signal.autoTradeApproved = false;
           signal.approved = false;
+          signal.backendApproved = false;
           signal.recommendedTradeAmount = 0;
           signal.finalApprovedTradeAmount = 0;
           signal.displayTradeAmount = 0;
@@ -2548,6 +2554,7 @@ export function createEngineCycle(dependencies) {
           signal.qualifiedToBuy = true;
           signal.autoTradeApproved = true;
           signal.approved = true;
+          signal.backendApproved = true;
         }
       }
       signals = [...stockSignals, ...cryptoSignals];
@@ -2708,7 +2715,7 @@ export function createEngineCycle(dependencies) {
         engineState.stockScoreOutcomeState.summary;
       engineState.stockScoreOutcomeLearning =
         calculateStockOutcomeLearning(engineState.stockScoreOutcomeState);
-      engineState.lastSignals = signals;
+      engineState.lastSignals = [...signals].sort(compareCanonicalSignals);
       engineState.lastStockSignals =
         Array.isArray(stockSignals) && stockSignals.length > 0
           ? stockSignals
@@ -2722,10 +2729,10 @@ export function createEngineCycle(dependencies) {
             ? engineState.lastCryptoSignals
             : [];
       engineState.topSignals = [...engineState.lastStockSignals, ...engineState.lastCryptoSignals]
-        .sort((a, b) => Number(b.score || 0) - Number(a.score || 0))
+        .sort(compareCanonicalSignals)
         .slice(0, CONFIG.maxSignalsToReturn || 75);
       engineState.topStockSignals = [...engineState.lastStockSignals]
-        .sort((a, b) => Number(b.score || 0) - Number(a.score || 0))
+        .sort(compareCanonicalSignals)
         .slice(0, 25);
       engineState.topSwingWatchlist =
         Array.isArray(engineState.topSwingWatchlist) &&
@@ -2746,7 +2753,7 @@ export function createEngineCycle(dependencies) {
             .slice(0, 10);
   
       engineState.topCryptoSignals = [...engineState.lastCryptoSignals]
-        .sort((a, b) => Number(b.score || 0) - Number(a.score || 0))
+        .sort(compareCanonicalSignals)
         .slice(0, 25);
       pushLiveSignalUpdate(
         buildLiveSignalPushPayload()
@@ -2764,9 +2771,8 @@ export function createEngineCycle(dependencies) {
       );
       const approvedCryptoSignals = cryptoSignals.filter(
         (signal) =>
-          signal.qualifiedToBuy === true &&
-          signal.autoTradeApproved !== false &&
-          Number(signal.cryptoDecisionScore ?? 0) >=
+          hasExplicitTradeApproval(signal) &&
+          Number(getCanonicalFinalScore(signal) ?? -Infinity) >=
             CRYPTO_MIN_FINAL_SCORE_TO_BUY
       );
       effectiveMode = selectSmartTradingMode({

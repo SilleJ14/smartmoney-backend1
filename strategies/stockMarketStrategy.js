@@ -5,6 +5,7 @@ import {
   calculateMultiDayContinuationScore,
   evaluateStockTradeCandidate,
 } from "../scoring/decisionScores.js";
+import { classifyStockDiscoveryLane } from "../discovery/stockDiscoveryLanes.js";
 
 export function createStockMarketStrategy(dependencies) {
   const {
@@ -397,6 +398,17 @@ export function createStockMarketStrategy(dependencies) {
       engineState.preMoverDiscoveryMemory?.[normalizeSymbol(q.symbol || "")]?.preMoveScore ||
       0
     );
+
+    // Keep explosive-runner discovery, but do not force every liquid stock
+    // through the small-float/5x-RVOL runner profile. This second lane only
+    // admits measured, liquid, positively structured stocks for full D/E/F
+    // evaluation; it does not bypass any execution or sizing gate.
+    const discoveryLane = classifyStockDiscoveryLane(q, {
+      minScanVolume: Number(CONFIG.minScanVolume || 300000),
+    });
+    const normalStrongLane = discoveryLane.normalStrong;
+    q.discoveryLane = discoveryLane.lane;
+    q.discoveryLaneEvidence = discoveryLane.evidence;
   
     const premarketContinuationScore = Math.max(
       Number(q.premarketContinuationScore || 0),
@@ -481,7 +493,8 @@ export function createStockMarketStrategy(dependencies) {
   
     if (
       relativeVolume < Number(CONFIG.minRunnerRelativeVolume || 5) &&
-      !discoveryRescue
+      !discoveryRescue &&
+      !normalStrongLane
     ) {
       return {
         ok: false,
@@ -489,7 +502,11 @@ export function createStockMarketStrategy(dependencies) {
       };
     }
   
-    if (floatShares > 0 && floatShares > Number(CONFIG.maxRunnerFloatShares || 20000000)) {
+    if (
+      !normalStrongLane &&
+      floatShares > 0 &&
+      floatShares > Number(CONFIG.maxRunnerFloatShares || 20000000)
+    ) {
       if (allowRiskDisplay) {
         return discoveryOnly(`Discovery only: float too high ${floatShares}`);
       }
@@ -497,7 +514,11 @@ export function createStockMarketStrategy(dependencies) {
       return { ok: false, reason: `Float too high: ${floatShares}` };
     }
   
-    if (marketCap > 0 && marketCap > Number(CONFIG.maxRunnerMarketCap || 1000000000)) {
+    if (
+      !normalStrongLane &&
+      marketCap > 0 &&
+      marketCap > Number(CONFIG.maxRunnerMarketCap || 1000000000)
+    ) {
       if (allowRiskDisplay) {
         return discoveryOnly(`Discovery only: market cap too high ${marketCap}`);
       }
@@ -575,6 +596,7 @@ export function createStockMarketStrategy(dependencies) {
       buyBlocked: false,
       blockBuying: false,
       displayOnly: false,
+      discoveryLane: q.discoveryLane,
     };
   }
   
@@ -1181,7 +1203,8 @@ export function createStockMarketStrategy(dependencies) {
             ...quote,
             scanCycleId,
             scanBuiltAt: new Date().toISOString(),
-            quoteFetchedAt: quote.quoteFetchedAt || new Date().toISOString(),
+            quoteFetchedAt:
+              quote.quoteFetchedAt || quote.liveQuoteUpdatedAt || quote.updatedAt || null,
             score: institutional.institutionalScore,
             legacyMomentumScore: score,
             momentumScore:

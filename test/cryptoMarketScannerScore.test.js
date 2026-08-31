@@ -152,6 +152,9 @@ test("crypto scan publishes quiet discovery separately from legacy momentum", as
       bid: dailyBars.at(-1).c - 0.02,
       ask: dailyBars.at(-1).c + 0.02,
       dollarVolume24h: 10_000_000,
+      quoteFetchedAt: "2026-08-31T14:00:00.000Z",
+      liveQuoteSource: "alpaca_crypto_latest",
+      priceIsLive: true,
     }),
     getCryptoNewsIntelligence: async () => ({
       dataAvailable: true,
@@ -161,7 +164,15 @@ test("crypto scan publishes quiet discovery separately from legacy momentum", as
     getFreshLiveCryptoQuote: () => null,
     isCrypto: () => true,
     recordSkippedSymbol: () => {},
-    updateQuoteCache: (_symbol, quote) => ({ ...quote, updatedAt: new Date().toISOString() }),
+    updateQuoteCache: (_symbol, quote) => ({
+      ...quote,
+      liveQuoteUpdatedAt: quote.quoteFetchedAt,
+      updatedAt: quote.quoteFetchedAt,
+      spreadUpdatedAt: quote.quoteFetchedAt,
+      bidAskUpdatedAt: quote.quoteFetchedAt,
+      spreadSource: quote.liveQuoteSource,
+      priceIsLive: true,
+    }),
     getRuntime: () => ({ TRADING_MODE: "live_crypto", LIVE_ORDER_MAX_QUOTE_AGE_SECONDS: 15 }),
   });
 
@@ -171,6 +182,9 @@ test("crypto scan publishes quiet discovery separately from legacy momentum", as
   assert.equal(signal.cryptoDiscoveryScore, signal.rawCryptoScore);
   assert.equal(typeof signal.legacyMomentumScore, "number");
   assert.equal(signal.cryptoDiscoveryScorecard.extension.alreadyExtended, false);
+  assert.equal(signal.liveQuoteUpdatedAt, "2026-08-31T14:00:00.000Z");
+  assert.equal(signal.spreadUpdatedAt, "2026-08-31T14:00:00.000Z");
+  assert.equal(signal.priceIsLive, true);
   assert.equal(engineState.cryptoQuietDiscoveryState.selectedCount, 1);
   assert.equal(engineState.cryptoQuietDiscoveryState.topCandidates[0].chartBars, undefined);
 });

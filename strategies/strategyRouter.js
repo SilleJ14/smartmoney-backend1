@@ -1,3 +1,8 @@
+import {
+  getCanonicalFinalScore,
+  hasExplicitTradeApproval,
+} from "../scoring/canonicalSignalRank.js";
+
 export function getEnabledStrategyModes(effectiveMode) {
   return {
     stockModeEnabled: effectiveMode === "live_stock" || effectiveMode === "smart",
@@ -7,11 +12,18 @@ export function getEnabledStrategyModes(effectiveMode) {
 
 export function selectSmartTradingMode({ selectedMode, currentEffectiveMode, stockSignals = [], cryptoSignals = [] }) {
   if (selectedMode !== "smart") return currentEffectiveMode;
-  const bestApprovedScore = (signals, crypto = false) => signals
-    .filter((signal) => signal.qualifiedToBuy === true &&
-      (crypto ? signal.autoTradeApproved !== false : signal.autoTradeApproved === true))
-    .reduce((best, signal) => Math.max(best, Number(signal.score || 0)), 0);
-  return bestApprovedScore(stockSignals) >= bestApprovedScore(cryptoSignals, true)
+  const bestApprovedScore = (signals) => signals
+    .filter(hasExplicitTradeApproval)
+    .reduce((best, signal) => {
+      const score = getCanonicalFinalScore(signal);
+      return score === null ? best : Math.max(best, score);
+    }, 0);
+  const stockScore = bestApprovedScore(stockSignals);
+  const cryptoScore = bestApprovedScore(cryptoSignals);
+  if (stockScore === 0 && cryptoScore === 0) {
+    return currentEffectiveMode || "live_stock";
+  }
+  return stockScore >= cryptoScore
     ? "live_stock"
     : "live_crypto";
 }

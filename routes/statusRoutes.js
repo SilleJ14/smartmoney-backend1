@@ -2,11 +2,14 @@ function mappedSignals(primary, fallback, mergeLiveQuote) {
   return (primary?.length ? primary : fallback || []).map(mergeLiveQuote);
 }
 
-function liveStreamState(state, includeCrypto = true) {
+function liveStreamState(state) {
   return {
     polygon: state.polygonLiveStreamState || null,
-    ...(includeCrypto ? { polygonCrypto: state.polygonCryptoLiveStreamState || null } : {}),
-    ...(includeCrypto ? { finnhub: state.liveQuoteStreamState || null } : {}),
+    finnhub: state.liveQuoteStreamState || null,
+    providerRouting: {
+      stock: ["polygon", "finnhub", "alpaca"],
+      crypto: ["finnhub", "alpaca"],
+    },
     fastRunner: state.fastRunnerEngineState || null,
     quickGate: state.quickInstitutionalGateState || null,
     starterBuy: state.liveStarterBuyGateState || null,
@@ -228,7 +231,7 @@ export function registerStatusRoutes(app, dependencies) {
         signals: mappedSignals(state.topSignals, state.lastSignals, mergeLiveQuote),
         stockSignals: mappedSignals(state.topStockSignals, state.lastStockSignals, mergeLiveQuote),
         cryptoSignals: mappedSignals(state.topCryptoSignals, state.lastCryptoSignals, mergeLiveQuote),
-        liveStreamState: liveStreamState(state, false),
+        liveStreamState: liveStreamState(state),
         engineState: {
           ...state,
           stockScoreOutcomeState: compactOutcomeStatus(state),

@@ -1,19 +1,17 @@
-const LIVE_QUOTE_PROVIDER_BY_SOURCE = Object.freeze({
-  polygon_ws_trade: "polygon",
-  polygon_ws_quote: "polygon",
-  polygon_ws_second_aggregate: "polygon",
-  polygon_crypto_ws_trade: "polygon",
-  polygon_crypto_ws_quote: "polygon",
-  polygon_crypto_ws_aggregate: "polygon",
-  polygon_crypto_ws_minute_aggregate: "polygon",
-  finnhub_ws: "finnhub",
-  finnhub_ws_trade: "finnhub",
-  alpaca_latest_stock_quote: "alpaca",
-  alpaca_crypto_latest: "alpaca",
+const LIVE_QUOTE_SOURCE_REGISTRY = Object.freeze({
+  polygon_ws_trade: { provider: "polygon", assets: ["stock"], connection: "polygon" },
+  polygon_ws_quote: { provider: "polygon", assets: ["stock"], connection: "polygon" },
+  polygon_ws_second_aggregate: { provider: "polygon", assets: ["stock"], connection: "polygon" },
+  polygon_rest_quote: { provider: "polygon", assets: ["stock"] },
+  finnhub_ws: { provider: "finnhub", assets: ["stock", "crypto"], connection: "finnhub" },
+  finnhub_ws_trade: { provider: "finnhub", assets: ["stock", "crypto"], connection: "finnhub" },
+  finnhub_rest_quote: { provider: "finnhub", assets: ["stock"] },
+  alpaca_latest_stock_quote: { provider: "alpaca", assets: ["stock"] },
+  alpaca_crypto_latest: { provider: "alpaca", assets: ["crypto"] },
 });
 
 export function getLiveQuoteProvider(source = "") {
-  return LIVE_QUOTE_PROVIDER_BY_SOURCE[String(source || "").toLowerCase()] || null;
+  return LIVE_QUOTE_SOURCE_REGISTRY[String(source || "").toLowerCase()]?.provider || null;
 }
 
 export function isLiveQuoteSource(source = "") {
@@ -25,26 +23,28 @@ export function evaluateLiveQuoteProviderReadiness(
   {
     isCrypto = false,
     polygonConnected = false,
-    polygonCryptoConnected = false,
     finnhubConnected = false,
   } = {}
 ) {
-  const provider = getLiveQuoteProvider(source);
-  const connected =
-    provider === "polygon"
-      ? isCrypto
-        ? polygonCryptoConnected === true
-        : polygonConnected === true
-      : provider === "finnhub"
-        ? isCrypto !== true && finnhubConnected === true
-        : provider === "alpaca";
+  const quoteSource = String(source || "").toLowerCase();
+  const registration = LIVE_QUOTE_SOURCE_REGISTRY[quoteSource] || null;
+  const provider = registration?.provider || null;
+  const assetClass = isCrypto === true ? "crypto" : "stock";
+  const supportsAsset = registration?.assets?.includes(assetClass) === true;
+  const connected = supportsAsset && (
+    !registration?.connection ||
+    (registration.connection === "polygon" && polygonConnected === true) ||
+    (registration.connection === "finnhub" && finnhubConnected === true)
+  );
 
   return {
     provider,
     connected,
     quoteSource: String(source || ""),
     reason: provider
-      ? connected
+      ? !supportsAsset
+        ? `${provider.toUpperCase()}_LIVE_QUOTE_SOURCE_UNSUPPORTED_FOR_${assetClass.toUpperCase()}`
+        : connected
         ? `${provider.toUpperCase()}_LIVE_QUOTE_PROVIDER_READY`
         : `${provider.toUpperCase()}_LIVE_QUOTE_PROVIDER_DISCONNECTED`
       : "UNRECOGNIZED_LIVE_QUOTE_PROVIDER",
@@ -71,16 +71,27 @@ function parsedTimestamp(value) {
   return Number.isFinite(timestamp) ? timestamp : null;
 }
 
+export function getLiveQuoteTimestampMs(quote = {}) {
+  for (const value of [
+    quote.liveQuoteUpdatedAt,
+    quote.quoteFetchedAt,
+    quote.updatedAt,
+  ]) {
+    const timestamp = parsedTimestamp(value);
+    if (timestamp !== null) return timestamp;
+  }
+  return null;
+}
+
+export function hasNonRegressiveProviderTimestamp(previous = {}, incoming = {}) {
+  const incomingTimestamp = getLiveQuoteTimestampMs(incoming);
+  if (incomingTimestamp === null) return false;
+  const previousTimestamp = getLiveQuoteTimestampMs(previous);
+  return previousTimestamp === null || incomingTimestamp >= previousTimestamp;
+}
+
 export function getSpreadTimestamp(quote = {}) {
-  return (
-    quote.spreadUpdatedAt ||
-    quote.bidAskUpdatedAt ||
-    (
-      quote.spreadAvailable === true
-        ? quote.liveQuoteUpdatedAt || quote.quoteFetchedAt || quote.updatedAt || null
-        : null
-    )
-  );
+  return quote.spreadUpdatedAt || quote.bidAskUpdatedAt || null;
 }
 
 export function getSpreadAgeSeconds(quote = {}, now = Date.now()) {
@@ -120,23 +131,36 @@ export function mergeLiveQuoteEvidence(
     previous.spreadAvailable === true &&
     previousBid > 0 &&
     previousAsk >= previousBid;
-  const bid = incomingHasSpread
+  const incomingSpreadUpdatedAt = incomingHasSpread
+    ? getSpreadTimestamp(incoming) || quoteUpdatedAt
+    : null;
+  const incomingSpreadTimestampMs = parsedTimestamp(incomingSpreadUpdatedAt);
+  const previousSpreadTimestampMs = parsedTimestamp(getSpreadTimestamp(previous));
+  const incomingSpreadIsUsable =
+    incomingHasSpread &&
+    incomingSpreadTimestampMs !== null &&
+    incomingSpreadTimestampMs <= Date.now() + 5000 &&
+    (
+      previousSpreadTimestampMs === null ||
+      incomingSpreadTimestampMs >= previousSpreadTimestampMs
+    );
+  const bid = incomingSpreadIsUsable
     ? incomingBid
     : previousHasSpread
       ? previousBid
       : 0;
-  const ask = incomingHasSpread
+  const ask = incomingSpreadIsUsable
     ? incomingAsk
     : previousHasSpread
       ? previousAsk
       : 0;
   const spreadEvidence = calculateSpread({ bid, ask, price });
-  const spreadUpdatedAt = incomingHasSpread
-    ? quoteUpdatedAt
+  const spreadUpdatedAt = incomingSpreadIsUsable
+    ? incomingSpreadUpdatedAt
     : previousHasSpread
       ? getSpreadTimestamp(previous)
       : null;
-  const spreadSource = incomingHasSpread
+  const spreadSource = incomingSpreadIsUsable
     ? incoming.spreadSource || quoteSource
     : previousHasSpread
       ? previous.spreadSource || previous.liveQuoteSource || previous.source || null
@@ -149,7 +173,7 @@ export function mergeLiveQuoteEvidence(
     spreadUpdatedAt,
     bidAskUpdatedAt: spreadUpdatedAt,
     spreadSource,
-    spreadPreservedFromPrevious: !incomingHasSpread && previousHasSpread,
+    spreadPreservedFromPrevious: !incomingSpreadIsUsable && previousHasSpread,
   };
 }
 

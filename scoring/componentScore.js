@@ -4,6 +4,7 @@ import {
   getUniqueCryptoSessionDays,
   resolveCryptoLiquidityEvidence,
 } from "./cryptoScoring.js";
+import { isLiveQuoteSource } from "../live/liveQuoteCache.js";
 
 // Crypto decision scoring intentionally uses one component per independent
 // evidence family. Liquidity/spread are represented only by entry quality;
@@ -165,8 +166,15 @@ export function buildCryptoDecisionScore(
   const quoteAgeSeconds = Number.isFinite(quoteTimestamp)
     ? (Number(now) - quoteTimestamp) / 1000
     : null;
+  const quoteSource =
+    signal.liveQuoteSource ||
+    signal.liveQuote?.source ||
+    signal.source ||
+    "";
+  const quoteSourceApproved = isLiveQuoteSource(quoteSource);
   const quoteFresh =
     signal.priceIsLive === true &&
+    quoteSourceApproved &&
     quoteAgeSeconds !== null &&
     quoteAgeSeconds >= -5 &&
     quoteAgeSeconds <= Math.max(
@@ -174,6 +182,28 @@ export function buildCryptoDecisionScore(
       Number(maxQuoteAgeSeconds || CRYPTO_MAX_DECISION_QUOTE_AGE_SECONDS)
     );
   const spread = calculateMeasuredSpread(signal);
+  const spreadTimestampRaw =
+    signal.spreadUpdatedAt ??
+    signal.bidAskUpdatedAt;
+  const spreadTimestamp = Number.isFinite(Number(spreadTimestampRaw))
+    ? Number(spreadTimestampRaw)
+    : spreadTimestampRaw
+      ? Date.parse(spreadTimestampRaw)
+      : NaN;
+  const spreadAgeSeconds = Number.isFinite(spreadTimestamp)
+    ? (Number(now) - spreadTimestamp) / 1000
+    : null;
+  const spreadSource = signal.spreadSource || quoteSource;
+  const spreadSourceApproved = isLiveQuoteSource(spreadSource);
+  const spreadFresh =
+    spread.measured &&
+    spreadSourceApproved &&
+    spreadAgeSeconds !== null &&
+    spreadAgeSeconds >= -5 &&
+    spreadAgeSeconds <= Math.max(
+      1,
+      Number(maxQuoteAgeSeconds || CRYPTO_MAX_DECISION_QUOTE_AGE_SECONDS)
+    );
   const liquidity = resolveCryptoLiquidityEvidence(signal);
   const measuredEntryQuality = calculateCryptoEntryQualityFromEvidence({
     spreadAvailable: spread.measured,
@@ -182,8 +212,8 @@ export function buildCryptoDecisionScore(
   });
   const entryQuality = {
     value: measuredEntryQuality.score,
-    available: measuredEntryQuality.available,
-    source: measuredEntryQuality.available
+    available: measuredEntryQuality.available && spreadFresh,
+    source: measuredEntryQuality.available && spreadFresh
       ? `measured_spread+${liquidity.source}`
       : "unavailable_entry_evidence",
   };
@@ -243,7 +273,9 @@ export function buildCryptoDecisionScore(
     },
   ];
   const weighted = calculateAvailableWeightedScore(components, {
-    normalizeMissing: true,
+    // Missing evidence contributes zero instead of increasing the weight of
+    // the remaining components. Absence must never improve a final score.
+    normalizeMissing: false,
   });
   const componentsWithSemantics = weighted.components.map((component) => ({
     ...component,
@@ -264,10 +296,14 @@ export function buildCryptoDecisionScore(
     ...(signal.newsCatalyst?.dataAvailable === true ? [] : ["newsRiskCoverage"]),
     ...(barsFound >= 10 ? [] : ["barHistory"]),
     ...(spread.measured ? [] : ["liveSpread"]),
+    ...(spread.measured && !spreadFresh ? ["freshLiveSpread"] : []),
+    ...(quoteSourceApproved ? [] : ["approvedLiveQuoteSource"]),
+    ...(spreadSourceApproved ? [] : ["approvedLiveSpreadSource"]),
     ...(spread.measured && !spread.pass ? ["acceptableSpread"] : []),
     ...(liquidity.available ? [] : ["liquidity"]),
     ...(liquidity.pass ? [] : ["minimumLiquidity"]),
     ...(entryQuality.available ? [] : ["entryQuality"]),
+    ...(continuation.available ? [] : ["continuation"]),
     ...(weighted.coverage >= CRYPTO_MIN_DECISION_COVERAGE
       ? []
       : ["decisionCoverage"]),
@@ -307,7 +343,20 @@ export function buildCryptoDecisionScore(
         Number(maxQuoteAgeSeconds || CRYPTO_MAX_DECISION_QUOTE_AGE_SECONDS)
       ),
       priceIsLive: signal.priceIsLive === true,
+      source: quoteSource,
+      sourceApproved: quoteSourceApproved,
       fresh: quoteFresh,
+    },
+    spreadFreshness: {
+      timestamp: Number.isFinite(spreadTimestamp)
+        ? new Date(spreadTimestamp).toISOString()
+        : null,
+      ageSeconds: spreadAgeSeconds === null
+        ? null
+        : Number(spreadAgeSeconds.toFixed(2)),
+      source: spreadSource,
+      sourceApproved: spreadSourceApproved,
+      fresh: spreadFresh,
     },
     discoveryFreshness: {
       calculatedAt: Number.isFinite(discoveryTimestamp)
@@ -334,10 +383,9 @@ export function evaluateCryptoTradeCandidate(
   const centralEvidence = signal.centralAutonomousDecisionCore
     ?.cryptoDecisionEvidence;
   const resolvedScore = finiteNumber(
-    signal.masterFinalScore,
     signal.cryptoDecisionScore,
-    signal.finalAutonomousDecisionScore,
-    signal.score
+    signal.masterFinalScore,
+    signal.finalAutonomousDecisionScore
   );
   const scoreAvailable =
     resolvedScore !== undefined &&
@@ -351,6 +399,8 @@ export function evaluateCryptoTradeCandidate(
     ...(evidence.coreEvidencePass ? [] : evidence.missingCriticalEvidence),
     ...(signal.qualifiedToBuy === true ? [] : ["NOT_QUALIFIED_TO_BUY"]),
     ...(signal.autoTradeApproved === true ? [] : ["AUTO_TRADE_NOT_APPROVED"]),
+    ...(signal.approved === true ? [] : ["FINAL_APPROVAL_MISSING"]),
+    ...(signal.backendApproved === true ? [] : ["BACKEND_APPROVAL_MISSING"]),
     ...(scoreAvailable ? [] : ["DECISION_SCORE_INVALID"]),
     ...(score >= Number(minimumScore || 0) ? [] : ["DECISION_SCORE_BELOW_THRESHOLD"]),
   ];
@@ -389,14 +439,16 @@ export function calculateAvailableWeightedScore(
     .filter((component) => component.available)
     .reduce((sum, component) => sum + component.weight, 0);
   const weightedTotal = included.reduce(
-    (sum, component) => sum + component.value * component.weight,
+    (sum, component) => sum + (
+      component.available ? component.value * component.weight : 0
+    ),
     0
   );
   const score = normalizeMissing && includedWeight > 0
     ? weightedTotal / includedWeight
     : weightedTotal;
   const componentsWithContributions = telemetry.map((component) => {
-    const includedComponent = !normalizeMissing || component.available;
+    const includedComponent = component.available;
     const normalizedWeight = includedComponent && includedWeight > 0
       ? normalizeMissing
         ? component.weight / includedWeight

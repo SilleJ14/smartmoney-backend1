@@ -1,4 +1,5 @@
 import { buildLiveMovers } from "../market-data/liveMovers.js";
+import { compareCanonicalSignals } from "../scoring/canonicalSignalRank.js";
 
 export function registerLiveMoversRoutes(app, dependencies) {
   const {
@@ -22,11 +23,7 @@ export function registerLiveMoversRoutes(app, dependencies) {
           normalizeSymbol,
           mergeLiveQuote,
           isCrypto,
-        }).sort((a, b) => {
-          const approvalGap = Number(b.qualifiedToBuy === true) - Number(a.qualifiedToBuy === true);
-          if (approvalGap !== 0) return approvalGap;
-          return Number(b.score || 0) - Number(a.score || 0);
-        });
+        }).sort(compareCanonicalSignals);
         activeQuoteRefresh = await refreshQuotes(
           refreshCandidates.map((candidate) => candidate.symbol)
         );

@@ -448,6 +448,7 @@ export function createEngineStateSaver({
         smartUniverseNarrowingState: engineState.smartUniverseNarrowingState || null,
         smartUniverseNarrowingHistory:
           (engineState.smartUniverseNarrowingHistory || []).slice(0, 200),
+        scanExplorationCursor: Number(engineState.scanExplorationCursor || 0),
 
         fullInstitutionalAiBrainState:
           engineState.fullInstitutionalAiBrainState || null,

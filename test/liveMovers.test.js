@@ -128,6 +128,7 @@ test("live movers preserve and refresh authoritative stock D E and F fields", ()
           ask: 103.02,
           spreadAvailable: true,
           spreadPercent: 0.0388,
+          spreadUpdatedAt: now.toISOString(),
           liveQuoteUpdatedAt: now.toISOString(),
           liveQuoteSource: "alpaca_latest_stock_quote",
           priceIsLive: true,
@@ -141,6 +142,7 @@ test("live movers preserve and refresh authoritative stock D E and F fields", ()
       ask: 103.02,
       spreadAvailable: true,
       spreadPercent: 0.0388,
+      spreadUpdatedAt: now.toISOString(),
       liveQuoteUpdatedAt: now.toISOString(),
       liveQuoteSource: "alpaca_latest_stock_quote",
       priceIsLive: true,
@@ -273,6 +275,7 @@ test("live movers finalize crypto F when discovery entry context and quote evide
     ask: 100.05,
     spreadAvailable: true,
     spreadPercent: 0.1,
+    spreadUpdatedAt: now.toISOString(),
     priceIsLive: true,
     liveQuoteUpdatedAt: now.toISOString(),
     liveQuoteSource: "alpaca_crypto_latest",
@@ -290,6 +293,8 @@ test("live movers finalize crypto F when discovery entry context and quote evide
     newsCatalyst: { dataAvailable: true, riskDetected: false },
     barsFound: 30,
     windowDollarVolume: 2_000_000,
+    multiDayContinuationScore: 70,
+    multiDayAccumulation: { seenDays: ["2026-08-29", "2026-08-30"] },
     score: 72,
   };
   const movers = buildLiveMovers({
@@ -400,4 +405,102 @@ test("crypto Discovery remains visible after its execution freshness window expi
   assert.equal(movers[0].cryptoDiscoveryScoreAvailable, true);
   assert.equal(movers[0].cryptoDiscoveryScoreFresh, false);
   assert.ok(Number.isFinite(movers[0].provisionalCryptoDecisionScore));
+});
+
+test("raw early movers surface before five-minute scoring and remain explicitly watch-only", () => {
+  const now = new Date("2026-08-31T12:05:00.000Z");
+  const movers = buildLiveMovers({
+    state: {
+      marketOpen: false,
+      marketSession: "premarket",
+      liveEarlyMoverSymbols: ["WETO"],
+      liveQuoteCache: {
+        WETO: {
+          price: 4.25,
+          previousClose: 3.75,
+          bid: 4.2,
+          ask: 4.3,
+          spreadAvailable: true,
+          spreadPercent: 2.3529,
+          spreadUpdatedAt: now.toISOString(),
+          liveQuoteUpdatedAt: now.toISOString(),
+          liveQuoteSource: "alpaca_latest_stock_quote",
+          priceIsLive: true,
+          quoteSession: "premarket",
+          premarketSpreadAcceptable: true,
+        },
+      },
+    },
+    normalizeSymbol,
+    mergeLiveQuote: (signal) => signal,
+    isCrypto,
+    now: () => now,
+  });
+
+  assert.equal(movers.length, 1);
+  assert.equal(movers[0].symbol, "WETO");
+  assert.equal(movers[0].candidateSource, "RAW_EARLY_MOVER");
+  assert.equal(movers[0].qualifiedToBuy, false);
+  assert.equal(movers[0].autoTradeApproved, false);
+  assert.equal(movers[0].recommendedTradeAmount, 0);
+  assert.equal(movers[0].stockDecisionScoreAvailable, false);
+  assert.ok(movers[0].missingEvidenceReasons.includes("FIVE_MINUTE_HISTORY_PENDING"));
+  assert.ok(movers[0].changePercent > 10);
+});
+
+test("live movers reject an unrecognized source even when an upstream flag says live", () => {
+  const now = new Date("2026-08-31T15:00:00.000Z");
+  const movers = buildLiveMovers({
+    state: {
+      topStockSignals: [{ symbol: "FAKE", price: 10, previousClose: 9 }],
+      liveQuoteCache: {
+        FAKE: {
+          price: 10,
+          bid: 9.99,
+          ask: 10.01,
+          spreadAvailable: true,
+          spreadUpdatedAt: now.toISOString(),
+          liveQuoteUpdatedAt: now.toISOString(),
+          liveQuoteSource: "scanner_snapshot",
+          priceIsLive: true,
+        },
+      },
+    },
+    normalizeSymbol,
+    mergeLiveQuote: (signal) => signal,
+    isCrypto,
+    now: () => now,
+  });
+
+  assert.equal(movers[0].priceIsLive, false);
+  assert.equal(movers[0].liveQuoteFresh, false);
+  assert.equal(movers[0].entryQualityScoreAvailable, false);
+});
+
+test("live movers never borrow a trade timestamp for bid and ask freshness", () => {
+  const now = new Date("2026-08-31T15:00:00.000Z");
+  const movers = buildLiveMovers({
+    state: {
+      topStockSignals: [{ symbol: "AAPL", price: 100, previousClose: 99 }],
+      liveQuoteCache: {
+        AAPL: {
+          price: 100,
+          bid: 99.99,
+          ask: 100.01,
+          spreadAvailable: true,
+          liveQuoteUpdatedAt: now.toISOString(),
+          liveQuoteSource: "alpaca_latest_stock_quote",
+          priceIsLive: true,
+        },
+      },
+    },
+    normalizeSymbol,
+    mergeLiveQuote: (signal) => signal,
+    isCrypto,
+    now: () => now,
+  });
+
+  assert.equal(movers[0].liveQuoteFresh, true);
+  assert.equal(movers[0].liveSpreadFresh, false);
+  assert.equal(movers[0].spreadUpdatedAt, null);
 });

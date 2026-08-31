@@ -6,6 +6,14 @@ function positiveNumber(value, label) {
   return number;
 }
 
+function requireStockHoldCategory(value, symbol) {
+  const category = String(value || "").trim().toLowerCase();
+  if (!['intraday', 'multi_day'].includes(category)) {
+    throw new Error(`Stock order holding category is required for ${symbol || 'stock'}`);
+  }
+  return category;
+}
+
 export function createOrderService({
   tradingRequest,
   normalizeSymbol,
@@ -72,7 +80,7 @@ export function createOrderService({
     fractionable,
     referencePrice,
     allowExistingOpenOrder = false,
-    holdCategory = "intraday",
+    holdCategory,
   }) {
     const cleanSymbol = normalizeSymbol(symbol);
     if (marketOpen !== true) {
@@ -80,6 +88,7 @@ export function createOrderService({
         `${cleanSymbol || "Stock"} order blocked: stocks trade only while the regular market is open`
       );
     }
+    const cleanHoldCategory = requireStockHoldCategory(holdCategory, cleanSymbol);
     const cleanNotional = Math.max(
       1,
       Number(positiveNumber(dollars, `buy amount for ${cleanSymbol}`).toFixed(2))
@@ -96,7 +105,7 @@ export function createOrderService({
     if (fractionable) {
       return submit(
         { ...payload, notional: cleanNotional, type: "market" },
-        { allowExistingOpenOrder, holdCategory }
+        { allowExistingOpenOrder, holdCategory: cleanHoldCategory }
       );
     }
 
@@ -111,7 +120,7 @@ export function createOrderService({
       ...payload,
       qty: String(qty),
       type: "market",
-    }, { allowExistingOpenOrder, holdCategory });
+    }, { allowExistingOpenOrder, holdCategory: cleanHoldCategory });
   }
 
   function stockSell({
@@ -149,7 +158,7 @@ export function createOrderService({
     buyMode = "dollars",
     fractionable,
     referencePrice,
-    holdCategory = "intraday",
+    holdCategory,
     marketOpen,
   }) {
     const cleanSymbol = normalizeSymbol(symbol);
@@ -159,6 +168,7 @@ export function createOrderService({
         `${cleanSymbol} order blocked: stocks trade only while the regular market is open`
       );
     }
+    const cleanHoldCategory = requireStockHoldCategory(holdCategory, cleanSymbol);
     const payload = {
       symbol: cleanSymbol,
       side: "buy",
@@ -175,7 +185,7 @@ export function createOrderService({
       return submit({
         ...payload,
         qty: fractionable ? String(shareAmount) : String(Math.floor(shareAmount)),
-      }, { automated: false, holdCategory });
+      }, { automated: false, holdCategory: cleanHoldCategory });
     }
 
     const amount = positiveNumber(dollars, "dollar amount");
@@ -183,7 +193,7 @@ export function createOrderService({
     if (fractionable) {
       return submit(
         { ...payload, notional: Number(amount.toFixed(2)) },
-        { automated: false, holdCategory }
+        { automated: false, holdCategory: cleanHoldCategory }
       );
     }
 
@@ -195,7 +205,10 @@ export function createOrderService({
         "1 whole share or use share mode."
       );
     }
-    return submit({ ...payload, qty: String(estimatedShares) }, { automated: false, holdCategory });
+    return submit(
+      { ...payload, qty: String(estimatedShares) },
+      { automated: false, holdCategory: cleanHoldCategory }
+    );
   }
 
   async function closePosition(symbol) {

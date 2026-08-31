@@ -47,8 +47,17 @@ export async function finnhubQuote({
 
   const current = Number(data.c || 0);
   const previousClose = Number(data.pc || 0);
+  const providerTimestampValue = Number(data.t || 0);
+  const providerTimestampMs = providerTimestampValue > 0
+    ? providerTimestampValue < 1e12
+      ? providerTimestampValue * 1000
+      : providerTimestampValue
+    : NaN;
+  const providerTimestamp = Number.isFinite(providerTimestampMs)
+    ? new Date(providerTimestampMs).toISOString()
+    : null;
 
-  if (!current || current <= 0) return null;
+  if (!current || current <= 0 || !providerTimestamp) return null;
 
   return {
     symbol: cleanSymbol,
@@ -74,7 +83,11 @@ export async function finnhubQuote({
         ? ((current - previousClose) / previousClose) * 100
         : 0,
 
-    source: "finnhub",
+    source: "finnhub_rest_quote",
+    liveQuoteSource: "finnhub_rest_quote",
+    liveQuoteUpdatedAt: providerTimestamp,
+    quoteFetchedAt: providerTimestamp,
+    priceIsLive: true,
     fetchedAt: new Date().toISOString(),
   };
 }

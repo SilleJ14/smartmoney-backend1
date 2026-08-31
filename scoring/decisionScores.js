@@ -1,4 +1,6 @@
 import { isUsStockMarketSessionDayKey } from "../utils/usMarketCalendar.js";
+import { isLiveQuoteSource } from "../live/liveQuoteCache.js";
+import { hasExplicitTradeApproval } from "./canonicalSignalRank.js";
 
 const clamp = (value) => Math.max(0, Math.min(100, Number(value) || 0));
 
@@ -151,20 +153,22 @@ export function evaluateStockTradeCandidate(
   {
     requireCentralDecision = false,
     requireFreshDecision = false,
+    requireExplicitApproval = false,
     maxSpreadPercent = STOCK_EXECUTION_THRESHOLDS.maxSpreadPercent,
     maxQuoteAgeSeconds = STOCK_EXECUTION_THRESHOLDS.maxQuoteAgeSeconds,
     maxDecisionAgeSeconds = STOCK_EXECUTION_THRESHOLDS.maxDecisionAgeSeconds,
     now = Date.now(),
   } = {}
 ) {
-  const parsedFinalScore = Number(
-    signal.masterFinalScore ??
-    signal.finalAutonomousDecisionScore ??
-    signal.stockDecisionScore ??
-    signal.score ??
-    0
+  const canonicalFinalScore = firstFinite(
+    signal.masterFinalScore,
+    signal.finalAutonomousDecisionScore,
+    signal.stockDecisionScore,
+    signal.decisionScoreTelemetry?.scores?.decision
   );
-  const finalScoreAvailable = Number.isFinite(parsedFinalScore);
+  const parsedFinalScore = Number(canonicalFinalScore);
+  const finalScoreAvailable =
+    canonicalFinalScore !== undefined && Number.isFinite(parsedFinalScore);
   const finalScore = finalScoreAvailable ? parsedFinalScore : 0;
   const entryScore = Number(signal.entryQualityScore ?? signal.entryQualityScorecard?.score ?? 0);
   const entryCoverage = Number(signal.entryQualityScorecard?.coverage || 0);
@@ -229,19 +233,27 @@ export function evaluateStockTradeCandidate(
   const quoteAgeSeconds = Number.isFinite(quoteTimestamp)
     ? (Number(now) - quoteTimestamp) / 1000
     : null;
+  const quoteSource =
+    signal.liveQuoteSource ||
+    signal.liveQuote?.source ||
+    signal.source ||
+    "";
+  const quoteSourceApproved =
+    signal.priceIsLive === true &&
+    isLiveQuoteSource(quoteSource);
   const effectiveMaxQuoteAgeSeconds = Number.isFinite(Number(maxQuoteAgeSeconds))
     ? Math.max(1, Number(maxQuoteAgeSeconds))
     : STOCK_EXECUTION_THRESHOLDS.maxQuoteAgeSeconds;
   const quoteFreshnessAvailable = quoteAgeSeconds !== null;
   const quoteFreshnessPass = !requireCentralDecision || (
+    quoteSourceApproved &&
     quoteFreshnessAvailable &&
     quoteAgeSeconds >= -5 &&
     quoteAgeSeconds <= effectiveMaxQuoteAgeSeconds
   );
   const spreadTimestampRaw =
     signal.spreadUpdatedAt ??
-    signal.bidAskUpdatedAt ??
-    (spreadAvailable ? quoteTimestampRaw : null);
+    signal.bidAskUpdatedAt;
   const spreadTimestamp = Number.isFinite(Number(spreadTimestampRaw))
     ? Number(spreadTimestampRaw)
     : spreadTimestampRaw
@@ -250,8 +262,11 @@ export function evaluateStockTradeCandidate(
   const spreadAgeSeconds = Number.isFinite(spreadTimestamp)
     ? (Number(now) - spreadTimestamp) / 1000
     : null;
+  const spreadSource = signal.spreadSource || quoteSource;
+  const spreadSourceApproved = isLiveQuoteSource(spreadSource);
   const spreadFreshnessAvailable = spreadAvailable && spreadAgeSeconds !== null;
   const spreadFreshnessPass = !requireCentralDecision || (
+    spreadSourceApproved &&
     spreadFreshnessAvailable &&
     spreadAgeSeconds >= -5 &&
     spreadAgeSeconds <= effectiveMaxQuoteAgeSeconds
@@ -312,6 +327,7 @@ export function evaluateStockTradeCandidate(
       signal.phase6ScoringLayers?.finalTradeApproval ||
       ""
     ).toUpperCase());
+  const explicitApproval = hasExplicitTradeApproval(signal);
   const blockingState =
     explicitBuyBlock ||
     signal.centralCoreHardBlock === true ||
@@ -329,6 +345,7 @@ export function evaluateStockTradeCandidate(
     ...(discoveryCoverage < 0.65 ? ["DISCOVERY_COVERAGE_BELOW_65_PERCENT"] : []),
     ...(!coreEvidencePass ? ["CORE_EVIDENCE_FAILED"] : []),
     ...(!centralDecisionPass ? ["CENTRAL_DECISION_NOT_EXECUTABLE"] : []),
+    ...(requireExplicitApproval && !explicitApproval ? ["EXPLICIT_APPROVAL_MISSING"] : []),
     ...(explicitBuyBlock ? ["EXPLICIT_BUY_BLOCK"] : []),
     ...(!spreadAvailable ? ["SPREAD_UNAVAILABLE"] : []),
     ...(spreadTooWide ? ["SPREAD_ABOVE_EXECUTION_LIMIT"] : []),
@@ -339,6 +356,9 @@ export function evaluateStockTradeCandidate(
         ? ["QUOTE_FRESHNESS_UNAVAILABLE"]
         : []
     ),
+    ...(requireCentralDecision && !quoteSourceApproved
+      ? ["QUOTE_SOURCE_UNAPPROVED"]
+      : []),
     ...(
       requireCentralDecision && quoteFreshnessAvailable && !quoteFreshnessPass
         ? ["QUOTE_STALE"]
@@ -349,6 +369,9 @@ export function evaluateStockTradeCandidate(
         ? ["SPREAD_FRESHNESS_UNAVAILABLE"]
         : []
     ),
+    ...(requireCentralDecision && spreadAvailable && !spreadSourceApproved
+      ? ["SPREAD_SOURCE_UNAPPROVED"]
+      : []),
     ...(
       requireCentralDecision && spreadFreshnessAvailable && !spreadFreshnessPass
         ? [spreadAgeSeconds < -5 ? "SPREAD_TIMESTAMP_IN_FUTURE" : "SPREAD_STALE"]
@@ -402,11 +425,14 @@ export function evaluateStockTradeCandidate(
     coreEvidencePass,
     centralAction: centralAction || null,
     centralDecisionPass,
+    explicitApproval,
     explicitBuyBlock,
     blockingState,
     spreadPercent: calculatedSpread,
     spreadAvailable,
     spreadSource: spreadEvidence.source,
+    spreadProviderSource: spreadSource,
+    spreadSourceApproved,
     spreadTooWide,
     riskQualityScore: riskQualityEvidence.score,
     riskQualitySource: riskQualityEvidence.source,
@@ -419,6 +445,8 @@ export function evaluateStockTradeCandidate(
       : Number(quoteAgeSeconds.toFixed(2)),
     quoteFreshnessAvailable,
     quoteFreshnessPass,
+    quoteSource,
+    quoteSourceApproved,
     spreadTimestamp: Number.isFinite(spreadTimestamp)
       ? new Date(spreadTimestamp).toISOString()
       : null,
@@ -846,16 +874,20 @@ export function buildStockDecisionScore(signal = {}) {
     component("fundamentals", fundamentalScore, effectiveWeights.fundamentals, "validated_fundamentals", fundamentalDataValid && fundamentalScore !== undefined),
   ];
   const rawCard = scorecard("STOCK_DECISION", components);
-  // Missing optional evidence must never improve the final score. Preserve
-  // normalized component telemetry, then apply a small conservative penalty
-  // proportional to unavailable configured weight.
+  // Score against the configured weights, treating unavailable evidence as
+  // zero contribution. Renormalizing only the available components can make a
+  // candidate stronger when weak evidence disappears, which is unsafe.
+  const coverageSafeScore = components.reduce(
+    (sum, item) => sum + (item.available ? item.value * item.weight : 0),
+    0
+  );
   const missingEvidencePenalty = Math.max(
     0,
-    Number(((1 - rawCard.coverage) * 25).toFixed(2))
+    Number((rawCard.score - coverageSafeScore).toFixed(2))
   );
   const card = rescaleScorecard(
     rawCard,
-    Math.max(0, rawCard.score - missingEvidencePenalty)
+    coverageSafeScore
   );
   const canonicalDiscoveryRequired = [
     "EARLY_DISCOVERY",

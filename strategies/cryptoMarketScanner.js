@@ -312,13 +312,11 @@ export function createCryptoMarketScanner(dependencies) {
           : institutionalCryptoScore >= 65 && cryptoTrapRiskScore <= 55
             ? "C_CRYPTO_PROBE"
             : "D_CRYPTO_AVOID";
-    const discoveryPass =
-      Number(score || 0) >=
-      Math.max(
-        70,
-        Number(CONFIG.minScoreToBuy || 70),
-        Number(engineState.selfOptimizationState?.adaptiveMinScoreToBuy || 0)
-      );
+    const cryptoDiscoveryThreshold = Math.max(
+      60,
+      Number(CONFIG.minCryptoDiscoveryScore || 60)
+    );
+    const discoveryPass = Number(score || 0) >= cryptoDiscoveryThreshold;
     // Use the same measured spread/liquidity Entry Quality shown to the user.
     // The legacy momentum timing score remains telemetry only and cannot act
     // as a hidden approval gate.
@@ -365,6 +363,7 @@ export function createCryptoMarketScanner(dependencies) {
         spreadAvailable,
         barsFound,
         score,
+        cryptoDiscoveryThreshold,
         spreadPercent: cleanSpreadPercent,
         dollarVolume,
         volumeSpikeRatio,
@@ -485,9 +484,17 @@ export function createCryptoMarketScanner(dependencies) {
           current: latestPrice,
           bid: quote.bid,
           ask: quote.ask,
-          source: quote.liveQuoteSource || "polygon_crypto_snapshot",
-          liveQuoteSource: quote.liveQuoteSource || "polygon_crypto_snapshot",
+          source: quote.liveQuoteSource || "crypto_quote_unavailable",
+          liveQuoteSource: quote.liveQuoteSource || "crypto_quote_unavailable",
+          liveQuoteUpdatedAt:
+            quote.liveQuoteUpdatedAt || quote.quoteFetchedAt || null,
           quoteFetchedAt: quote.quoteFetchedAt,
+          spreadUpdatedAt:
+            quote.spreadUpdatedAt || quote.bidAskUpdatedAt || null,
+          bidAskUpdatedAt:
+            quote.spreadUpdatedAt || quote.bidAskUpdatedAt || null,
+          spreadSource:
+            quote.spreadSource || quote.liveQuoteSource || null,
           priceIsLive: quote.priceIsLive === true,
           raw: quote,
         });
@@ -562,15 +569,30 @@ export function createCryptoMarketScanner(dependencies) {
           price: latestPrice,
           current: latestPrice,
           liveQuoteUpdatedAt:
-            quote.quoteFetchedAt || cachedCryptoQuote?.updatedAt || new Date().toISOString(),
+            cachedCryptoQuote?.liveQuoteUpdatedAt ||
+            cachedCryptoQuote?.updatedAt ||
+            null,
+          spreadUpdatedAt:
+            cachedCryptoQuote?.spreadUpdatedAt ||
+            cachedCryptoQuote?.bidAskUpdatedAt ||
+            null,
+          bidAskUpdatedAt:
+            cachedCryptoQuote?.spreadUpdatedAt ||
+            cachedCryptoQuote?.bidAskUpdatedAt ||
+            null,
           liveQuoteSource:
-            quote.liveQuoteSource || cachedCryptoQuote?.source || "polygon_crypto_snapshot",
+            cachedCryptoQuote?.liveQuoteSource ||
+            cachedCryptoQuote?.source ||
+            quote.liveQuoteSource ||
+            "crypto_quote_unavailable",
+          spreadSource:
+            cachedCryptoQuote?.spreadSource ||
+            cachedCryptoQuote?.source ||
+            null,
           priceIsLive:
-            cachedCryptoQuote?.priceIsLive === true ||
-            quote.priceIsLive === true,
+            cachedCryptoQuote?.priceIsLive === true,
           priceStale:
-            cachedCryptoQuote?.priceIsLive !== true &&
-            quote.priceIsLive !== true,
+            cachedCryptoQuote?.priceIsLive !== true,
           dayChangePercent: Number(cryptoPercentChange.toFixed(2)),
           dayChangeDollars: Number(cryptoDollarChange.toFixed(2)),
           percentChange: Number(cryptoPercentChange.toFixed(2)),
@@ -594,7 +616,7 @@ export function createCryptoMarketScanner(dependencies) {
           barsFound: bars.length,
           chartBars: cryptoChartBars,
           sparkline: cryptoSparkline,
-          chartSource: "polygon_crypto_aggs",
+          chartSource: "alpaca_crypto_bars",
           chartTimeframe: "best_available_live_crypto",
           latestChartClose:
             cryptoSparkline[cryptoSparkline.length - 1] || latestPrice,
@@ -621,6 +643,8 @@ export function createCryptoMarketScanner(dependencies) {
           autoTradeApproved:
             cryptoQualification.qualifiedToBuy === true,
           approved:
+            cryptoQualification.qualifiedToBuy === true,
+          backendApproved:
             cryptoQualification.qualifiedToBuy === true,
           decisionLevel:
             cryptoQualification.qualifiedToBuy === true

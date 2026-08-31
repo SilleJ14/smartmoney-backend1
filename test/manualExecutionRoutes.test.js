@@ -73,6 +73,7 @@ test("manual stock route is enabled but still requires a tradable asset", async 
   assert.equal(calls.length, 1);
   assert.equal(records[0][0], "MANUAL_STOCK_BUY");
   assert.equal(calls[0].marketOpen, true);
+  assert.equal(calls[0].holdCategory, "intraday");
 
   marketOpen = false;
   const closed = { status(code) { this.statusCode = code; return this; }, json(body) { this.body = body; return this; } };

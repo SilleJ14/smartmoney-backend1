@@ -27,17 +27,23 @@ export function evaluateStockCandidateQuoteQuality(
   const price =
     finiteNumber(quote.price ?? quote.current) ||
     (bid > 0 && ask >= bid ? (bid + ask) / 2 : 0);
-  const providerTimestamp =
-    quote.spreadUpdatedAt ||
-    quote.bidAskUpdatedAt ||
+  const quoteTimestamp =
     quote.liveQuoteUpdatedAt ||
     quote.quoteFetchedAt ||
     quote.updatedAt ||
     null;
-  const providerTimestampMs = timestampMs(providerTimestamp);
-  const quoteAgeSeconds = providerTimestampMs === null
+  const spreadTimestamp =
+    quote.spreadUpdatedAt ||
+    quote.bidAskUpdatedAt ||
+    null;
+  const quoteTimestampMs = timestampMs(quoteTimestamp);
+  const spreadTimestampMs = timestampMs(spreadTimestamp);
+  const quoteAgeSeconds = quoteTimestampMs === null
     ? null
-    : (Number(now) - providerTimestampMs) / 1000;
+    : (Number(now) - quoteTimestampMs) / 1000;
+  const spreadAgeSeconds = spreadTimestampMs === null
+    ? null
+    : (Number(now) - spreadTimestampMs) / 1000;
   const spreadAvailable = bid > 0 && ask >= bid;
   const spreadPercent = spreadAvailable
     ? ((ask - bid) / ((ask + bid) / 2)) * 100
@@ -51,7 +57,7 @@ export function evaluateStockCandidateQuoteQuality(
   const reasons = [];
 
   if (!spreadAvailable) reasons.push("TWO_SIDED_QUOTE_UNAVAILABLE");
-  if (providerTimestampMs === null) reasons.push("QUOTE_TIMESTAMP_UNAVAILABLE");
+  if (quoteTimestampMs === null) reasons.push("QUOTE_TIMESTAMP_UNAVAILABLE");
   if (quoteAgeSeconds !== null && quoteAgeSeconds < -5) {
     reasons.push("QUOTE_TIMESTAMP_IN_FUTURE");
   }
@@ -60,6 +66,18 @@ export function evaluateStockCandidateQuoteQuality(
     quoteAgeSeconds > Number(maxQuoteAgeSeconds || 120)
   ) {
     reasons.push("QUOTE_TOO_STALE_FOR_WATCHLIST");
+  }
+  if (spreadAvailable && spreadTimestampMs === null) {
+    reasons.push("SPREAD_TIMESTAMP_UNAVAILABLE");
+  }
+  if (spreadAgeSeconds !== null && spreadAgeSeconds < -5) {
+    reasons.push("SPREAD_TIMESTAMP_IN_FUTURE");
+  }
+  if (
+    spreadAgeSeconds !== null &&
+    spreadAgeSeconds > Number(maxQuoteAgeSeconds || 120)
+  ) {
+    reasons.push("SPREAD_TOO_STALE_FOR_WATCHLIST");
   }
   if (
     spreadPercent !== null &&
@@ -76,13 +94,16 @@ export function evaluateStockCandidateQuoteQuality(
   const spreadScore = spreadPercent === null
     ? 0
     : Math.max(0, 25 - spreadPercent * 12.5);
-  const freshnessScore = quoteAgeSeconds === null
+  const evidenceAgeSeconds = quoteAgeSeconds === null || spreadAgeSeconds === null
+    ? null
+    : Math.max(quoteAgeSeconds, spreadAgeSeconds);
+  const freshnessScore = evidenceAgeSeconds === null
     ? 0
-    : quoteAgeSeconds <= 5
+    : evidenceAgeSeconds <= 5
       ? 20
-      : quoteAgeSeconds <= 30
+      : evidenceAgeSeconds <= 30
         ? 12
-        : quoteAgeSeconds <= 60
+        : evidenceAgeSeconds <= 60
           ? 6
           : 2;
   const qualityScore = Number(
@@ -102,10 +123,14 @@ export function evaluateStockCandidateQuoteQuality(
     spreadPercent: spreadPercent === null
       ? null
       : Number(spreadPercent.toFixed(4)),
-    quoteUpdatedAt: providerTimestamp,
+    quoteUpdatedAt: quoteTimestamp,
+    spreadUpdatedAt: spreadTimestamp,
     quoteAgeSeconds: quoteAgeSeconds === null
       ? null
       : Number(quoteAgeSeconds.toFixed(2)),
+    spreadAgeSeconds: spreadAgeSeconds === null
+      ? null
+      : Number(spreadAgeSeconds.toFixed(2)),
     volume,
     dollarVolume: Number(dollarVolume.toFixed(2)),
   };
@@ -138,8 +163,8 @@ export function filterAndRankStockCandidatesByExecutionQuality({
         ask: executionQuoteQuality.ask || null,
         spreadAvailable: executionQuoteQuality.spreadAvailable,
         spreadPercent: executionQuoteQuality.spreadPercent,
-        spreadUpdatedAt: executionQuoteQuality.quoteUpdatedAt,
-        bidAskUpdatedAt: executionQuoteQuality.quoteUpdatedAt,
+        spreadUpdatedAt: executionQuoteQuality.spreadUpdatedAt,
+        bidAskUpdatedAt: executionQuoteQuality.spreadUpdatedAt,
         spreadSource: executionQuoteQuality.spreadAvailable
           ? quote.spreadSource || quote.liveQuoteSource || quote.source || "execution_quote"
           : null,

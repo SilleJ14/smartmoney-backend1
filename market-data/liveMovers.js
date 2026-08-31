@@ -2,8 +2,19 @@ import {
   buildStockDecisionScore,
   calculateEarlyDiscoveryScore,
   calculateEntryQualityScore,
+  evaluateStockTradeCandidate,
 } from "../scoring/decisionScores.js";
-import { buildCryptoDecisionScore } from "../scoring/componentScore.js";
+import {
+  buildCryptoDecisionScore,
+  CRYPTO_MIN_FINAL_SCORE_TO_BUY,
+  evaluateCryptoTradeCandidate,
+} from "../scoring/componentScore.js";
+import {
+  compareCanonicalSignals,
+  getCanonicalFinalScore,
+  hasExplicitTradeApproval,
+} from "../scoring/canonicalSignalRank.js";
+import { isLiveQuoteSource } from "../live/liveQuoteCache.js";
 
 function asArray(value) {
   return Array.isArray(value) ? value : [];
@@ -58,6 +69,71 @@ function measuredDecisionAuthority(signal = {}, cryptoAsset = false) {
   );
 }
 
+export function buildRawEarlyMoverCandidates({
+  state,
+  normalizeSymbol,
+} = {}) {
+  const symbols = asArray(state?.liveEarlyMoverSymbols)
+    .map((item) => normalizeSymbol(item?.symbol || item))
+    .filter(Boolean);
+  return [...new Set(symbols)].map((symbol) => {
+    const quote = findLiveQuote(state, symbol, normalizeSymbol) || {};
+    const mover = state?.polygonMoversCache?.moverDetails?.[symbol] || {};
+    const memory = state?.liveMarketMemory?.[symbol] || {};
+    const price = Number(quote.price || quote.current || memory.price || mover.price || 0);
+    const previousClose = Number(
+      quote.previousClose || memory.previousClose || mover.previousClose || 0
+    );
+    const missingEvidenceReasons = [
+      ...asArray(mover.missingEvidenceReasons),
+      "FIVE_MINUTE_HISTORY_PENDING",
+      "DISCOVERY_CONTEXT_PENDING",
+      "ENTRY_QUALITY_PENDING",
+      "CANONICAL_FINAL_DECISION_PENDING",
+      "EXPLICIT_APPROVAL_PENDING",
+      "POSITION_SIZING_PENDING",
+    ];
+    return {
+      symbol,
+      assetClass: "stock",
+      candidateSource: mover.candidateSource || "RAW_EARLY_MOVER",
+      rawEarlyMover: true,
+      discoveryOnly: true,
+      price,
+      current: price,
+      previousClose,
+      livePrice: price > 0 ? price : null,
+      bid: quote.bid ?? null,
+      ask: quote.ask ?? null,
+      spreadPercent: quote.spreadPercent ?? null,
+      spreadAvailable: quote.spreadAvailable === true,
+      spreadUpdatedAt: quote.spreadUpdatedAt || quote.bidAskUpdatedAt || null,
+      liveQuoteUpdatedAt:
+        quote.liveQuoteUpdatedAt || quote.quoteFetchedAt || quote.updatedAt || null,
+      liveQuoteSource: quote.liveQuoteSource || quote.source || "scan_snapshot",
+      priceIsLive: quote.priceIsLive === true,
+      qualifiedToBuy: false,
+      backendApproved: false,
+      approved: false,
+      autoTradeApproved: false,
+      recommendedTradeAmount: 0,
+      discoveryScore: null,
+      discoveryScoreAvailable: false,
+      entryQualityScore: null,
+      entryQualityScoreAvailable: false,
+      stockDecisionScore: null,
+      stockDecisionScoreAvailable: false,
+      multiDayScore: null,
+      multiDayScoreAvailable: false,
+      missingEvidenceReasons,
+      portfolioManagerReason:
+        `Early mover detected before the five-minute scoring cycle. Missing: ${missingEvidenceReasons.join(", ")}.`,
+      decisionLevel: "EARLY DISCOVERY",
+      tradeQuality: "Watch Only",
+    };
+  });
+}
+
 export function buildLiveMovers({
   state,
   limit = 50,
@@ -67,6 +143,9 @@ export function buildLiveMovers({
   now = () => new Date(),
 }) {
   const sourceSignals = [
+    ...buildRawEarlyMoverCandidates({ state, normalizeSymbol }),
+    ...asArray(state.quickInstitutionalCandidates),
+    ...asArray(state.fastRunnerCandidates),
     ...asArray(state.topStockSignals),
     ...asArray(state.lastStockSignals),
     ...asArray(state.topCryptoSignals),
@@ -200,8 +279,15 @@ export function buildLiveMovers({
         Number(cryptoMemory.cryptoInstitutionalScore || 0)
       )
       : Number(merged.quickInstitutionalScore || merged.institutionalScore || merged.score || 0);
-    const bid = Number(liveQuote.bid || merged.bid || 0);
-    const ask = Number(liveQuote.ask || merged.ask || 0);
+    const liveQuoteBid = Number(liveQuote.bid || 0);
+    const liveQuoteAsk = Number(liveQuote.ask || 0);
+    const mergedBid = Number(merged.bid || 0);
+    const mergedAsk = Number(merged.ask || 0);
+    const liveQuoteHasBidAsk =
+      liveQuoteBid > 0 && liveQuoteAsk >= liveQuoteBid;
+    const mergedHasBidAsk = mergedBid > 0 && mergedAsk >= mergedBid;
+    const bid = liveQuoteHasBidAsk ? liveQuoteBid : mergedBid;
+    const ask = liveQuoteHasBidAsk ? liveQuoteAsk : mergedAsk;
     const spreadAvailable = liveQuote.spreadAvailable === true || (
       liveQuote.spreadAvailable !== false &&
       merged.spreadAvailable !== false &&
@@ -227,7 +313,7 @@ export function buildLiveMovers({
         liveQuote.bidAskUpdatedAt ||
         merged.spreadUpdatedAt ||
         merged.bidAskUpdatedAt ||
-        liveQuoteUpdatedAt
+        null
       : null;
     const liveQuoteSource =
       liveQuote.liveQuoteSource ||
@@ -237,10 +323,22 @@ export function buildLiveMovers({
       merged.source ||
       merged.dataSource ||
       "scan_snapshot";
+    const spreadSource =
+      liveQuote.spreadSource ||
+      (liveQuoteHasBidAsk
+        ? liveQuote.liveQuoteSource || liveQuote.source || null
+        : null) ||
+      merged.spreadSource ||
+      (mergedHasBidAsk
+        ? merged.liveQuoteSource || merged.source || null
+        : null) ||
+      null;
     const providerMarkedLive =
       liveQuote.priceIsLive === true ||
       merged.priceIsLive === true;
-    const priceIsLive = providerMarkedLive && Boolean(liveQuoteUpdatedAt);
+    const priceIsLive = providerMarkedLive &&
+      Boolean(liveQuoteUpdatedAt) &&
+      isLiveQuoteSource(liveQuoteSource);
     const liveQuoteTimestamp = liveQuoteUpdatedAt
       ? Date.parse(liveQuoteUpdatedAt)
       : NaN;
@@ -260,6 +358,7 @@ export function buildLiveMovers({
       liveQuoteAgeSeconds <= 5;
     const liveSpreadFresh =
       spreadAvailable &&
+      isLiveQuoteSource(spreadSource) &&
       spreadAgeSeconds !== null &&
       spreadAgeSeconds >= -5 &&
       spreadAgeSeconds <= 5;
@@ -280,6 +379,7 @@ export function buildLiveMovers({
       spreadPercent,
       spreadAvailable,
       spreadUpdatedAt,
+      spreadSource,
       liveQuoteUpdatedAt,
       liveQuoteSource,
       priceIsLive,
@@ -475,15 +575,9 @@ export function buildLiveMovers({
       ),
       qualifiedToBuy: merged.qualifiedToBuy === true,
       backendApproved:
-        merged.backendApproved === true ||
-        merged.approved === true ||
-        merged.qualifiedToBuy === true ||
-        merged.autoTradeApproved === true,
+        merged.backendApproved === true || hasExplicitTradeApproval(merged),
       approved:
-        merged.approved === true ||
-        merged.backendApproved === true ||
-        merged.qualifiedToBuy === true ||
-        merged.autoTradeApproved === true,
+        merged.approved === true || hasExplicitTradeApproval(merged),
       autoTradeApproved: merged.autoTradeApproved === true,
       recommendedTradeAmount,
       aiAllocationPercentOfBotBudget: Number(
@@ -503,6 +597,19 @@ export function buildLiveMovers({
         merged.pattern ||
         merged.tradeQuality ||
         "Live mover price update",
+      missingEvidenceReasons: cryptoAsset
+        ? asArray(
+          resolvedCryptoDecisionEvidence?.missingCriticalEvidence ||
+          resolvedCryptoDecisionEvidence?.missingEvidence
+        )
+        : [
+          ...new Set([
+            ...asArray(merged.missingEvidenceReasons),
+            ...asArray(stockDiscovery?.missingCriticalEvidence),
+            ...asArray(stockEntry?.missingCriticalEvidence),
+            ...asArray(stockDecision?.missingCriticalEvidence),
+          ]),
+        ],
       liveScoreRefresh: true,
       liveScoreUpdatedAt,
       ...(cryptoAsset
@@ -598,6 +705,46 @@ export function buildLiveMovers({
           },
         }),
     };
+    const executionGate = cryptoAsset
+      ? evaluateCryptoTradeCandidate(next, {
+        minimumScore: CRYPTO_MIN_FINAL_SCORE_TO_BUY,
+        now: scoringNow.getTime(),
+      })
+      : evaluateStockTradeCandidate(next, {
+        requireCentralDecision: true,
+        requireFreshDecision: true,
+        requireExplicitApproval: true,
+        maxQuoteAgeSeconds: 5,
+      });
+    const explicitApproval = hasExplicitTradeApproval(next);
+    const validSizing =
+      Number.isFinite(Number(next.recommendedTradeAmount)) &&
+      Number(next.recommendedTradeAmount) >= 1;
+    next.executionEligibility = {
+      approved:
+        executionGate.approved === true &&
+        explicitApproval &&
+        liveQuoteFresh &&
+        liveSpreadFresh &&
+        validSizing,
+      assetClass: cryptoAsset ? "crypto" : "stock",
+      canonicalScore: cryptoAsset
+        ? (next.cryptoDecisionScoreAvailable ? next.cryptoDecisionScore : null)
+        : (next.stockDecisionScoreAvailable ? next.stockDecisionScore : null),
+      explicitApproval,
+      quoteFresh: liveQuoteFresh,
+      spreadFresh: liveSpreadFresh,
+      sizingValid: validSizing,
+      reasons: [
+        ...(executionGate.reasons || []),
+        ...(explicitApproval ? [] : ["EXPLICIT_APPROVAL_MISSING"]),
+        ...(liveQuoteFresh ? [] : ["LIVE_QUOTE_NOT_FRESH"]),
+        ...(liveSpreadFresh ? [] : ["LIVE_SPREAD_NOT_FRESH"]),
+        ...(validSizing ? [] : ["VALID_SIZING_MISSING"]),
+      ],
+      evaluatedAt: liveScoreUpdatedAt,
+    };
+    next.buyableNow = next.executionEligibility.approved;
     const current = moversBySymbol.get(symbol);
     const nextAuthority = measuredDecisionAuthority(next, cryptoAsset);
     const currentAuthority = measuredDecisionAuthority(current, cryptoAsset);
@@ -614,6 +761,10 @@ export function buildLiveMovers({
   }
 
   return Array.from(moversBySymbol.values())
-    .sort((a, b) => Math.abs(b.changePercent) - Math.abs(a.changePercent))
+    .map((candidate) => ({
+      ...candidate,
+      canonicalFinalScore: getCanonicalFinalScore(candidate),
+    }))
+    .sort(compareCanonicalSignals)
     .slice(0, Math.min(100, Math.max(10, Number(limit || 50))));
 }

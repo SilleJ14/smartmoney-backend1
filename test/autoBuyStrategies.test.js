@@ -10,19 +10,23 @@ test("stock auto-buy resolves the canonical Final Decision score before the lega
   assert.equal(resolveCanonicalStockDecisionScore({
     score: 55,
     stockDecisionScore: 86,
+    stockDecisionScoreAvailable: true,
   }), 86);
   assert.equal(resolveCanonicalStockDecisionScore({
     score: 95,
     stockDecisionScore: 70,
     finalAutonomousDecisionScore: 82,
     masterFinalScore: 84,
+    stockDecisionScoreAvailable: true,
   }), 84);
 });
 
-test("canonical stock approval ignores stale legacy booleans but preserves explicit safety blocks", () => {
+test("canonical stock auto-buy requires explicit approvals and preserves safety blocks", () => {
+  const now = new Date().toISOString();
   const signal = {
     score: 55,
     masterFinalScore: 86,
+    stockDecisionScoreAvailable: true,
     entryQualityScore: 82,
     entryQualityScorecard: { approved: true, coverage: 1 },
     discoveryScorecard: { coverage: 1 },
@@ -30,15 +34,33 @@ test("canonical stock approval ignores stale legacy booleans but preserves expli
     centralAutonomousAction: "ALLOW",
     riskScore: 70,
     spreadPercent: 0.2,
-    quoteFetchedAt: new Date().toISOString(),
-    decisionUpdatedAt: new Date().toISOString(),
+    quoteFetchedAt: now,
+    spreadUpdatedAt: now,
+    liveQuoteSource: "alpaca_latest_stock_quote",
+    spreadSource: "alpaca_latest_stock_quote",
+    priceIsLive: true,
+    decisionUpdatedAt: now,
     qualifiedToBuy: false,
     autoTradeApproved: false,
+    approved: false,
+    backendApproved: false,
   };
   const canonical = evaluateCanonicalStockAutoBuyEligibility(signal, 78);
-  assert.equal(canonical.approved, true);
-  const suppressed = evaluateCanonicalStockAutoBuyEligibility({
+  assert.equal(canonical.approved, false);
+  assert.ok(canonical.evidence.reasons.includes("EXPLICIT_APPROVAL_MISSING"));
+  const explicitlyApproved = {
     ...signal,
+    qualifiedToBuy: true,
+    autoTradeApproved: true,
+    approved: true,
+    backendApproved: true,
+  };
+  assert.equal(
+    evaluateCanonicalStockAutoBuyEligibility(explicitlyApproved, 78).approved,
+    true
+  );
+  const suppressed = evaluateCanonicalStockAutoBuyEligibility({
+    ...explicitlyApproved,
     phase9LiquiditySuppressed: true,
   }, 78);
   assert.equal(suppressed.approved, false);
@@ -107,6 +129,8 @@ test("crypto auto-buy fails closed when spread availability has no measurement",
     masterFinalScore: 90,
     qualifiedToBuy: true,
     autoTradeApproved: true,
+    approved: true,
+    backendApproved: true,
     barsFound: 30,
     current: 100,
     windowDollarVolume: 1_000_000,
@@ -272,6 +296,8 @@ test("crypto auto-buy accepts Final Decision 65 with complete evidence and a nar
     masterFinalScore: 65,
     qualifiedToBuy: true,
     autoTradeApproved: true,
+    approved: true,
+    backendApproved: true,
     barsFound: 30,
     current: 100,
     bid: 99.95,
@@ -281,6 +307,9 @@ test("crypto auto-buy accepts Final Decision 65 with complete evidence and a nar
     windowDollarVolume: 1_000_000,
     priceIsLive: true,
     liveQuoteUpdatedAt: new Date().toISOString(),
+    liveQuoteSource: "alpaca_crypto_latest",
+    spreadUpdatedAt: new Date().toISOString(),
+    spreadSource: "alpaca_crypto_latest",
     multiDayContinuationScore: 75,
     multiDayAccumulation: { seenDays: ["2026-08-20", "2026-08-21"] },
     cryptoDiscoveryScorecard: {

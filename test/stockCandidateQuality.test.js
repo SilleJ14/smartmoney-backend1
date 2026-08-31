@@ -14,6 +14,7 @@ test("rejects stock movers with missing, stale, wide, or thin execution evidence
     bid: 9.98,
     ask: 10.02,
     liveQuoteUpdatedAt: "2026-08-31T13:59:58.000Z",
+    spreadUpdatedAt: "2026-08-31T13:59:58.000Z",
   };
 
   assert.equal(evaluateStockCandidateQuoteQuality(base, goodQuote, { now }).accepted, true);
@@ -24,6 +25,13 @@ test("rejects stock movers with missing, stale, wide, or thin execution evidence
   assert.ok(
     evaluateStockCandidateQuoteQuality(base, { ...goodQuote, bid: 0, ask: 0 }, { now })
       .reasons.includes("TWO_SIDED_QUOTE_UNAVAILABLE")
+  );
+  assert.ok(
+    evaluateStockCandidateQuoteQuality(
+      base,
+      { ...goodQuote, spreadUpdatedAt: null },
+      { now }
+    ).reasons.includes("SPREAD_TIMESTAMP_UNAVAILABLE")
   );
   assert.ok(
     evaluateStockCandidateQuoteQuality(
@@ -49,9 +57,9 @@ test("keeps only executable movers and ranks quote quality ahead of raw percenta
       { symbol: "OKAY", current: 20, volume: 500_000, percentChange: 6 },
     ],
     quotes: [
-      { symbol: "WIDE", bid: 4, ask: 6, liveQuoteUpdatedAt: "2026-08-31T13:59:59.000Z" },
-      { symbol: "GOOD", bid: 49.99, ask: 50.01, liveQuoteUpdatedAt: "2026-08-31T13:59:59.000Z" },
-      { symbol: "OKAY", bid: 19.9, ask: 20.1, liveQuoteUpdatedAt: "2026-08-31T13:59:40.000Z" },
+      { symbol: "WIDE", bid: 4, ask: 6, liveQuoteUpdatedAt: "2026-08-31T13:59:59.000Z", spreadUpdatedAt: "2026-08-31T13:59:59.000Z" },
+      { symbol: "GOOD", bid: 49.99, ask: 50.01, liveQuoteUpdatedAt: "2026-08-31T13:59:59.000Z", spreadUpdatedAt: "2026-08-31T13:59:59.000Z" },
+      { symbol: "OKAY", bid: 19.9, ask: 20.1, liveQuoteUpdatedAt: "2026-08-31T13:59:40.000Z", spreadUpdatedAt: "2026-08-31T13:59:40.000Z" },
     ],
     normalizeSymbol: (value) => String(value || "").toUpperCase(),
     now,

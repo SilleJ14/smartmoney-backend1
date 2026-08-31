@@ -5,7 +5,11 @@ export function clampLiveScore(value, min = 0, max = 100) {
 export function updateOneSecondCandle(memory, tick = {}, maxSecondCandles = 120) {
   const price = Number(tick.price || 0);
   const volume = Number(tick.volume || tick.size || 0);
-  const now = Date.now();
+  const providerTime = Date.parse(
+    String(tick.liveQuoteUpdatedAt || tick.quoteFetchedAt || tick.providerTimestamp || "")
+  );
+  if (!Number.isFinite(providerTime)) return null;
+  const now = providerTime;
   const secondKey = Math.floor(now / 1000) * 1000;
 
   if (!Array.isArray(memory.secondCandles)) {
@@ -216,7 +220,18 @@ export function updateLiveMarketMemory(symbol, tick = {}, {
       secondCandles: [],
     };
 
-  const now = Date.now();
+  const providerTime = Date.parse(
+    String(tick.liveQuoteUpdatedAt || tick.quoteFetchedAt || tick.providerTimestamp || "")
+  );
+  if (!Number.isFinite(providerTime)) return previous;
+  const previousProviderTime = Date.parse(String(previous.updatedAt || ""));
+  if (
+    Number.isFinite(previousProviderTime) &&
+    providerTime < previousProviderTime
+  ) {
+    return previous;
+  }
+  const now = providerTime;
   const previousPrice = Number(previous.price || 0);
 
   const incomingPreviousClose = Number(
@@ -347,7 +362,7 @@ export function updateLiveMarketMemory(symbol, tick = {}, {
     avgPrice: incomingVwap,
     lastSize: Number(tick.size || 0),
     source: tick.source || previous.source || "live_stream",
-    updatedAt: new Date().toISOString(),
+    updatedAt: new Date(providerTime).toISOString(),
     tickWindow: freshTickWindow,
     tapeSpeed,
     liquidityPressure:

@@ -26,6 +26,7 @@ test("builds a fractional stock market buy", async () => {
     marketOpen: true,
     fractionable: true,
     referencePrice: 200,
+    holdCategory: "intraday",
   });
   assert.deepEqual(requests[0].body, {
     symbol: "AAPL",
@@ -45,6 +46,7 @@ test("converts a non-fractionable stock buy to whole shares", async () => {
     marketOpen: true,
     fractionable: false,
     referencePrice: 400,
+    holdCategory: "multi_day",
   });
   assert.equal(requests[0].body.qty, "2");
   assert.equal(requests[0].body.type, "market");
@@ -59,6 +61,7 @@ test("rejects a whole-share buy that cannot afford one share", async () => {
       marketOpen: true,
       fractionable: false,
       referencePrice: 200,
+      holdCategory: "intraday",
     }), /not enough for 1 share/);
   assert.equal(requests.length, 0);
 });
@@ -107,8 +110,21 @@ test("manual dollar buys use notional only for fractionable assets", async () =>
     buyMode: "dollars",
     fractionable: true,
     marketOpen: true,
+    holdCategory: "intraday",
   });
   assert.equal(requests[0].body.notional, 50.13);
+});
+
+test("stock buys fail closed when holding category is missing", () => {
+  const { service, requests } = harness();
+  assert.throws(() => service.stockBuy({
+    symbol: "AAPL",
+    dollars: 25,
+    marketOpen: true,
+    fractionable: true,
+    referencePrice: 100,
+  }), /holding category is required/i);
+  assert.equal(requests.length, 0);
 });
 
 test("manual stock buys also reject a closed regular market", () => {

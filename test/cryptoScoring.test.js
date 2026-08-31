@@ -339,12 +339,49 @@ test("an explicit zero crypto component remains available evidence", () => {
 test("component coverage reports unavailable weight even when score weights are not renormalized", () => {
   const result = calculateAvailableWeightedScore([
     { name: "base", available: true, value: 80, weight: 0.6 },
-    { name: "research", available: false, value: 0, weight: 0.4 },
+    { name: "research", available: false, value: 100, weight: 0.4 },
   ]);
 
   assert.equal(result.score, 48);
   assert.equal(result.coverage, 0.6);
+  assert.equal(result.components.find((item) => item.name === "research")?.contribution, 0);
   assert.deepEqual(result.missingComponents, ["research"]);
+});
+
+test("missing independent crypto context cannot inflate the remaining decision evidence", () => {
+  const now = Date.parse("2026-08-30T12:00:00.000Z");
+  const result = buildCryptoDecisionScore({
+    symbol: "BTC/USD",
+    cryptoDiscoveryScorecard: {
+      stage: "CRYPTO_EARLY_DISCOVERY",
+      score: 80,
+      coverage: 1,
+      calculatedAt: new Date(now).toISOString(),
+      extension: { alreadyExtended: false },
+    },
+    newsCatalyst: { dataAvailable: true, riskDetected: false },
+    barsFound: 30,
+    current: 100,
+    priceIsLive: true,
+    liveQuoteUpdatedAt: new Date(now).toISOString(),
+    liveQuoteSource: "alpaca_crypto_latest",
+    spreadUpdatedAt: new Date(now).toISOString(),
+    spreadSource: "alpaca_crypto_latest",
+    bid: 99.95,
+    ask: 100.05,
+    windowDollarVolume: 1_000_000,
+    multiDayContinuationScore: 80,
+    multiDayAccumulation: { seenDays: ["2026-08-20", "2026-08-21"] },
+  }, { now });
+
+  const context = result.componentsByName.strategyEvolution;
+  const availableContribution = result.components
+    .reduce((sum, component) => sum + component.contribution, 0);
+  assert.equal(context.available, false);
+  assert.equal(context.contribution, 0);
+  assert.equal(result.coverage, 0.85);
+  assert.equal(result.score, Number(availableContribution.toFixed(2)));
+  assert.ok(result.score < availableContribution / result.coverage);
 });
 
 test("crypto decision score uses independent discovery, entry, continuation, and context families", () => {
@@ -362,6 +399,9 @@ test("crypto decision score uses independent discovery, entry, continuation, and
     current: 100,
     priceIsLive: true,
     liveQuoteUpdatedAt: new Date().toISOString(),
+    liveQuoteSource: "alpaca_crypto_latest",
+    spreadUpdatedAt: new Date().toISOString(),
+    spreadSource: "alpaca_crypto_latest",
     bid: 99.9,
     ask: 100,
     spreadAvailable: true,
@@ -435,10 +475,15 @@ test("shared crypto execution gate requires central and freshly complete evidenc
     masterFinalScore: 90,
     qualifiedToBuy: true,
     autoTradeApproved: true,
+    approved: true,
+    backendApproved: true,
     barsFound: 30,
     current: 100,
     priceIsLive: true,
     liveQuoteUpdatedAt: new Date().toISOString(),
+    liveQuoteSource: "alpaca_crypto_latest",
+    spreadUpdatedAt: new Date().toISOString(),
+    spreadSource: "alpaca_crypto_latest",
     bid: 99.95,
     ask: 100.05,
     windowDollarVolume: 1_000_000,
@@ -485,10 +530,15 @@ test("crypto execution gate uses a 65 minimum Final Decision score", () => {
     newsCatalyst: { dataAvailable: true, riskDetected: false },
     qualifiedToBuy: true,
     autoTradeApproved: true,
+    approved: true,
+    backendApproved: true,
     barsFound: 30,
     current: 100,
     priceIsLive: true,
     liveQuoteUpdatedAt: new Date(now).toISOString(),
+    liveQuoteSource: "alpaca_crypto_latest",
+    spreadUpdatedAt: new Date(now).toISOString(),
+    spreadSource: "alpaca_crypto_latest",
     bid: 99.95,
     ask: 100.05,
     windowDollarVolume: 1_000_000,
@@ -512,7 +562,7 @@ test("crypto execution gate uses a 65 minimum Final Decision score", () => {
   assert.ok(belowThreshold.reasons.includes("DECISION_SCORE_BELOW_THRESHOLD"));
 });
 
-test("crypto cannot finalize from discovery and entry evidence alone", () => {
+test("crypto cannot finalize without measured continuation even at 80 percent coverage", () => {
   const now = Date.now();
   const result = buildCryptoDecisionScore({
     symbol: "BTC/USD",
@@ -523,18 +573,26 @@ test("crypto cannot finalize from discovery and entry evidence alone", () => {
       extension: { alreadyExtended: false },
     },
     newsCatalyst: { dataAvailable: true, riskDetected: false },
+    cryptoContextScorecard: {
+      independent: true,
+      score: 80,
+      source: "independent_crypto_context",
+    },
     barsFound: 30,
     current: 100,
     priceIsLive: true,
     liveQuoteUpdatedAt: new Date(now).toISOString(),
+    liveQuoteSource: "alpaca_crypto_latest",
+    spreadUpdatedAt: new Date(now).toISOString(),
+    spreadSource: "alpaca_crypto_latest",
     bid: 99.95,
     ask: 100.05,
     windowDollarVolume: 1_000_000,
   }, { now });
-  assert.equal(result.coverage, 0.65);
+  assert.equal(result.coverage, 0.8);
   assert.equal(result.coreEvidencePass, false);
   assert.equal(result.scoreStatus, "PROVISIONAL_INCOMPLETE_EVIDENCE");
-  assert.ok(result.missingCriticalEvidence.includes("decisionCoverage"));
+  assert.ok(result.missingCriticalEvidence.includes("continuation"));
 });
 
 test("crypto decision evidence rejects a stale quote before order submission", () => {
@@ -552,6 +610,9 @@ test("crypto decision evidence rejects a stale quote before order submission", (
     current: 100,
     priceIsLive: true,
     liveQuoteUpdatedAt: new Date(now - 6_000).toISOString(),
+    liveQuoteSource: "alpaca_crypto_latest",
+    spreadUpdatedAt: new Date(now).toISOString(),
+    spreadSource: "alpaca_crypto_latest",
     bid: 99.95,
     ask: 100.05,
     windowDollarVolume: 1_000_000,
@@ -560,6 +621,42 @@ test("crypto decision evidence rejects a stale quote before order submission", (
   }, { now });
   assert.equal(result.quoteFreshness.fresh, false);
   assert.ok(result.missingCriticalEvidence.includes("freshLiveQuote"));
+});
+
+test("crypto Entry and F require an independently fresh approved spread", () => {
+  const now = Date.now();
+  const result = buildCryptoDecisionScore({
+    symbol: "BTC/USD",
+    cryptoDiscoveryScorecard: {
+      score: 90,
+      coverage: 1,
+      calculatedAt: new Date(now).toISOString(),
+      extension: { alreadyExtended: false },
+    },
+    newsCatalyst: { dataAvailable: true, riskDetected: false },
+    barsFound: 30,
+    current: 100,
+    priceIsLive: true,
+    liveQuoteUpdatedAt: new Date(now).toISOString(),
+    liveQuoteSource: "alpaca_crypto_latest",
+    bid: 99.95,
+    ask: 100.05,
+    spreadSource: "alpaca_crypto_latest",
+    windowDollarVolume: 1_000_000,
+    multiDayContinuationScore: 75,
+    multiDayAccumulation: { seenDays: ["2026-08-20", "2026-08-21"] },
+    cryptoContextScorecard: {
+      independent: true,
+      score: 80,
+      source: "independent_crypto_context",
+    },
+  }, { now });
+
+  assert.equal(result.quoteFreshness.fresh, true);
+  assert.equal(result.spreadFreshness.fresh, false);
+  assert.equal(result.componentsByName.execution.available, false);
+  assert.equal(result.coreEvidencePass, false);
+  assert.ok(result.missingCriticalEvidence.includes("freshLiveSpread"));
 });
 
 test("derived runner strength is not reused as independent continuation evidence", () => {
@@ -705,7 +802,11 @@ test("a Discovery 67 with unavailable Entry evidence never becomes a finalized F
   };
 
   const evidence = buildCryptoDecisionScore(candidate, { now });
-  assert.equal(evidence.score, 67, "the partial score may remain available for diagnostics");
+  assert.equal(
+    evidence.score,
+    33.5,
+    "missing Entry and Continuation evidence must contribute zero rather than inflate F"
+  );
   assert.equal(evidence.componentsByName.execution.available, false);
   assert.equal(evidence.coreEvidencePass, false);
   assert.equal(evidence.scoreStatus, "PROVISIONAL_INCOMPLETE_EVIDENCE");
@@ -743,4 +844,37 @@ test("stale crypto discovery evidence cannot be refreshed by only a new quote", 
 
   assert.equal(result.approved, false);
   assert.ok(result.reasons.includes("freshDiscoveryScorecard"));
+});
+
+test("legacy generic crypto score cannot substitute for canonical F", () => {
+  const now = Date.now();
+  const result = evaluateCryptoTradeCandidate({
+    symbol: "BTC/USD",
+    score: 99,
+    cryptoDiscoveryScorecard: {
+      score: 90,
+      coverage: 1,
+      calculatedAt: new Date(now).toISOString(),
+      extension: { alreadyExtended: false },
+    },
+    newsCatalyst: { dataAvailable: true, riskDetected: false },
+    qualifiedToBuy: true,
+    autoTradeApproved: true,
+    barsFound: 30,
+    current: 100,
+    priceIsLive: true,
+    liveQuoteUpdatedAt: new Date(now).toISOString(),
+    bid: 99.95,
+    ask: 100.05,
+    windowDollarVolume: 1_000_000,
+    multiDayContinuationScore: 75,
+    multiDayAccumulation: { seenDays: ["2026-08-29", "2026-08-30"] },
+    centralAutonomousDecisionCore: {
+      cryptoDecisionEvidence: { coreEvidencePass: true },
+    },
+  }, { now });
+
+  assert.equal(result.scoreAvailable, false);
+  assert.equal(result.approved, false);
+  assert.ok(result.reasons.includes("DECISION_SCORE_INVALID"));
 });

@@ -6,17 +6,14 @@ import {
   evaluateCryptoTradeCandidate,
 } from "../scoring/componentScore.js";
 import { evaluateStockTradeCandidate } from "../scoring/decisionScores.js";
+import {
+  getCanonicalFinalScore,
+  hasExplicitTradeApproval,
+} from "../scoring/canonicalSignalRank.js";
 
 export function resolveCanonicalStockDecisionScore(signal = {}) {
-  const value =
-    signal.masterFinalScore ??
-    signal.finalAutonomousDecisionScore ??
-    signal.stockDecisionScore ??
-    signal.decisionScoreTelemetry?.scores?.decision ??
-    signal.score ??
-    0;
-  const parsed = Number(value);
-  return Number.isFinite(parsed) ? parsed : 0;
+  const value = getCanonicalFinalScore({ ...signal, assetClass: "stock" });
+  return value === null ? 0 : value;
 }
 
 export function evaluateCanonicalStockAutoBuyEligibility(
@@ -28,6 +25,7 @@ export function evaluateCanonicalStockAutoBuyEligibility(
     ...options,
     requireCentralDecision: true,
     requireFreshDecision: true,
+    requireExplicitApproval: true,
   });
   const canonicalScore = resolveCanonicalStockDecisionScore(signal);
   return {
@@ -107,14 +105,8 @@ export function createAutoBuyStrategies(dependencies) {
   } = dependencies;
 
   function getCryptoDecisionScore(signal = {}) {
-    const value =
-      signal.masterFinalScore ??
-      signal.cryptoDecisionScore ??
-      signal.finalAutonomousDecisionScore ??
-      signal.score ??
-      0;
-    const parsed = Number(value);
-    return Number.isFinite(parsed) ? parsed : 0;
+    const value = getCanonicalFinalScore({ ...signal, assetClass: "crypto" });
+    return value === null ? 0 : value;
   }
 
   function getMeasuredCryptoSpread(signal = {}) {
@@ -395,6 +387,7 @@ export function createAutoBuyStrategies(dependencies) {
       const stockTradeEvidence = evaluateStockTradeCandidate(candidate, {
         requireCentralDecision: true,
         requireFreshDecision: true,
+        requireExplicitApproval: true,
       });
       if (!stockTradeEvidence.approved) {
         recordOrder("STOCK_SKIPPED_ENTRY_EVIDENCE", symbol, {
@@ -1351,7 +1344,7 @@ export function createAutoBuyStrategies(dependencies) {
     const bestCandidateScore = Math.max(
       0,
       ...signals
-        .filter((s) => s.qualifiedToBuy === true)
+        .filter(hasExplicitTradeApproval)
         .map((s) => getCryptoDecisionScore(s))
     );
     let scoreMultiplier = 0.5;
@@ -1369,14 +1362,10 @@ export function createAutoBuyStrategies(dependencies) {
       .filter((s) => {
         const score = getCryptoDecisionScore(s);
         const spread = getMeasuredCryptoSpread(s);
-        const institutionalPassed =
-          s.qualifiedToBuy === true ||
-          s.cryptoInstitutionalQualification?.momentumPass === true;
-        const autoTradeAllowed = s.autoTradeApproved !== false;
+        const institutionalPassed = hasExplicitTradeApproval(s);
         const completeEntryEvidence = hasCompleteCryptoEntryEvidence(s);
         return (
           institutionalPassed &&
-          autoTradeAllowed &&
           completeEntryEvidence &&
           score >= effectiveCryptoBuyThreshold &&
           spread !== null &&
@@ -1417,7 +1406,7 @@ export function createAutoBuyStrategies(dependencies) {
       const measuredCryptoSpread = getMeasuredCryptoSpread(crypto);
       const completeCryptoEntryEvidence = hasCompleteCryptoEntryEvidence(crypto);
       const cryptoQualified =
-        crypto.qualifiedToBuy === true &&
+        hasExplicitTradeApproval(crypto) &&
         completeCryptoEntryEvidence &&
         cryptoDecisionScore >= effectiveCryptoBuyThreshold &&
         measuredCryptoSpread !== null &&

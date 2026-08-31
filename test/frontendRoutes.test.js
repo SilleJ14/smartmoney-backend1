@@ -86,3 +86,56 @@ test("frontend AI route stays available when the independent news provider fails
   assert.equal(response.body.ai.newsFeedStatus.available, false);
   assert.equal(response.body.ai.newsFeedStatus.reason, "provider timeout");
 });
+
+test("frontend signals require all approval flags and rank by canonical F", async () => {
+  const approval = {
+    qualifiedToBuy: true,
+    autoTradeApproved: true,
+    approved: true,
+    backendApproved: true,
+  };
+  const api = createHarness({
+    getState: () => ({
+      topStockSignals: [
+        { symbol: "AAPL", score: 5, masterFinalScore: 81, stockDecisionScoreAvailable: true, ...approval },
+        { symbol: "LOOSE", score: 100, masterFinalScore: 99, stockDecisionScoreAvailable: true, qualifiedToBuy: true, autoTradeApproved: true },
+      ],
+      topCryptoSignals: [
+        { symbol: "BTC/USD", score: 99, cryptoDecisionScore: 72, cryptoDecisionScoreAvailable: true, ...approval },
+      ],
+    }),
+  });
+
+  const response = await api.invoke("/frontend/signals");
+
+  assert.equal(response.body.approvedCount, 2);
+  assert.deepEqual(response.body.signals.map((signal) => signal.symbol), ["AAPL", "BTC/USD"]);
+});
+
+test("frontend alerts expose canonical F and never report loose approval", async () => {
+  const api = createHarness({
+    getConfig: () => ({ minScoreToBuy: 70 }),
+    getState: () => ({
+      topStockSignals: [
+        {
+          symbol: "AAPL",
+          score: 10,
+          masterFinalScore: 80,
+          stockDecisionScoreAvailable: true,
+          qualifiedToBuy: true,
+          autoTradeApproved: true,
+          approved: true,
+          backendApproved: true,
+        },
+        { symbol: "LEGACY", score: 100, qualifiedToBuy: true, autoTradeApproved: true },
+      ],
+    }),
+  });
+
+  const response = await api.invoke("/frontend/alerts");
+
+  assert.equal(response.body.count, 1);
+  assert.equal(response.body.alerts[0].symbol, "AAPL");
+  assert.equal(response.body.alerts[0].score, 80);
+  assert.equal(response.body.alerts[0].approved, true);
+});

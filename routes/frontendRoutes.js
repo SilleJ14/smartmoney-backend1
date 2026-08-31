@@ -1,3 +1,9 @@
+import {
+  compareCanonicalSignals,
+  getCanonicalFinalScore,
+  hasExplicitTradeApproval,
+} from "../scoring/canonicalSignalRank.js";
+
 function uniqueSignals(signals, normalizeSymbol) {
   return signals
     .filter(Boolean)
@@ -107,11 +113,11 @@ export function registerFrontendRoutes(app, dependencies) {
         true
       ).map(mergeLiveQuote);
       const approvedSignals = signals
-        .filter((signal) => signal?.qualifiedToBuy && (signal.autoTradeApproved || signal.approved))
-        .sort((a, b) => (b.score || 0) - (a.score || 0));
+        .filter(hasExplicitTradeApproval)
+        .sort(compareCanonicalSignals);
       const displaySignals = approvedSignals.length
         ? approvedSignals
-        : signals.sort((a, b) => Number(b.score || 0) - Number(a.score || 0));
+        : signals.sort(compareCanonicalSignals);
       res.json({
         success: true,
         count: displaySignals.length,
@@ -253,20 +259,27 @@ export function registerFrontendRoutes(app, dependencies) {
       const config = getConfig();
       const alerts = collectSignals(getState(), getLatestStatus(), normalizeSymbol)
         .map(mergeLiveQuote)
-        .filter((signal) => signal.score >= Number(config.minScoreToBuy || 70))
+        .filter((signal) => {
+          const score = getCanonicalFinalScore(signal);
+          return score !== null && score >= Number(config.minScoreToBuy || 70);
+        })
+        .sort(compareCanonicalSignals)
         .slice(0, 25)
-        .map((signal) => ({
-          symbol: signal.symbol,
-          score: signal.score,
-          message:
-            signal.portfolioManagerReason ||
-            signal.technicalReason ||
-            signal.executionReason ||
-            "Institutional signal detected",
-          approved: signal.autoTradeApproved || signal.approved,
-          executionConfidence: signal.executionConfidence || 0,
-          institutionalGrade: signal.institutionalGrade || "NORMAL",
-        }));
+        .map((signal) => {
+          const score = getCanonicalFinalScore(signal);
+          return {
+            symbol: signal.symbol,
+            score,
+            message:
+              signal.portfolioManagerReason ||
+              signal.technicalReason ||
+              signal.executionReason ||
+              "Institutional signal detected",
+            approved: hasExplicitTradeApproval(signal),
+            executionConfidence: signal.executionConfidence || 0,
+            institutionalGrade: signal.institutionalGrade || "NORMAL",
+          };
+        });
       res.json({ success: true, count: alerts.length, alerts });
     } catch (err) {
       console.error("frontend alerts error", err);

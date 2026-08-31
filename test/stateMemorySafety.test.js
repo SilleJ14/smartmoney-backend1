@@ -103,6 +103,28 @@ test("persisted snapshot removes live caches and stays within a bounded size", (
   assert.ok(bytes < 100_000, `expected compact snapshot below 100 KB, received ${bytes}`);
 });
 
+test("compacted history preserves unavailable decision scores as null", () => {
+  const state = {
+    explosiveRunnerHistory: [{
+      topEarlyRunners: [{
+        symbol: "BTC/USD",
+        assetClass: "crypto",
+        score: 55,
+        cryptoDecisionScore: null,
+        cryptoDecisionScoreAvailable: false,
+        multiDayScore: null,
+        multiDayScoreAvailable: false,
+      }],
+    }],
+  };
+  compactLiveEngineStateHistories(state);
+  const compact = state.explosiveRunnerHistory[0].topEarlyRunners[0];
+  assert.equal(compact.cryptoDecisionScore, null);
+  assert.equal(compact.cryptoDecisionScoreAvailable, false);
+  assert.equal(compact.multiDayScore, null);
+  assert.equal(compact.multiDayScoreAvailable, false);
+});
+
 test("state saver persists bounded stock and quiet-candidate learning history", async () => {
   const quietObservations = Array.from({ length: 650 }, (_, index) => ({
     id: `crypto:Q${index}:2026-08-20`,
