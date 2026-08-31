@@ -69,6 +69,9 @@ test("live movers preserve provider quote time and never manufacture live freshn
   assert.equal(movers[0].liveQuoteUpdatedAt, providerTime);
   assert.equal(movers[0].spreadAvailable, true);
   assert.equal(movers[0].priceIsLive, true);
+  assert.equal(movers[0].liveQuoteFresh, false);
+  assert.equal(movers[0].entryQualityScoreAvailable, false);
+  assert.equal(movers[0].stockDecisionScoreAvailable, false);
 
   const snapshot = buildLiveMovers({
     state: { topStockSignals: [{ symbol: "MSFT", price: 200, previousClose: 190 }] },
@@ -81,4 +84,182 @@ test("live movers preserve provider quote time and never manufacture live freshn
   assert.equal(snapshot[0].liveQuoteSource, "scan_snapshot");
   assert.equal(snapshot[0].priceIsLive, false);
   assert.equal(snapshot[0].spreadAvailable, false);
+});
+
+test("live movers preserve and refresh authoritative stock D E and F fields", () => {
+  const now = new Date("2026-08-31T15:00:00.000Z");
+  const movers = buildLiveMovers({
+    state: {
+      marketOpen: true,
+      topStockSignals: [{
+        symbol: "AAPL",
+        price: 103,
+        previousClose: 100,
+        preMoveScore: 82,
+        historyDays: 30,
+        extensionProfile: { coverage: 1, alreadyExtended: false, extensionPenalty: 0 },
+        technicalBarsFound: 30,
+        technicals: { ema9: 103, ema20: 101, macd: 2, macdSignal: 1, rsi: 61 },
+        confirmations: {
+          closeNearHighPercent: 86,
+          aboveVwap: true,
+          fakeBreakout: false,
+        },
+        phase5SignalQuality: {
+          breakoutRetestConfirmation: true,
+          liquidityStabilityScore: 88,
+          antiChaseRisk: 18,
+          exhaustionRisk: 14,
+          spreadWideningRisk: 10,
+        },
+        contextScore: 76,
+        blendedRiskScore: 82,
+        portfolioScore: 78,
+        fundamentalBlendScore: 74,
+        fundamentalDataValid: true,
+        masterFinalScore: 79,
+        entryQualityScore: 77,
+        discoveryScore: 80,
+      }],
+      liveQuoteCache: {
+        AAPL: {
+          price: 103,
+          bid: 102.98,
+          ask: 103.02,
+          spreadAvailable: true,
+          spreadPercent: 0.0388,
+          liveQuoteUpdatedAt: now.toISOString(),
+          liveQuoteSource: "alpaca_latest_stock_quote",
+          priceIsLive: true,
+        },
+      },
+    },
+    normalizeSymbol,
+    mergeLiveQuote: (signal) => ({
+      ...signal,
+      bid: 102.98,
+      ask: 103.02,
+      spreadAvailable: true,
+      spreadPercent: 0.0388,
+      liveQuoteUpdatedAt: now.toISOString(),
+      liveQuoteSource: "alpaca_latest_stock_quote",
+      priceIsLive: true,
+    }),
+    isCrypto,
+    now: () => now,
+  });
+
+  assert.equal(movers[0].liveScoreRefresh, true);
+  assert.equal(movers[0].marketOpen, true);
+  assert.equal(movers[0].discoveryScoreAvailable, true);
+  assert.equal(movers[0].entryQualityScoreAvailable, true);
+  assert.equal(movers[0].stockDecisionScoreAvailable, true);
+  assert.ok(Number.isFinite(movers[0].discoveryScore));
+  assert.ok(Number.isFinite(movers[0].entryQualityScore));
+  assert.ok(Number.isFinite(movers[0].stockDecisionScore));
+  assert.ok(movers[0].entryQualityScore > 0);
+  assert.ok(movers[0].stockDecisionScore > 0);
+  assert.equal(movers[0].masterFinalScore, 79, "existing central evidence is preserved");
+});
+
+test("live movers never copy Discovery into F when Entry evidence is unavailable", () => {
+  const now = new Date("2026-08-31T15:00:00.000Z");
+  const movers = buildLiveMovers({
+    state: {
+      marketOpen: true,
+      topStockSignals: [{
+        symbol: "XYZ",
+        price: 103,
+        previousClose: 100,
+        preMoveScore: 67,
+        historyDays: 30,
+        extensionProfile: { coverage: 1, alreadyExtended: false, extensionPenalty: 0 },
+        masterFinalScore: 67,
+        discoveryScore: 67,
+        entryQualityScore: 0,
+      }],
+      liveQuoteCache: {
+        XYZ: {
+          price: 103,
+          bid: 102.98,
+          ask: 103.02,
+          spreadAvailable: true,
+          spreadPercent: 0.0388,
+          liveQuoteUpdatedAt: now.toISOString(),
+          liveQuoteSource: "alpaca_latest_stock_quote",
+          priceIsLive: true,
+        },
+      },
+    },
+    normalizeSymbol,
+    mergeLiveQuote: (signal) => ({
+      ...signal,
+      bid: 102.98,
+      ask: 103.02,
+      spreadAvailable: true,
+      spreadPercent: 0.0388,
+      liveQuoteUpdatedAt: now.toISOString(),
+      liveQuoteSource: "alpaca_latest_stock_quote",
+      priceIsLive: true,
+    }),
+    isCrypto,
+    now: () => now,
+  });
+
+  assert.equal(movers[0].discoveryScore, 67);
+  assert.equal(movers[0].entryQualityScoreAvailable, false);
+  assert.equal(movers[0].entryQualityScore, null);
+  assert.equal(movers[0].stockDecisionScoreAvailable, false);
+  assert.equal(movers[0].stockDecisionScore, null);
+  assert.notEqual(movers[0].stockDecisionScore, movers[0].discoveryScore);
+});
+
+test("live movers finalize crypto F when discovery entry context and quote evidence are complete", () => {
+  const now = new Date("2026-08-31T15:00:00.000Z");
+  const candidate = {
+    symbol: "BTC/USD",
+    price: 100,
+    current: 100,
+    bid: 99.95,
+    ask: 100.05,
+    spreadAvailable: true,
+    spreadPercent: 0.1,
+    priceIsLive: true,
+    liveQuoteUpdatedAt: now.toISOString(),
+    liveQuoteSource: "alpaca_crypto_latest",
+    cryptoDiscoveryScorecard: {
+      score: 72,
+      coverage: 1,
+      calculatedAt: now.toISOString(),
+      extension: { alreadyExtended: false },
+    },
+    cryptoContextScorecard: {
+      independent: true,
+      score: 68,
+      source: "cross_asset_crypto_breadth",
+    },
+    newsCatalyst: { dataAvailable: true, riskDetected: false },
+    barsFound: 30,
+    windowDollarVolume: 2_000_000,
+    score: 72,
+  };
+  const movers = buildLiveMovers({
+    state: {
+      marketOpen: false,
+      topCryptoSignals: [candidate],
+      liveQuoteCache: { "BTC/USD": candidate },
+    },
+    normalizeSymbol,
+    mergeLiveQuote: (signal) => signal,
+    isCrypto,
+    now: () => now,
+  });
+
+  assert.equal(movers[0].marketOpen, true, "crypto remains live around the clock");
+  assert.equal(movers[0].cryptoDiscoveryScoreAvailable, true);
+  assert.equal(movers[0].cryptoEntryScoreAvailable, true);
+  assert.equal(movers[0].cryptoScoreTelemetry.decision.coreEvidencePass, true);
+  assert.ok(Number.isFinite(movers[0].cryptoDecisionScore));
+  assert.equal(movers[0].provisionalCryptoDecisionScore, null);
+  assert.ok(movers[0].cryptoDecisionCoverage >= 0.8);
 });

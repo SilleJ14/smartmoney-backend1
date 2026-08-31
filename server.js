@@ -356,12 +356,12 @@ const FAST_RUNNER_ENGINE_INTERVAL_MS = Number(
   process.env.FAST_RUNNER_ENGINE_INTERVAL_MS || 2000
 );
 const ACTIVE_CANDIDATE_QUOTE_REFRESH_INTERVAL_MS = Math.max(
-  5000,
-  Number(process.env.ACTIVE_CANDIDATE_QUOTE_REFRESH_INTERVAL_MS || 5000)
+  1000,
+  Number(process.env.ACTIVE_CANDIDATE_QUOTE_REFRESH_INTERVAL_MS || 1000)
 );
 const ACTIVE_CANDIDATE_QUOTE_REFRESH_LIMIT = Math.min(
   20,
-  Math.max(1, Number(process.env.ACTIVE_CANDIDATE_QUOTE_REFRESH_LIMIT || 12))
+  Math.max(1, Number(process.env.ACTIVE_CANDIDATE_QUOTE_REFRESH_LIMIT || 20))
 );
 const FAST_RUNNER_MIN_SCORE = Number(
   process.env.FAST_RUNNER_MIN_SCORE || 78
@@ -30718,6 +30718,13 @@ function startLiveScheduler() {
       () => refreshFinnhubLiveSubscriptions()
     );
     void runLiveScheduledTask(
+      "refreshActiveCandidateQuotes",
+      ACTIVE_CANDIDATE_QUOTE_REFRESH_INTERVAL_MS,
+      () => refreshActiveCandidateQuotes(
+        getActiveCandidateQuoteRefreshSymbols()
+      )
+    );
+    void runLiveScheduledTask(
       "refreshEarlyMoversThenPolygonSubscriptions",
       LIVE_EARLY_MOVER_REFRESH_INTERVAL_MS,
       () => refreshEarlyMoversThenPolygonSubscriptions()
@@ -30792,6 +30799,7 @@ function startLiveScheduler() {
       "cleanupLiveQuoteCache",
       "cleanupLiveOrderDedupMap",
       "refreshFinnhubLiveSubscriptions",
+      "refreshActiveCandidateQuotes",
       "refreshEarlyMoversThenPolygonSubscriptions",
       "runFastRunnerEngine",
       "runQuickInstitutionalGate",
@@ -30885,6 +30893,50 @@ function getProviderQuoteTimestampMs(quote = {}) {
   return Number.isFinite(timestamp) ? timestamp : null;
 }
 
+function getActiveCandidateQuoteRefreshSymbols(
+  limit = ACTIVE_CANDIDATE_QUOTE_REFRESH_LIMIT
+) {
+  const sources = [
+    ...(engineState.cachedPositions || []).map((item) => ({ ...item, quotePriority: 5000 })),
+    ...(engineState.liveStarterBuyGateState?.topApproved || []).map((item) => ({ ...item, quotePriority: 4000 })),
+    ...(engineState.quickInstitutionalCandidates || []).map((item) => ({ ...item, quotePriority: 3000 })),
+    ...(engineState.fastRunnerCandidates || []).map((item) => ({ ...item, quotePriority: 2500 })),
+    ...(engineState.topStockSignals || []),
+    ...(engineState.lastStockSignals || []),
+    ...(engineState.topCryptoSignals || []),
+    ...(engineState.lastCryptoSignals || []),
+  ];
+  const rankedBySymbol = new Map();
+  for (const item of sources) {
+    const symbol = normalizeSymbol(item?.symbol || item);
+    if (!symbol) continue;
+    if (!isCrypto(symbol) && engineState.marketOpen !== true) continue;
+    const score = Math.max(
+      Number(item?.stockDecisionScore || 0),
+      Number(item?.cryptoDecisionScore || 0),
+      Number(item?.provisionalCryptoDecisionScore || 0),
+      Number(item?.masterFinalScore || 0),
+      Number(item?.finalAutonomousDecisionScore || 0),
+      Number(item?.score || 0),
+      Number(item?.runnerScore || 0),
+      Number(item?.fastRunnerScore || 0)
+    );
+    const priority =
+      Number(item?.quotePriority || 0) +
+      (item?.qualifiedToBuy === true ? 2000 : 0) +
+      (item?.autoTradeApproved === true ? 1500 : 0) +
+      score;
+    const current = rankedBySymbol.get(symbol);
+    if (!current || priority > current.priority) {
+      rankedBySymbol.set(symbol, { symbol, priority });
+    }
+  }
+  return [...rankedBySymbol.values()]
+    .sort((a, b) => b.priority - a.priority)
+    .slice(0, Math.min(20, Math.max(1, Number(limit) || 20)))
+    .map((item) => item.symbol);
+}
+
 async function refreshActiveCandidateQuotes(symbols = []) {
   const requestedSymbols = [...new Set(
     (Array.isArray(symbols) ? symbols : [symbols])
@@ -30894,7 +30946,7 @@ async function refreshActiveCandidateQuotes(symbols = []) {
   const staleSymbols = requestedSymbols.filter((symbol) => {
     if (!isCrypto(symbol) && engineState.marketOpen !== true) return false;
     const ageSeconds = getLiveQuoteAgeSeconds(symbol);
-    return ageSeconds === null || ageSeconds > 4;
+    return ageSeconds === null || ageSeconds > 0;
   });
   if (staleSymbols.length === 0) {
     return {

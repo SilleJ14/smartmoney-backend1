@@ -50,6 +50,8 @@ export function registerLiveMoversRoutes(app, dependencies) {
         cryptoSignals: movers.filter((signal) => isCrypto(signal.symbol)),
         activeQuoteRefresh,
         ...runtime,
+        marketOpen: state.marketOpen === true,
+        marketSession: state.marketSession || null,
         effectiveMode: state.effectiveMode,
       });
     } catch (err) {

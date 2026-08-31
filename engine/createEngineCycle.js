@@ -1,4 +1,5 @@
 import { CRYPTO_MIN_FINAL_SCORE_TO_BUY } from "../scoring/componentScore.js";
+import { applyCrossAssetCryptoContext } from "../scoring/cryptoContext.js";
 
 export function createEngineCycle(dependencies) {
   const {
@@ -374,6 +375,10 @@ export function createEngineCycle(dependencies) {
       }
       const phase42CryptoInstitutionalState =
         updateCryptoInstitutionalState(cryptoSignals);
+      applyCrossAssetCryptoContext(
+        cryptoSignals,
+        phase42CryptoInstitutionalState
+      );
       recordOrder("PHASE_42_CRYPTO_INSTITUTIONAL_UPDATED", "CRYPTO", {
         reviewedCount: phase42CryptoInstitutionalState.reviewedCount,
         approvedCount: phase42CryptoInstitutionalState.approvedCount,

@@ -1,3 +1,10 @@
+import {
+  buildStockDecisionScore,
+  calculateEarlyDiscoveryScore,
+  calculateEntryQualityScore,
+} from "../scoring/decisionScores.js";
+import { buildCryptoDecisionScore } from "../scoring/componentScore.js";
+
 function asArray(value) {
   return Array.isArray(value) ? value : [];
 }
@@ -19,6 +26,36 @@ function positiveNumbers(values) {
   return values
     .map(Number)
     .filter((value) => Number.isFinite(value) && value > 0);
+}
+
+function finiteNumber(...values) {
+  for (const value of values) {
+    if (value === null || value === undefined || value === "") continue;
+    const parsed = Number(value);
+    if (Number.isFinite(parsed)) return parsed;
+  }
+  return undefined;
+}
+
+function measuredDecisionAuthority(signal = {}, cryptoAsset = false) {
+  const fields = cryptoAsset
+    ? [
+      signal.cryptoDecisionScore,
+      signal.provisionalCryptoDecisionScore,
+      signal.cryptoEntryScore,
+      signal.rawCryptoScore,
+    ]
+    : [
+      signal.stockDecisionScore,
+      signal.masterFinalScore,
+      signal.finalAutonomousDecisionScore,
+      signal.entryQualityScore,
+      signal.discoveryScore,
+    ];
+  return fields.reduce(
+    (count, value) => count + (finiteNumber(value) === undefined ? 0 : 1),
+    0
+  );
 }
 
 export function buildLiveMovers({
@@ -114,6 +151,8 @@ export function buildLiveMovers({
       0
     );
     const cryptoAsset = isCrypto(symbol);
+    const scoringNow = now();
+    const liveScoreUpdatedAt = scoringNow.toISOString();
     const cryptoMemory =
       state.cryptoInstitutionalMemory?.[symbol] ||
       state.cryptoInstitutionalMemory?.[symbol.replace("/", "")] ||
@@ -195,9 +234,80 @@ export function buildLiveMovers({
       liveQuote.priceIsLive === true ||
       merged.priceIsLive === true;
     const priceIsLive = providerMarkedLive && Boolean(liveQuoteUpdatedAt);
+    const liveQuoteTimestamp = liveQuoteUpdatedAt
+      ? Date.parse(liveQuoteUpdatedAt)
+      : NaN;
+    const liveQuoteAgeSeconds = Number.isFinite(liveQuoteTimestamp)
+      ? (scoringNow.getTime() - liveQuoteTimestamp) / 1000
+      : null;
+    const liveQuoteFresh =
+      priceIsLive &&
+      liveQuoteAgeSeconds !== null &&
+      liveQuoteAgeSeconds >= -5 &&
+      liveQuoteAgeSeconds <= 5;
+    const scoringSignal = {
+      ...merged,
+      symbol,
+      price: livePrice,
+      livePrice,
+      current: livePrice,
+      previousClose,
+      open,
+      dayOpen: open,
+      changePercent,
+      dayChangePercent: changePercent,
+      percentChange: changePercent,
+      bid,
+      ask,
+      spreadPercent,
+      spreadAvailable,
+      liveQuoteUpdatedAt,
+      liveQuoteSource,
+      priceIsLive,
+    };
+    const stockDiscovery = cryptoAsset
+      ? null
+      : calculateEarlyDiscoveryScore(scoringSignal);
+    const stockEntry = cryptoAsset
+      ? null
+      : calculateEntryQualityScore(scoringSignal);
+    const stockDecision = cryptoAsset
+      ? null
+      : buildStockDecisionScore({
+        ...scoringSignal,
+        discoveryScorecard: stockDiscovery,
+        entryQualityScorecard: stockEntry,
+      });
+    const cryptoDecision = cryptoAsset
+      ? buildCryptoDecisionScore(scoringSignal, { now: scoringNow.getTime() })
+      : null;
+    const stockDiscoveryAvailable =
+      !cryptoAsset &&
+      Number(stockDiscovery?.coverage || 0) >= 0.65 &&
+      stockDiscovery?.canonicalExtensionEvidencePass === true;
+    const stockEntryAvailable =
+      !cryptoAsset &&
+      Number(stockEntry?.coverage || 0) >= 0.8 &&
+      liveQuoteFresh;
+    const stockDecisionMissingEvidence = (
+      stockDecision?.missingCriticalEvidence || []
+    ).filter((reason) => reason !== "approvedEntry");
+    const stockDecisionAvailable =
+      stockDiscoveryAvailable &&
+      stockEntryAvailable &&
+      Number(stockDecision?.coverage || 0) >= 0.8 &&
+      stockDecisionMissingEvidence.length === 0;
+    const cryptoDiscoveryAvailable =
+      cryptoDecision?.componentsByName?.base?.available === true &&
+      Number(scoringSignal.cryptoDiscoveryScorecard?.coverage || 0) >= 0.65 &&
+      cryptoDecision?.discoveryFreshness?.fresh === true;
+    const cryptoEntryAvailable =
+      cryptoDecision?.componentsByName?.execution?.available === true;
     const next = {
+      ...merged,
       symbol,
       assetClass: merged.assetClass || merged.asset_class || (cryptoAsset ? "crypto" : "stock"),
+      marketOpen: cryptoAsset || state.marketOpen === true,
       price: livePrice,
       livePrice,
       displayPrice: livePrice,
@@ -214,6 +324,10 @@ export function buildLiveMovers({
       spreadAvailable,
       liveQuoteUpdatedAt,
       liveQuoteSource,
+      liveQuoteAgeSeconds: liveQuoteAgeSeconds === null
+        ? null
+        : Number(liveQuoteAgeSeconds.toFixed(2)),
+      liveQuoteFresh,
       priceIsLive,
       score: displayScore,
       institutionalScore: displayScore,
@@ -256,9 +370,101 @@ export function buildLiveMovers({
         merged.pattern ||
         merged.tradeQuality ||
         "Live mover price update",
+      liveScoreRefresh: true,
+      liveScoreUpdatedAt,
+      ...(cryptoAsset
+        ? {
+          rawCryptoScore: cryptoDiscoveryAvailable
+            ? Number(cryptoDecision.componentsByName.base.value || 0)
+            : null,
+          cryptoDiscoveryScoreAvailable: cryptoDiscoveryAvailable,
+          cryptoEntryScore: cryptoEntryAvailable
+            ? Number(cryptoDecision.componentsByName.execution.value || 0)
+            : null,
+          cryptoEntryScoreAvailable: cryptoEntryAvailable,
+          cryptoDecisionScore:
+            cryptoDecision?.coreEvidencePass === true
+              ? Number(cryptoDecision.score || 0)
+              : null,
+          provisionalCryptoDecisionScore:
+            cryptoDecision?.coreEvidencePass === true
+              ? null
+              : Number(cryptoDecision?.score || 0),
+          cryptoDecisionCoverage: Number(cryptoDecision?.coverage || 0),
+          cryptoScoreTelemetry: {
+            ...(merged.cryptoScoreTelemetry || {}),
+            decision: cryptoDecision,
+            calculatedAt: liveScoreUpdatedAt,
+          },
+          centralAutonomousDecisionCore: {
+            ...(merged.centralAutonomousDecisionCore || {}),
+            cryptoDecisionScore:
+              cryptoDecision?.coreEvidencePass === true
+                ? Number(cryptoDecision.score || 0)
+                : null,
+            provisionalCryptoDecisionScore:
+              cryptoDecision?.coreEvidencePass === true
+                ? null
+                : Number(cryptoDecision?.score || 0),
+            cryptoDecisionEvidence: cryptoDecision,
+          },
+        }
+        : {
+          discoveryScore: stockDiscoveryAvailable
+            ? Number(stockDiscovery.score || 0)
+            : null,
+          discoveryScoreAvailable: stockDiscoveryAvailable,
+          discoveryScorecard: stockDiscovery,
+          entryQualityScore: stockEntryAvailable
+            ? Number(stockEntry.score || 0)
+            : null,
+          entryQualityScoreAvailable: stockEntryAvailable,
+          entryQualityScorecard: stockEntry,
+          stockDecisionScore: stockDecisionAvailable
+            ? Number(stockDecision.score || 0)
+            : null,
+          stockDecisionScoreAvailable: stockDecisionAvailable,
+          decisionScoreCoverage: Number(stockDecision?.coverage || 0),
+          stockDecisionEvidence: {
+            coreEvidencePass: stockDecision?.coreEvidencePass === true,
+            missingCriticalEvidence: stockDecision?.missingCriticalEvidence || [],
+            discoveryCoverage: Number(stockDiscovery?.coverage || 0),
+            entryCoverage: Number(stockEntry?.coverage || 0),
+            entryApproved: stockEntry?.approved === true,
+          },
+          decisionScoreTelemetry: {
+            version: 2,
+            calculatedAt: liveScoreUpdatedAt,
+            scores: {
+              discovery: Number(stockDiscovery?.score || 0),
+              entry: Number(stockEntry?.score || 0),
+              continuation: finiteNumber(
+                merged.continuationScorecard?.score,
+                merged.multiDayScore,
+                merged.multiDayContinuationScore
+              ) || 0,
+              decision: Number(stockDecision?.score || 0),
+            },
+            stages: {
+              discovery: stockDiscovery,
+              entry: stockEntry,
+              continuation: merged.continuationScorecard || null,
+              decision: stockDecision,
+            },
+          },
+        }),
     };
     const current = moversBySymbol.get(symbol);
-    if (!current || Math.abs(next.changePercent) > Math.abs(current.changePercent)) {
+    const nextAuthority = measuredDecisionAuthority(next, cryptoAsset);
+    const currentAuthority = measuredDecisionAuthority(current, cryptoAsset);
+    if (
+      !current ||
+      nextAuthority > currentAuthority ||
+      (
+        nextAuthority === currentAuthority &&
+        Math.abs(next.changePercent) > Math.abs(current.changePercent)
+      )
+    ) {
       moversBySymbol.set(symbol, next);
     }
   }
