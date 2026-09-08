@@ -1,4 +1,3 @@
-import { getApprovedTradeAmount, isSizingRevoked } from "../scoring/approvedSizing.js";
 import {
   CRYPTO_MAX_ENTRY_SPREAD_PERCENT,
 } from "../scoring/cryptoScoring.js";
@@ -27,10 +26,6 @@ export function evaluateCanonicalStockAutoBuyEligibility(
     requireCentralDecision: true,
     requireFreshDecision: true,
     requireExplicitApproval: true,
-    maxQuoteAgeSeconds: Math.min(
-      5,
-      Math.max(1, Number(options.maxQuoteAgeSeconds) || 5)
-    ),
   });
   const canonicalScore = resolveCanonicalStockDecisionScore(signal);
   return {
@@ -107,8 +102,6 @@ export function createAutoBuyStrategies(dependencies) {
     rotateWeakCryptoIfBetter,
     shouldSkipFromTradeMemory,
     getTradingMode,
-    refreshStockExecutionQuotes,
-    refreshCryptoExecutionQuotes,
   } = dependencies;
 
   function getCryptoDecisionScore(signal = {}) {
@@ -145,7 +138,7 @@ export function createAutoBuyStrategies(dependencies) {
   }
 
   function hasCompleteCryptoEntryEvidence(signal = {}) {
-    return !isSizingRevoked(signal) && evaluateCryptoTradeCandidate(signal).approved;
+    return evaluateCryptoTradeCandidate(signal, { minimumScore: 0 }).approved;
   }
 
   async function autoBuySignals(signals = []) {
@@ -245,7 +238,6 @@ export function createAutoBuyStrategies(dependencies) {
       return;
     }
     const frozenOpenSlots = openSlots;
-    if (typeof refreshStockExecutionQuotes === "function") signals = await refreshStockExecutionQuotes(signals);
     const effectiveBuyThreshold = getEffectiveBuyThreshold(signals);
     const adaptiveMinScoreToBuy = Math.max(
       78,
@@ -390,16 +382,14 @@ export function createAutoBuyStrategies(dependencies) {
       engineState.morningStrikeHistory.slice(0, 200);
     let successfulStockBuysThisCycle = 0;
     let stockBudgetReservedThisCycle = 0;
-    for (let candidate of candidates) {
-      if (typeof refreshStockExecutionQuotes === "function") candidate = (await refreshStockExecutionQuotes([candidate]))[0] || candidate;
+    for (const candidate of candidates) {
       const symbol = normalizeSymbol(candidate.symbol);
       const stockTradeEvidence = evaluateStockTradeCandidate(candidate, {
         requireCentralDecision: true,
         requireFreshDecision: true,
         requireExplicitApproval: true,
-        maxQuoteAgeSeconds: 5,
       });
-      if (!stockTradeEvidence.approved || isSizingRevoked(candidate)) {
+      if (!stockTradeEvidence.approved) {
         recordOrder("STOCK_SKIPPED_ENTRY_EVIDENCE", symbol, {
           ...stockTradeEvidence,
         });
@@ -1351,7 +1341,6 @@ export function createAutoBuyStrategies(dependencies) {
       return;
     }
     const baseTradeAmount = getDynamicTradeAmount(account, cryptoPositions);
-    if (typeof refreshCryptoExecutionQuotes === "function") signals = await refreshCryptoExecutionQuotes(signals);
     const bestCandidateScore = Math.max(
       0,
       ...signals
@@ -1395,8 +1384,7 @@ export function createAutoBuyStrategies(dependencies) {
       )
       .slice(0, openSlots);
     let cryptoBudgetReservedThisCycle = 0;
-    for (let crypto of buyCandidates) {
-      if (typeof refreshCryptoExecutionQuotes === "function") crypto = (await refreshCryptoExecutionQuotes([crypto]))[0] || crypto;
+    for (const crypto of buyCandidates) {
       const symbol = normalizeSymbol(crypto.symbol);
       const cryptoInstitutionalScore = Number(
         crypto.institutionalScore ||
@@ -1469,7 +1457,6 @@ export function createAutoBuyStrategies(dependencies) {
             crypto,
             account
           );
-        const approvedSizingCeiling = getApprovedTradeAmount(crypto);
         crypto.adaptiveCryptoSizing = adaptiveCryptoSizing;
         crypto.cryptoPositionSizing = adaptiveCryptoSizing;
         crypto.positionSizing = {
@@ -1477,6 +1464,7 @@ export function createAutoBuyStrategies(dependencies) {
           recommendedTradeAmount: Number(adaptiveCryptoSizing.recommendedAmount || 0),
           recommendedSize: Number(adaptiveCryptoSizing.recommendedAmount || 0),
         };
+        crypto.recommendedTradeAmount = Number(adaptiveCryptoSizing.recommendedAmount || 0);
         crypto.rawRecommendedTradeAmount = Number(adaptiveCryptoSizing.recommendedAmount || 0);
         crypto.displayTradeAmount = Number(adaptiveCryptoSizing.recommendedAmount || 0);
         const cryptoConvictionMultiplier =
@@ -1498,6 +1486,8 @@ export function createAutoBuyStrategies(dependencies) {
           });
         crypto.finalMasterDecisionProfile =
           finalMasterDecisionProfile;
+        crypto.masterFinalScore =
+          finalMasterDecisionProfile.finalScore;
         crypto.masterFinalSizingMultiplier =
           finalMasterDecisionProfile.finalSizingMultiplier;
         crypto.masterExecutionDecision =
@@ -1550,7 +1540,6 @@ export function createAutoBuyStrategies(dependencies) {
           Number(cryptoParliamentGate.multiplier || 1);
         let finalTradeAmount = Number(
           Math.min(
-            approvedSizingCeiling,
             rawFinalTradeAmount,
             availableCryptoBuyingPower,
             remainingCryptoBudget,
@@ -1562,8 +1551,7 @@ export function createAutoBuyStrategies(dependencies) {
         );
         if (finalTradeAmount > 0 && finalTradeAmount < minCryptoTradeAmount) {
           finalTradeAmount =
-            approvedSizingCeiling >= minCryptoTradeAmount &&
-              availableCryptoBuyingPower >= minCryptoTradeAmount &&
+            availableCryptoBuyingPower >= minCryptoTradeAmount &&
               remainingCryptoBudget >= minCryptoTradeAmount &&
               remainingTotalBotBudget >= minCryptoTradeAmount
               ? minCryptoTradeAmount

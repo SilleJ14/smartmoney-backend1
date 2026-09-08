@@ -6,7 +6,6 @@ export function createEngineState({ defaults, persisted = {}, canonicalize, conf
     cachedPositions: [],
     cachedAccount: null,
     lastError: null,
-    polygonEntitlementBlocked: false,
   };
   canonicalize?.(state, config);
   return state;

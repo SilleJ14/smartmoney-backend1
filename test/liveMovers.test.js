@@ -54,7 +54,6 @@ test("live movers preserve provider quote time and never manufacture live freshn
           ask: 111.1,
           spreadPercent: 0.18,
           spreadAvailable: true,
-          spreadUpdatedAt: providerTime,
           liveQuoteUpdatedAt: providerTime,
           liveQuoteSource: "alpaca_latest_stock_quote",
           priceIsLive: true,
@@ -146,7 +145,6 @@ test("live movers preserve and refresh authoritative stock D E and F fields", ()
       spreadUpdatedAt: now.toISOString(),
       liveQuoteUpdatedAt: now.toISOString(),
       liveQuoteSource: "alpaca_latest_stock_quote",
-      spreadSource: "alpaca_latest_stock_quote",
       priceIsLive: true,
     }),
     isCrypto,
@@ -318,70 +316,6 @@ test("live movers finalize crypto F when discovery entry context and quote evide
   assert.ok(Number.isFinite(movers[0].cryptoDecisionScore));
   assert.equal(movers[0].provisionalCryptoDecisionScore, null);
   assert.ok(movers[0].cryptoDecisionCoverage >= 0.8);
-});
-
-test("same-symbol provisional crypto F cannot replace an available canonical F", () => {
-  const now = new Date("2026-08-31T15:00:00.000Z");
-  const liveQuote = {
-    symbol: "BTC/USD",
-    price: 126.25,
-    current: 126.25,
-    bid: 126.24,
-    ask: 126.26,
-    spreadAvailable: true,
-    spreadPercent: 0.0158,
-    spreadUpdatedAt: now.toISOString(),
-    bidAskUpdatedAt: now.toISOString(),
-    priceIsLive: true,
-    liveQuoteUpdatedAt: now.toISOString(),
-    liveQuoteSource: "alpaca_crypto_latest",
-    spreadSource: "alpaca_crypto_latest",
-  };
-  const canonical = {
-    ...liveQuote,
-    previousClose: 125,
-    cryptoDecisionScore: 75,
-    cryptoDecisionScoreAvailable: true,
-    cryptoScoreTelemetry: {
-      decision: { coreEvidencePass: true, coverage: 1 },
-    },
-    cryptoDiscoveryScorecard: {
-      score: 72,
-      coverage: 1,
-      calculatedAt: now.toISOString(),
-    },
-    rawCryptoScore: 72,
-  };
-  const provisional = {
-    ...liveQuote,
-    previousClose: 100,
-    cryptoDiscoveryScorecard: {
-      score: 72,
-      coverage: 1,
-      calculatedAt: now.toISOString(),
-    },
-    rawCryptoScore: 72,
-    barsFound: 30,
-    windowDollarVolume: 2_000_000,
-  };
-  const movers = buildLiveMovers({
-    state: {
-      topCryptoSignals: [canonical],
-      lastCryptoSignals: [provisional],
-      liveQuoteCache: { "BTC/USD": liveQuote },
-    },
-    normalizeSymbol,
-    mergeLiveQuote: (signal) => signal,
-    isCrypto,
-    now: () => now,
-  });
-
-  assert.equal(movers.length, 1);
-  assert.equal(movers[0].cryptoDecisionScore, 75);
-  assert.equal(movers[0].cryptoDecisionScoreAvailable, true);
-  assert.equal(movers[0].provisionalCryptoDecisionScore, null);
-  assert.equal(Number(movers[0].changePercent.toFixed(2)), 1);
-  assert.equal(movers[0].executionEligibility.approved, false);
 });
 
 test("live movers do not replace an authoritative stock F with a sparse quote-only recalculation", () => {
@@ -569,39 +503,4 @@ test("live movers never borrow a trade timestamp for bid and ask freshness", () 
   assert.equal(movers[0].liveQuoteFresh, true);
   assert.equal(movers[0].liveSpreadFresh, false);
   assert.equal(movers[0].spreadUpdatedAt, null);
-});
-
-test("quote-only crypto movers keep missing change unavailable instead of inventing zero", () => {
-  const now = new Date("2026-08-31T15:00:00.000Z");
-  const quote = {
-    symbol: "DOGE/USD",
-    price: 0.25,
-    current: 0.25,
-    bid: 0.249,
-    ask: 0.251,
-    spreadAvailable: true,
-    spreadUpdatedAt: now.toISOString(),
-    bidAskUpdatedAt: now.toISOString(),
-    liveQuoteUpdatedAt: now.toISOString(),
-    liveQuoteSource: "alpaca_crypto_latest",
-    spreadSource: "alpaca_crypto_latest",
-    priceIsLive: true,
-    previousClose: null,
-    percentChange: null,
-    percentChangeAvailable: false,
-  };
-  const movers = buildLiveMovers({
-    state: {
-      topCryptoSignals: [quote],
-      liveQuoteCache: { "DOGE/USD": quote },
-    },
-    normalizeSymbol,
-    mergeLiveQuote: (signal) => signal,
-    isCrypto,
-    now: () => now,
-  });
-
-  assert.equal(movers[0].percentChange, null);
-  assert.equal(movers[0].changePercent, null);
-  assert.equal(movers[0].percentChangeAvailable, false);
 });

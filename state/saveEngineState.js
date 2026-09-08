@@ -13,7 +13,6 @@ export function createEngineStateSaver({
   saveDelayMs = 1000,
   setTimeoutFn = setTimeout,
   clearTimeoutFn = clearTimeout,
-  writeSafetyState = () => {},
 }) {
   let engineStateSaveTimer = null;
   let pendingEngineStateSnapshot = null;
@@ -58,7 +57,6 @@ export function createEngineStateSaver({
 
   function saveEngineState(reason = "STATE_UPDATE") {
     try {
-      writeSafetyState();
       compactLiveEngineStateHistories(engineState);
       const safeState = {
         reason,
@@ -85,8 +83,6 @@ export function createEngineStateSaver({
         openingBellTriggeredAt: engineState.openingBellTriggeredAt || null,
 
         dailyLossLocked: engineState.dailyLossLocked,
-        safetyReconciliationRequired: engineState.safetyReconciliationRequired === true,
-        orderRiskReservations: engineState.orderRiskReservations || {},
         profitLocked: engineState.profitLocked,
 
         highWaterMarks: engineState.highWaterMarks || {},

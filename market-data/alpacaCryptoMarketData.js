@@ -62,22 +62,12 @@ export function createAlpacaCryptoMarketData({ dataRequest, normalizeSymbol, now
     const eventTimestamp = providerTimestamp(
       marketEvent?.t ?? marketEvent?.timestamp ?? marketEvent?.time
     );
-    const spreadAvailable = bid > 0 && ask >= bid;
     return {
-      symbol, current: price, price, bid, ask, previousClose: null,
-      changePercent: null, percentChange: null,
-      changePercentAvailable: false,
-      percentChangeAvailable: false,
-      changeReferencePrice: null,
-      percentChangeReferencePrice: null,
-      assetClass: "crypto",
+      symbol, current: price, price, bid, ask, previousClose: 0,
+      changePercent: 0, percentChange: 0, assetClass: "crypto",
       liveQuoteSource: "alpaca_crypto_latest", source: "alpaca_crypto_latest",
       quoteFetchedAt: eventTimestamp,
       liveQuoteUpdatedAt: eventTimestamp,
-      spreadAvailable,
-      spreadUpdatedAt: spreadAvailable ? eventTimestamp : null,
-      bidAskUpdatedAt: spreadAvailable ? eventTimestamp : null,
-      spreadSource: spreadAvailable ? "alpaca_crypto_latest" : null,
       providerTimestampAvailable: Boolean(eventTimestamp),
       fetchedAt: now().toISOString(),
       priceIsLive: Boolean(eventTimestamp),
@@ -103,7 +93,7 @@ export function createAlpacaCryptoMarketData({ dataRequest, normalizeSymbol, now
       const tradeData = missingTradeSymbols.length > 0
         ? await dataRequest(
           `/v1beta3/crypto/us/latest/trades?symbols=${encodeURIComponent(missingTradeSymbols.join(","))}`
-        ).catch(() => ({ trades: {} }))
+        )
         : { trades: {} };
       return cleanSymbols
         .map((symbol) => normalizeLatestQuote(
