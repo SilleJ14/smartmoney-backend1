@@ -17,6 +17,25 @@ const DAY = 86400000, start = Date.parse('2026-09-08T18:00:00Z');
 const iso = t => new Date(t).toISOString(), day = t => iso(t).slice(0, 10);
 const quote = (t, price = 100, symbol = 'ETH/USD') => ({ symbol, price, liveQuoteUpdatedAt: iso(t) });
 const options = t => ({ assetClass: 'crypto', dayKey: day(t), now: t });
+test('production outcome migration accepts null persisted history on the first scan', async () => {
+  const source = await fs.readFile(new URL('../server.js', import.meta.url), 'utf8');
+  const begin = source.indexOf('async function updateQuietCandidateOutcomes(');
+  const end = source.indexOf('\nconst {', begin);
+  assert.ok(begin >= 0 && end > begin);
+  for (const previous of [null, undefined, {}, { observations: null }]) {
+    let imports = 0;
+    const store = { importObservations: async rows => { imports++; assert.deepEqual(rows, []); },
+      ingest: async () => ({ policy: 'DURABLE_FULL_POPULATION' }) };
+    const update = new Function('discoveryOutcomeStore', 'updateQuietCandidateOutcomesCache', 'engineState',
+      'let outcomeMigrationComplete = false;\n' + source.slice(begin, end) + '; return updateQuietCandidateOutcomes;')(
+      store, old => ({ observations: old.observations || [] }), {});
+    const result = await update(previous, [], [], options(start));
+    assert.equal(result.displayCacheOnly, true);
+    assert.equal(imports, 1);
+    await update(result, [], [], options(start));
+    assert.equal(imports, 1);
+  }
+});
 async function temporary(t) {
   const directory = await fs.mkdtemp(path.join(os.tmpdir(), 'sm-reaudit-closure-'));
   t.after(() => fs.rm(directory, { recursive: true, force: true }));

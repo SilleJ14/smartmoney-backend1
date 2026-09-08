@@ -1157,8 +1157,9 @@ const persistSafetyState = createSafetyJournal(`${ENGINE_STATE_FILE}.safety.json
 const discoveryOutcomeStore = createDiscoveryOutcomeStore(path.resolve(DATA_DIR, 'discovery-outcomes'));
 let outcomeMigrationComplete = false;
 async function updateQuietCandidateOutcomes(previous = {}, candidates = [], prices = [], options = {}) {
+  previous = previous && typeof previous === 'object' && !Array.isArray(previous) ? previous : {};
   if (!outcomeMigrationComplete) {
-    await discoveryOutcomeStore.importObservations(previous.observations || []);
+    await discoveryOutcomeStore.importObservations(Array.isArray(previous.observations) ? previous.observations : []);
     outcomeMigrationComplete = true;
   }
   const settings = { ...options, now: options.now || Date.now(), dayKey: options.dayKey || new Date().toISOString().slice(0, 10) };
