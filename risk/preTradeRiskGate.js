@@ -1,3 +1,4 @@
+import { validBrokerAccount, validBrokerPositions, availableBuyingPower } from './brokerEvidence.js';
 function finiteNumber(value, fallback = 0) {
   const number = Number(value);
   return Number.isFinite(number) ? number : fallback;
@@ -32,6 +33,12 @@ export function evaluatePreTradeRisk({ order = {}, context = {}, options = {} } 
   }
 
   if (isBuy) {
+    if (!validBrokerAccount(context.account) || !validBrokerPositions(context.positions)) reasons.push('Broker risk evidence is malformed or incomplete');
+    if (context.safetyReconciliationRequired) reasons.push('Safety state requires reconciliation before new entries');
+    if (context.account?.stale === true || context.positions?.stale === true || context.brokerEvidenceStale === true) reasons.push('Broker account/positions evidence is stale');
+    for (const snapshot of [context.account, context.positions]) {
+      if (snapshot?.snapshotAt != null && (Date.now() - snapshot.snapshotAt > 10000 || snapshot.snapshotAt > Date.now() + 5000)) reasons.push('Broker snapshot expired');
+    }
     const price = finiteNumber(context.price);
     const quoteAgeSeconds = finiteNumber(context.quoteAgeSeconds, Infinity);
     const spreadPercent = finiteNumber(context.spreadPercent);
@@ -39,10 +46,10 @@ export function evaluatePreTradeRisk({ order = {}, context = {}, options = {} } 
     const value = orderValue(order, price);
     const equity = finiteNumber(context.account?.equity || context.account?.portfolio_value);
     const cash = Number(context.account?.cash);
-    const buyingPower = Number(context.account?.buying_power);
+    const buyingPower = availableBuyingPower(context.account, context.isCrypto);
     const exposure = (context.positions || []).reduce(
       (sum, position) => sum + Math.abs(finiteNumber(position.market_value)),
-      0
+      Number(context.pendingOrderNotional || 0)
     );
     const maxExposure = equity * (finiteNumber(context.maxExposurePercent) / 100);
 
@@ -72,27 +79,25 @@ export function evaluatePreTradeRisk({ order = {}, context = {}, options = {} } 
     if (equity <= 0) reasons.push("Broker equity is unavailable");
     if (!Number.isFinite(cash) || cash < 0) {
       reasons.push("Broker cash balance is unavailable");
-    } else if (value > cash) {
+    } else if (value + finiteNumber(context.pendingOrderNotional) > cash) {
       reasons.push(`Insufficient cash: ${Number(value.toFixed(2))} > ${Number(cash.toFixed(2))}`);
     }
-    if (Number.isFinite(buyingPower) && buyingPower >= 0 && value > buyingPower) {
+    if (Number.isFinite(buyingPower) && buyingPower >= 0 && value + finiteNumber(context.pendingOrderNotional) > buyingPower) {
       reasons.push(
         `Insufficient buying power: ${Number(value.toFixed(2))} > ${Number(buyingPower.toFixed(2))}`
       );
     }
     if (value <= 0) reasons.push("Order value cannot be calculated");
-    if (maxExposure > 0 && exposure + value > maxExposure) {
+    if (exposure + value > maxExposure) {
       reasons.push(
         `Maximum bot exposure exceeded: ${Number((exposure + value).toFixed(2))} > ` +
         `${Number(maxExposure.toFixed(2))}`
       );
     }
+    const openSymbols = new Set([...(context.positions || []).map(position => String(position.symbol || '').toUpperCase()), ...(context.pendingPositionSymbols || [])]);
     if (
       finiteNumber(context.maxOpenTrades) > 0 &&
-      (context.positions || []).length >= finiteNumber(context.maxOpenTrades) &&
-      !(context.positions || []).some(
-        (position) => String(position.symbol || "").toUpperCase() === symbol
-      )
+      openSymbols.size >= finiteNumber(context.maxOpenTrades) && !openSymbols.has(symbol)
     ) {
       reasons.push("Maximum open-trade count reached");
     }

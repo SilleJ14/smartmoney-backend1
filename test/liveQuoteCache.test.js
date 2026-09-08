@@ -1,6 +1,7 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 import {
+  buildMeasuredPercentChangePatch,
   evaluateLiveQuoteProviderReadiness,
   getLiveQuoteTimestampMs,
   getLiveQuoteProvider,
@@ -9,7 +10,9 @@ import {
   isFreshLiveQuote,
   isLiveQuoteSource,
   hasNonRegressiveProviderTimestamp,
+  mergeMeasuredPercentChange,
   mergeLiveQuoteEvidence,
+  resolveMeasuredPercentChange,
 } from "../live/liveQuoteCache.js";
 
 test("recognizes the approved stock and crypto live quote sources", () => {
@@ -169,7 +172,7 @@ test("a newer two-sided quote replaces and refreshes spread evidence", () => {
       spreadAvailable: true,
       spreadUpdatedAt: "2026-08-31T14:00:00.000Z",
     },
-    { bid: 100, ask: 100.04 },
+    { bid: 100, ask: 100.04, spreadUpdatedAt: quoteTime },
     {
       price: 100.02,
       quoteUpdatedAt: quoteTime,
@@ -254,4 +257,60 @@ test("spread freshness requires its own bid-ask timestamp", () => {
   };
   assert.equal(getSpreadAgeSeconds(quote, now), null);
   assert.equal(isFreshMeasuredSpread(quote, { maxAgeSeconds: 5, now }), false);
+});
+
+test("an unavailable quote change preserves an existing measured percent", () => {
+  const merged = mergeMeasuredPercentChange(
+    { percentChange: 5, percentChangeAvailable: true },
+    {
+      price: 105,
+      percentChange: null,
+      changePercent: null,
+      percentChangeAvailable: false,
+      changePercentAvailable: false,
+    },
+    { price: 105 }
+  );
+
+  assert.equal(merged.available, true);
+  assert.equal(merged.value, 5);
+});
+
+test("an explicitly measured zero percent replaces an older non-zero percent", () => {
+  const merged = mergeMeasuredPercentChange(
+    { percentChange: 5, percentChangeAvailable: true },
+    { percentChange: 0, percentChangeAvailable: true },
+    { price: 105 }
+  );
+
+  assert.equal(merged.available, true);
+  assert.equal(merged.value, 0);
+});
+
+test("price equal to a valid previous close is an authoritative measured zero", () => {
+  const measurement = resolveMeasuredPercentChange({
+    price: 100,
+    previousClose: 100,
+    percentChange: null,
+    percentChangeAvailable: false,
+  });
+
+  assert.equal(measurement.available, true);
+  assert.equal(measurement.value, 0);
+  assert.equal(measurement.referencePrice, 100);
+  assert.equal(measurement.referenceType, "previous_close");
+});
+
+test("signal merge patch is empty when the incoming quote has no measured change", () => {
+  const patch = buildMeasuredPercentChangePatch(
+    { percentChange: 5, sessionChangePercent: 4, percentChange24h: 3 },
+    {
+      price: 105,
+      percentChange: null,
+      percentChangeAvailable: false,
+    },
+    { price: 105 }
+  );
+
+  assert.deepEqual(patch, {});
 });

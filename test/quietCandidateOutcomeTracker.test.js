@@ -3,8 +3,18 @@ import assert from "node:assert/strict";
 import {
   calculateQuietCandidateLearning,
   summarizeQuietCandidateOutcomes,
-  updateQuietCandidateOutcomes,
+  updateQuietCandidateOutcomes as updateMeasuredOutcomes,
 } from "../scoring/quietCandidateOutcomeTracker.js";
+
+// These fixtures test outcomes, not missing-data rejection. Give each simulated
+// observation its explicit provider evidence time; invalid-time tests call the API directly.
+function updateQuietCandidateOutcomes(previous, selected, prices, options) {
+  const now = options.now ?? Date.now();
+  const measured = (row) => options.assetClass === "stock"
+    ? { ...row, evidenceDay: options.dayKey }
+    : { ...row, liveQuoteUpdatedAt: new Date(now).toISOString() };
+  return updateMeasuredOutcomes(previous, selected.map(measured), prices.map(measured), { ...options, now });
+}
 
 function candidates(count, price = 100) {
   return Array.from({ length: count }, (_, index) => ({
@@ -229,7 +239,8 @@ test("quiet-candidate runtime memory keeps each asset capped at 300 observations
   });
 
   assert.equal(state.maxObservations, 600);
-  assert.equal(state.observationCount, 300);
+  assert.equal(state.observationCount, 40);
+  assert.equal(state.untrackedDiscoveriesThisUpdate, 660);
   assert.equal(state.maxObservationsPerAsset, 300);
 });
 
@@ -309,6 +320,10 @@ test("quiet discovery proof summarizes every measured candidate without exposing
       crypto: { assetClass: "crypto", sampleCount: 1, minimumSamples: 30 },
     },
   };
+  for (const observation of outcomeState.observations) {
+    observation.evidenceVersion = 2;
+    for (const measurement of Object.values(observation.measurements)) Object.assign(measurement, { evidenceVerified: true, measurementPolicyVersion: 3 });
+  }
   const proof = summarizeQuietCandidateOutcomes(outcomeState, {
     stockDiscoveryState: {
       updatedAt: "2026-08-26T20:10:00.000Z",

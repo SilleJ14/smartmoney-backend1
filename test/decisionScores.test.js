@@ -218,7 +218,7 @@ test("extreme independent entry risk blocks an otherwise strong setup", () => {
 });
 
 test("multi-day continuation requires observed multi-session evidence", () => {
-  const strong = calculateMultiDayContinuationScore({ multiDayAccumulation: { persistenceScore: 88, supportHoldingScore: 85, seenDays: ["2026-08-17", "2026-08-18", "2026-08-19", "2026-08-20"] }, confirmations: { aboveVwap: true, closeNearHigh: true }, technicals: { ema9: 12, ema20: 10 } });
+  const strong = calculateMultiDayContinuationScore({ multiDayAccumulation: { persistenceScore: 88, supportHoldingScore: 85, seenDays: ["2026-08-17", "2026-08-18", "2026-08-19", "2026-08-20"] }, confirmations: { aboveVwap: true, closeNearHigh: true }, technicals: { ema9: 12, ema20: 10 } }, { now: Date.parse("2026-08-21T15:00:00Z") });
   const newMover = calculateMultiDayContinuationScore({ percentChange: 30, volumeRatio: 8, confirmations: { aboveVwap: true }, technicals: { ema9: 12, ema20: 10 } });
   assert.ok(strong.score >= 75);
   assert.ok(newMover.score < strong.score);
@@ -227,8 +227,8 @@ test("multi-day continuation requires observed multi-session evidence", () => {
 
 test("multi-day continuation counts unique sessions instead of duplicate observations", () => {
   const shared = { persistenceScore: 92, supportHoldingScore: 90 };
-  const duplicate = calculateMultiDayContinuationScore({ multiDayAccumulation: { ...shared, seenDays: ["2026-08-21", "2026-08-21", "2026-08-21", "2026-08-21"] }, confirmations: { aboveVwap: true, closeNearHigh: true }, technicals: { ema9: 12, ema20: 10 } });
-  const unique = calculateMultiDayContinuationScore({ multiDayAccumulation: { ...shared, seenDays: ["2026-08-18", "2026-08-19", "2026-08-20", "2026-08-21"] }, confirmations: { aboveVwap: true, closeNearHigh: true }, technicals: { ema9: 12, ema20: 10 } });
+  const duplicate = calculateMultiDayContinuationScore({ multiDayAccumulation: { ...shared, seenDays: ["2026-08-21", "2026-08-21", "2026-08-21", "2026-08-21"] }, confirmations: { aboveVwap: true, closeNearHigh: true }, technicals: { ema9: 12, ema20: 10 } }, { now: Date.parse("2026-08-24T15:00:00Z") });
+  const unique = calculateMultiDayContinuationScore({ multiDayAccumulation: { ...shared, seenDays: ["2026-08-18", "2026-08-19", "2026-08-20", "2026-08-21"] }, confirmations: { aboveVwap: true, closeNearHigh: true }, technicals: { ema9: 12, ema20: 10 } }, { now: Date.parse("2026-08-24T15:00:00Z") });
   assert.equal(duplicate.observedSessions, 1);
   assert.equal(duplicate.tier, "INTRADAY_ONLY");
   assert.equal(unique.observedSessions, 4);
@@ -289,7 +289,7 @@ test("decision telemetry exposes every component value, weight, and contribution
 
 test("stock final decision uses independent score families and requires entry evidence", () => {
   const decision = buildStockDecisionScore({
-    discoveryScorecard: { score: 84, coverage: 1 },
+    discoveryScorecard: { score: 84, coverage: 1, canonicalExtensionEvidencePass: true },
     entryQualityScorecard: { score: 80, coverage: 1, approved: true },
     contextScore: 70,
     riskPortfolioScore: 75,
@@ -650,6 +650,19 @@ test("final stock gate requires a fresh quote for executable approval", () => {
     now,
   });
   assert.equal(fresh.approved, true);
+  const overFiveSecondsDespiteRelaxedCaller = evaluateStockTradeCandidate({
+    ...base,
+    quoteFetchedAt: "2026-08-25T13:59:54.999Z",
+    spreadUpdatedAt: "2026-08-25T13:59:54.999Z",
+  }, {
+    requireCentralDecision: true,
+    maxQuoteAgeSeconds: 15,
+    now,
+  });
+  assert.equal(overFiveSecondsDespiteRelaxedCaller.approved, false);
+  assert.equal(overFiveSecondsDespiteRelaxedCaller.thresholds.maxQuoteAgeSeconds, 5);
+  assert.ok(overFiveSecondsDespiteRelaxedCaller.reasons.includes("QUOTE_STALE"));
+  assert.ok(overFiveSecondsDespiteRelaxedCaller.reasons.includes("SPREAD_STALE"));
   const staleSpread = evaluateStockTradeCandidate({
     ...base,
     quoteFetchedAt: "2026-08-25T13:59:59Z",

@@ -31,7 +31,18 @@ export function registerSignalObservabilityRoutes(app, dependencies) {
   app.get("/live-quotes", requireAdmin, (req, res) => {
     try {
       const symbols = String(req.query.symbols || "").split(",").map((item) => item.trim()).filter(Boolean);
-      res.json(buildLiveQuotesPayload(symbols));
+      const compact = ["1", "true"].includes(
+        String(req.query.compact || "").toLowerCase()
+      );
+      const sinceVersion = Number(
+        req.query.sinceVersion ?? req.query.since_version
+      );
+      const since = req.query.since || null;
+      res.json(buildLiveQuotesPayload(symbols, {
+        compact,
+        sinceVersion: Number.isFinite(sinceVersion) ? sinceVersion : null,
+        since,
+      }));
     } catch (error) { fail(res, "Failed to load live quotes", error); }
   });
   app.get("/live-market-memory", requireAdmin, (req, res) => {

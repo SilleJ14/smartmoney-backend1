@@ -1,6 +1,14 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import { buildProofReport } from "../analytics/proofReport.js";
+import { buildProofReport as buildVerifiedProofReport } from "../analytics/proofReport.js";
+
+// Statistical fixtures represent verified observations. Separate audit tests
+// assert that legacy/unverified records are excluded by the public API.
+const buildProofReport = (state, options) => buildVerifiedProofReport({ ...state,
+  observations: state.observations.map((row) => ({ ...row, evidenceVersion: 2,
+    measurements: Object.fromEntries(Object.entries(row.measurements || {}).map(([horizon, value]) =>
+      [horizon, { ...value, evidenceVerified: true, measurementPolicyVersion: 3 }])) })),
+}, options);
 
 test("advanced proof report uses chronological out-of-sample data and includes costs", () => {
   const observations = Array.from({ length: 101 }, (_, index) => ({
@@ -9,8 +17,8 @@ test("advanced proof report uses chronological out-of-sample data and includes c
   }));
   const report = buildProofReport({ observations }, { feePercent: 0.1, slippagePercent: 0.1 });
   assert.equal(report.assets.stock.horizons[1].training.sampleCount, 70);
-  assert.equal(report.assets.stock.horizons[1].outOfSample.sampleCount, 30);
-  assert.equal(report.assets.stock.horizons[1].outOfSampleReady, true);
+  assert.equal(report.assets.stock.horizons[1].outOfSample.sampleCount, 28);
+  assert.equal(report.assets.stock.horizons[1].outOfSampleReady, false);
   assert.equal(report.assets.stock.horizons[1].all.assumedRoundTripCostPercent, 0.4);
   assert.equal(report.productionClaimApproved, false);
 });
@@ -30,9 +38,9 @@ test("walk-forward cutoff stays fixed as new future samples arrive and benchmark
     first.assets.stock.horizons[1].trainingCutoffAt,
     expanded.assets.stock.horizons[1].trainingCutoffAt
   );
-  assert.equal(first.assets.stock.horizons[1].outOfSample.sampleCount, 30);
-  assert.equal(expanded.assets.stock.horizons[1].outOfSample.sampleCount, 40);
-  assert.equal(first.assets.stock.horizons[1].matchedBenchmarks.SPY.sampleCount, 30);
+  assert.equal(first.assets.stock.horizons[1].outOfSample.sampleCount, 28);
+  assert.equal(expanded.assets.stock.horizons[1].outOfSample.sampleCount, 38);
+  assert.equal(first.assets.stock.horizons[1].matchedBenchmarks.SPY.sampleCount, 28);
   assert.ok(first.assets.stock.horizons[1].matchedBenchmarks.SPY.averageExcessReturnPercent > 0);
 });
 

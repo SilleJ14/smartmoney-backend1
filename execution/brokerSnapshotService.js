@@ -1,3 +1,4 @@
+import { validBrokerAccount, validBrokerPositions } from '../risk/brokerEvidence.js';
 const ACCOUNT_FALLBACK = {
   equity: 0,
   cash: 0,
@@ -14,9 +15,11 @@ export function createBrokerSnapshotService({
   async function cachedRequest({ path, cacheKey, healthKey, fallback }) {
     try {
       const result = await tradingRequest(path);
-      const value = Array.isArray(fallback)
-        ? (Array.isArray(result) ? result : [])
-        : result;
+      if (Array.isArray(fallback) ? !Array.isArray(result) : !result || typeof result !== 'object') throw new Error('Malformed broker snapshot');
+      if ((cacheKey === 'cachedAccount' && !validBrokerAccount(result)) ||
+          (cacheKey === 'cachedPositions' && !validBrokerPositions(result))) throw new Error('Malformed broker risk evidence');
+      const value = Array.isArray(fallback) ? [...result] : { ...result };
+      Object.assign(value, { stale: false, snapshotAt: Date.now() });
       setCache(cacheKey, value);
       onApiHealth(healthKey, true);
       return value;
@@ -24,7 +27,7 @@ export function createBrokerSnapshotService({
       const message = error?.message || String(error);
       onApiHealth(healthKey, false, message);
       const cached = getCache(cacheKey);
-      if (Array.isArray(fallback)) return Array.isArray(cached) ? cached : [];
+      if (Array.isArray(fallback)) return Object.assign(Array.isArray(cached) ? [...cached] : [], { stale: true, snapshotAt: cached?.snapshotAt || null });
       if (cached) return { ...cached, stale: true, staleReason: message };
       return { ...fallback, stale: true, staleReason: message };
     }

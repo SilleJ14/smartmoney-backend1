@@ -5,15 +5,18 @@ import os from "os";
 import path from "path";
 import { createDiscoveryFeatureStore } from "../discovery/featureStore.js";
 import {
-  calculateQuietPreMoveFeatures,
+  calculateQuietPreMoveFeatures as calculateFeatures,
   compactGroupedRows,
-  runBoundedQuietDiscovery,
+  runBoundedQuietDiscovery as runDiscovery,
 } from "../discovery/quietDiscoveryPipeline.js";
+
+const calculateQuietPreMoveFeatures = (history) => calculateFeatures(history, { now: Date.parse("2026-07-23T00:00:00Z") });
+const runBoundedQuietDiscovery = (options) => runDiscovery({ ...options, now: () => Date.parse(`${options.dateKey}T23:00:00Z`) });
 
 function rowsForDay(day, symbols = ["QUIET", "LOUD"]) {
   return symbols.map((symbol, index) => {
     const base = 10 + day * 0.03 + index;
-    return { T: symbol, o: base, h: base * 1.01, l: base * 0.995, c: base * 1.005, v: 100000 + day * 3000 };
+    return { T: symbol, t: Date.UTC(2026, 6, day + 1), o: base, h: base * 1.01, l: base * 0.995, c: base * 1.005, v: 100000 + day * 3000 };
   });
 }
 
@@ -65,8 +68,8 @@ test("quiet discovery sorts, deduplicates, and rejects malformed daily candles",
   assert.equal(features.discoveryScorecard.dataQuality.fullExtensionCoverage, true);
 
   const compact = compactGroupedRows([
-    { T: "SAFE", o: 10, h: 10.2, l: 9.9, c: 10.1, v: 100 },
-    { T: "SAFE", o: 10, h: 10.3, l: 9.8, c: 10.2, v: 120 },
+    { T: "SAFE", d: '2026-08-27', o: 10, h: 10.2, l: 9.9, c: 10.1, v: 100 },
+    { T: "SAFE", d: '2026-08-27', o: 10, h: 10.3, l: 9.8, c: 10.2, v: 120 },
     { T: "BAD", o: 10, h: 9, l: 8, c: 10, v: 100 },
   ], "2026-08-27");
   assert.equal(compact.length, 1);
@@ -84,7 +87,7 @@ test("disk store prunes history and pipeline excludes already-loud movers", asyn
     assert.equal(store.stats().fileCount, 12);
     const currentRows = rowsForDay(20);
     currentRows.find((item) => item.T === "LOUD").c *= 1.12;
-    const result = await runBoundedQuietDiscovery({ groupedResults: currentRows, dateKey: "2026-08-01", featureStore: store, budgets: { maxUniverse: 10, historyDays: 20, minAverageDollarVolume: 1, watchlistSize: 5 } });
+    const result = await runBoundedQuietDiscovery({ groupedResults: currentRows, dateKey: "2026-07-21", featureStore: store, budgets: { maxUniverse: 10, historyDays: 20, minAverageDollarVolume: 1, watchlistSize: 5 } });
     assert.ok(result.watchlist.some((item) => item.symbol === "QUIET"));
     assert.ok(!result.watchlist.some((item) => item.symbol === "LOUD"));
     assert.ok(result.resourceUsage.store.bytes <= 1024 * 1024);

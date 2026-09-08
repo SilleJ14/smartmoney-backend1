@@ -22,26 +22,40 @@ export function createOrderService({
   duplicateOrderGuard,
   preTradeRiskGuard,
   onOrderSubmitted,
+  reserveRisk,
 }) {
-  async function submit(payload, options = {}) {
-    if (preTradeRiskGuard) {
-      await preTradeRiskGuard.assertAllowed(payload, options);
-    }
+  let buyQueue = Promise.resolve();
+  function submit(payload, options = {}) {
+    if (payload.side !== 'buy') return submitNow(payload, options);
+    const work = buyQueue.then(() => submitNow(payload, options));
+    buyQueue = work.catch(() => {});
+    return work;
+  }
+  async function submitNow(payload, options = {}) {
     const release = duplicateOrderGuard
       ? await duplicateOrderGuard.reserve(payload, options)
       : () => {};
+    let riskReservation;
+    let submitted = false;
     try {
+      // Slow broker duplicate lookups must precede the final authorization.
+      const authorization = preTradeRiskGuard ? await preTradeRiskGuard.assertAllowed(payload, options) : null;
+      if (payload.side === 'buy' && reserveRisk) riskReservation = await reserveRisk(payload, options);
+      authorization?.assertCurrent?.();
+      submitted = true;
       const result = await tradingRequest("/v2/orders", {
         method: "POST",
         body: JSON.stringify(payload),
       });
       if (typeof onOrderSubmitted === "function") {
-        onOrderSubmitted({ payload, options, result });
+        await onOrderSubmitted({ payload, options, result });
       }
       release({ success: true });
+      await riskReservation?.settle?.({ result });
       return result;
     } catch (error) {
       release({ success: false });
+      await riskReservation?.settle?.({ error, notSubmitted: !submitted });
       throw error;
     }
   }
@@ -160,6 +174,7 @@ export function createOrderService({
     referencePrice,
     holdCategory,
     marketOpen,
+    requireCandidateDecision = false,
   }) {
     const cleanSymbol = normalizeSymbol(symbol);
     if (!cleanSymbol) throw new Error("Missing symbol");
@@ -185,7 +200,7 @@ export function createOrderService({
       return submit({
         ...payload,
         qty: fractionable ? String(shareAmount) : String(Math.floor(shareAmount)),
-      }, { automated: false, holdCategory: cleanHoldCategory });
+      }, { automated: false, requireCandidateDecision, holdCategory: cleanHoldCategory });
     }
 
     const amount = positiveNumber(dollars, "dollar amount");
@@ -193,7 +208,7 @@ export function createOrderService({
     if (fractionable) {
       return submit(
         { ...payload, notional: Number(amount.toFixed(2)) },
-        { automated: false, holdCategory: cleanHoldCategory }
+        { automated: false, requireCandidateDecision, holdCategory: cleanHoldCategory }
       );
     }
 
@@ -207,7 +222,7 @@ export function createOrderService({
     }
     return submit(
       { ...payload, qty: String(estimatedShares) },
-      { automated: false, holdCategory: cleanHoldCategory }
+      { automated: false, requireCandidateDecision, holdCategory: cleanHoldCategory }
     );
   }
 

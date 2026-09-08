@@ -2,6 +2,7 @@ import test from "node:test";
 import assert from "node:assert/strict";
 import {
   calculateCryptoMultiSessionContinuation,
+  hydrateCryptoContinuationMemoryFromDailyBars,
   pruneCryptoContinuationMemory,
   updateCryptoContinuationMemoryEntry,
 } from "../scoring/cryptoScoring.js";
@@ -45,7 +46,7 @@ test("two completed unique UTC days unlock independent crypto continuation", () 
     windowDollarVolume: 1_000_000,
     continuationScorecard: memory,
     multiDayAccumulation: { seenDays: memory.seenDays },
-  });
+  }, { now: Date.parse("2026-08-20T12:00:00Z") });
   assert.equal(decision.componentsByName.runner.available, true);
   assert.equal(decision.componentsByName.runner.source, "continuationScorecard.score");
 });
@@ -62,7 +63,7 @@ test("duplicate and invalid day labels cannot inflate continuation coverage", ()
     multiDayAccumulation: {
       seenDays: ["2026-08-18", "2026-08-18", "not-a-day"],
     },
-  });
+  }, { now: Date.parse("2026-08-20T12:00:00Z") });
 
   assert.equal(decision.componentsByName.runner.available, false);
   assert.equal(decision.continuationEvidence.seenDays, 1);
@@ -121,6 +122,7 @@ test("crypto continuation session and symbol memories stay bounded", () => {
 
 test("continuation scoring ignores duplicate completed session records", () => {
   const continuation = calculateCryptoMultiSessionContinuation({
+    evidenceNow: Date.parse("2026-08-20T12:00:00Z"),
     continuationSessions: [
       { dayKey: "2026-08-18", open: 100, high: 101, low: 99, close: 100, completed: true },
       { dayKey: "2026-08-18", open: 100, high: 102, low: 99, close: 101, completed: true },
@@ -165,4 +167,52 @@ test("phase51 attachment preserves a legitimate zero continuation score", () => 
 
   assert.equal(signal.continuationScorecard.score, 0);
   assert.equal(signal.multiDayContinuationScore, 0);
+});
+
+test("completed provider daily bars hydrate multi-day continuation without fabricating sessions", () => {
+  const memory = hydrateCryptoContinuationMemoryFromDailyBars(
+    {},
+    [
+      {
+        t: "2026-08-29T00:00:00.000Z",
+        o: 100,
+        h: 103,
+        l: 99,
+        c: 102,
+      },
+      {
+        t: "2026-08-30T00:00:00.000Z",
+        o: 102,
+        h: 105,
+        l: 101,
+        c: 104,
+      },
+      {
+        t: "2026-08-31T00:00:00.000Z",
+        o: 104,
+        h: 106,
+        l: 103,
+        c: 105,
+      },
+      { o: 90, h: 95, l: 89, c: 94 },
+      {
+        t: "2026-08-28T00:00:00.000Z",
+        o: 98,
+        h: 0,
+        l: 97,
+        c: 99,
+      },
+    ],
+    { now: new Date("2026-08-31T14:00:00.000Z") }
+  );
+
+  assert.equal(memory.available, true);
+  assert.equal(memory.observedSessions, 2);
+  assert.equal(memory.historicalDailyBarsHydrated, 2);
+  assert.deepEqual(memory.seenDays, ["2026-08-29", "2026-08-30"]);
+  assert.deepEqual(
+    memory.continuationSessions.map((session) => session.dayKey),
+    ["2026-08-29", "2026-08-30"]
+  );
+  assert.ok(memory.continuationSessions.every((session) => session.completed));
 });

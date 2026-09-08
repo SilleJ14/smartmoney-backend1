@@ -1,4 +1,5 @@
 import { assertOrderAllowed } from "./orderGate.js";
+import { readBoundedResponseText } from "../utils/boundedResponse.js";
 
 async function parseResponse(response) {
   const text = await response.text();
@@ -51,12 +52,14 @@ export function createAlpacaClient({
       const message = errorMessage(data, `HTTP ${response.status}`);
       onTradingFailure(message);
       onApiHealth("alpacaTrading", false, message);
-      throw new Error(
+      const error = new Error(
         errorMessage(
           data,
           `Alpaca trading error ${response.status}: ${JSON.stringify(data)}`
         )
       );
+      error.status = response.status;
+      throw error;
     }
 
     onApiHealth("alpacaTrading", true);
@@ -64,14 +67,16 @@ export function createAlpacaClient({
   }
 
   async function dataRequest(path, options = {}) {
+    const { maxResponseBytes = 4 * 1024 * 1024, timeoutMs = 12000, onBytesRead, ...requestOptions } = options;
     const response = await fetchWithTimeout(`${dataBaseUrl}${path}`, {
-      ...options,
+      ...requestOptions,
       headers: {
         ...headers(),
         ...(options.headers || {}),
       },
-    });
-    const data = await parseResponse(response);
+    }, timeoutMs);
+    const text = await readBoundedResponseText(response, { maxBytes: maxResponseBytes, timeoutMs, onBytesRead });
+    const data = text ? JSON.parse(text) : {};
 
     if (!response.ok) {
       throw new Error(

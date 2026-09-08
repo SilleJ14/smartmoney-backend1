@@ -89,7 +89,11 @@ export function evaluateInstitutionalApproval(input = {}) {
   const institutionalQualityPass =
     Number(input.institutionalScore || 0) >= Number(input.minScoreToBuy || 0) &&
     Number(input.institutionalEntryScore || 0) >= 55;
-  const researchDataUsed = input.tradingMode !== "live_crypto" && input.fundamentalDataValid === true;
+  const cryptoInput =
+    input.assetClass === "crypto" ||
+    input.asset_class === "crypto" ||
+    String(input.symbol || "").includes("/");
+  const researchDataUsed = !cryptoInput && input.fundamentalDataValid === true;
   const stockResearchPass = !researchDataUsed ||
     (Number(input.valuationRiskScore || 0) <= 90 &&
       input.earningsRiskMode !== "HIGH_EARNINGS_RISK" &&

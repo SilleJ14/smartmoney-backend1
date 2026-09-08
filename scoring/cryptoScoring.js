@@ -83,9 +83,101 @@ function sanitizeContinuationSessions(sessions = [], maxSessions = MAX_CRYPTO_CO
     .slice(-Math.max(2, Number(maxSessions) || MAX_CRYPTO_CONTINUATION_SESSIONS));
 }
 
+function historicalBarTimestamp(bar = {}) {
+  const raw =
+    bar.t ??
+    bar.timestamp ??
+    bar.time ??
+    bar.datetime ??
+    bar.date;
+  if (raw === null || raw === undefined || raw === "") return null;
+  const numeric = Number(raw);
+  const parsed = Number.isFinite(numeric)
+    ? numeric < 10_000_000_000
+      ? numeric * 1000
+      : numeric
+    : Date.parse(String(raw));
+  return Number.isFinite(parsed) ? parsed : null;
+}
+
+export function hydrateCryptoContinuationMemoryFromDailyBars(
+  previous = {},
+  dailyBars = [],
+  { now = new Date(), maxSessions = MAX_CRYPTO_CONTINUATION_SESSIONS } = {}
+) {
+  const timestamp = now instanceof Date ? now : new Date(now);
+  const nowMs = Number.isFinite(timestamp.getTime())
+    ? timestamp.getTime()
+    : Date.now();
+  const currentDayKey = new Date(nowMs).toISOString().slice(0, 10);
+  const completedHistoricalSessions = [];
+
+  for (const bar of Array.isArray(dailyBars) ? dailyBars : []) {
+    const barTimestamp = historicalBarTimestamp(bar);
+    if (barTimestamp === null) continue;
+    const dayKey = new Date(barTimestamp).toISOString().slice(0, 10);
+    if (!isValidUtcDayKey(dayKey) || dayKey >= currentDayKey) continue;
+    const open = positiveFiniteNumber(bar.o, bar.open);
+    const high = positiveFiniteNumber(bar.h, bar.high);
+    const low = positiveFiniteNumber(bar.l, bar.low);
+    const close = positiveFiniteNumber(bar.c, bar.close);
+    if (
+      open === undefined ||
+      high === undefined ||
+      low === undefined ||
+      close === undefined ||
+      high < Math.max(open, close) ||
+      low > Math.min(open, close) ||
+      low > high
+    ) {
+      continue;
+    }
+    completedHistoricalSessions.push({
+      dayKey,
+      open,
+      high,
+      low,
+      close,
+      completed: true,
+    });
+  }
+
+  const sessions = sanitizeContinuationSessions(
+    [
+      ...(Array.isArray(previous.continuationSessions)
+        ? previous.continuationSessions
+        : []),
+      ...completedHistoricalSessions,
+    ],
+    maxSessions
+  );
+  const continuation = calculateCryptoMultiSessionContinuation({
+    continuationSessions: sessions,
+    evidenceNow: nowMs,
+  });
+  return {
+    ...previous,
+    continuationSessions: sessions,
+    ...continuation,
+    historicalDailyBarsHydrated: completedHistoricalSessions.length,
+    historicalDailyBarsHydratedAt: new Date(nowMs).toISOString(),
+  };
+}
+
 export function calculateCryptoMultiSessionContinuation(entry = {}) {
   const sessions = sanitizeContinuationSessions(entry.continuationSessions);
-  const completedSessions = sessions.filter((session) => session.completed === true);
+  const nowMs = Number(entry.evidenceNow ?? Date.now());
+  const completedSessions = sessions.filter((session) => session.completed === true &&
+    Date.parse(session.dayKey) + 86400000 <= nowMs && nowMs - Date.parse(session.dayKey) <= 32 * 86400000);
+  if (completedSessions.length && nowMs - Date.parse(completedSessions.at(-1).dayKey) > 2 * 86400000) {
+    completedSessions.length = 0;
+  }
+  for (let i = completedSessions.length - 1; i > 0; i--) {
+    if (Date.parse(completedSessions[i].dayKey) - Date.parse(completedSessions[i - 1].dayKey) > 1.5 * 86400000) {
+      completedSessions.splice(0, i);
+      break;
+    }
+  }
   const seenDays = getUniqueCryptoSessionDays(
     completedSessions.map((session) => session.dayKey)
   );
@@ -182,6 +274,7 @@ export function updateCryptoContinuationMemoryEntry(
   if (!isValidUtcDayKey(dayKey) || price === undefined) {
     const continuation = calculateCryptoMultiSessionContinuation({
       continuationSessions: sessions,
+      evidenceNow: timestamp.getTime(),
     });
     return { ...previous, continuationSessions: sessions, ...continuation };
   }
@@ -214,6 +307,7 @@ export function updateCryptoContinuationMemoryEntry(
   sessions = sanitizeContinuationSessions(sessions, maxSessions);
   const continuation = calculateCryptoMultiSessionContinuation({
     continuationSessions: sessions,
+    evidenceNow: timestamp.getTime(),
   });
   return {
     continuationSessions: sessions,
@@ -395,7 +489,11 @@ export function calculateCryptoLiquidityFromBars(
           bar.quoteVolume,
           bar.dollarVolume
         );
-        const timestamp = finiteNumber(bar.t, bar.timestamp, bar.time);
+        const rawTime = bar.t ?? bar.timestamp ?? bar.time;
+        const numericTime = rawTime == null || rawTime === "" ? NaN : Number(rawTime);
+        const timestamp = Number.isFinite(numericTime)
+          ? numericTime < 100_000_000_000 ? numericTime * 1000 : numericTime
+          : Date.parse(String(rawTime));
         return { close, volume, quoteVolume, timestamp };
       })
       .filter((bar) => bar.close > 0)
@@ -438,11 +536,11 @@ export function calculateCryptoLiquidityFromBars(
     .sort((a, b) => a - b);
   const medianBarMinutes = timestampDeltasMinutes.length
     ? timestampDeltasMinutes[Math.floor(timestampDeltasMinutes.length / 2)]
-    : 5;
-  const windowMinutes = Math.max(1, cleanBars.length * medianBarMinutes);
+    : null;
+  const windowMinutes = medianBarMinutes === null ? null : Math.max(1, cleanBars.length * medianBarMinutes);
   // Normalize every aggregated window to a 30x5-minute equivalent so a
   // 30-minute 1m fallback is not treated like a 450-minute 15m window.
-  const normalizedWindowDollarVolume = windowDollarVolume * (150 / windowMinutes);
+  const normalizedWindowDollarVolume = medianBarMinutes === null ? 0 : windowDollarVolume * (150 / windowMinutes);
   const latestBarDollarVolume = Number.isFinite(latestBar.quoteVolume)
     ? Number(latestBar.quoteVolume)
     : latestVolume * Number(latestBar.close || effectivePrice || 0);
@@ -471,7 +569,7 @@ export function calculateCryptoLiquidityFromBars(
     : normalizedWindowDollarVolume;
   const liquiditySource = dollarVolume24h !== undefined
     ? "reported_24h"
-    : windowDollarVolume > 0
+    : normalizedWindowDollarVolume > 0
       ? "aggregated_bar_window"
       : "missing";
   const liquidityThresholds = getCryptoLiquidityThresholds(liquiditySource);
@@ -498,8 +596,8 @@ export function calculateCryptoLiquidityFromBars(
     averageBarDollarVolume: Number(averageBarDollarVolume.toFixed(2)),
     windowDollarVolume: Number(windowDollarVolume.toFixed(2)),
     normalizedWindowDollarVolume: Number(normalizedWindowDollarVolume.toFixed(2)),
-    liquidityWindowMinutes: Number(windowMinutes.toFixed(2)),
-    medianBarMinutes: Number(medianBarMinutes.toFixed(2)),
+    liquidityWindowMinutes: windowMinutes === null ? null : Number(windowMinutes.toFixed(2)),
+    medianBarMinutes: medianBarMinutes === null ? null : Number(medianBarMinutes.toFixed(2)),
     dollarVolume24h: dollarVolume24h === undefined
       ? null
       : Number(Math.max(0, dollarVolume24h).toFixed(2)),

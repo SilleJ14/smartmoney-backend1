@@ -1,3 +1,5 @@
+import { parseProviderTimestamp } from '../market-data/providerTimestamp.js';
+
 function fallbackIsNormalStockSymbol(symbol = "") {
   const clean = String(symbol || "").trim().toUpperCase();
 
@@ -88,6 +90,9 @@ export function parsePolygonSnapshotTickers({
             : 0;
 
       const volume = Number(ticker?.day?.v || 0);
+      // A last trade owns its own clock; snapshot update time cannot freshen it.
+      const providerTime = parseProviderTimestamp(ticker?.lastTrade?.p > 0
+        ? ticker.lastTrade.t : ticker?.updated);
 
       return {
         symbol,
@@ -99,6 +104,10 @@ export function parsePolygonSnapshotTickers({
         ),
         percentChange,
         volume,
+        liveQuoteUpdatedAt: providerTime,
+        updatedAt: providerTime,
+        priceIsLive: false,
+        liveQuoteSource: 'polygon_snapshot',
         direction:
           percentChange > 0
             ? "GAINER"

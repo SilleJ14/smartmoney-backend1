@@ -4,9 +4,10 @@ const round = (value, digits = 3) => Number(Number(value || 0).toFixed(digits));
 
 function measuredRows(observations, assetClass, days) {
   return observations
-    .filter((item) => item?.assetClass === assetClass)
+    .filter((item) => item?.assetClass === assetClass && item.evidenceVersion === 2)
     .map((item) => ({ item, measurement: item?.measurements?.[days], days }))
     .filter(({ measurement }) =>
+      measurement?.evidenceVerified === true && measurement.measurementPolicyVersion === 3 &&
       measurement?.closeReturnPercent !== null &&
       measurement?.closeReturnPercent !== undefined &&
       measurement?.closeReturnPercent !== "" &&
@@ -25,7 +26,7 @@ function meanConfidence95(values) {
   if (!values.length) return { low: null, high: null, standardError: null };
   const mean = average(values);
   if (values.length < 2) {
-    return { low: round(mean), high: round(mean), standardError: null };
+    return { low: null, high: null, standardError: null };
   }
   const variance = values.reduce(
     (sum, value) => sum + (Number(value) - mean) ** 2,
@@ -106,7 +107,8 @@ function summarize(rows, { feePercent, slippagePercent, breakoutPercent }) {
       : null,
     averageGrossReturnPercent: average(gross) === null ? null : round(average(gross)),
     averageNetReturnPercent: average(net) === null ? null : round(average(net)),
-    averageNetReturnConfidence95Percent: meanConfidence95(net),
+    averageNetReturnConfidence95Percent: meanConfidence95(cohortNet),
+    confidenceUnit: 'INDEPENDENT_DATE_COHORT',
     averageProfitPercent: average(wins) === null ? null : round(average(wins)),
     averageLossPercent: average(losses) === null ? null : round(average(losses)),
     maximumCandidateCohortDrawdownPercent: rows.length
@@ -155,17 +157,39 @@ function scoreReliabilityBands(rows, options) {
   );
 }
 
+export function labelAvailableAt(row, days) {
+  const { item = {}, measurement = {} } = row;
+  const observed = Number(item.observedAt || 0);
+  if (!Number.isFinite(observed) || observed <= 0) return Infinity;
+  let target = item.targets?.[days] || measurement.targetDay;
+  if (!target && item.assetClass === 'stock') {
+    const start = parseMarketDayKey(new Date(observed).toISOString().slice(0, 10));
+    const end = addUsStockMarketSessionDays(start, days);
+    target = `${end.year}-${String(end.month).padStart(2, '0')}-${String(end.day).padStart(2, '0')}`;
+  }
+  const timestamps = [observed + days * DAY_MS];
+  for (const value of [target, measurement.measuredDay, measurement.evidenceDay]) {
+    if (value && Number.isFinite(Date.parse(value))) timestamps.push(Date.parse(value) + DAY_MS);
+  }
+  for (const value of [measurement.measuredAt, measurement.evidenceTimestamp]) {
+    const time = typeof value === 'number' ? value : Date.parse(value || '');
+    if (Number.isFinite(time)) timestamps.push(time);
+  }
+  return Math.max(...timestamps);
+}
+
 function selectNonOverlappingPerSymbol(rows, horizonDays) {
   const lastBySymbol = new Map();
-  return rows.filter(({ item }) => {
+  return rows.filter((row) => {
+    const { item } = row;
     const symbol = String(item?.symbol || "").toUpperCase();
     if (!symbol) return true;
     const observedAt = Number(item?.observedAt || 0);
     const previous = lastBySymbol.get(symbol);
-    if (previous !== undefined && observedAt - previous < horizonDays * DAY_MS) {
+    if (previous !== undefined && observedAt <= previous) {
       return false;
     }
-    lastBySymbol.set(symbol, observedAt);
+    lastBySymbol.set(symbol, labelAvailableAt(row, horizonDays));
     return true;
   });
 }
@@ -176,10 +200,11 @@ function walkForwardSplit(rows, { days, minimumTrainingSamples, purgeDays }) {
     return { training, outOfSample: [], purgedCount: 0, cutoffAt: null };
   }
   const cutoffAt = Number(training.at(-1)?.item?.observedAt || 0);
-  const purgeMs = Math.max(days, purgeDays) * DAY_MS;
+  const availableAt = Math.max(...training.map(row => labelAvailableAt(row, days)));
+  const purgeMs = Math.max(0, purgeDays) * DAY_MS;
   const candidates = rows.slice(minimumTrainingSamples);
   const purged = candidates.filter(
-    ({ item }) => Number(item?.observedAt || 0) > cutoffAt + purgeMs
+    ({ item }) => Number(item?.observedAt || 0) > availableAt + purgeMs
   );
   return {
     training,
@@ -194,6 +219,7 @@ function matchedBenchmarkSummary(rows, name, cost) {
     .map((row) => {
       const rawBenchmark = row.item?.benchmarkMeasurements?.[row.days]?.[name];
       return {
+        item: row.item,
         candidate: Number(row.measurement.closeReturnPercent) - cost,
         benchmark:
           rawBenchmark === null || rawBenchmark === undefined || rawBenchmark === ""
@@ -212,7 +238,7 @@ function matchedBenchmarkSummary(rows, name, cost) {
     averageExcessReturnPercent: average(excess) === null
       ? null
       : round(average(excess)),
-    excessReturnConfidence95Percent: meanConfidence95(excess),
+    excessReturnConfidence95Percent: meanConfidence95(cohortReturns(matched, excess)),
   };
 }
 
@@ -232,6 +258,7 @@ function assessProductionReadiness({
   ))].sort();
   const checks = {
     minimumSampleCount: outOfSample.sampleCount >= minimumOutOfSample,
+    minimumIndependentCohorts: outOfSample.independentCohortCount >= 20,
     positiveNetReturn: Number(outOfSample.averageNetReturnPercent) > 0,
     netReturnConfidenceAboveZero:
       Number(outOfSample.averageNetReturnConfidence95Percent?.low) > 0,
@@ -312,7 +339,7 @@ export function buildProofReport(outcomeState = {}, {
           marketCap: summarizeSegments(split.outOfSample, "marketCapBucket", summaryOptions),
         },
         scoreReliabilityBands: scoreReliabilityBands(split.outOfSample, summaryOptions),
-        outOfSampleReady: split.outOfSample.length >= minimumOutOfSample,
+        outOfSampleReady: split.outOfSample.length >= minimumOutOfSample && outOfSample.independentCohortCount >= 20,
         productionReadiness,
         trainingCutoffAt: split.cutoffAt,
         purgedBoundarySamples: split.purgedCount,
@@ -351,3 +378,4 @@ export function buildProofReport(outcomeState = {}, {
     ),
   };
 }
+import { addUsStockMarketSessionDays, parseMarketDayKey } from '../utils/usMarketCalendar.js';

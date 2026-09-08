@@ -11,7 +11,6 @@ export function registerSignalRoutes(app, dependencies) {
   app.get("/crypto-signals", requireAdmin, async (_req, res) => {
     try {
       const mode = getMode();
-      if (!["live_crypto", "smart"].includes(mode)) return res.status(403).json({ error: "Crypto signals are available in live_crypto or smart mode.", mode });
       res.json({ mode, liveOnly: true, signals: (await scanCrypto() || []).map(mergeLiveQuote) });
     } catch (error) { res.status(500).json({ error: error.message }); }
   });

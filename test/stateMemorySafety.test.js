@@ -241,7 +241,7 @@ test("loader backs up migratable state and archives state above the hard budget"
 
     const oversized = path.join(directory, "oversized.json");
     fs.writeFileSync(oversized, JSON.stringify({ payload: "x".repeat(500) }));
-    assert.deepEqual(loadPersistedEngineState(oversized, { maxLoadBytes: 100 }), {});
+    assert.deepEqual(loadPersistedEngineState(oversized, { maxLoadBytes: 100 }), { safetyReconciliationRequired: true, safetyStateLoadFailed: true });
     assert.equal(fs.existsSync(oversized), false);
     assert.equal(
       fs.readdirSync(directory).some((name) => name.startsWith("oversized.json.oversized-")),

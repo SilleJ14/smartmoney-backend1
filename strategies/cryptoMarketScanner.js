@@ -1,10 +1,148 @@
 import {
   CRYPTO_MAX_ENTRY_SPREAD_PERCENT,
   calculateCryptoEntryQualityFromEvidence,
+  hydrateCryptoContinuationMemoryFromDailyBars,
   resolveCryptoLiquidityEvidence,
   scoreSparseCryptoMarket,
 } from "../scoring/cryptoScoring.js";
 import { calculateCryptoEarlyDiscoveryScore } from "../scoring/earlyDiscovery.js";
+
+export async function mapWithConcurrency(items = [], concurrency = 4, worker) {
+  const values = Array.isArray(items) ? items : [];
+  const limit = Math.max(1, Math.min(values.length || 1, Number(concurrency) || 1));
+  let cursor = 0;
+  const workers = Array.from({ length: limit }, async () => {
+    while (cursor < values.length) {
+      const index = cursor;
+      cursor += 1;
+      await worker(values[index], index);
+    }
+  });
+  await Promise.all(workers);
+}
+
+function cryptoBarTimestamp(bar = {}) {
+  const raw = bar.t ?? bar.timestamp ?? bar.time ?? bar.datetime ?? bar.date;
+  if (raw === null || raw === undefined || raw === "") return null;
+  const numeric = Number(raw);
+  const parsed = Number.isFinite(numeric)
+    ? numeric < 10_000_000_000
+      ? numeric * 1000
+      : numeric
+    : Date.parse(String(raw));
+  return Number.isFinite(parsed) ? parsed : null;
+}
+
+export function resolveCryptoDailyChangeReference(
+  dailyBars = [],
+  { now = new Date() } = {}
+) {
+  const timestamp = now instanceof Date ? now : new Date(now);
+  const nowMs = Number.isFinite(timestamp.getTime())
+    ? timestamp.getTime()
+    : Date.now();
+  const currentDayKey = new Date(nowMs).toISOString().slice(0, 10);
+  const timestampedBars = (Array.isArray(dailyBars) ? dailyBars : [])
+    .map((bar) => ({ bar, timestamp: cryptoBarTimestamp(bar) }))
+    .filter(({ timestamp: barTimestamp }) => barTimestamp !== null)
+    .sort((left, right) => left.timestamp - right.timestamp);
+  const completedBars = timestampedBars.filter(({ timestamp: barTimestamp }) =>
+    new Date(barTimestamp).toISOString().slice(0, 10) < currentDayKey
+  );
+  for (let index = completedBars.length - 1; index >= 0; index -= 1) {
+    const close = Number(
+      completedBars[index].bar.c ?? completedBars[index].bar.close
+    );
+    if (Number.isFinite(close) && close > 0) {
+      return {
+        price: close,
+        type: "previous_completed_utc_daily_close",
+        source: completedBars[index].bar.source || "crypto_daily_bars",
+        dayKey: new Date(completedBars[index].timestamp).toISOString().slice(0, 10),
+      };
+    }
+  }
+  const currentDayBars = timestampedBars.filter(({ timestamp: barTimestamp }) =>
+    new Date(barTimestamp).toISOString().slice(0, 10) === currentDayKey
+  );
+  for (const { bar } of currentDayBars) {
+    const open = Number(bar.o ?? bar.open);
+    if (Number.isFinite(open) && open > 0) {
+      return {
+        price: open,
+        type: "current_utc_day_open",
+        source: bar.source || "crypto_daily_bars",
+        dayKey: currentDayKey,
+      };
+    }
+  }
+  return null;
+}
+
+function cryptoQuoteTimestampMs(quote = {}) {
+  const raw =
+    quote.liveQuoteUpdatedAt ??
+    quote.quoteFetchedAt ??
+    quote.updatedAt;
+  if (raw === null || raw === undefined || raw === "") return null;
+  const parsed = Number.isFinite(Number(raw))
+    ? Number(raw)
+    : Date.parse(String(raw));
+  return Number.isFinite(parsed) ? parsed : null;
+}
+
+export function mergeLatestCryptoPriceWithAlpacaSpread(
+  priceQuote = null,
+  alpacaQuote = null,
+  { now = Date.now(), maxSpreadAgeSeconds = 5 } = {}
+) {
+  const priceTimestamp = cryptoQuoteTimestampMs(priceQuote || {});
+  const alpacaTimestamp = cryptoQuoteTimestampMs(alpacaQuote || {});
+  const latestPriceQuote = !priceQuote
+    ? alpacaQuote
+    : !alpacaQuote
+      ? priceQuote
+      : alpacaTimestamp !== null &&
+        (priceTimestamp === null || alpacaTimestamp > priceTimestamp)
+        ? alpacaQuote
+        : priceQuote;
+  if (!latestPriceQuote) return null;
+
+  const bid = Number(alpacaQuote?.bid || 0);
+  const ask = Number(alpacaQuote?.ask || 0);
+  const spreadTimestamp = Date.parse(String(
+    alpacaQuote?.spreadUpdatedAt || alpacaQuote?.bidAskUpdatedAt || ""
+  ));
+  const spreadAgeSeconds = Number.isFinite(spreadTimestamp)
+    ? (Number(now) - spreadTimestamp) / 1000
+    : null;
+  const spreadAvailable =
+    bid > 0 &&
+    ask >= bid &&
+    spreadAgeSeconds !== null &&
+    spreadAgeSeconds >= -5 &&
+    spreadAgeSeconds <= Math.max(1, Number(maxSpreadAgeSeconds) || 5);
+
+  return {
+    ...alpacaQuote,
+    ...latestPriceQuote,
+    bid: spreadAvailable ? bid : null,
+    ask: spreadAvailable ? ask : null,
+    spreadAvailable,
+    spreadUpdatedAt: spreadAvailable
+      ? alpacaQuote.spreadUpdatedAt || alpacaQuote.bidAskUpdatedAt
+      : null,
+    bidAskUpdatedAt: spreadAvailable
+      ? alpacaQuote.bidAskUpdatedAt || alpacaQuote.spreadUpdatedAt
+      : null,
+    spreadSource: spreadAvailable
+      ? alpacaQuote.spreadSource ||
+        alpacaQuote.liveQuoteSource ||
+        alpacaQuote.source ||
+        "alpaca_crypto_latest"
+      : null,
+  };
+}
 
 export function createCryptoMarketScanner(dependencies) {
   const {
@@ -19,6 +157,7 @@ export function createCryptoMarketScanner(dependencies) {
     getCryptoAssets,
     getCryptoNewsIntelligence,
     getCryptoLatestQuote,
+    getCryptoLatestQuotes,
     getFreshLiveCryptoQuote,
     isCrypto,
     recordSkippedSymbol,
@@ -383,11 +522,16 @@ export function createCryptoMarketScanner(dependencies) {
     };
   }
   
-  async function scanCryptoMarket() {
-    const { TRADING_MODE, LIVE_ORDER_MAX_QUOTE_AGE_SECONDS } = getRuntime();
-    if (!["live_crypto", "smart"].includes(TRADING_MODE)) {
-      throw new Error("Crypto scanner is only available in live modes");
-    }
+  let cryptoScanInFlight = null;
+  function scanCryptoMarket() {
+    if (!cryptoScanInFlight) cryptoScanInFlight = Promise.resolve().then(runCryptoMarketScan).finally(() => { cryptoScanInFlight = null; });
+    return cryptoScanInFlight;
+  }
+  async function runCryptoMarketScan() {
+    const {
+      LIVE_ORDER_MAX_QUOTE_AGE_SECONDS,
+      CRYPTO_SCAN_CONCURRENCY = 4,
+    } = getRuntime();
     const symbols = await getCryptoAssets();
     const cryptoSkipped = [];
     const results = [];
@@ -398,13 +542,28 @@ export function createCryptoMarketScanner(dependencies) {
     });
     engineState.skippedSymbols = [];
     engineState.lastCryptoScanStartedAt = new Date().toISOString();
-    engineState.topCryptoSignals = [];
-    let processedSymbols = 0;
-    for (const symbol of symbols) {
-      const institutionalUsdPair = String(symbol || "").endsWith("/USD");
-      if (!institutionalUsdPair) {
-        continue;
+    // Preserve the last published snapshot until this generation completes.
+    const scanSymbols = symbols.filter((symbol) =>
+      String(symbol || "").endsWith("/USD")
+    );
+    let initialAlpacaQuotesBySymbol = new Map();
+    if (typeof getCryptoLatestQuotes === "function" && scanSymbols.length > 0) {
+      try {
+        const initialQuotes = await getCryptoLatestQuotes(scanSymbols);
+        initialAlpacaQuotesBySymbol = new Map(
+          (Array.isArray(initialQuotes) ? initialQuotes : [])
+            .filter((quote) => quote?.symbol)
+            .map((quote) => [String(quote.symbol).toUpperCase(), quote])
+        );
+      } catch (error) {
+        console.warn("Initial Alpaca crypto quote batch failed:", error.message);
       }
+    }
+    let processedSymbols = 0;
+    await mapWithConcurrency(
+      scanSymbols,
+      Math.max(1, Math.min(8, Number(CRYPTO_SCAN_CONCURRENCY) || 4)),
+      async (symbol) => {
       processedSymbols += 1;
       engineState.lastHeartbeatAt = new Date().toISOString();
       engineState.engineCycleStage = {
@@ -419,12 +578,34 @@ export function createCryptoMarketScanner(dependencies) {
           symbol,
           LIVE_ORDER_MAX_QUOTE_AGE_SECONDS
         );
-        const quote = liveCryptoQuote || await getCryptoLatestQuote(symbol);
+        const initialAlpacaQuote = initialAlpacaQuotesBySymbol.get(
+          String(symbol).toUpperCase()
+        );
+        const quote = mergeLatestCryptoPriceWithAlpacaSpread(
+          liveCryptoQuote,
+          initialAlpacaQuote,
+          { maxSpreadAgeSeconds: 5 }
+        ) || (
+          typeof getCryptoLatestQuotes === "function"
+            ? null
+            : await getCryptoLatestQuote(symbol)
+        );
+        if (!quote) {
+          throw new Error("No live crypto quote available from the batch providers");
+        }
         const [bars, dailyBars, newsCatalyst] = await Promise.all([
           getBestCryptoBars(symbol),
           getCryptoDailyBarsForDiscovery(symbol),
           getCryptoNewsIntelligence(symbol),
         ]);
+        engineState.multiTimeframeCryptoMemory ||= {};
+        const cryptoContinuationMemory =
+          hydrateCryptoContinuationMemoryFromDailyBars(
+            engineState.multiTimeframeCryptoMemory[symbol] || {},
+            dailyBars,
+            { now: new Date() }
+          );
+        engineState.multiTimeframeCryptoMemory[symbol] = cryptoContinuationMemory;
         const legacyMomentumScore = scoreCrypto(quote, bars);
         const validBars = Array.isArray(bars)
           ? bars.filter((bar) => Number(bar.c || bar.close || 0) > 0)
@@ -446,39 +627,73 @@ export function createCryptoMarketScanner(dependencies) {
           quote.close ||
           0
         );
-        const changeBasePrice =
-          firstBarClose > 0 && firstBarClose !== latestPrice
+        const providerReferencePrice = firstPositiveNumber(
+          quote.previousClose,
+          quote.prevClose,
+          quote.percentChangeReferencePrice,
+          quote.changeReferencePrice
+        );
+        const quoteReferenceTime =
+          quote.liveQuoteUpdatedAt || quote.quoteFetchedAt || new Date();
+        const dailyChangeReference = resolveCryptoDailyChangeReference(
+          dailyBars,
+          { now: quoteReferenceTime }
+        );
+        const changeBasePrice = dailyChangeReference?.price > 0
+          ? dailyChangeReference.price
+          : firstBarClose > 0
             ? firstBarClose
-            : lastBarClose > 0 && lastBarClose !== latestPrice
-              ? lastBarClose
-              : Number(
-                quote.previousClose ||
-                quote.prevClose ||
-                quote.open ||
-                quote.o ||
-                0
-              );
-        const cryptoPercentChange =
-          changeBasePrice > 0 && latestPrice > 0
-            ? ((latestPrice - changeBasePrice) / changeBasePrice) * 100
-            : Number(
-              quote.changePercent ||
-              quote.percentChange ||
-              quote.change_percent ||
-              quote.dp ||
-              0
-            );
+            : providerReferencePrice;
+        const explicitProviderPercent = [
+          quote.changePercent,
+          quote.percentChange,
+          quote.change_percent,
+          quote.dp,
+        ].find((value) =>
+          value !== null &&
+          value !== undefined &&
+          value !== "" &&
+          Number.isFinite(Number(value))
+        );
+        const explicitProviderPercentAvailable =
+          quote.changePercentAvailable === true ||
+          quote.percentChangeAvailable === true;
+        const percentChangeAvailable =
+          (changeBasePrice > 0 && latestPrice > 0) ||
+          (
+            explicitProviderPercentAvailable &&
+            explicitProviderPercent !== undefined
+          );
+        const cryptoPercentChange = changeBasePrice > 0 && latestPrice > 0
+          ? ((latestPrice - changeBasePrice) / changeBasePrice) * 100
+          : percentChangeAvailable
+            ? Number(explicitProviderPercent)
+            : null;
+        const changeReferenceType = dailyChangeReference?.type ||
+          (firstBarClose > 0
+            ? "intraday_window_open"
+            : providerReferencePrice > 0
+              ? quote.percentChangeReferenceType ||
+                quote.changeReferenceType ||
+                "provider_reference"
+            : explicitProviderPercentAvailable
+              ? "provider_measured_percent"
+              : null);
+        const percentChangeSource = dailyChangeReference?.source ||
+          (firstBarClose > 0
+            ? "crypto_scanner_intraday_bars"
+            : quote.liveQuoteSource || quote.source || null);
+        const dayChangeAvailable = percentChangeAvailable && [
+          "previous_completed_utc_daily_close",
+          "current_utc_day_open",
+          "previous_close",
+        ].includes(changeReferenceType);
         const cryptoDollarChange =
           changeBasePrice > 0 && latestPrice > 0
             ? latestPrice - changeBasePrice
-            : cryptoPercentChange !== 0 && latestPrice > 0
+            : percentChangeAvailable && latestPrice > 0
               ? latestPrice * (cryptoPercentChange / 100)
-              : Number(
-                quote.change ||
-                quote.changeDollars ||
-                quote.dollarChange ||
-                0
-              );
+              : null;
         const cachedCryptoQuote = updateQuoteCache(symbol, {
           price: latestPrice,
           current: latestPrice,
@@ -496,6 +711,21 @@ export function createCryptoMarketScanner(dependencies) {
           spreadSource:
             quote.spreadSource || quote.liveQuoteSource || null,
           priceIsLive: quote.priceIsLive === true,
+          percentChange: cryptoPercentChange,
+          changePercent: cryptoPercentChange,
+          dayChangePercent: dayChangeAvailable ? cryptoPercentChange : null,
+          percentChangeAvailable,
+          changePercentAvailable: percentChangeAvailable,
+          dayChangePercentAvailable: dayChangeAvailable,
+          percentChangeReferencePrice:
+            changeBasePrice > 0 ? changeBasePrice : null,
+          changeReferencePrice:
+            changeBasePrice > 0 ? changeBasePrice : null,
+          percentChangeReferenceType: changeReferenceType,
+          changeReferenceType,
+          percentChangeSource,
+          dayChangePercentSource:
+            dayChangeAvailable ? percentChangeSource : null,
           raw: quote,
         });
         const liquidityMetrics =
@@ -593,23 +823,82 @@ export function createCryptoMarketScanner(dependencies) {
             cachedCryptoQuote?.priceIsLive === true,
           priceStale:
             cachedCryptoQuote?.priceIsLive !== true,
-          dayChangePercent: Number(cryptoPercentChange.toFixed(2)),
-          dayChangeDollars: Number(cryptoDollarChange.toFixed(2)),
-          percentChange: Number(cryptoPercentChange.toFixed(2)),
-          changePercent: Number(cryptoPercentChange.toFixed(2)),
+          dayChangePercent: dayChangeAvailable
+            ? Number(cryptoPercentChange.toFixed(2))
+            : null,
+          dayChangeDollars: dayChangeAvailable
+            ? Number(cryptoDollarChange.toFixed(2))
+            : null,
+          percentChange: percentChangeAvailable
+            ? Number(cryptoPercentChange.toFixed(2))
+            : null,
+          changePercent: percentChangeAvailable
+            ? Number(cryptoPercentChange.toFixed(2))
+            : null,
+          percentChangeAvailable,
+          changePercentAvailable: percentChangeAvailable,
+          dayChangePercentAvailable: dayChangeAvailable,
+          percentChangeReferencePrice:
+            changeBasePrice > 0 ? changeBasePrice : null,
+          changeReferencePrice:
+            changeBasePrice > 0 ? changeBasePrice : null,
+          percentChangeReferenceType: changeReferenceType,
+          changeReferenceType,
+          percentChangeSource,
+          dayChangePercentSource:
+            dayChangeAvailable ? percentChangeSource : null,
           rawCryptoScore: score,
           scannerScore: score,
           score,
           legacyMomentumScore,
-          cryptoEntryScore: canonicalCryptoEntryQuality.score,
+          cryptoEntryScore: canonicalCryptoEntryQuality.available
+            ? canonicalCryptoEntryQuality.score
+            : null,
+          cryptoEntryScoreAvailable: canonicalCryptoEntryQuality.available === true,
           cryptoEntryScorecard: canonicalCryptoEntryQuality,
           cryptoDiscoveryScore: score,
+          cryptoDiscoveryScoreAvailable:
+            Number(cryptoDiscoveryScorecard.coverage || 0) >= 0.5,
           cryptoDiscoveryTier: cryptoDiscoveryScorecard.tier,
           cryptoDiscoveryScorecard,
           discoveryScorecard: cryptoDiscoveryScorecard,
           discoveryScore: score,
           discoveryTier: cryptoDiscoveryScorecard.tier,
           multiHorizonExtension: cryptoDiscoveryScorecard.extension,
+          continuationScorecard: {
+            score: cryptoContinuationMemory.available === true
+              ? cryptoContinuationMemory.score
+              : null,
+            available: cryptoContinuationMemory.available === true,
+            coverage: Number(cryptoContinuationMemory.coverage || 0),
+            tier: cryptoContinuationMemory.tier,
+            source:
+              cryptoContinuationMemory.source ||
+              "persisted_crypto_daily_sessions",
+            observedSessions: Number(
+              cryptoContinuationMemory.observedSessions || 0
+            ),
+          },
+          multiDayContinuationScore:
+            cryptoContinuationMemory.available === true
+              ? cryptoContinuationMemory.score
+              : null,
+          multiDayScore:
+            cryptoContinuationMemory.available === true
+              ? cryptoContinuationMemory.score
+              : null,
+          multiDayScoreAvailable: cryptoContinuationMemory.available === true,
+          cryptoDecisionScore: null,
+          cryptoDecisionScoreAvailable: false,
+          missingEvidenceReasons: [
+            ...(canonicalCryptoEntryQuality.available
+              ? []
+              : ["CRYPTO_ENTRY_SCORE_UNAVAILABLE"]),
+            ...(cryptoContinuationMemory.available === true
+              ? []
+              : ["CRYPTO_MULTI_DAY_EVIDENCE_UNAVAILABLE"]),
+            "CANONICAL_CRYPTO_FINAL_DECISION_PENDING_CENTRAL_CORE",
+          ],
           newsCatalyst,
           newsRisk: newsCatalyst?.riskDetected === true,
           dailyBarsFound: Array.isArray(dailyBars) ? dailyBars.length : 0,
@@ -658,6 +947,181 @@ export function createCryptoMarketScanner(dependencies) {
           reason: err.message,
         });
         recordSkippedSymbol(symbol, err.message);
+      }
+    });
+    if (typeof getCryptoLatestQuotes === "function" && results.length > 0) {
+      try {
+        const refreshedAt = Date.now();
+        const finalAlpacaQuotes = await getCryptoLatestQuotes(
+          results.map((signal) => signal.symbol)
+        );
+        const finalAlpacaQuotesBySymbol = new Map(
+          (Array.isArray(finalAlpacaQuotes) ? finalAlpacaQuotes : [])
+            .filter((quote) => quote?.symbol)
+            .map((quote) => [String(quote.symbol).toUpperCase(), quote])
+        );
+        for (const signal of results) {
+          const alpacaQuote = finalAlpacaQuotesBySymbol.get(
+            String(signal.symbol).toUpperCase()
+          );
+          const executionQuote = mergeLatestCryptoPriceWithAlpacaSpread(
+            signal,
+            alpacaQuote,
+            { now: refreshedAt, maxSpreadAgeSeconds: 5 }
+          );
+          if (!executionQuote) continue;
+          const refreshedPrice = firstPositiveNumber(
+            executionQuote.current,
+            executionQuote.price,
+            signal.current
+          );
+          const referencePrice = firstPositiveNumber(
+            signal.percentChangeReferencePrice,
+            signal.changeReferencePrice
+          );
+          const refreshedPercentAvailable =
+            refreshedPrice > 0 && referencePrice > 0
+              ? true
+              : signal.percentChangeAvailable === true;
+          const refreshedPercentChange =
+            refreshedPrice > 0 && referencePrice > 0
+              ? ((refreshedPrice - referencePrice) / referencePrice) * 100
+              : refreshedPercentAvailable
+                ? Number(signal.percentChange)
+                : null;
+          const refreshedDayChangeAvailable =
+            refreshedPercentAvailable && signal.dayChangePercentAvailable === true;
+          const refreshedCache = updateQuoteCache(signal.symbol, {
+            ...executionQuote,
+            price: refreshedPrice,
+            current: refreshedPrice,
+            percentChange: refreshedPercentChange,
+            changePercent: refreshedPercentChange,
+            dayChangePercent: refreshedDayChangeAvailable
+              ? refreshedPercentChange
+              : null,
+            percentChangeAvailable: refreshedPercentAvailable,
+            changePercentAvailable: refreshedPercentAvailable,
+            dayChangePercentAvailable: refreshedDayChangeAvailable,
+            percentChangeReferencePrice: referencePrice || null,
+            changeReferencePrice: referencePrice || null,
+            percentChangeReferenceType: signal.percentChangeReferenceType,
+            changeReferenceType: signal.changeReferenceType,
+            percentChangeSource: signal.percentChangeSource,
+          });
+          const finalPrice = firstPositiveNumber(
+            refreshedCache?.price,
+            refreshedPrice
+          );
+          const spreadAvailable =
+            executionQuote.spreadAvailable === true &&
+            Number(executionQuote.bid || 0) > 0 &&
+            Number(executionQuote.ask || 0) >= Number(executionQuote.bid || 0);
+          const spreadPercent = spreadAvailable
+            ? ((Number(executionQuote.ask) - Number(executionQuote.bid)) /
+              ((Number(executionQuote.ask) + Number(executionQuote.bid)) / 2)) * 100
+            : null;
+          const liquidityMetrics = calculateCryptoLiquidityFromBars(
+            signal.chartBars,
+            finalPrice,
+            { ...signal, ...executionQuote, current: finalPrice }
+          );
+          const entryQuality = calculateCryptoEntryQualityFromEvidence({
+            spreadAvailable,
+            spreadPercent,
+            liquidityEvidence: resolveCryptoLiquidityEvidence(liquidityMetrics),
+          });
+          const qualification = calculateCryptoInstitutionalQualification({
+            quote: {
+              ...signal,
+              ...executionQuote,
+              current: finalPrice,
+              price: finalPrice,
+            },
+            score: signal.cryptoDiscoveryScore,
+            entryQualityScore: entryQuality.score,
+            bars: signal.chartBars,
+            discoveryScorecard: signal.cryptoDiscoveryScorecard,
+            liquidityMetrics,
+            spreadPercent,
+            spreadAvailable,
+          });
+          const finalPercentChange = referencePrice > 0 && finalPrice > 0
+            ? ((finalPrice - referencePrice) / referencePrice) * 100
+            : refreshedPercentChange;
+          Object.assign(signal, {
+            livePrice: finalPrice,
+            displayPrice: finalPrice,
+            price: finalPrice,
+            current: finalPrice,
+            bid: spreadAvailable ? Number(executionQuote.bid) : null,
+            ask: spreadAvailable ? Number(executionQuote.ask) : null,
+            spreadAvailable,
+            spreadPercent: spreadPercent === null
+              ? null
+              : Number(spreadPercent.toFixed(3)),
+            spreadUpdatedAt: spreadAvailable
+              ? executionQuote.spreadUpdatedAt || executionQuote.bidAskUpdatedAt
+              : null,
+            bidAskUpdatedAt: spreadAvailable
+              ? executionQuote.bidAskUpdatedAt || executionQuote.spreadUpdatedAt
+              : null,
+            spreadSource: spreadAvailable
+              ? executionQuote.spreadSource
+              : null,
+            liveQuoteUpdatedAt:
+              refreshedCache?.liveQuoteUpdatedAt ||
+              executionQuote.liveQuoteUpdatedAt ||
+              executionQuote.quoteFetchedAt ||
+              null,
+            liveQuoteSource:
+              refreshedCache?.liveQuoteSource ||
+              executionQuote.liveQuoteSource ||
+              executionQuote.source ||
+              null,
+            priceIsLive: refreshedCache?.priceIsLive === true,
+            priceStale: refreshedCache?.priceIsLive !== true,
+            percentChange: refreshedPercentAvailable
+              ? Number(finalPercentChange.toFixed(2))
+              : null,
+            changePercent: refreshedPercentAvailable
+              ? Number(finalPercentChange.toFixed(2))
+              : null,
+            dayChangePercent: refreshedDayChangeAvailable
+              ? Number(finalPercentChange.toFixed(2))
+              : null,
+            dayChangeDollars: refreshedDayChangeAvailable
+              ? Number((finalPrice - referencePrice).toFixed(2))
+              : null,
+            percentChangeAvailable: refreshedPercentAvailable,
+            changePercentAvailable: refreshedPercentAvailable,
+            dayChangePercentAvailable: refreshedDayChangeAvailable,
+            cryptoEntryScore: entryQuality.available
+              ? entryQuality.score
+              : null,
+            cryptoEntryScoreAvailable: entryQuality.available === true,
+            missingEvidenceReasons: [
+              ...(Array.isArray(signal.missingEvidenceReasons)
+                ? signal.missingEvidenceReasons.filter(
+                  (reason) => reason !== "CRYPTO_ENTRY_SCORE_UNAVAILABLE"
+                )
+                : []),
+              ...(entryQuality.available
+                ? []
+                : ["CRYPTO_ENTRY_SCORE_UNAVAILABLE"]),
+            ],
+            cryptoEntryScorecard: entryQuality,
+            ...qualification,
+            autoTradeApproved: qualification.qualifiedToBuy === true,
+            approved: qualification.qualifiedToBuy === true,
+            backendApproved: qualification.qualifiedToBuy === true,
+            decisionLevel: qualification.qualifiedToBuy === true
+              ? "Auto-Trade Approved"
+              : "Watchlist",
+          });
+        }
+      } catch (error) {
+        console.warn("Final Alpaca crypto quote batch failed:", error.message);
       }
     }
     console.log("CRYPTO SCAN DEBUG", {

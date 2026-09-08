@@ -1,3 +1,5 @@
+import { getApprovedTradeAmount } from "../scoring/approvedSizing.js";
+import { revalidateCandidate } from "../scoring/revalidateCandidate.js";
 import {
   buildStockDecisionScore,
   calculateEarlyDiscoveryScore,
@@ -11,10 +13,16 @@ import {
 } from "../scoring/componentScore.js";
 import {
   compareCanonicalSignals,
+  dedupeSignalsByCanonicalAuthority,
   getCanonicalFinalScore,
   hasExplicitTradeApproval,
 } from "../scoring/canonicalSignalRank.js";
-import { isLiveQuoteSource } from "../live/liveQuoteCache.js";
+import { normalizeSignalScoreCompleteness } from "../scoring/signalScoreCompleteness.js";
+import {
+  isLiveQuoteSource,
+  mergeLiveQuoteEvidence,
+  mergeMeasuredPercentChange,
+} from "../live/liveQuoteCache.js";
 
 function asArray(value) {
   return Array.isArray(value) ? value : [];
@@ -142,7 +150,10 @@ export function buildLiveMovers({
   isCrypto,
   now = () => new Date(),
 }) {
-  const sourceSignals = [
+  // Collapse duplicate/raw candidates before running the relatively expensive
+  // live score refresh.  In particular, a raw early-mover placeholder must not
+  // be scored and then compete with an already-complete canonical scan result.
+  const sourceSignals = dedupeSignalsByCanonicalAuthority([
     ...buildRawEarlyMoverCandidates({ state, normalizeSymbol }),
     ...asArray(state.quickInstitutionalCandidates),
     ...asArray(state.fastRunnerCandidates),
@@ -152,7 +163,7 @@ export function buildLiveMovers({
     ...asArray(state.lastCryptoSignals),
     ...asArray(state.topSignals),
     ...asArray(state.lastSignals),
-  ];
+  ], { normalizeSymbol });
   const moversBySymbol = new Map();
 
   for (const rawSignal of sourceSignals) {
@@ -161,6 +172,7 @@ export function buildLiveMovers({
     const merged = mergeLiveQuote(rawSignal);
     const liveQuote = findLiveQuote(state, symbol, normalizeSymbol) || {};
     const livePrice = Number(
+      liveQuote.price || liveQuote.current ||
       liveQuote.lastTradePrice ||
       liveQuote.tradePrice ||
       liveQuote.lastPrice ||
@@ -168,7 +180,7 @@ export function buildLiveMovers({
       liveQuote.midPrice ||
       liveQuote.price ||
       liveQuote.livePrice ||
-      merged.lastTradePrice ||
+      merged.price || merged.current || merged.lastTradePrice ||
       merged.tradePrice ||
       merged.lastPrice ||
       merged.markPrice ||
@@ -189,46 +201,34 @@ export function buildLiveMovers({
       liveQuote.previousClose || liveQuote.prevClose || merged.previousClose || merged.prevClose || merged.pc || 0
     );
     const open = Number(liveQuote.open || liveQuote.dayOpen || merged.open || merged.dayOpen || merged.o || 0);
-    const changePercent = previousClose > 0
-      ? ((livePrice - previousClose) / previousClose) * 100
-      : Number(
-        merged.dayChangePercent ||
-        merged.percentChange ||
-        merged.changePercent ||
-        liveQuote.percentChange ||
-        liveQuote.livePercentChange ||
-        0
-      );
+    const measuredPercentChange = mergeMeasuredPercentChange(
+      merged,
+      {
+        ...liveQuote,
+        previousClose: previousClose > 0 ? previousClose : null,
+      },
+      { price: livePrice }
+    );
+    const changePercent = measuredPercentChange.available
+      ? measuredPercentChange.value
+      : null;
+    const dayChangeAvailable = measuredPercentChange.available && (
+      liveQuote.dayChangePercentAvailable === true ||
+      merged.dayChangePercentAvailable === true ||
+      [
+        "previous_completed_utc_daily_close",
+        "current_utc_day_open",
+        "previous_close",
+      ].includes(measuredPercentChange.referenceType)
+    );
+    const dayChangePercent = dayChangeAvailable ? changePercent : null;
     const liveStarterCandidate =
       asArray(state.liveStarterBuyHistory).find((item) => normalizeSymbol(item?.symbol) === symbol) ||
       asArray(state.quickInstitutionalCandidates).find((item) => normalizeSymbol(item?.symbol) === symbol) ||
       asArray(state.fastRunnerCandidates).find((item) => normalizeSymbol(item?.symbol) === symbol) ||
       asArray(state.topAutonomousCandidates).find((item) => normalizeSymbol(item?.symbol) === symbol) ||
       {};
-    const recommendedTradeAmount = Number(
-      merged.recommendedTradeAmount ||
-      merged.rawRecommendedTradeAmount ||
-      merged.recommendedSize ||
-      merged.tradeAmount ||
-      merged.positionSize ||
-      merged.dollarAmount ||
-      merged.notional ||
-      merged.positionSizing?.recommendedTradeAmount ||
-      merged.positionSizing?.recommendedSize ||
-      merged.portfolioManager?.recommendedTradeAmount ||
-      merged.portfolioManager?.aiRecommendedTradeAmount ||
-      liveStarterCandidate.decision?.starterAmount ||
-      liveStarterCandidate.decision?.plannedFullTradeAmount ||
-      state.aiEntryScores?.[symbol]?.starterAmount ||
-      state.aiEntryScores?.[symbol]?.plannedFullTradeAmount ||
-      liveStarterCandidate.recommendedTradeAmount ||
-      liveStarterCandidate.rawRecommendedTradeAmount ||
-      liveStarterCandidate.recommendedSize ||
-      liveStarterCandidate.tradeAmount ||
-      liveStarterCandidate.positionSize ||
-      liveStarterCandidate.dollarAmount ||
-      0
-    );
+    const recommendedTradeAmount = getApprovedTradeAmount(merged);
     const cryptoAsset = isCrypto(symbol);
     const scoringNow = now();
     const liveScoreUpdatedAt = scoringNow.toISOString();
@@ -279,27 +279,9 @@ export function buildLiveMovers({
         Number(cryptoMemory.cryptoInstitutionalScore || 0)
       )
       : Number(merged.quickInstitutionalScore || merged.institutionalScore || merged.score || 0);
-    const liveQuoteBid = Number(liveQuote.bid || 0);
-    const liveQuoteAsk = Number(liveQuote.ask || 0);
-    const mergedBid = Number(merged.bid || 0);
-    const mergedAsk = Number(merged.ask || 0);
-    const liveQuoteHasBidAsk =
-      liveQuoteBid > 0 && liveQuoteAsk >= liveQuoteBid;
-    const mergedHasBidAsk = mergedBid > 0 && mergedAsk >= mergedBid;
-    const bid = liveQuoteHasBidAsk ? liveQuoteBid : mergedBid;
-    const ask = liveQuoteHasBidAsk ? liveQuoteAsk : mergedAsk;
-    const spreadAvailable = liveQuote.spreadAvailable === true || (
-      liveQuote.spreadAvailable !== false &&
-      merged.spreadAvailable !== false &&
-      bid > 0 &&
-      ask >= bid
-    );
-    const rawSpreadPercent = liveQuote.spreadPercent ?? merged.spreadPercent;
-    const spreadPercent = spreadAvailable && Number.isFinite(Number(rawSpreadPercent))
-      ? Number(rawSpreadPercent)
-      : spreadAvailable && bid > 0 && ask >= bid
-        ? ((ask - bid) / ((ask + bid) / 2)) * 100
-        : null;
+    const pair = mergeLiveQuoteEvidence(merged, liveQuote, { price: livePrice,
+      quoteSource: liveQuote.liveQuoteSource || liveQuote.source });
+    const { bid, ask, spreadAvailable, spreadPercent, spreadUpdatedAt, spreadSource } = pair;
     const liveQuoteUpdatedAt =
       liveQuote.liveQuoteUpdatedAt ||
       liveQuote.updatedAt ||
@@ -308,13 +290,6 @@ export function buildLiveMovers({
       merged.updatedAt ||
       merged.quoteFetchedAt ||
       null;
-    const spreadUpdatedAt = spreadAvailable
-      ? liveQuote.spreadUpdatedAt ||
-        liveQuote.bidAskUpdatedAt ||
-        merged.spreadUpdatedAt ||
-        merged.bidAskUpdatedAt ||
-        null
-      : null;
     const liveQuoteSource =
       liveQuote.liveQuoteSource ||
       liveQuote.source ||
@@ -323,22 +298,12 @@ export function buildLiveMovers({
       merged.source ||
       merged.dataSource ||
       "scan_snapshot";
-    const spreadSource =
-      liveQuote.spreadSource ||
-      (liveQuoteHasBidAsk
-        ? liveQuote.liveQuoteSource || liveQuote.source || null
-        : null) ||
-      merged.spreadSource ||
-      (mergedHasBidAsk
-        ? merged.liveQuoteSource || merged.source || null
-        : null) ||
-      null;
     const providerMarkedLive =
       liveQuote.priceIsLive === true ||
       merged.priceIsLive === true;
     const priceIsLive = providerMarkedLive &&
       Boolean(liveQuoteUpdatedAt) &&
-      isLiveQuoteSource(liveQuoteSource);
+      isLiveQuoteSource(liveQuoteSource, cryptoAsset ? "crypto" : "stock");
     const liveQuoteTimestamp = liveQuoteUpdatedAt
       ? Date.parse(liveQuoteUpdatedAt)
       : NaN;
@@ -358,12 +323,13 @@ export function buildLiveMovers({
       liveQuoteAgeSeconds <= 5;
     const liveSpreadFresh =
       spreadAvailable &&
-      isLiveQuoteSource(spreadSource) &&
+      isLiveQuoteSource(spreadSource, cryptoAsset ? "crypto" : "stock") &&
       spreadAgeSeconds !== null &&
       spreadAgeSeconds >= -5 &&
       spreadAgeSeconds <= 5;
     const scoringSignal = {
       ...merged,
+      ...(cryptoAsset ? { cryptoRealism: { ...(merged.cryptoRealism || {}), spreadAvailable, spreadPercent } } : {}),
       symbol,
       price: livePrice,
       livePrice,
@@ -372,8 +338,11 @@ export function buildLiveMovers({
       open,
       dayOpen: open,
       changePercent,
-      dayChangePercent: changePercent,
+      dayChangePercent,
       percentChange: changePercent,
+      changePercentAvailable: measuredPercentChange.available,
+      percentChangeAvailable: measuredPercentChange.available,
+      dayChangePercentAvailable: dayChangeAvailable,
       bid,
       ask,
       spreadPercent,
@@ -422,7 +391,10 @@ export function buildLiveMovers({
       preservedStockDiscovery !== undefined &&
       (
         merged.discoveryScoreAvailable === true ||
-        preservedStockDiscoveryCoverage >= 0.65
+        (
+          preservedStockDiscoveryCoverage >= 0.65 &&
+          merged.discoveryScorecard?.canonicalExtensionEvidencePass === true
+        )
       );
     const stockDiscoveryAvailable =
       preservedStockDiscoveryAvailable || recalculatedStockDiscoveryAvailable;
@@ -461,11 +433,10 @@ export function buildLiveMovers({
       merged.stockDecisionEvidence?.coreEvidencePass === true ||
       merged.centralAutonomousDecisionCore?.stockDecisionEvidence
         ?.coreEvidencePass === true ||
-      Number(
-        merged.decisionScoreTelemetry?.stages?.decision?.coverage || 0
-      ) >= 0.8;
+      merged.decisionScoreTelemetry?.stages?.decision?.coreEvidencePass === true;
     const preservedStockDecisionAvailable =
       !cryptoAsset &&
+      merged.stockDecisionScoreAvailable !== false &&
       preservedStockDecision !== undefined &&
       (
         preservedStockDecisionEvidenceAvailable ||
@@ -511,6 +482,7 @@ export function buildLiveMovers({
       : undefined;
     const preservedCryptoDecisionAvailable =
       cryptoAsset &&
+      merged.cryptoDecisionScoreAvailable !== false &&
       preservedCryptoDecision !== undefined &&
       preservedCryptoDecisionEvidence?.coreEvidencePass === true;
     const liveCryptoDecisionAvailable =
@@ -531,8 +503,9 @@ export function buildLiveMovers({
     const resolvedCryptoDecisionEvidence = liveCryptoDecisionAvailable
       ? cryptoDecision
       : preservedCryptoDecisionEvidence || cryptoDecision;
-    const next = {
+    let next = normalizeSignalScoreCompleteness({
       ...merged,
+      ...(cryptoAsset ? { cryptoRealism: scoringSignal.cryptoRealism } : {}),
       symbol,
       assetClass: merged.assetClass || merged.asset_class || (cryptoAsset ? "crypto" : "stock"),
       marketOpen: cryptoAsset || state.marketOpen === true,
@@ -544,8 +517,11 @@ export function buildLiveMovers({
       open,
       dayOpen: open,
       changePercent,
-      dayChangePercent: changePercent,
+      dayChangePercent,
       percentChange: changePercent,
+      changePercentAvailable: measuredPercentChange.available,
+      percentChangeAvailable: measuredPercentChange.available,
+      dayChangePercentAvailable: dayChangeAvailable,
       bid,
       ask,
       spreadPercent,
@@ -684,6 +660,10 @@ export function buildLiveMovers({
             ...(merged.stockDecisionEvidence || {}),
             coreEvidencePass:
               merged.stockDecisionEvidence?.coreEvidencePass === true ||
+              merged.centralAutonomousDecisionCore?.stockDecisionEvidence
+                ?.coreEvidencePass === true ||
+              merged.decisionScoreTelemetry?.stages?.decision
+                ?.coreEvidencePass === true ||
               stockDecision?.coreEvidencePass === true,
             liveMissingCriticalEvidence:
               stockDecision?.missingCriticalEvidence || [],
@@ -704,7 +684,8 @@ export function buildLiveMovers({
             },
           },
         }),
-    };
+    });
+    next = normalizeSignalScoreCompleteness(revalidateCandidate(merged, next, { now: scoringNow.getTime() }));
     const executionGate = cryptoAsset
       ? evaluateCryptoTradeCandidate(next, {
         minimumScore: CRYPTO_MIN_FINAL_SCORE_TO_BUY,
@@ -715,6 +696,7 @@ export function buildLiveMovers({
         requireFreshDecision: true,
         requireExplicitApproval: true,
         maxQuoteAgeSeconds: 5,
+        now: scoringNow.getTime(),
       });
     const explicitApproval = hasExplicitTradeApproval(next);
     const validSizing =
@@ -744,16 +726,31 @@ export function buildLiveMovers({
       ],
       evaluatedAt: liveScoreUpdatedAt,
     };
+    // Permission still belongs to the canonical scan; eligibility has a
+    // separate clock so recovery from a stale quote is not a new trade thesis.
+    next.liveEligibilityCanRecover = hasExplicitTradeApproval(merged) &&
+      getApprovedTradeAmount(merged) > 0 &&
+      ![merged.blockBuying, merged.displayOnly, merged.centralCoreHardBlock,
+        merged.finalSizingReconciliation?.finalBlocked, merged.globalRiskOffDefense?.shouldBlock,
+        merged.shouldWaitForPullback, merged.finalMasterDecisionProfile?.suppressEntry].some(v => v === true);
     next.buyableNow = next.executionEligibility.approved;
     const current = moversBySymbol.get(symbol);
     const nextAuthority = measuredDecisionAuthority(next, cryptoAsset);
     const currentAuthority = measuredDecisionAuthority(current, cryptoAsset);
+    const nextHasCanonicalFinal = getCanonicalFinalScore(next) !== null;
+    const currentHasCanonicalFinal = getCanonicalFinalScore(current) !== null;
     if (
       !current ||
-      nextAuthority > currentAuthority ||
+      (nextHasCanonicalFinal && !currentHasCanonicalFinal) ||
       (
-        nextAuthority === currentAuthority &&
-        Math.abs(next.changePercent) > Math.abs(current.changePercent)
+        nextHasCanonicalFinal === currentHasCanonicalFinal &&
+        (
+          nextAuthority > currentAuthority ||
+          (
+            nextAuthority === currentAuthority &&
+            Math.abs(next.changePercent) > Math.abs(current.changePercent)
+          )
+        )
       )
     ) {
       moversBySymbol.set(symbol, next);

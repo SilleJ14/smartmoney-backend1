@@ -33,7 +33,7 @@ function median(values = []) {
 
 export function normalizeDiscoveryBars(
   bars = [],
-  { excludeIncomplete = false, now = Date.now() } = {}
+  { excludeIncomplete = false, now = Date.now(), maxLatestAgeMs = Infinity, maxGapMs = Infinity } = {}
 ) {
   const normalized = (Array.isArray(bars) ? bars : [])
     .map((bar, sourceIndex) => {
@@ -60,6 +60,7 @@ export function normalizeDiscoveryBars(
       };
     })
     .filter((bar) => (
+      bar.timestampMs !== null && bar.timestampMs <= Number(now) &&
       Number.isFinite(bar.open) && bar.open > 0 &&
       Number.isFinite(bar.high) && bar.high > 0 &&
       Number.isFinite(bar.low) && bar.low > 0 &&
@@ -100,11 +101,16 @@ export function normalizeDiscoveryBars(
   ));
   const completed = excludeIncomplete && inferredIntervalMs
     ? deduplicated.filter((bar) => (
-      bar.timestampMs === null || bar.timestampMs + inferredIntervalMs <= Number(now)
+      bar.timestampMs + inferredIntervalMs <= Number(now)
     ))
     : deduplicated;
 
-  return completed.map(({ sourceIndex: _sourceIndex, ...bar }) => bar);
+  if (!completed.length || Number(now) - completed.at(-1).timestampMs > maxLatestAgeMs) return [];
+  let contiguousStart = 0;
+  for (let i = 1; i < completed.length; i++) {
+    if (completed[i].timestampMs - completed[i - 1].timestampMs > maxGapMs) contiguousStart = i;
+  }
+  return completed.slice(contiguousStart).map(({ sourceIndex: _sourceIndex, ...bar }) => bar);
 }
 
 const EXTENSION_THRESHOLDS = Object.freeze({
@@ -117,13 +123,16 @@ export function calculateMultiHorizonExtension({
   currentPrice,
   assetClass = "stock",
   excludeIncomplete = false,
+  currentPriceAfterLastBar = assetClass === "crypto" && excludeIncomplete,
   now = Date.now(),
 } = {}) {
-  const clean = normalizeDiscoveryBars(bars, { excludeIncomplete, now });
+  const clean = normalizeDiscoveryBars(bars, { excludeIncomplete, now,
+    maxLatestAgeMs: (assetClass === "crypto" ? 2 : 7) * 86400000,
+    maxGapMs: (assetClass === "crypto" ? 1.5 : 4.5) * 86400000 });
   const current = firstPositive(currentPrice, clean.at(-1)?.close);
   const thresholds = EXTENSION_THRESHOLDS[assetClass] || EXTENSION_THRESHOLDS.stock;
   const horizons = [1, 3, 5, 20].map((days) => {
-    const referenceIndex = clean.length - 1 - days;
+    const referenceIndex = clean.length - days - (currentPriceAfterLastBar ? 0 : 1);
     const reference = referenceIndex >= 0 ? clean[referenceIndex]?.close : 0;
     const available = current > 0 && reference > 0;
     const changePercent = available ? ((current - reference) / reference) * 100 : null;
@@ -270,7 +279,7 @@ export function calculateCryptoEarlyDiscoveryScore({
   learning = null,
   now = Date.now(),
 } = {}) {
-  const daily = normalizeDiscoveryBars(dailyBars, { excludeIncomplete: true, now });
+  const daily = normalizeDiscoveryBars(dailyBars, { excludeIncomplete: true, now, maxLatestAgeMs: 2 * 86400000, maxGapMs: 1.5 * 86400000 });
   const recent = daily.slice(-5);
   const baseline = daily.slice(-20, -5);
   const latest = recent.at(-1);
@@ -304,7 +313,7 @@ export function calculateCryptoEarlyDiscoveryScore({
     .reduce((sum, bar) => sum + bar.volume, 0);
   const totalVolume = recent.reduce((sum, bar) => sum + bar.volume, 0);
   const accumulationRatio = totalVolume > 0 ? upVolume / totalVolume : 0;
-  const threeDayReference = daily.at(-4)?.close || 0;
+  const threeDayReference = daily.at(-3)?.close || 0;
   const threeDayChange = threeDayReference > 0
     ? ((price - threeDayReference) / threeDayReference) * 100
     : 0;
@@ -319,6 +328,7 @@ export function calculateCryptoEarlyDiscoveryScore({
   const completedIntraday = normalizeDiscoveryBars(intradayBars, {
     excludeIncomplete: true,
     now,
+    maxLatestAgeMs: 2 * 3600000,
   });
   const awakening = calculateAwakeningScore(completedIntraday);
   const volumeLifecycleScore = awakening.available
@@ -345,6 +355,7 @@ export function calculateCryptoEarlyDiscoveryScore({
     bars: daily,
     currentPrice: price,
     assetClass: "crypto",
+    currentPriceAfterLastBar: true,
     now,
   });
   // Missing news reduces evidence coverage, not technical discovery quality.

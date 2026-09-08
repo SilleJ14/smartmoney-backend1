@@ -62,6 +62,9 @@ function firstFinite(...values) {
 }
 
 function resolveMeasuredStockSpread(signal = {}, quality = {}) {
+  if (signal.spreadAvailable === false || signal.liveQuote?.spreadAvailable === false) {
+    return { spreadPercent: null, source: "explicitly_unavailable" };
+  }
   const liveBid = firstFinite(signal.liveQuote?.bid);
   const liveAsk = firstFinite(signal.liveQuote?.ask);
   if (
@@ -143,7 +146,7 @@ export const STOCK_EXECUTION_THRESHOLDS = Object.freeze({
   acceleratedFinalScore: 85,
   acceleratedEntryScore: 82,
   maxSpreadPercent: 1,
-  maxQuoteAgeSeconds: 15,
+  maxQuoteAgeSeconds: 5,
   maxDecisionAgeSeconds: 300,
   riskQualityScore: 55,
 });
@@ -168,6 +171,7 @@ export function evaluateStockTradeCandidate(
   );
   const parsedFinalScore = Number(canonicalFinalScore);
   const finalScoreAvailable =
+    signal.stockDecisionScoreAvailable !== false &&
     canonicalFinalScore !== undefined && Number.isFinite(parsedFinalScore);
   const finalScore = finalScoreAvailable ? parsedFinalScore : 0;
   const entryScore = Number(signal.entryQualityScore ?? signal.entryQualityScorecard?.score ?? 0);
@@ -240,9 +244,12 @@ export function evaluateStockTradeCandidate(
     "";
   const quoteSourceApproved =
     signal.priceIsLive === true &&
-    isLiveQuoteSource(quoteSource);
+    isLiveQuoteSource(quoteSource, "stock");
   const effectiveMaxQuoteAgeSeconds = Number.isFinite(Number(maxQuoteAgeSeconds))
-    ? Math.max(1, Number(maxQuoteAgeSeconds))
+    ? Math.min(
+      STOCK_EXECUTION_THRESHOLDS.maxQuoteAgeSeconds,
+      Math.max(1, Number(maxQuoteAgeSeconds))
+    )
     : STOCK_EXECUTION_THRESHOLDS.maxQuoteAgeSeconds;
   const quoteFreshnessAvailable = quoteAgeSeconds !== null;
   const quoteFreshnessPass = !requireCentralDecision || (
@@ -263,7 +270,7 @@ export function evaluateStockTradeCandidate(
     ? (Number(now) - spreadTimestamp) / 1000
     : null;
   const spreadSource = signal.spreadSource || quoteSource;
-  const spreadSourceApproved = isLiveQuoteSource(spreadSource);
+  const spreadSourceApproved = isLiveQuoteSource(spreadSource, "stock");
   const spreadFreshnessAvailable = spreadAvailable && spreadAgeSeconds !== null;
   const spreadFreshnessPass = !requireCentralDecision || (
     spreadSourceApproved &&
@@ -588,6 +595,11 @@ export function calculateEarlyDiscoveryScore(signal = {}) {
 }
 
 export function calculateEntryQualityScore(signal = {}) {
+  if (signal.setupRevalidationRequired === true) return {
+    score: null, coverage: 0, approved: false, tier: 'WAIT_FOR_DATA',
+    components: [], gates: ['SETUP_PRICE_MOVED_RESCAN_REQUIRED'],
+    missingCriticalEvidence: ['SETUP_PRICE_MOVED_RESCAN_REQUIRED'],
+  };
   const confirmations = signal.confirmations || {};
   const technicals = signal.technicals || {};
   const quality = signal.phase5SignalQuality || signal.institutionalSignalQuality || {};
@@ -743,9 +755,14 @@ function getNewYorkDayKey(now = Date.now()) {
 
 export function getCompletedUniqueStockSessionDays(values = [], { now = Date.now() } = {}) {
   const todayKey = getNewYorkDayKey(now);
-  return getUniqueStockSessionDays(values).filter(
-    (dayKey) => dayKey < todayKey && isUsStockMarketSessionDayKey(dayKey)
+  const recent = getUniqueStockSessionDays(values).filter(
+    (dayKey) => dayKey < todayKey && isUsStockMarketSessionDayKey(dayKey) &&
+      Number(now) - Date.parse(`${dayKey}T00:00:00Z`) <= 35 * 86400000
   );
+  if (!recent.length || Number(now) - Date.parse(recent.at(-1)) > 7 * 86400000) return [];
+  let start = recent.length - 1;
+  while (start > 0 && Date.parse(recent[start]) - Date.parse(recent[start - 1]) <= 7 * 86400000) start--;
+  return recent.slice(start);
 }
 
 export function calculateMultiDayContinuationScore(signal = {}, { now = Date.now() } = {}) {
@@ -889,21 +906,18 @@ export function buildStockDecisionScore(signal = {}) {
     rawCard,
     coverageSafeScore
   );
-  const canonicalDiscoveryRequired = [
-    "EARLY_DISCOVERY",
-    "BOUNDED_STOCK_QUIET_DISCOVERY",
-  ].includes(String(discovery.stage || "").toUpperCase());
   const canonicalDiscoveryPass =
-    !canonicalDiscoveryRequired ||
     discovery.canonicalExtensionEvidencePass === true ||
     (
       discovery.dataQuality?.fullExtensionCoverage === true &&
       Number(discovery.dataQuality?.completedValidDailyBars || 0) >= 21
     );
   const missingCriticalEvidence = [
-    ...(discovery.coverage < 0.65 ? ["discoveryEvidence"] : []),
+    ...(Number.isFinite(discovery.coverage) && discovery.coverage >= 0.65 && discovery.coverage <= 1 &&
+      Number.isFinite(discovery.score) && discovery.score >= 0 && discovery.score <= 100 ? [] : ["discoveryEvidence"]),
     ...(canonicalDiscoveryPass ? [] : ["canonicalDiscoveryExtensionEvidence"]),
-    ...(entry.coverage < 0.8 ? ["entryEvidence"] : []),
+    ...(Number.isFinite(entry.coverage) && entry.coverage >= 0.8 && entry.coverage <= 1 &&
+      Number.isFinite(entry.score) && entry.score >= 0 && entry.score <= 100 ? [] : ["entryEvidence"]),
     ...(entry.approved !== true ? ["approvedEntry"] : []),
     ...(card.coverage < 0.8 ? ["decisionCoverage"] : []),
   ];

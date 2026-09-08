@@ -198,6 +198,10 @@ function compactQuietCandidateObservation(observation = {}) {
   const extension = observation.extensionProfile || null;
   const news = observation.newsCatalyst || null;
   return {
+    evidenceVersion: observation.evidenceVersion || null,
+    baselineEvidenceTimestamp: observation.baselineEvidenceTimestamp || null,
+    baselineEvidenceDay: observation.baselineEvidenceDay || null,
+    lastEvidenceStatus: observation.lastEvidenceStatus || null,
     id: observation.id || null,
     assetClass: observation.assetClass || null,
     symbol: observation.symbol || null,

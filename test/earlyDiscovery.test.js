@@ -11,6 +11,7 @@ function quietDailyBars() {
     const base = 100 + index * 0.08;
     const range = index < 25 ? 1.2 : 0.35;
     return {
+      t: new Date(Math.floor(Date.now() / 86400000) * 86400000 - (30 - index) * 86400000).toISOString(),
       o: base,
       h: base + range * 0.65,
       l: base - range * 0.35,
@@ -22,6 +23,7 @@ function quietDailyBars() {
 
 function intradayAwakeningBars() {
   return Array.from({ length: 12 }, (_, index) => ({
+    t: new Date(Date.now() - (12 - index) * 300000).toISOString(),
     o: 102.4 + index * 0.01,
     h: 102.45 + index * 0.01,
     l: 102.35 + index * 0.01,
@@ -80,7 +82,7 @@ test("missing news lowers coverage without suppressing technical discovery", () 
 test("multi-horizon extension demotes an asset that already ran", () => {
   const dailyBars = Array.from({ length: 30 }, (_, index) => {
     const base = 100 * (1.035 ** index);
-    return { o: base, h: base * 1.02, l: base * 0.99, c: base * 1.015, v: 1_000 };
+    return { t: new Date(Math.floor(Date.now() / 86400000) * 86400000 - (30 - index) * 86400000).toISOString(), o: base, h: base * 1.02, l: base * 0.99, c: base * 1.015, v: 1_000 };
   });
   const result = calculateCryptoEarlyDiscoveryScore({
     symbol: "ETH/USD",
@@ -99,6 +101,7 @@ test("multi-horizon extension demotes an asset that already ran", () => {
 
 test("extension exposes 1, 3, 5 and 20 day evidence", () => {
   const bars = Array.from({ length: 25 }, (_, index) => ({
+    t: new Date(Math.floor(Date.now() / 86400000) * 86400000 - (25 - index) * 86400000).toISOString(),
     o: 100 + index,
     h: 101 + index,
     l: 99 + index,

@@ -26,8 +26,16 @@ export function evaluateLiveTradeLimits({
 } = {}) {
   const cleanSymbol = normalize(symbol);
   const existingSymbols = new Set(positions.map((position) => normalize(position.symbol)));
+  // Reserve unreflected, accepted/pending entries across ALL symbols.
+  positions = [...positions];
+  for (const [pendingSymbol, intent] of Object.entries(positionIntents)) {
+    if (existingSymbols.has(normalize(pendingSymbol))) continue;
+    if (intent.pending === true || (intent.pending !== false && Date.now() - Date.parse(intent.enteredAt || '') < 10 * 60000)) {
+      positions.push({ symbol: pendingSymbol, isCrypto: intent.holdCategory === 'crypto', reserved: true });
+    }
+  }
   const intentEnteredAt = Date.parse(positionIntents[cleanSymbol]?.enteredAt || "");
-  const hasRecentEntryReservation = Number.isFinite(intentEnteredAt) && Date.now() - intentEnteredAt < 10 * 60 * 1000;
+  const hasRecentEntryReservation = positionIntents[cleanSymbol]?.pending !== false && Number.isFinite(intentEnteredAt) && Date.now() - intentEnteredAt < 10 * 60 * 1000;
   const isExistingPosition = existingSymbols.has(cleanSymbol) || hasRecentEntryReservation;
   const maxIntradayStockTradesPerDay = Number(limits.maxIntradayStockTradesPerDay || 2);
   const maxIntradayStockPositions = Number(limits.maxIntradayStockPositions || 2);
@@ -39,10 +47,15 @@ export function evaluateLiveTradeLimits({
     normalizeHoldCategory(positionIntents[normalize(position.symbol)]?.holdCategory) === "intraday"
   );
   const multiDayStockPositions = stockPositions.filter((position) =>
+    positionIntents[normalize(position.symbol)]?.unknownHoldCategory === true ||
     normalizeHoldCategory(positionIntents[normalize(position.symbol)]?.holdCategory || "multi_day") === "multi_day"
   );
   const category = isCrypto ? "crypto" : normalizeHoldCategory(holdCategory);
   const reasons = [];
+  const existingCategory = positionIntents[cleanSymbol]?.holdCategory;
+  if (isExistingPosition && existingCategory && existingCategory !== category) {
+    reasons.push(`Existing holding category ${existingCategory} cannot be changed by an add order`);
+  }
 
   if (!isExistingPosition) {
     if (category === "crypto" && cryptoPositions.length >= maxCryptoOpenPositions) {

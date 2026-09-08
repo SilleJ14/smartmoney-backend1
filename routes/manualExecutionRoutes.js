@@ -14,8 +14,8 @@ export function registerManualExecutionRoutes(app, dependencies) {
     now = () => new Date(), logger = console } = dependencies;
   const hydrateWithVerifiedQuote = (candidate, resolution) => {
     const quote = resolution?.quote || {};
-    const updatedAt = quote.updatedAt || quote.liveQuoteUpdatedAt || quote.quoteFetchedAt || null;
-    return {
+    const updatedAt = quote.liveQuoteUpdatedAt || quote.updatedAt || null;
+    return revalidateCandidate(candidate, {
       ...candidate,
       current: Number(quote.current || quote.price || candidate?.current || candidate?.price || 0),
       price: Number(quote.price || quote.current || candidate?.price || candidate?.current || 0),
@@ -23,12 +23,14 @@ export function registerManualExecutionRoutes(app, dependencies) {
       ask: Number(quote.ask || 0) > 0 ? Number(quote.ask) : null,
       spreadPercent: quote.spreadAvailable === true ? Number(quote.spreadPercent) : null,
       spreadAvailable: quote.spreadAvailable === true,
+      spreadUpdatedAt: quote.spreadUpdatedAt || null,
+      spreadSource: quote.spreadSource || null,
       priceIsLive: resolution?.quoteReady === true && quote.priceIsLive === true,
       liveQuoteUpdatedAt: updatedAt,
       quoteFetchedAt: updatedAt,
       liveQuote: { ...quote, updatedAt },
       liveQuoteSource: quote.liveQuoteSource || quote.source || null,
-    };
+    });
   };
   app.post("/manual-buy-stock", requireAdmin, async (req, res) => {
     try {
@@ -116,9 +118,7 @@ export function registerManualExecutionRoutes(app, dependencies) {
           error: `Stock decision no longer passes: ${(decision?.reasons || ["incomplete evidence"]).join("; ")}`,
         });
       }
-      const sizingLimit = Number(
-        candidate.recommendedTradeAmount || candidate.recommendedDollarAmount || candidate.tradeAmount || 0
-      );
+      const sizingLimit = getApprovedTradeAmount(verifiedCandidate);
       if (!Number.isFinite(sizingLimit) || sizingLimit < 1 || dollars > sizingLimit + 0.01) {
         return res.status(409).json({ ok: false, error: "Requested stock amount exceeds the current verified sizing limit" });
       }
@@ -131,6 +131,7 @@ export function registerManualExecutionRoutes(app, dependencies) {
       const order = await manualStockBuy({
         symbol: cleanSymbol,
         dollars,
+        requireCandidateDecision: true,
         buyMode: "dollars",
         fractionable,
         referencePrice,
@@ -183,7 +184,7 @@ export function registerManualExecutionRoutes(app, dependencies) {
       if (candidate.qualifiedToBuy !== true || verifiedCandidate.priceIsLive !== true || verifiedCandidate.spreadAvailable !== true) {
         return res.status(409).json({ ok: false, error: "Crypto candidate no longer passes entry and live-spread gates" });
       }
-      const sizingLimit = Number(candidate.recommendedTradeAmount || candidate.suggestedTradeAmount || 0);
+      const sizingLimit = getApprovedTradeAmount(verifiedCandidate);
       if (!Number.isFinite(sizingLimit) || sizingLimit < 1 || dollars > sizingLimit + 0.01) {
         return res.status(409).json({ ok: false, error: "Requested crypto amount exceeds the current verified sizing limit" });
       }
@@ -215,3 +216,5 @@ export function registerManualExecutionRoutes(app, dependencies) {
     }
   });
 }
+import { getApprovedTradeAmount } from '../scoring/approvedSizing.js';
+import { revalidateCandidate } from '../scoring/revalidateCandidate.js';
