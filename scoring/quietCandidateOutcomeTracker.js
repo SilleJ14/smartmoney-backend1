@@ -42,7 +42,7 @@ function observationEvidence(candidate, assetClass, dayKey, now) {
 }
 
 export function getQuietFollowupSymbols(state = {}, { now = Date.now(), limit = 120 } = {}) {
-  const due = (state.observations || []).filter((o) => o.assetClass === "crypto" &&
+  const due = (Array.isArray(state?.observations) ? state.observations : []).filter((o) => o?.assetClass === "crypto" &&
     HORIZONS.some((days) => (!o.measurements?.[days] ||
       (o.measurements[days].status !== "MISSED_TARGET_WINDOW" &&
         Object.keys(o.benchmarks || {}).some((name) => o.benchmarks[name].baselinePrice > 0 && o.benchmarkMeasurements?.[days]?.[name] == null))) && o.targetTimestamps?.[days] <= now &&

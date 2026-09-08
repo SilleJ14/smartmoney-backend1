@@ -23,6 +23,7 @@ test('production outcome migration accepts null persisted history on the first s
   const end = source.indexOf('\nconst {', begin);
   assert.ok(begin >= 0 && end > begin);
   for (const previous of [null, undefined, {}, { observations: null }]) {
+    assert.deepEqual(getQuietFollowupSymbols(previous), []);
     let imports = 0;
     const store = { importObservations: async rows => { imports++; assert.deepEqual(rows, []); },
       ingest: async () => ({ policy: 'DURABLE_FULL_POPULATION' }) };
