@@ -3,7 +3,9 @@ import {
   dedupeSignalsByCanonicalAuthority,
   getCanonicalFinalScore,
   hasExplicitTradeApproval,
+  selectCandidateDisplayWindow,
 } from "../scoring/canonicalSignalRank.js";
+import { buildRawEarlyMoverCandidates } from "../market-data/liveMovers.js";
 
 function uniqueSignals(signals, normalizeSymbol) {
   return dedupeSignalsByCanonicalAuthority(signals, { normalizeSymbol });
@@ -13,6 +15,7 @@ function collectSignals(state, latestStatus, normalizeSymbol, includeFastRunners
   const orchestration = latestStatus?.phase20AutonomousOrchestration || {};
   return uniqueSignals(
     [
+      ...(includeFastRunners ? buildRawEarlyMoverCandidates({ state, normalizeSymbol }) : []),
       ...(Array.isArray(state.topStockSignals) ? state.topStockSignals : []),
       ...(Array.isArray(state.lastStockSignals) ? state.lastStockSignals : []),
       ...(includeFastRunners && Array.isArray(state.fastRunnerCandidates)
@@ -113,9 +116,7 @@ export function registerFrontendRoutes(app, dependencies) {
         100,
         Math.max(10, Number(req.query.limit || 50))
       );
-      const displaySignals = signals
-        .sort(compareCanonicalSignals)
-        .slice(0, displayLimit);
+      const displaySignals = selectCandidateDisplayWindow(signals, displayLimit);
       const watchSignals = displaySignals.filter(
         (signal) => !hasExplicitTradeApproval(signal)
       );

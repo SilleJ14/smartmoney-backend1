@@ -230,6 +230,7 @@ import {
   dedupeSignalsByCanonicalAuthority,
   getCanonicalFinalScore,
   hasExplicitTradeApproval,
+  selectCandidateDisplayWindow,
 } from "./scoring/canonicalSignalRank.js";
 import { normalizeSignalScoreCompleteness } from "./scoring/signalScoreCompleteness.js";
 import { buildRawEarlyMoverCandidates } from "./market-data/liveMovers.js";
@@ -3059,8 +3060,20 @@ function buildBackendHealthPayload(clock = {}) {
       engineFreezeDetected: Boolean(engineState.engineFreezeDetected),
       engineFreezeCount: Number(engineState.engineFreezeCount || 0),
       lastEngineStopReason: engineState.lastEngineStopReason || null,
+      serviceStartupErrors: engineState.serviceStartupErrors || {},
     },
     liveScheduler: engineState.liveSchedulerState || null,
+    candidates: {
+      stocks: Array.isArray(engineState.lastStockSignals) ? engineState.lastStockSignals.length : 0,
+      crypto: Array.isArray(engineState.lastCryptoSignals) ? engineState.lastCryptoSignals.length : 0,
+      earlyMovers: Array.isArray(engineState.liveEarlyMoverSymbols) ? engineState.liveEarlyMoverSymbols.length : 0,
+      lastSuccessfulCycleAt: engineState.lastSuccessfulCycleAt || null,
+    },
+    outcomeWorker: engineState.fullPopulationOutcomeWorker ? {
+      ok: engineState.fullPopulationOutcomeWorker.ok,
+      updatedAt: engineState.fullPopulationOutcomeWorker.updatedAt,
+      error: engineState.fullPopulationOutcomeWorker.error || null,
+    } : null,
     quotes: {
       liveQuoteCount,
       lastQuoteUpdateAt: latestLiveQuoteUpdateAt,
@@ -3094,6 +3107,7 @@ function buildBackendHealthPayload(clock = {}) {
         hasLiveKey: Boolean(process.env.ALPACA_LIVE_KEY),
         hasLiveSecret: Boolean(process.env.ALPACA_LIVE_SECRET),
       },
+      tradier: tradierMarketData.getStatus(),
     },
     safety: {
       dailyLossLocked: Boolean(engineState.dailyLossLocked),
@@ -24095,6 +24109,7 @@ registerSystemRoutes(app, {
   }),
   getClock,
   getHealthPayload: buildBackendHealthPayload,
+  getCachedClock: () => engineState.cachedClock || null,
   getFallbackMarketOpen: () => engineState.marketOpen,
   getEngineRuntime: () => engineState,
 });
@@ -27985,7 +28000,7 @@ function collectFrontendSignalSnapshot() {
 function buildFrontendStartupSnapshot(limit = 50) {
   const allSignals = collectFrontendSignalSnapshot();
   const approvedSignals = allSignals.filter(hasExplicitTradeApproval);
-  const displaySignals = allSignals.slice(0, limit);
+  const displaySignals = selectCandidateDisplayWindow(allSignals, limit);
   return {
     generatedAt: new Date().toISOString(),
     source: "memory_snapshot",
@@ -28827,10 +28842,7 @@ function startPolygonStockStream() {
         for (const message of messages) {
           if (message.ev === "status") {
             const status = String(message.status || "").toLowerCase();
-            if (
-              status === "auth_success" ||
-              String(message.message || "").toLowerCase().includes("authenticated")
-            ) {
+            if (status === "auth_success") {
               polygonAuthenticated = true;
               polygonSocketReconnectAttempts = 0;
               const result = await refreshEarlyMoversThenPolygonSubscriptions();
@@ -28849,13 +28861,16 @@ function startPolygonStockStream() {
                 subscribedCount: symbols.length,
                 reason: `Polygon websocket authenticated with ${symbols.length} symbols.`,
               };
-            } else if (status === "error") {
+            } else if (["error", "auth_failed", "auth_failure", "not_authorized"].includes(status)) {
               const errorMsg = message.message || "Polygon websocket status error";
               const isPlanError =
                 errorMsg.toLowerCase().includes("real-time") ||
                 errorMsg.toLowerCase().includes("not authorized") ||
                 errorMsg.toLowerCase().includes("don't have access") ||
-                errorMsg.toLowerCase().includes("delayed");
+                errorMsg.toLowerCase().includes("not entitled") ||
+                errorMsg.toLowerCase().includes("not subscribed") ||
+                errorMsg.toLowerCase().includes("delayed") ||
+                ["auth_failed", "auth_failure", "not_authorized"].includes(status);
               engineState.polygonLiveStreamState = {
                 ok: false,
                 provider: "polygon",
@@ -28867,7 +28882,7 @@ function startPolygonStockStream() {
               if (isPlanError) {
                 engineState.polygonEntitlementBlocked = true;
                 console.warn(
-                  "[Polygon] Plan-level access error - streaming on delayed endpoint:",
+                  "[Polygon] Streaming access denied; REST fallback remains available:",
                   errorMsg
                 );
                 // Close socket to stop reconnect loop - plan does not support this endpoint
@@ -28892,7 +28907,7 @@ function startPolygonStockStream() {
         checkedAt: new Date().toISOString(),
       };
     };
-    polygonLiveSocket.onclose = () => {
+    polygonLiveSocket.onclose = (event) => {
       if (engineState.polygonEntitlementBlocked === true) {
         polygonAuthenticated = false;
         polygonSubscribedSymbols = new Set();
@@ -28903,8 +28918,12 @@ function startPolygonStockStream() {
       polygonSubscribedSymbols = new Set();
       polygonAuthenticated = false;
       engineState.polygonLiveStreamState = {
+        ...engineState.polygonLiveStreamState,
         ok: false,
         provider: "polygon",
+        authenticated: false,
+        closeCode: event?.code || null,
+        closeReason: String(event?.reason || '').slice(0, 240),
         disconnectedAt: new Date().toISOString(),
         reconnectAttempts: polygonSocketReconnectAttempts,
       };

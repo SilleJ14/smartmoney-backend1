@@ -38,6 +38,16 @@ function createHarness(overrides = {}) {
   return { invoke };
 }
 
+test('frontend signals include discovery-only early movers before full scoring', async () => {
+  const api = createHarness({ getState: () => ({ liveEarlyMoverSymbols: ['AAPL'],
+    liveQuoteCache: { AAPL: { price: 100, previousClose: 98, liveQuoteUpdatedAt: new Date().toISOString() } } }) });
+  const response = await api.invoke('/frontend/signals');
+  assert.equal(response.body.signals.length, 1);
+  assert.equal(response.body.signals[0].symbol, 'AAPL');
+  assert.notEqual(response.body.signals[0].approved, true);
+  assert.equal(response.body.approvedCount, 0);
+});
+
 test("frontend AI feed includes independent market news when no signal candidates exist", async () => {
   const api = createHarness({
     getMarketNewsFeed: async () => ({

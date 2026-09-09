@@ -1,0 +1,57 @@
+// Test-only process: parent supplies an empty temporary cwd and fake credentials.
+// Never contact a provider or submit an order from this fixture.
+import http from 'node:http';
+const originalListen = http.Server.prototype.listen;
+http.Server.prototype.listen = function (...args) {
+  this.once('listening', () => process.send?.({ type: 'listening', port: this.address().port }));
+  return originalListen.apply(this, args);
+};
+globalThis.WebSocket = class { constructor() { throw new Error('Fixture blocks external sockets'); } };
+let reads = 0, writes = 0;
+const stocks = ['AAPL', 'MSFT', 'NVDA'];
+const crypto = ['BTC/USD', 'ETH/USD', 'SOL/USD'];
+if (process.env.SMARTMONEY_FIXTURE_LOAD === 'full') {
+  for (let i = stocks.length; i < 60; i++) stocks.push(`S${String.fromCharCode(65 + Math.floor(i / 26))}${String.fromCharCode(65 + i % 26)}`);
+  for (let i = crypto.length; i < 73; i++) crypto.push(`C${String.fromCharCode(65 + Math.floor(i / 26))}${String.fromCharCode(65 + i % 26)}/USD`);
+}
+const json = (body, status = 200) => new Response(JSON.stringify(body), { status, headers: { 'content-type': 'application/json' } });
+globalThis.fetch = async (input, options = {}) => {
+  if ((options.method || 'GET').toUpperCase() !== 'GET') {
+    writes++;
+    process.send?.({ type: 'unsafe-write', method: options.method });
+    throw new Error('Fixture forbids provider mutations');
+  }
+  reads++;
+  const url = new URL(String(input));
+  const p = url.pathname;
+  const now = Date.now(), stamp = new Date(now).toISOString();
+  const asset = symbol => ({ symbol, tradable: true, fractionable: true, status: 'active',
+    class: symbol.includes('/') ? 'crypto' : 'us_equity', exchange: 'NASDAQ', marginable: true });
+  if (p === '/v2/clock') return json({ is_open: false, timestamp: stamp,
+    next_open: '2026-09-09T09:30:00-04:00', next_close: '2026-09-09T16:00:00-04:00' });
+  if (p === '/v2/account') return json({ equity: '10000', cash: '10000', buying_power: '10000', last_equity: '10000', status: 'ACTIVE' });
+  if (p === '/v2/positions' || p === '/v2/orders') return json([]);
+  if (p === '/v2/assets') return json((url.searchParams.get('asset_class') === 'crypto' ? crypto : stocks).map(asset));
+  if (p.startsWith('/v2/assets/')) return json(asset(decodeURIComponent(p.split('/').at(-1))));
+  const symbols = (url.searchParams.get('symbols') || p.match(/stocks\/([^/]+)\//)?.[1] || 'AAPL').split(',');
+  const quote = () => ({ bp: 100, ap: 100.02, bs: 100, as: 100, t: stamp });
+  if (p.includes('/quotes/latest')) return json(p.includes('/stocks/') && !url.searchParams.has('symbols')
+    ? { quote: quote() } : { quotes: Object.fromEntries(symbols.map(s => [s, quote()])) });
+  if (p.endsWith('/latest/quotes')) return json({ quotes: Object.fromEntries(symbols.map(s => [s, quote()])) });
+  if (p.endsWith('/bars')) {
+    const daily = (url.searchParams.get('timeframe') || '').includes('Day');
+    const bars = Array.from({ length: 80 }, (_, i) => ({ t: new Date(now - (80 - i) * (daily ? 86400000 : 60000)).toISOString(),
+      o: 98 + i * .02, h: 99 + i * .02, l: 97.9 + i * .02, c: 98.1 + i * .02, v: 300000 + i * 1000, vw: 99 }));
+    return json({ bars: p.match(/\/stocks\/[^/]+\/bars/) ? bars.reverse() : Object.fromEntries(symbols.map(s => [s, bars])), next_page_token: null });
+  }
+  if (p.includes('snapshots')) return json({ snapshots: Object.fromEntries(symbols.map(s => [s, {
+    latestQuote: quote(), latestTrade: { p: 100, t: stamp }, dailyBar: { o: 98, c: 100, v: 3000000, t: stamp },
+    prevDailyBar: { c: 98, t: new Date(now - 86400000).toISOString() },
+  }])) });
+  if (p.includes('/screener/stocks/movers')) return json({ gainers: stocks.map(symbol => ({ symbol, price: 100, percent_change: 2 })), losers: [] });
+  if (p.includes('news')) return json([]);
+  if (p.endsWith('/quote')) return json({ c: 100, pc: 98, o: 98, h: 101, l: 97, t: Math.floor(now / 1000) });
+  return json({ error: `No fixture for ${p}` }, 404);
+};
+setInterval(() => process.send?.({ type: 'metrics', reads, writes, rss: process.memoryUsage().rss }), 1000).unref();
+await import('../server.js');

@@ -92,6 +92,23 @@ export function compareCanonicalSignals(left = {}, right = {}) {
     Math.abs(Number(left.changePercent || left.percentChange || 0));
 }
 
+// Display capacity is not an execution gate. Keep both asset classes reachable
+// even when one class fills the entire highest-score window.
+export function selectCandidateDisplayWindow(signals = [], limit = 50) {
+  const parsed = Number(limit);
+  const capacity = Number.isFinite(parsed) ? Math.max(1, Math.min(100, Math.floor(parsed))) : 50;
+  const ranked = signals.filter(Boolean).slice().sort(compareCanonicalSignals);
+  const stocks = ranked.filter(s => !isCryptoSignal(s));
+  const crypto = ranked.filter(isCryptoSignal);
+  const reserve = Math.floor(capacity / 2);
+  const selected = new Set([...stocks.slice(0, reserve), ...crypto.slice(0, reserve)]);
+  for (const signal of ranked) {
+    if (selected.size >= capacity) break;
+    selected.add(signal);
+  }
+  return ranked.filter(signal => selected.has(signal)).slice(0, capacity);
+}
+
 const RAW_MOVER_FILL_FIELDS = Object.freeze([
   "price",
   "current",

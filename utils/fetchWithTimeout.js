@@ -8,12 +8,17 @@ export async function fetchWithTimeout(
   timeoutMs = DEFAULT_FETCH_TIMEOUT_MS
 ) {
   const controller = new AbortController();
+  // Keep caller cancellation connected after headers arrive (including while
+  // the response body is being read), without disabling our request deadline.
+  const signal = options.signal
+    ? AbortSignal.any([options.signal, controller.signal])
+    : controller.signal;
   const timeout = setTimeout(() => controller.abort(), timeoutMs);
 
   try {
     return await fetch(url, {
       ...options,
-      signal: options.signal || controller.signal,
+      signal,
     });
   } finally {
     clearTimeout(timeout);

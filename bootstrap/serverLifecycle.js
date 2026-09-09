@@ -24,7 +24,19 @@ export function startServerLifecycle(options) {
     logger.error("RUNNER_RESULT_CHECKER_INTERVAL", error?.message)), 60 * 60 * 1000);
   return app.listen(port, "0.0.0.0", async () => {
     logger.log(`SmartMoney Pro backend running on port ${port}`);
-    startServices.forEach((start) => start());
+    state.serviceStartupErrors = {};
+    // A failed feed must not reject the async listen callback and terminate
+    // Node, nor prevent the other providers and scanner from starting.
+    startServices.forEach((start, index) => {
+      const failed = (error) => {
+        const name = start.name || `service_${index}`;
+        state.serviceStartupErrors[name] = { error: String(error?.message || error).slice(0, 240),
+          failedAt: new Date().toISOString() };
+        logger.error(`SERVICE_START_FAILED ${name}`, error?.message);
+      };
+      try { void Promise.resolve(start()).catch(failed); }
+      catch (error) { failed(error); }
+    });
     logger.log(`Auto trading enabled: ${options.autoTradingEnabled}`);
     if (!runStartupEngineScan || state.running || state.engineFreezeDetected) return;
     setTimeoutFn(() => void runStartupScan().then(() => {

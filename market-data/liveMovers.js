@@ -12,10 +12,10 @@ import {
   evaluateCryptoTradeCandidate,
 } from "../scoring/componentScore.js";
 import {
-  compareCanonicalSignals,
   dedupeSignalsByCanonicalAuthority,
   getCanonicalFinalScore,
   hasExplicitTradeApproval,
+  selectCandidateDisplayWindow,
 } from "../scoring/canonicalSignalRank.js";
 import { normalizeSignalScoreCompleteness } from "../scoring/signalScoreCompleteness.js";
 import {
@@ -757,11 +757,9 @@ export function buildLiveMovers({
     }
   }
 
-  return Array.from(moversBySymbol.values())
+  return selectCandidateDisplayWindow(Array.from(moversBySymbol.values())
     .map((candidate) => ({
       ...candidate,
       canonicalFinalScore: getCanonicalFinalScore(candidate),
-    }))
-    .sort(compareCanonicalSignals)
-    .slice(0, Math.min(100, Math.max(10, Number(limit || 50))));
+    })), Math.min(100, Math.max(10, Number(limit || 50))));
 }
