@@ -1,4 +1,5 @@
 import { addUsStockMarketSessionDays } from "../utils/usMarketCalendar.js";
+import { isCryptoSignal } from './canonicalSignalRank.js';
 
 const HORIZONS = Object.freeze([1, 3, 5]);
 // Construct ICU formatters once, not two or three times for every price in
@@ -6,9 +7,21 @@ const HORIZONS = Object.freeze([1, 3, 5]);
 const etDayFormatter = new Intl.DateTimeFormat('en-CA', { timeZone: 'America/New_York' });
 const etHourFormatter = new Intl.DateTimeFormat('en-US', { timeZone: 'America/New_York', hour: 'numeric', hourCycle: 'h23' });
 
+export function isOutcomeEvidenceQuarantined(observation = {}) {
+  return observation.evidenceQuarantined === true ||
+    (observation.assetClass === 'stock' && isCryptoSignal({ symbol: observation.symbol }));
+}
+
 export function normalizeOutcomeObservation(observation) {
   const next = { ...observation, measurements: { ...(observation.measurements || {}) },
     legacyMeasurements: { ...(observation.legacyMeasurements || {}) } };
+  if (isOutcomeEvidenceQuarantined(observation)) {
+    // Older fast-runner code could register crypto under a stock-session cohort.
+    // Retain its identity and original measurements for audit; those horizons
+    // cannot be converted into verified 24-hour crypto returns after the fact.
+    return { ...next, evidenceQuarantined: true,
+      evidenceQuarantineReason: observation.evidenceQuarantineReason || 'CRYPTO_IN_STOCK_OUTCOME_COHORT' };
+  }
   for (const days of HORIZONS) {
     const value = next.measurements[days];
     if (value?.evidenceVerified && value.measurementPolicyVersion !== 3) {
@@ -158,9 +171,9 @@ function roundedAverage(values = []) {
 }
 
 function summarizeOutcomeHorizon(observations = [], horizonDays) {
-  const verifiedObservations = observations.filter((o) => o.evidenceVersion === 2);
+  const verifiedObservations = observations.filter((o) => o.evidenceVersion === 2 && !isOutcomeEvidenceQuarantined(o));
   const measurements = observations
-    .filter((observation) => observation.evidenceVersion === 2)
+    .filter((observation) => observation.evidenceVersion === 2 && !isOutcomeEvidenceQuarantined(observation))
     .map((observation) => observation?.measurements?.[horizonDays])
     .filter((measurement) =>
       measurement?.evidenceVerified === true && measurement.measurementPolicyVersion === 3 &&
@@ -252,7 +265,7 @@ export function summarizeQuietCandidateOutcomes(
       (observation) => observation?.assetClass === assetClass
     );
     const measuredObservationCount = assetObservations.filter(
-      (observation) => observation.evidenceVersion === 2 && HORIZONS.some((days) =>
+      (observation) => observation.evidenceVersion === 2 && !isOutcomeEvidenceQuarantined(observation) && HORIZONS.some((days) =>
         observation?.measurements?.[days]?.evidenceVerified === true && observation.measurements[days].measurementPolicyVersion === 3 &&
         observation?.measurements?.[days]?.peakReturnPercent !== null &&
         observation?.measurements?.[days]?.peakReturnPercent !== undefined &&
@@ -267,6 +280,7 @@ export function summarizeQuietCandidateOutcomes(
     return {
       assetClass,
       observationCount: assetObservations.length,
+      quarantinedObservationCount: assetObservations.filter(isOutcomeEvidenceQuarantined).length,
       measuredObservationCount,
       becameTradeCount,
       becameTradeRatePercent: assetObservations.length > 0
@@ -335,7 +349,7 @@ export function calculateQuietCandidateLearning(
   );
   const measured = due.filter(
     (observation) => {
-      if (observation.evidenceVersion !== 2 || observation.measurements?.[horizonDays]?.evidenceVerified !== true || observation.measurements[horizonDays].measurementPolicyVersion !== 3) return false;
+      if (isOutcomeEvidenceQuarantined(observation) || observation.evidenceVersion !== 2 || observation.measurements?.[horizonDays]?.evidenceVerified !== true || observation.measurements[horizonDays].measurementPolicyVersion !== 3) return false;
       const value = observation.measurements?.[horizonDays]?.peakReturnPercent;
       return value !== null && value !== undefined && value !== "" &&
         Number.isFinite(Number(value));
@@ -372,6 +386,7 @@ export function calculateQuietCandidateLearning(
     active,
     horizonDays,
     sampleCount: measured.length,
+    quarantinedObservationCount: observations.filter(isOutcomeEvidenceQuarantined).length,
     dueCount: due.length,
     measurementCoverage: Number(measurementCoverage.toFixed(4)),
     uniqueSymbolCount: uniqueSymbols,
@@ -468,6 +483,7 @@ export function updateQuietCandidateOutcomes(
 
   for (const observation of observations) {
     if (observation.assetClass !== assetClass) continue;
+    if (isOutcomeEvidenceQuarantined(observation)) continue;
     if (dayKey < observation.observedDay) continue;
     const confirmedTradeAt = fillsBySymbol.get(observation.symbol.replace(/[/-]/g, ''))
       ?.find(filledAt => filledAt >= observation.observedAt);

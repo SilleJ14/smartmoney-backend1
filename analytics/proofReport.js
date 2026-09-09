@@ -1,10 +1,12 @@
+import { isOutcomeEvidenceQuarantined } from '../scoring/quietCandidateOutcomeTracker.js';
+
 const HORIZONS = [1, 3, 5];
 const DAY_MS = 24 * 60 * 60 * 1000;
 const round = (value, digits = 3) => Number(Number(value || 0).toFixed(digits));
 
 function measuredRows(observations, assetClass, days) {
   return observations
-    .filter((item) => item?.assetClass === assetClass && item.evidenceVersion === 2)
+    .filter((item) => item?.assetClass === assetClass && item.evidenceVersion === 2 && !isOutcomeEvidenceQuarantined(item))
     .map((item) => ({ item, measurement: item?.measurements?.[days], days }))
     .filter(({ measurement }) =>
       measurement?.evidenceVerified === true && measurement.measurementPolicyVersion === 3 &&

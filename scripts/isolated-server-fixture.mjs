@@ -27,13 +27,54 @@ http.Server.prototype.listen = function (...args) {
   this.once('listening', () => process.send?.({ type: 'listening', port: this.address().port }));
   return originalListen.apply(this, args);
 };
-globalThis.WebSocket = class { constructor() { throw new Error('Fixture blocks external sockets'); } };
+// Exercise the real production message handlers without opening a socket. A
+// parent-controlled burst catches failures hidden by disabling all streams.
+const fixtureSockets = [];
+globalThis.WebSocket = class {
+  constructor(address) {
+    if (process.env.SMARTMONEY_FIXTURE_STREAM !== 'finnhub' || new URL(address).hostname !== 'ws.finnhub.io') {
+      throw new Error('Fixture blocks external sockets');
+    }
+    this.readyState = 0;
+    this.subscriptions = new Set();
+    fixtureSockets.push(this);
+    setImmediate(() => { this.readyState = 1; this.onopen?.({}); });
+  }
+  send(data) {
+    const message = JSON.parse(data);
+    if (message.type === 'subscribe') this.subscriptions.add(message.symbol);
+    else if (message.type === 'unsubscribe') this.subscriptions.delete(message.symbol);
+    else throw new Error('Fixture only permits simulated stream subscriptions');
+  }
+  close() { this.readyState = 3; this.onclose?.({}); }
+};
+process.on('message', message => {
+  if (message?.type !== 'finnhub-burst') return;
+  const socket = fixtureSockets.find(item => item.readyState === 1);
+  if (!socket) { process.send?.({ type: 'burst-missing-socket' }); return; }
+  const count = Math.max(1, Math.min(10000, Number(message.count) || 200));
+  const providerSymbols = [...socket.subscriptions];
+  const stock = providerSymbols.find(symbol => !symbol.includes(':')) || 'AAPL';
+  const crypto = providerSymbols.find(symbol => symbol.includes(':')) || 'BINANCE:BTCUSDT';
+  const data = Array.from({ length: count }, (_, i) => ({
+    s: i % 2 ? crypto : stock, p: 100 + (i % 10) / 100, v: 10, t: Date.now(),
+  }));
+  if (message.separateFrames === true) {
+    for (const trade of data) socket.onmessage?.({ data: JSON.stringify({ type: 'trade', data: [trade] }) });
+  } else socket.onmessage?.({ data: JSON.stringify({ type: 'trade', data }) });
+  process.send?.({ type: 'burst-delivered', count, stock, crypto, subscriptions: providerSymbols.length });
+});
 let reads = 0, writes = 0, polygonReads = 0;
 const stocks = ['AAPL', 'MSFT', 'NVDA'];
 const crypto = ['BTC/USD', 'ETH/USD', 'SOL/USD'];
 if (process.env.SMARTMONEY_FIXTURE_LOAD === 'full') {
   for (let i = stocks.length; i < 60; i++) stocks.push(`S${String.fromCharCode(65 + Math.floor(i / 26))}${String.fromCharCode(65 + i % 26)}`);
   for (let i = crypto.length; i < 73; i++) crypto.push(`C${String.fromCharCode(65 + Math.floor(i / 26))}${String.fromCharCode(65 + i % 26)}/USD`);
+}
+const marketSymbols = [...stocks];
+const marketPopulation = Math.max(stocks.length, Math.min(12000, Number(process.env.SMARTMONEY_FIXTURE_POPULATION) || stocks.length));
+for (let i = marketSymbols.length; i < marketPopulation; i++) {
+  marketSymbols.push(`M${String.fromCharCode(65 + Math.floor(i / 676) % 26)}${String.fromCharCode(65 + Math.floor(i / 26) % 26)}${String.fromCharCode(65 + i % 26)}`);
 }
 const json = (body, status = 200) => new Response(JSON.stringify(body), { status, headers: { 'content-type': 'application/json' } });
 globalThis.fetch = async (input, options = {}) => {
@@ -55,7 +96,7 @@ globalThis.fetch = async (input, options = {}) => {
     if (fault === 'stalled') return new Response(new ReadableStream({ start() {} }));
     if (fault === 'unavailable') return json({ error: 'fixture provider outage' }, 503);
     if (fault === 'malformed') return new Response('{invalid');
-    return json({ tickers: stocks.map(ticker => ({ ticker, todaysChangePerc: 2,
+    return json({ tickers: marketSymbols.map(ticker => ({ ticker, todaysChangePerc: 2,
       day: { c: 100, v: 3000000 }, prevDay: { c: 98 }, lastTrade: { p: 100, t: now * 1000000 },
       lastQuote: { bp: 100, ap: 100.02, t: now * 1000000 } })) });
   }
@@ -87,5 +128,12 @@ globalThis.fetch = async (input, options = {}) => {
   if (p.endsWith('/quote')) return json({ c: 100, pc: 98, o: 98, h: 101, l: 97, t: Math.floor(now / 1000) });
   return json({ error: `No fixture for ${p}` }, 404);
 };
-setInterval(() => process.send?.({ type: 'metrics', reads, writes, polygonReads, rss: process.memoryUsage().rss }), 1000).unref();
+let metricAt = performance.now(), maxEventLoopDelayMs = 0;
+setInterval(() => {
+  const now = performance.now();
+  maxEventLoopDelayMs = Math.max(maxEventLoopDelayMs, now - metricAt - 1000);
+  metricAt = now;
+  process.send?.({ type: 'metrics', reads, writes, polygonReads, rss: process.memoryUsage().rss,
+    maxEventLoopDelayMs: Math.round(maxEventLoopDelayMs) });
+}, 1000).unref();
 await import('../server.js');

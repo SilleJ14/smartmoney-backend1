@@ -13,8 +13,13 @@ export function createTaskScheduler({ now = () => Date.now(), onError = () => {}
       await worker();
       return { ran: true, reason: "completed" };
     } catch (error) {
-      await onError(taskName, intervalMs, error);
-      return { ran: true, reason: "failed", error };
+      // These jobs are also launched from timers/feed callbacks. A failure in
+      // error reporting (for example a full disk) must not create a second,
+      // unobserved rejection and terminate the process.
+      let reportingError;
+      try { await onError(taskName, intervalMs, error); }
+      catch (failure) { reportingError = failure; }
+      return { ran: true, reason: "failed", error, ...(reportingError ? { reportingError } : {}) };
     } finally {
       locks.delete(taskName);
     }

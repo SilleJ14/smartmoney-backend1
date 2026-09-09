@@ -1,12 +1,14 @@
 import fs from 'node:fs/promises';
 import path from 'node:path';
 import { createHash } from 'node:crypto';
-import { updateQuietCandidateOutcomes, normalizeOutcomeObservation } from './quietCandidateOutcomeTracker.js';
+import { updateQuietCandidateOutcomes, normalizeOutcomeObservation, isOutcomeEvidenceQuarantined } from './quietCandidateOutcomeTracker.js';
 
 // Durable pages, not one ever-growing engine-state object. Completed pages are
 // retained for research; active pages are visited round-robin with bounded I/O.
 export function createDiscoveryOutcomeStore(directory, { pageBytes = 2 * 1024 * 1024, maxRows = 1000, maxActivePages = 32768 } = {}) {
   let queue = Promise.resolve(), cursor = '', pending = 0;
+  const queueLimit = 64;
+  let peakPending = 0, rejected = 0, completed = 0, failed = 0;
   let indexed = false;
   const activePages = new Set();
   async function ensureIndex() {
@@ -22,9 +24,17 @@ export function createDiscoveryOutcomeStore(directory, { pageBytes = 2 * 1024 * 
     indexed = true;
   }
   const serial = work => {
-    if (pending >= 64) return Promise.reject(new Error('Outcome storage queue full; retry required'));
+    if (pending >= queueLimit) {
+      rejected++;
+      const error = new Error('Outcome storage queue full; retry required');
+      error.code = 'OUTCOME_STORAGE_BACKPRESSURE';
+      return Promise.reject(error);
+    }
     pending++;
-    const job = queue.then(work).finally(() => { pending--; });
+    peakPending = Math.max(peakPending, pending);
+    const job = queue.then(work).then(result => { completed++; return result; }, error => {
+      failed++; throw error;
+    }).finally(() => { pending--; });
     queue = job.catch(() => {});
     return job;
   };
@@ -126,9 +136,9 @@ export function createDiscoveryOutcomeStore(directory, { pageBytes = 2 * 1024 * 
         }).observations;
         if (JSON.stringify(page.observations) !== before) await write(file, page);
       }
-      const needsMeasurement = (o, d) => !o.measurements?.[d] ||
+      const needsMeasurement = (o, d) => !isOutcomeEvidenceQuarantined(o) && (!o.measurements?.[d] ||
         (o.measurements[d].status !== 'MISSED_TARGET_WINDOW' && Object.keys(o.benchmarks || {}).some(b => o.benchmarks[b].baselinePrice > 0 && o.benchmarkMeasurements?.[d]?.[b] == null) &&
-          (page.assetClass === 'stock' ? dayKey === o.targets?.[d] : now <= o.targetTimestamps?.[d] + 6 * 3600000));
+          (page.assetClass === 'stock' ? dayKey === o.targets?.[d] : now <= o.targetTimestamps?.[d] + 6 * 3600000)));
       const due = page.observations.filter(o => [1, 3, 5].some(d => needsMeasurement(o, d) &&
         (page.assetClass === 'stock' ? o.targets?.[d] <= dayKey : o.targetTimestamps?.[d] <= now)));
       if (due.length) {
@@ -138,7 +148,7 @@ export function createDiscoveryOutcomeStore(directory, { pageBytes = 2 * 1024 * 
         const result = updateQuietCandidateOutcomes(page, [], prices, { assetClass: page.assetClass, dayKey, now, fullPopulationPage: true });
         page.observations = result.observations;
         await write(file, page);
-        measured += result.observations.filter(o => Object.keys(o.measurements || {}).length).length;
+        measured += result.observations.filter(o => !isOutcomeEvidenceQuarantined(o) && Object.keys(o.measurements || {}).length).length;
       }
       recentMeasurements.push(...page.observations);
       recentMeasurements.sort((a, b) => b.observedAt - a.observedAt);
@@ -149,6 +159,7 @@ export function createDiscoveryOutcomeStore(directory, { pageBytes = 2 * 1024 * 
       if (terminalMissing && page.observations.every(o => [1, 3, 5].every(d => !needsMeasurement(o, d)))) {
         page.missingBaselines = page.missingBaselines.map(o => ({ ...o, status: 'UNMEASURABLE_BASELINE', terminalAt: now }));
         page.completionStatus = page.missingBaselines.length || page.observations.some(o =>
+          isOutcomeEvidenceQuarantined(o) ||
           [1, 3, 5].some(d => o.measurements?.[d]?.evidenceVerified !== true) ||
           Object.values(o.benchmarks || {}).some(b => !(b.baselinePrice > 0)) ||
           [1, 3, 5].some(d => Object.keys(o.benchmarks || {}).some(b => o.benchmarkMeasurements?.[d]?.[b] == null)))
@@ -182,7 +193,8 @@ export function createDiscoveryOutcomeStore(directory, { pageBytes = 2 * 1024 * 
       }
     }
   }
-  return { ingest: (rows, prices, options) => serial(() => ingestNow(rows, prices, options)),
+  return { getStatus: () => ({ pending, peakPending, queueLimit, rejected, completed, failed }),
+    ingest: (rows, prices, options) => serial(() => ingestNow(rows, prices, options)),
     importObservations: rows => serial(() => importNow(rows)),
     process: (fetchPrices, options) => serial(() => processNow(fetchPrices, options)),
     readPage: (asset, day, symbol) => serial(() => read(path.join(directory, filename(asset, day, symbol)))) };

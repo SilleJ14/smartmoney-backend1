@@ -10,6 +10,7 @@ import { installCentralDecision } from "../scoring/installCentralDecision.js";
 import { calculateDynamicTradeAmount } from '../risk/positionSizing.js';
 import { outstandingOrderNotional } from '../risk/orderRiskReservations.js';
 import { availableBuyingPower } from '../risk/brokerEvidence.js';
+import { refreshCycleSubscriptions } from './refreshCycleSubscriptions.js';
 
 export function createEngineCycle(dependencies) {
   const {
@@ -2854,7 +2855,10 @@ export function createEngineCycle(dependencies) {
         ENABLE_POLYGON_WEBSOCKET &&
         typeof refreshPolygonLiveSubscriptions === "function"
       ) {
-        refreshEarlyMoversThenPolygonSubscriptions();
+        await refreshCycleSubscriptions({
+          refresh: refreshEarlyMoversThenPolygonSubscriptions,
+          engineState,
+        });
       }
       const approvedStockSignals = stockSignals.filter(
         (signal) =>

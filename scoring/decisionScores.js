@@ -3,6 +3,12 @@ import { isLiveQuoteSource } from "../live/liveQuoteCache.js";
 import { hasExplicitTradeApproval } from "./canonicalSignalRank.js";
 
 const clamp = (value) => Math.max(0, Math.min(100, Number(value) || 0));
+const newYorkDayFormatter = new Intl.DateTimeFormat("en-CA", {
+  timeZone: "America/New_York",
+  year: "numeric",
+  month: "2-digit",
+  day: "2-digit",
+});
 
 function component(name, value, weight, source, available = true) {
   const normalized = clamp(value);
@@ -743,12 +749,9 @@ export function getUniqueStockSessionDays(values = []) {
 }
 
 function getNewYorkDayKey(now = Date.now()) {
-  const parts = new Intl.DateTimeFormat("en-CA", {
-    timeZone: "America/New_York",
-    year: "numeric",
-    month: "2-digit",
-    day: "2-digit",
-  }).formatToParts(new Date(now));
+  // Continuation is re-evaluated on quotes and candidate merges. Reuse ICU
+  // configuration without caching the date, so midnight/DST stay correct.
+  const parts = newYorkDayFormatter.formatToParts(new Date(now));
   const values = Object.fromEntries(parts.map((part) => [part.type, part.value]));
   return `${values.year}-${values.month}-${values.day}`;
 }

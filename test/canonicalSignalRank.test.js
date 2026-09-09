@@ -15,6 +15,33 @@ test("explicit unavailable F wins over stale nested positive evidence", () => {
     cryptoDecisionScoreAvailable: false, cryptoScoreTelemetry: { decision: { coreEvidencePass: true } } }), null);
 });
 
+test("failed current evidence cannot be overridden by stale available flags when ranking", () => {
+  const unavailable = [
+    { symbol: "AAPL", stockDecisionScore: 95, stockDecisionScoreAvailable: true,
+      stockDecisionEvidence: { coreEvidencePass: false },
+      centralAutonomousDecisionCore: { stockDecisionEvidence: { coreEvidencePass: true } } },
+    { symbol: "BTC/USD", cryptoDecisionScore: 95, cryptoDecisionScoreAvailable: true,
+      cryptoScoreTelemetry: { decision: { coreEvidencePass: false } },
+      centralAutonomousDecisionCore: { cryptoDecisionEvidence: { coreEvidencePass: true } } },
+  ];
+  const complete = { symbol: "MSFT", stockDecisionScore: 78,
+    stockDecisionScoreAvailable: true, stockDecisionEvidence: { coreEvidencePass: true } };
+  for (const candidate of unavailable) {
+    assert.equal(getCanonicalFinalScore(candidate), null, candidate.symbol);
+    assert.deepEqual([candidate, complete].sort(compareCanonicalSignals).map(row => row.symbol),
+      [complete.symbol, candidate.symbol]);
+  }
+});
+
+test("current validated evidence has the same precedence as score publication", () => {
+  assert.equal(getCanonicalFinalScore({ symbol: "AAPL", stockDecisionScore: 78,
+    stockDecisionEvidence: { coreEvidencePass: true },
+    centralAutonomousDecisionCore: { stockDecisionEvidence: { coreEvidencePass: false } } }), 78);
+  assert.equal(getCanonicalFinalScore({ symbol: "BTC/USD", cryptoDecisionScore: 65,
+    cryptoScoreTelemetry: { decision: { coreEvidencePass: true } },
+    centralAutonomousDecisionCore: { cryptoDecisionEvidence: { coreEvidencePass: false } } }), 65);
+});
+
 test("newer decision rejection replaces older approval in either input order", () => {
   const old = { symbol: "AAPL", stockDecisionScore: 90, stockDecisionScoreAvailable: true,
     approved: true, backendApproved: true, autoTradeApproved: true, qualifiedToBuy: true,

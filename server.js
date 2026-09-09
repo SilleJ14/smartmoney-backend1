@@ -10,6 +10,7 @@ import { isUsStockMarketSessionDayKey } from "./utils/usMarketCalendar.js";
 import { readBoundedResponseText, readBoundedResponseJson, cancelResponseBody } from "./utils/boundedResponse.js";
 import { createSingleFlight } from "./utils/singleFlight.js";
 import { installProcessDiagnostics } from "./bootstrap/processDiagnostics.js";
+import { ingestMixedAssetDiscoveryOutcomes } from "./scoring/mixedAssetDiscoveryOutcomes.js";
 import { takeExplorationWindow, createFairReviewQueue } from "./discovery/fairExploration.js";
 import { createStockQuoteBatch } from "./market-data/stockQuoteBatch.js";
 import { providerDailyBar } from "./discovery/providerDailyBar.js";
@@ -25,9 +26,12 @@ import {
 } from "./utils/fetchWithTimeout.js";
 import { processBatches } from "./utils/processBatches.js";
 import { createLiveSignalPushQueue } from "./live/liveSignalPushQueue.js";
+import { writeBoundedStream } from "./live/boundedStream.js";
+import { createBoundedStreamReplay } from "./live/boundedStreamReplay.js";
 import { normalizeSymbol } from "./utils/normalizeSymbol.js";
 import {
   getTodayKeyET,
+  getEasternClock,
   getQuoteTimestampMs,
 } from "./utils/time.js";
 import { registerAlpacaRoutes } from "./routes/alpacaRoutes.js";
@@ -1218,7 +1222,7 @@ const activeScanLocks = {
 };
 const liveSignalClients = new Set();
 const backendStreamClients = new Set();
-const backendStreamReplayBuffer = [];
+const backendStreamReplayBuffer = createBoundedStreamReplay();
 const backendTapeClients = new Set();
 function broadcastTapeEvent(type, payload = {}) {
   return pushBackendStreamEvent(type, payload);
@@ -1270,6 +1274,7 @@ const liveTaskScheduler = createTaskScheduler({
     });
   },
 });
+const fastRunnerSingleFlight = createSingleFlight();
 const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
 function updateAccountPeaks(account) {
   const mode = TRADING_MODE;
@@ -3007,15 +3012,8 @@ function getMarketSession(clock = {}) {
   if (clock?.is_open === true) {
     return "regular";
   }
-  const nowET = new Date(
-    new Date().toLocaleString("en-US", {
-      timeZone: "America/New_York",
-    })
-  );
-  const hour = nowET.getHours();
-  const minute = nowET.getMinutes();
-  const weekday = nowET.getDay();
-  if (weekday === 0 || weekday === 6) {
+  const { hour, minute, weekday } = getEasternClock();
+  if (weekday === "Sun" || weekday === "Sat") {
     return "closed";
   }
   const minutes = hour * 60 + minute;
@@ -3084,6 +3082,8 @@ function buildBackendHealthPayload(clock = {}) {
       serviceStartupErrors: engineState.serviceStartupErrors || {},
     },
     liveScheduler: engineState.liveSchedulerState || null,
+    outcomeStorage: discoveryOutcomeStore.getStatus(),
+    fastRunnerRefreshError: engineState.fastRunnerRefreshError || null,
     candidates: {
       stocks: Array.isArray(engineState.lastStockSignals) ? engineState.lastStockSignals.length : 0,
       crypto: Array.isArray(engineState.lastCryptoSignals) ? engineState.lastCryptoSignals.length : 0,
@@ -3618,14 +3618,7 @@ function getBotExposure(openPositions = []) {
   }, 0);
 }
 function getEasternMarketMinutes() {
-  const parts = new Intl.DateTimeFormat("en-US", {
-    timeZone: "America/New_York",
-    hour: "2-digit",
-    minute: "2-digit",
-    hour12: false,
-  }).formatToParts(new Date());
-  const hour = Number(parts.find((part) => part.type === "hour")?.value || 0);
-  const minute = Number(parts.find((part) => part.type === "minute")?.value || 0);
+  const { hour, minute } = getEasternClock();
   return hour * 60 + minute;
 }
 function isPremarketMomentumWindow() {
@@ -13636,7 +13629,7 @@ const outcomeWorkerTimer = setInterval(async () => {
     const result = await discoveryOutcomeStore.process(async (asset, symbols) => {
       if (asset === 'crypto') return alpacaCryptoMarketData.getLatestQuotes(symbols);
       const now = new Date();
-      const etHour = Number(new Intl.DateTimeFormat('en-US', { timeZone: 'America/New_York', hour: 'numeric', hourCycle: 'h23' }).format(now));
+      const etHour = getEasternClock(now).hour;
       if (etHour < 16) return [];
       const day = getTodayKeyET();
       const data = await alpacaDataRequest(`/v2/stocks/bars?symbols=${encodeURIComponent(symbols.join(','))}&timeframe=1Day&start=${day}T00:00:00Z&end=${encodeURIComponent(now.toISOString())}&limit=1000&feed=iex`, { maxResponseBytes: 512 * 1024 });
@@ -18679,14 +18672,7 @@ async function getPreMoverSeedSymbols({
   return window.symbols;
 }
 function getEasternSessionClock() {
-  const parts = Object.fromEntries(new Intl.DateTimeFormat("en-US", {
-    timeZone: "America/New_York",
-    weekday: "short",
-    hour: "2-digit",
-    minute: "2-digit",
-    hour12: false,
-  }).formatToParts(new Date()).filter((part) => part.type !== "literal").map((part) => [part.type, part.value]));
-  return { weekday: parts.weekday, hour: Number(parts.hour || 0), minute: Number(parts.minute || 0) };
+  return getEasternClock();
 }
 
 async function runBoundedQuietDiscoveryScan({ force = false } = {}) {
@@ -20754,9 +20740,7 @@ function calculatePdtExitProtection({
   const enteredAt = entry.enteredAt ? new Date(entry.enteredAt) : null;
   const enteredToday =
     enteredAt &&
-    enteredAt.toLocaleDateString("en-CA", {
-      timeZone: "America/New_York",
-    }) === getTodayKeyET();
+    getTodayKeyET(enteredAt) === getTodayKeyET();
   const daytradeCount = Number(account?.daytrade_count || 0);
   const equity = Number(account?.equity || 0);
   const isStock = String(entry.assetClass || "stock") === "stock";
@@ -24859,13 +24843,7 @@ function calculatePhase62MarketPersonalityMemory(signals = []) {
     engineState.phase62MarketPersonalityMemory = {};
   }
   const now = new Date();
-  const etHour = Number(
-    now.toLocaleString("en-US", {
-      timeZone: "America/New_York",
-      hour: "2-digit",
-      hour12: false,
-    })
-  );
+  const etHour = getEasternClock(now).hour;
   const sessionKey =
     etHour < 9
       ? "PREMARKET"
@@ -28104,7 +28082,7 @@ function flushLiveSignalUpdates() {
   });
   for (const client of liveSignalClients) {
     try {
-      client.write(message);
+      if (!writeBoundedStream(client, message)) liveSignalClients.delete(client);
     } catch {
       liveSignalClients.delete(client);
     }
@@ -28118,9 +28096,8 @@ function pushBackendStreamEvent(type, payload = {}) {
     generatedAt: new Date().toISOString(),
     payload,
   };
-  backendStreamReplayBuffer.unshift(event);
-  backendStreamReplayBuffer.splice(100);
   const message = `id: ${event.id}\nevent: ${type}\ndata: ${JSON.stringify(event)}\n\n`;
+  backendStreamReplayBuffer.add(event, message);
   for (const client of backendStreamClients) {
     try {
       const allowedSymbols = client.allowedSymbols || [];
@@ -28133,7 +28110,7 @@ function pushBackendStreamEvent(type, payload = {}) {
       ) {
         continue;
       }
-      client.write(message);
+      if (!writeBoundedStream(client, message)) backendStreamClients.delete(client);
     } catch {
       backendStreamClients.delete(client);
     }
@@ -28141,19 +28118,9 @@ function pushBackendStreamEvent(type, payload = {}) {
   return event;
 }
 function replayBackendStreamEvents(res, since = "") {
-  const replayEvents = backendStreamReplayBuffer
-    .slice()
-    .reverse()
-    .filter((event) => {
-      if (!since) return true;
-      return new Date(event.generatedAt).getTime() >
-        new Date(since).getTime();
-    })
-    .slice(-25);
+  const replayEvents = backendStreamReplayBuffer.since(since);
   for (const event of replayEvents) {
-    res.write(
-      `id: ${event.id}\nevent: ${event.type}\ndata: ${JSON.stringify(event)}\n\n`
-    );
+    if (!writeBoundedStream(res, event.message)) break;
   }
 }
 function mergeLiveQuoteIntoSignal(signal = {}) {
@@ -28837,6 +28804,7 @@ function startPolygonStockStream() {
   try {
     polygonLiveSocket = new WebSocketImpl(POLYGON_WS_URL);
     polygonLiveSocket.onopen = () => {
+      try {
       polygonAuthenticated = false;
       polygonSubscribedSymbols = new Set();
       polygonLiveSocket.send(
@@ -28851,6 +28819,15 @@ function startPolygonStockStream() {
         connectedAt: new Date().toISOString(),
         reason: "Polygon websocket connected. Authentication sent.",
       };
+      } catch (error) {
+        polygonAuthenticated = false;
+        engineState.polygonLiveStreamState = { ok: false, provider: "polygon", authenticated: false,
+          error: "Polygon stream initialization failed; REST fallback remains available.", checkedAt: new Date().toISOString() };
+        processDiagnostics.record("POLYGON_STREAM_OPEN_FAILED", error);
+        try { polygonLiveSocket?.close(); } catch { /* the socket is already unavailable */ }
+        polygonLiveSocket = null;
+        schedulePolygonReconnect();
+      }
     };
     polygonLiveSocket.onmessage = async (event) => {
       try {
@@ -29354,6 +29331,11 @@ function isFastRunnerMemoryFresh(memory = {}) {
   return memory.snapshotOnly === true || secondCandles.length >= 1 || tickWindow.length >= 1;
 }
 async function runFastRunnerEngine() {
+  // API refreshes and full engine cycles call this directly. They must share
+  // the in-progress pass too, not just the feed/timer scheduling lock.
+  return fastRunnerSingleFlight(() => runFastRunnerEnginePass());
+}
+async function runFastRunnerEnginePass() {
   if (!ENABLE_FAST_RUNNER_ENGINE) {
     engineState.fastRunnerEngineState = {
       ok: false,
@@ -29384,8 +29366,8 @@ async function runFastRunnerEngine() {
   if (reviewed.length) {
     const evidenceRows = reviewed.map(candidate => ({ ...candidate,
       t: engineState.liveMarketMemory[normalizeSymbol(candidate.symbol)]?.updatedAt }));
-    await discoveryOutcomeStore.ingest(evidenceRows, evidenceRows, {
-      assetClass: 'stock', dayKey: getTodayKeyET(), now: Date.now(), tradedSymbols: engineState.aiManagedSymbols || [] });
+    await ingestMixedAssetDiscoveryOutcomes(discoveryOutcomeStore, evidenceRows, evidenceRows, {
+      now: Date.now(), tradedSymbols: engineState.aiManagedSymbols || [] });
   }
   const visibleCandidates = reviewed
     .filter((candidate) => {
@@ -31175,6 +31157,22 @@ async function refreshEarlyMoversThenPolygonSubscriptions() {
 async function runLiveScheduledTask(taskName, intervalMs, worker) {
   return liveTaskScheduler.run(taskName, intervalMs, worker);
 }
+function requestFastRunnerRefresh() {
+  // Feed bursts and the periodic poller must share the SAME lock and cadence.
+  // Launching a full scan per trade filled the outcome-store queue, and a
+  // synchronous websocket try/catch cannot catch those rejected promises.
+  void runLiveScheduledTask("runFastRunnerEngine", FAST_RUNNER_ENGINE_INTERVAL_MS,
+    () => runFastRunnerEngine()).then((result) => {
+    if (result.reason === "completed") engineState.fastRunnerRefreshError = null;
+    if (result.reason === "failed") throw result.error;
+  }).catch((error) => {
+    engineState.fastRunnerRefreshError = {
+      message: String(error?.message || error).slice(0, 240),
+      updatedAt: new Date().toISOString(),
+    };
+    console.error("FAST_RUNNER_REFRESH_FAILED", engineState.fastRunnerRefreshError.message);
+  });
+}
 function startLiveScheduler() {
   if (liveSchedulerTimer) return engineState.liveSchedulerState;
   liveSchedulerTimer = setInterval(() => {
@@ -31205,11 +31203,7 @@ function startLiveScheduler() {
       LIVE_EARLY_MOVER_REFRESH_INTERVAL_MS,
       () => refreshEarlyMoversThenPolygonSubscriptions()
     );
-    void runLiveScheduledTask(
-      "runFastRunnerEngine",
-      FAST_RUNNER_ENGINE_INTERVAL_MS,
-      () => runFastRunnerEngine()
-    );
+    requestFastRunnerRefresh();
     void runLiveScheduledTask(
       "runQuickInstitutionalGate",
       QUICK_INSTITUTIONAL_GATE_INTERVAL_MS,
@@ -31868,6 +31862,7 @@ function startFinnhubStream() {
   try {
     finnhubLiveSocket = new WebSocketImpl(FINNHUB_WS_URL);
     finnhubLiveSocket.onopen = () => {
+      try {
       finnhubSocketReconnectAttempts = 0;
       finnhubSubscribedSymbols = new Set();
       finnhubProviderToAppSymbol = new Map();
@@ -31883,6 +31878,14 @@ function startFinnhubStream() {
         cryptoQuoteCurrency: FINNHUB_CRYPTO_QUOTE,
         reason: `Finnhub websocket connected with ${symbols.length} symbols.`,
       };
+      } catch (error) {
+        engineState.liveQuoteStreamState = { ok: false, provider: "finnhub",
+          error: "Finnhub stream initialization failed; other quote providers remain available.", checkedAt: new Date().toISOString() };
+        processDiagnostics.record("FINNHUB_STREAM_OPEN_FAILED", error);
+        try { finnhubLiveSocket?.close(); } catch { /* the socket is already unavailable */ }
+        finnhubLiveSocket = null;
+        scheduleFinnhubReconnect();
+      }
     };
     finnhubLiveSocket.onmessage = (event) => {
       try {
@@ -31891,6 +31894,7 @@ function startFinnhubStream() {
           return;
         }
 
+        let runnerRefreshNeeded = false;
         for (const trade of payload.data) {
           const providerSymbol = String(trade.s || "").trim().toUpperCase();
           const mappedSymbol =
@@ -31918,11 +31922,12 @@ function startFinnhubStream() {
             assetClass: isCrypto(symbol) ? "crypto" : "stock",
             raw: trade,
           });
-          if (engineState.liveMarketMemory?.[symbol]) {
-            void runFastRunnerEngine();
-          }
+          if (engineState.liveMarketMemory?.[symbol]) runnerRefreshNeeded = true;
 
         }
+        // Retain every valid quote, then request at most one bounded refresh
+        // for this message. The next scheduled pass sees any newer prices.
+        if (runnerRefreshNeeded) requestFastRunnerRefresh();
       } catch (err) {
         console.error("Finnhub websocket message error:", err.message);
       }

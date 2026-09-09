@@ -44,9 +44,14 @@ export function getCanonicalFinalScore(signal = {}) {
       signal.finalAutonomousDecisionScore ??
       signal.centralAutonomousDecisionCore?.cryptoDecisionScore
     );
-    const available = signal.cryptoDecisionScoreAvailable === true ||
-      signal.centralAutonomousDecisionCore?.cryptoDecisionEvidence?.coreEvidencePass === true ||
-      signal.cryptoScoreTelemetry?.decision?.coreEvidencePass === true;
+    // Use the current revalidated evidence before the original central snapshot,
+    // just as score publication does. A stale available flag is not stronger
+    // evidence than a current failed scorecard.
+    const evidence = signal.cryptoScoreTelemetry?.decision ||
+      signal.centralAutonomousDecisionCore?.cryptoDecisionEvidence;
+    const available = typeof evidence?.coreEvidencePass === "boolean"
+      ? evidence.coreEvidencePass
+      : signal.cryptoDecisionScoreAvailable === true;
     return available && score !== null ? score : null;
   }
 
@@ -57,10 +62,12 @@ export function getCanonicalFinalScore(signal = {}) {
     signal.stockDecisionScore ??
     signal.decisionScoreTelemetry?.scores?.decision
   );
-  const available = signal.stockDecisionScoreAvailable === true ||
-    signal.stockDecisionEvidence?.coreEvidencePass === true ||
-    signal.centralAutonomousDecisionCore?.stockDecisionEvidence?.coreEvidencePass === true ||
-    signal.decisionScoreTelemetry?.stages?.decision?.coreEvidencePass === true;
+  const evidence = signal.stockDecisionEvidence ||
+    signal.centralAutonomousDecisionCore?.stockDecisionEvidence ||
+    signal.decisionScoreTelemetry?.stages?.decision;
+  const available = typeof evidence?.coreEvidencePass === "boolean"
+    ? evidence.coreEvidencePass
+    : signal.stockDecisionScoreAvailable === true;
   return available && score !== null ? score : null;
 }
 
