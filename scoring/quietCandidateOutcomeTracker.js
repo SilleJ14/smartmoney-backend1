@@ -2,55 +2,6 @@ import { addUsStockMarketSessionDays } from "../utils/usMarketCalendar.js";
 
 const HORIZONS = Object.freeze([1, 3, 5]);
 
-export function normalizeOutcomeObservation(observation) {
-  const next = { ...observation, measurements: { ...(observation.measurements || {}) },
-    legacyMeasurements: { ...(observation.legacyMeasurements || {}) } };
-  for (const days of HORIZONS) {
-    const value = next.measurements[days];
-    if (value?.evidenceVerified && value.measurementPolicyVersion !== 3) {
-      next.legacyMeasurements[days] = { ...value, evidenceVerified: false, status: 'LEGACY_MEASUREMENT_UNVERIFIED' };
-      delete next.measurements[days];
-    }
-  }
-  if (next.peakPolicyVersion !== 3) next.trackingPeakPrice = next.baselinePrice;
-  next.peakPolicyVersion = 3;
-  const benchmarkName = next.assetClass === 'stock' ? 'SPY' : 'Bitcoin';
-  next.benchmarks = { [benchmarkName]: { symbol: next.assetClass === 'stock' ? 'SPY' : 'BTC/USD', baselinePrice: null, baselineStatus: 'MISSING_BASELINE_EVIDENCE' },
-    simpleMomentum: { symbol: null, baselinePrice: null, baselineStatus: 'MISSING_BASELINE_EVIDENCE' }, ...(next.benchmarks || {}) };
-  return next;
-}
-
-function observationEvidence(candidate, assetClass, dayKey, now) {
-  if (assetClass === "stock") {
-    const providerTime = candidate.t == null ? NaN : new Date(candidate.t).getTime();
-    const day = candidate.evidenceDay || candidate.d || candidate.date ||
-      (Number.isFinite(providerTime) && providerTime <= now + 5000
-        ? new Intl.DateTimeFormat('en-CA', { timeZone: 'America/New_York' }).format(new Date(providerTime)) : null);
-    const etDay = new Intl.DateTimeFormat('en-CA', { timeZone: 'America/New_York' }).format(new Date(now));
-    const etHour = Number(new Intl.DateTimeFormat('en-US', { timeZone: 'America/New_York', hour: 'numeric', hourCycle: 'h23' }).format(new Date(now)));
-    const dailyBar = Boolean(candidate.evidenceDay || candidate.d || candidate.date) &&
-      Number(candidate.c ?? candidate.close) > 0;
-    const completedClose = dailyBar && (day < etDay || day === etDay && etHour >= 16);
-    return day === dayKey && day <= etDay
-      ? { valid: true, evidenceDay: day, completedClose,
-        closePrice: completedClose ? Number(candidate.c ?? candidate.close) : null } : { valid: false };
-  }
-  const raw = candidate.liveQuoteUpdatedAt || candidate.quoteUpdatedAt || candidate.priceUpdatedAt || candidate.quoteFetchedAt;
-  const time = typeof raw === "number" ? raw : Date.parse(raw);
-  return Number.isFinite(time) && time <= now + 5000 && now - time <= 60000
-    ? { valid: true, evidenceTimestamp: time } : { valid: false };
-}
-
-export function getQuietFollowupSymbols(state = {}, { now = Date.now(), limit = 120 } = {}) {
-  const due = (Array.isArray(state?.observations) ? state.observations : []).filter((o) => o?.assetClass === "crypto" &&
-    HORIZONS.some((days) => (!o.measurements?.[days] ||
-      (o.measurements[days].status !== "MISSED_TARGET_WINDOW" &&
-        Object.keys(o.benchmarks || {}).some((name) => o.benchmarks[name].baselinePrice > 0 && o.benchmarkMeasurements?.[days]?.[name] == null))) && o.targetTimestamps?.[days] <= now &&
-      now - o.targetTimestamps[days] <= 6 * 3600000));
-  return [...new Set(due.flatMap((o) => [o.symbol,
-    ...Object.values(o.benchmarks || {}).filter(b => b.baselinePrice > 0).map((benchmark) => benchmark.symbol)]))].filter(Boolean).slice(0, limit);
-}
-
 const clamp = (value) => Math.max(0, Math.min(100, Number(value) || 0));
 
 function dayKeyFromDate(value = Date.now()) {
@@ -155,12 +106,10 @@ function roundedAverage(values = []) {
 }
 
 function summarizeOutcomeHorizon(observations = [], horizonDays) {
-  const verifiedObservations = observations.filter((o) => o.evidenceVersion === 2);
   const measurements = observations
-    .filter((observation) => observation.evidenceVersion === 2)
     .map((observation) => observation?.measurements?.[horizonDays])
     .filter((measurement) =>
-      measurement?.evidenceVerified === true && measurement.measurementPolicyVersion === 3 &&
+      measurement &&
       measurement.peakReturnPercent !== null &&
       measurement.peakReturnPercent !== undefined &&
       Number.isFinite(Number(measurement.peakReturnPercent))
@@ -171,10 +120,6 @@ function summarizeOutcomeHorizon(observations = [], horizonDays) {
 
   return {
     horizonDays,
-    denominatorScope: "RETAINED_VERIFIED_BASELINES_NOT_FULL_DISCOVERY_POPULATION",
-    trackedCount: verifiedObservations.length,
-    missedCount: verifiedObservations.filter((o) => o.measurements?.[horizonDays]?.status === "MISSED_TARGET_WINDOW").length,
-    pendingCount: verifiedObservations.filter((o) => !o.measurements?.[horizonDays]).length,
     measuredCount: measurements.length,
     breakoutHitCount,
     breakoutHitRatePercent: measurements.length > 0
@@ -249,8 +194,7 @@ export function summarizeQuietCandidateOutcomes(
       (observation) => observation?.assetClass === assetClass
     );
     const measuredObservationCount = assetObservations.filter(
-      (observation) => observation.evidenceVersion === 2 && HORIZONS.some((days) =>
-        observation?.measurements?.[days]?.evidenceVerified === true && observation.measurements[days].measurementPolicyVersion === 3 &&
+      (observation) => HORIZONS.some((days) =>
         observation?.measurements?.[days]?.peakReturnPercent !== null &&
         observation?.measurements?.[days]?.peakReturnPercent !== undefined &&
         Number.isFinite(
@@ -282,13 +226,6 @@ export function summarizeQuietCandidateOutcomes(
     version: 1,
     generatedAt: new Date(now).toISOString(),
     updatedAt: safeState.updatedAt || null,
-    trackingPolicy: safeState.trackingPolicy || "LEGACY_SELECTED_CANDIDATES",
-    dailySampleLimit: safeState.dailySampleLimit ?? null,
-    untrackedDiscoveriesThisUpdate: safeState.untrackedDiscoveriesThisUpdate ?? null,
-    samplingByAsset: safeState.samplingByAsset || {},
-    discoveryPopulationThisUpdate: safeState.discoveryPopulationThisUpdate ?? null,
-    excludedByRetentionThisUpdate: safeState.excludedByRetentionThisUpdate ?? null,
-    legacyUnverifiedObservationCount: observations.filter((o) => o.evidenceVersion !== 2).length,
     breakoutDefinition: {
       stockPeakReturnPercent: 8,
       cryptoPeakReturnPercent: 10,
@@ -332,7 +269,6 @@ export function calculateQuietCandidateLearning(
   );
   const measured = due.filter(
     (observation) => {
-      if (observation.evidenceVersion !== 2 || observation.measurements?.[horizonDays]?.evidenceVerified !== true || observation.measurements[horizonDays].measurementPolicyVersion !== 3) return false;
       const value = observation.measurements?.[horizonDays]?.peakReturnPercent;
       return value !== null && value !== undefined && value !== "" &&
         Number.isFinite(Number(value));
@@ -398,9 +334,7 @@ export function updateQuietCandidateOutcomes(
     maxObservations = 600,
     maxObservationsPerAsset = 300,
     tradedSymbols = [],
-    tradeEvents = [],
     cryptoMeasurementMaxLagMs = 6 * 60 * 60 * 1000,
-    fullPopulationPage = false,
   } = {}
 ) {
   const safePreviousState = previousState && typeof previousState === "object"
@@ -422,23 +356,13 @@ export function updateQuietCandidateOutcomes(
       .map((value) => symbolOf(typeof value === "string" ? { symbol: value } : value))
       .filter(Boolean)
   );
-  const fillsBySymbol = new Map();
-  for (const event of tradeEvents) {
-    const symbol = symbolOf(event).replace(/[/-]/g, '');
-    const filledAt = Number(event.filledAt);
-    if (!symbol || !Number.isFinite(filledAt) || filledAt <= 0 || filledAt > now) continue;
-    if (!fillsBySymbol.has(symbol)) fillsBySymbol.set(symbol, []);
-    fillsBySymbol.get(symbol).push(filledAt);
-  }
-  for (const times of fillsBySymbol.values()) times.sort((a, b) => a - b);
   const prices = new Map(
     (Array.isArray(priceUniverse) ? priceUniverse : [])
       .map((candidate) => [symbolOf(candidate), {
         price: priceOf(candidate),
         high: highOf(candidate),
-        ...observationEvidence(candidate, assetClass, dayKey, Number(now)),
       }])
-      .filter(([symbol, value]) => symbol && value.price > 0 && value.valid)
+      .filter(([symbol, value]) => symbol && value.price > 0)
   );
   const benchmarkSymbol = assetClass === "stock"
     ? [...prices.keys()].find((symbol) => symbol === "SPY")
@@ -447,70 +371,33 @@ export function updateQuietCandidateOutcomes(
     .map((candidate) => ({
       symbol: symbolOf(candidate),
       price: priceOf(candidate),
-      momentum: Number(candidate.percentChange ?? candidate.changePercent ?? candidate.todaysChangePerc ??
-        (Number(candidate.o) > 0 ? ((priceOf(candidate) - Number(candidate.o)) / Number(candidate.o)) * 100 : -Infinity)),
+      momentum: Number(candidate.percentChange ?? candidate.changePercent ?? candidate.todaysChangePerc ?? -Infinity),
     }))
-    .filter((candidate) => prices.has(candidate.symbol) && candidate.price > 0 && Number.isFinite(candidate.momentum))
+    .filter((candidate) => candidate.symbol && candidate.price > 0 && Number.isFinite(candidate.momentum))
     .sort((a, b) => b.momentum - a.momentum)[0] || null;
   const observations = (Array.isArray(safePreviousState.observations)
     ? safePreviousState.observations
-    : []).map(normalizeOutcomeObservation).map((observation) => ({
+    : []).map((observation) => ({
       ...observation,
       targets: { ...(observation.targets || {}) },
       measurements: { ...(observation.measurements || {}) },
-      benchmarkMeasurements: Object.fromEntries(Object.entries(observation.benchmarkMeasurements || {})
-        .map(([days, values]) => [days, { ...values }])),
     }));
 
   for (const observation of observations) {
     if (observation.assetClass !== assetClass) continue;
-    if (dayKey < observation.observedDay) continue;
-    const confirmedTradeAt = fillsBySymbol.get(observation.symbol.replace(/[/-]/g, ''))
-      ?.find(filledAt => filledAt >= observation.observedAt);
-    // Benchmarks have independent completion state: a measured candidate must
-    // not prevent a late (but still in-window) benchmark from being recorded.
-    for (const days of HORIZONS) {
-      const measurement = observation.measurements[days];
-      if (!measurement || measurement.status === "MISSED_TARGET_WINDOW") continue;
-      const target = Number(observation.targetTimestamps?.[days] || Infinity);
-      const inWindow = assetClass === "crypto"
-        ? Number(now) >= target && Number(now) <= target + cryptoMeasurementMaxLagMs
-        : dayKey === observation.targets?.[days];
-      if (!inWindow) continue;
-      for (const [name, benchmark] of Object.entries(observation.benchmarks || {})) {
-        if (observation.benchmarkMeasurements[days]?.[name] != null) continue;
-        const value = prices.get(benchmark.symbol);
-        const baseline = Number(benchmark.baselinePrice || 0);
-        if (!value || baseline <= 0 || (assetClass === 'stock' ? !value.completedClose : value.evidenceTimestamp < target)) continue;
-        observation.benchmarkMeasurements[days] ||= {};
-        const benchmarkClose = assetClass === 'stock' ? value.closePrice : value.price;
-        observation.benchmarkMeasurements[days][name] = Number((((benchmarkClose - baseline) / baseline) * 100).toFixed(4));
-      }
-    }
     if (
-      (traded.has(observation.symbol) || confirmedTradeAt) &&
+      traded.has(observation.symbol) &&
       observation.alreadyTradedAtSelection !== true
     ) {
       observation.becameTrade = true;
-      observation.becameTradeAt ||= Number(confirmedTradeAt || now);
+      observation.becameTradeAt ||= Number(now);
     }
     const current = prices.get(observation.symbol);
-    if (!current) {
-      observation.lastEvidenceStatus = "MISSING_OR_STALE_TARGET_PRICE";
-      for (const days of HORIZONS) {
-        const missed = assetClass === "crypto"
-          ? Number(now) > Number(observation.targetTimestamps?.[days] || Infinity) + cryptoMeasurementMaxLagMs
-          : dayKey > observation.targets?.[days];
-        if (!observation.measurements[days] && missed) observation.measurements[days] = {
-          status: "MISSED_TARGET_WINDOW", closeReturnPercent: null, peakReturnPercent: null, evidenceVerified: false,
-        };
-      }
-      continue;
-    }
+    if (!current) continue;
     // Crypto provider highs are commonly rolling 24-hour highs and may have
     // occurred before this candidate was selected. Only observed scan prices
     // are eligible for post-selection crypto peak tracking.
-    const observedPeakPrice = assetClass === "crypto" || dayKey <= observation.observedDay
+    const observedPeakPrice = assetClass === "crypto"
       ? current.price
       : current.high;
     const peakPrice = Math.max(
@@ -531,7 +418,6 @@ export function updateQuietCandidateOutcomes(
         )
       ) continue;
       const targetTimestamp = Number(observation.targetTimestamps?.[days] || 0);
-      if (assetClass === "crypto" && current.evidenceTimestamp < targetTimestamp) continue;
       const missedTargetWindow = assetClass === "crypto"
         ? targetTimestamp > 0 && Number(now) > targetTimestamp + cryptoMeasurementMaxLagMs
         : dayKey > observation.targets[days];
@@ -547,24 +433,14 @@ export function updateQuietCandidateOutcomes(
         };
         continue;
       }
-      // The target-day date is not evidence of a closing price. Live/premarket
-      // observations still update observed peaks, but cannot settle a horizon.
-      if (assetClass === 'stock' && !current.completedClose) continue;
-      const closingPrice = assetClass === 'stock' ? current.closePrice : current.price;
-      const closeReturnPercent = ((closingPrice - observation.baselinePrice) /
+      const closeReturnPercent = ((current.price - observation.baselinePrice) /
         observation.baselinePrice) * 100;
       const peakReturnPercent = ((peakPrice - observation.baselinePrice) /
         observation.baselinePrice) * 100;
       observation.measurements[days] = {
-        measurementPolicyVersion: 3,
-        priceBasis: assetClass === 'stock' ? 'COMPLETED_SESSION_CLOSE' : 'TARGET_WINDOW_OBSERVED_PRICE',
-        peakBasis: 'POST_SELECTION_OBSERVED_PEAK_NOT_CONTINUOUS_TICK_COVERAGE',
-        evidenceVerified: observation.evidenceVersion === 2,
-        evidenceTimestamp: current.evidenceTimestamp || null,
-        evidenceDay: current.evidenceDay || null,
         targetDay: observation.targets[days],
         measuredDay: dayKey,
-        closePrice: Number(closingPrice.toFixed(8)),
+        closePrice: Number(current.price.toFixed(8)),
         closeReturnPercent: Number(closeReturnPercent.toFixed(4)),
         peakReturnPercent: Number(peakReturnPercent.toFixed(4)),
         breakoutHit: peakReturnPercent >= (assetClass === "crypto" ? 10 : 8),
@@ -574,9 +450,8 @@ export function updateQuietCandidateOutcomes(
         Object.entries(observation.benchmarks || {}).map(([name, benchmark]) => {
           const currentBenchmark = prices.get(benchmark.symbol);
           const baseline = Number(benchmark.baselinePrice || 0);
-          return [name, currentBenchmark && baseline > 0 &&
-            (assetClass === 'stock' ? currentBenchmark.completedClose : currentBenchmark.evidenceTimestamp >= targetTimestamp)
-            ? Number(((((assetClass === 'stock' ? currentBenchmark.closePrice : currentBenchmark.price) - baseline) / baseline) * 100).toFixed(4))
+          return [name, currentBenchmark && baseline > 0
+            ? Number((((currentBenchmark.price - baseline) / baseline) * 100).toFixed(4))
             : null];
         })
       );
@@ -584,24 +459,9 @@ export function updateQuietCandidateOutcomes(
   }
 
   const existing = new Set(observations.map((observation) => observation.id));
-  // Freeze a bounded daily sample so frequent scans cannot evict observations
-  // before day 3/5. Stable hashing avoids selecting only the highest D scores.
-  const dailySampleLimit = fullPopulationPage ? Infinity : Math.min(40, Math.floor(safeMaxPerAsset / 6));
-  const dailySlots = Math.max(0, dailySampleLimit - observations.filter((o) => o.assetClass === assetClass && o.observedDay === dayKey).length);
-  const sampleHash = (candidate) => {
-    let hash = 2166136261;
-    for (const char of `${dayKey}:${symbolOf(candidate)}`) hash = Math.imul(hash ^ char.charCodeAt(0), 16777619);
-    return hash >>> 0;
-  };
-  const registrationCandidates = (Array.isArray(selectedCandidates) ? selectedCandidates : [])
-    .filter((candidate) => !existing.has(`${assetClass}:${symbolOf(candidate)}:${dayKey}`))
-    .filter((candidate) => prices.has(symbolOf(candidate)) || observationEvidence(candidate, assetClass, dayKey, Number(now)).valid)
-    .sort((a, b) => sampleHash(a) - sampleHash(b)).slice(0, dailySlots);
-  for (const candidate of registrationCandidates) {
+  for (const candidate of Array.isArray(selectedCandidates) ? selectedCandidates : []) {
     const symbol = symbolOf(candidate);
-    const ownEvidence = observationEvidence(candidate, assetClass, dayKey, Number(now));
-    const evidence = prices.get(symbol) || (ownEvidence.valid ? { ...ownEvidence, price: priceOf(candidate) } : null);
-    const price = evidence?.price || 0;
+    const price = priceOf(candidate);
     const id = `${assetClass}:${symbol}:${dayKey}`;
     if (!symbol || price <= 0 || existing.has(id)) continue;
     const discoveryScore = Number(
@@ -610,20 +470,16 @@ export function updateQuietCandidateOutcomes(
       candidate.preMoveScore ?? 0
     );
     observations.push({
-      evidenceVersion: 2,
       id,
       assetClass,
       symbol,
       observedDay: dayKey,
       observedAt: Number(now),
       baselinePrice: Number(price.toFixed(8)),
-      baselineEvidenceTimestamp: evidence.evidenceTimestamp || null,
-      baselineEvidenceDay: evidence.evidenceDay || null,
       // Start future-outcome tracking at the observation price. The current
       // bar's earlier high happened before selection and must not leak into a
       // 1/3/5-day result.
       trackingPeakPrice: Number(price.toFixed(8)),
-      peakPolicyVersion: 3,
       discoveryScore: Number(clamp(discoveryScore).toFixed(2)),
       discoveryTier: candidate.discoveryTier || candidate.cryptoDiscoveryTier || candidate.tier || null,
       scoringModelVersion: candidate.scoringModelVersion ||
@@ -651,61 +507,32 @@ export function updateQuietCandidateOutcomes(
         : {},
       measurements: {},
       benchmarks: {
-        [assetClass === 'stock' ? 'SPY' : 'Bitcoin']: {
-          symbol: benchmarkSymbol || (assetClass === 'stock' ? 'SPY' : 'BTC/USD'),
-          baselinePrice: benchmarkSymbol ? prices.get(benchmarkSymbol).price : null,
-          baselineStatus: benchmarkSymbol ? 'VERIFIED_AT_SELECTION' : 'MISSING_BASELINE_EVIDENCE',
-        },
-        simpleMomentum: { symbol: momentumCandidate?.symbol || null, baselinePrice: momentumCandidate?.price || null,
-          baselineStatus: momentumCandidate ? 'VERIFIED_AT_SELECTION' : 'MISSING_BASELINE_EVIDENCE' },
+        ...(benchmarkSymbol && prices.get(benchmarkSymbol)
+          ? { [assetClass === "stock" ? "SPY" : "Bitcoin"]: { symbol: benchmarkSymbol, baselinePrice: prices.get(benchmarkSymbol).price } }
+          : {}),
+        ...(momentumCandidate
+          ? { simpleMomentum: { symbol: momentumCandidate.symbol, baselinePrice: momentumCandidate.price } }
+          : {}),
       },
       benchmarkMeasurements: {},
     });
     existing.add(id);
   }
-  const bounded = fullPopulationPage ? observations : ["stock", "crypto"]
-    .flatMap((className) => {
-      const rows = observations.filter((o) => o.assetClass === className);
-      const completed = rows.filter((o) => o.measurements?.[3]?.evidenceVerified === true)
-        .sort((a, b) => b.observedAt - a.observedAt).slice(0, Math.floor(safeMaxPerAsset / 3));
-      const reserved = new Set(completed.map((o) => o.id));
-      const pending = (o) => o.evidenceVersion === 2 && !o.measurements?.[5] &&
-        (o.assetClass === "stock" ? o.targets?.[5] >= new Intl.DateTimeFormat("en-CA", { timeZone: "America/New_York" }).format(new Date(now)) : Number(o.targetTimestamps?.[5]) + 6 * 3600000 >= Number(now));
-      const remaining = rows.filter((o) => !reserved.has(o.id)).sort((a, b) =>
-        Number(pending(b)) - Number(pending(a)) || a.observedAt - b.observedAt);
-      return [...completed, ...remaining].slice(0, safeMaxPerAsset);
-    })
+  const bounded = ["stock", "crypto"]
+    .flatMap((className) => observations
+      .filter((observation) => observation.assetClass === className)
+      .sort((a, b) => Number(b.observedAt || 0) - Number(a.observedAt || 0))
+      .slice(0, safeMaxPerAsset))
     .sort((a, b) => Number(b.observedAt || 0) - Number(a.observedAt || 0))
     .slice(0, safeMaxObservations);
   const nextState = {
-    version: 2,
-    measurementPolicyVersion: 3,
+    version: 1,
     updatedAt: new Date(now).toISOString(),
     updatedDayKey: dayKey,
     maxObservations: safeMaxObservations,
     maxObservationsPerAsset: safeMaxPerAsset,
     observationCount: bounded.length,
-    trackingPolicy: fullPopulationPage ? "DURABLE_FULL_POPULATION_PAGE" : "BOUNDED_DISCOVERY_SAMPLE_NOT_FULL_POPULATION",
-    dailySampleLimit,
-    untrackedDiscoveriesThisUpdate: selectedCandidates.filter((candidate) =>
-      !bounded.some((o) => o.id === `${assetClass}:${symbolOf(candidate)}:${dayKey}`)).length,
-    discoveryPopulationThisUpdate: selectedCandidates.length,
-    excludedByRetentionThisUpdate: Math.max(0, observations.length - bounded.length),
-    missingBaselineEvidenceThisUpdate: selectedCandidates.filter((c) => !prices.has(symbolOf(c))).length,
     observations: bounded,
-  };
-  nextState.samplingByAsset = {
-    ...(safePreviousState.samplingByAsset || {}),
-    [assetClass]: {
-      updatedAt: nextState.updatedAt, dayKey, dailySampleLimit,
-      discoveredThisUpdate: selectedCandidates.length,
-      eligibleBaselineThisUpdate: selectedCandidates.filter((c) => prices.has(symbolOf(c))).length,
-      sampledThisUpdate: selectedCandidates.filter((c) => bounded.some((o) =>
-        o.id === `${assetClass}:${symbolOf(c)}:${dayKey}`)).length,
-      untrackedThisUpdate: nextState.untrackedDiscoveriesThisUpdate,
-      missingBaselineEvidenceThisUpdate: nextState.missingBaselineEvidenceThisUpdate,
-      retained: bounded.filter((o) => o.assetClass === assetClass).length,
-    },
   };
   nextState.learning = {
     stock: calculateQuietCandidateLearning(nextState, { assetClass: "stock" }),

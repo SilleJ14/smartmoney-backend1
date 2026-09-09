@@ -24,14 +24,13 @@ export function updateStockContinuationSession(
     ...new Set(
       (Array.isArray(previous.seenDays) ? previous.seenDays : [])
         .map((value) => String(value || "").trim())
-        .filter((value) => isUsStockMarketSessionDayKey(value) && value <= normalizedDayKey &&
-          Date.parse(normalizedDayKey) - Date.parse(value) <= 35 * 86400000)
+        .filter((value) => isUsStockMarketSessionDayKey(value))
     ),
   ].slice(-MAX_TRACKED_SESSIONS);
   const priorSessionEvidence = (Array.isArray(previous.sessionEvidence)
     ? previous.sessionEvidence
     : [])
-    .filter((item) => priorSeenDays.includes(item?.dayKey))
+    .filter((item) => isUsStockMarketSessionDayKey(item?.dayKey))
     .slice(-MAX_TRACKED_SESSIONS)
     .map((item) => ({
       dayKey: item.dayKey,
@@ -75,7 +74,12 @@ export function updateStockContinuationSession(
       currentEvidence,
     ].sort((a, b) => a.dayKey.localeCompare(b.dayKey)).slice(-MAX_TRACKED_SESSIONS)
     : priorSessionEvidence;
-  const nextCount = (name) => sessionEvidence.filter((item) => seenDays.includes(item.dayKey) && item[name]).length;
+  const eventIncrement = (name) =>
+    currentEvidence?.[name] === true && priorCurrentEvidence[name] !== true ? 1 : 0;
+  const nextCount = (name, previousCount) => Math.min(
+    seenDays.length,
+    boundedSessionCount(previousCount, priorSessionCount) + eventIncrement(name)
+  );
 
   return {
     seenDays,

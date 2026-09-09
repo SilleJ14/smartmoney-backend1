@@ -20,7 +20,7 @@ export function loadPersistedEngineState(
       console.error(
         `Engine state exceeded the safe load budget and was archived: ${oversizedFile}`
       );
-      return { safetyReconciliationRequired: true, safetyStateLoadFailed: true };
+      return {};
     }
     if (fileSize > backupThresholdBytes) {
       const migrationBackup = `${engineStateFile}.pre-memory-compaction`;
@@ -32,12 +32,10 @@ export function loadPersistedEngineState(
     const raw = fs.readFileSync(engineStateFile, "utf8").trim();
 
     if (!raw) {
-      throw new Error('Empty engine state');
+      return {};
     }
 
-    const parsed = JSON.parse(raw);
-    if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) throw new Error('Invalid engine state');
-    return parsed;
+    return JSON.parse(raw);
   } catch (err) {
     console.error(
       "Could not load engine-state.json:",
@@ -56,6 +54,6 @@ export function loadPersistedEngineState(
       );
     } catch {}
 
-    return { safetyReconciliationRequired: true, safetyStateLoadFailed: true };
+    return {};
   }
 }

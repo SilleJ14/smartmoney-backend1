@@ -1,21 +1,24 @@
 import {
   compareCanonicalSignals,
-  dedupeSignalsByCanonicalAuthority,
   getCanonicalFinalScore,
   hasExplicitTradeApproval,
-  selectCandidateDisplayWindow,
 } from "../scoring/canonicalSignalRank.js";
-import { buildRawEarlyMoverCandidates } from "../market-data/liveMovers.js";
 
 function uniqueSignals(signals, normalizeSymbol) {
-  return dedupeSignalsByCanonicalAuthority(signals, { normalizeSymbol });
+  return signals
+    .filter(Boolean)
+    .filter(
+      (signal, index, all) =>
+        all.findIndex(
+          (item) => normalizeSymbol(item.symbol) === normalizeSymbol(signal.symbol)
+        ) === index
+    );
 }
 
 function collectSignals(state, latestStatus, normalizeSymbol, includeFastRunners = false) {
   const orchestration = latestStatus?.phase20AutonomousOrchestration || {};
   return uniqueSignals(
     [
-      ...(includeFastRunners ? buildRawEarlyMoverCandidates({ state, normalizeSymbol }) : []),
       ...(Array.isArray(state.topStockSignals) ? state.topStockSignals : []),
       ...(Array.isArray(state.lastStockSignals) ? state.lastStockSignals : []),
       ...(includeFastRunners && Array.isArray(state.fastRunnerCandidates)
@@ -112,23 +115,15 @@ export function registerFrontendRoutes(app, dependencies) {
       const approvedSignals = signals
         .filter(hasExplicitTradeApproval)
         .sort(compareCanonicalSignals);
-      const displayLimit = Math.min(
-        100,
-        Math.max(10, Number(req.query.limit || 50))
-      );
-      const displaySignals = selectCandidateDisplayWindow(signals, displayLimit);
-      const watchSignals = displaySignals.filter(
-        (signal) => !hasExplicitTradeApproval(signal)
-      );
+      const displaySignals = approvedSignals.length
+        ? approvedSignals
+        : signals.sort(compareCanonicalSignals);
       res.json({
         success: true,
         count: displaySignals.length,
         approvedCount: approvedSignals.length,
-        watchCount: watchSignals.length,
-        source: "canonical_ranked_signals",
+        source: approvedSignals.length ? "approved_signals" : "memory_snapshot_fallback",
         signals: displaySignals,
-        approvedSignals: approvedSignals.slice(0, displayLimit),
-        watchSignals,
       });
     } catch (err) {
       console.error("frontend signals error", err);

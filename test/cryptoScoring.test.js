@@ -82,7 +82,6 @@ test("quiet liquid major crypto keeps its score and reports missing statistics a
 
 test("crypto liquidity uses reported 24-hour volume or the full bar window, not only the latest bar", () => {
   const bars = Array.from({ length: 30 }, (_, index) => ({
-    t: Date.now() - (30 - index) * 300000,
     c: 100,
     v: index === 29 ? 0.01 : 10,
   }));
@@ -123,7 +122,7 @@ test("aggregated crypto liquidity normalizes different bar windows to the same d
 });
 
 test("crypto liquidity applies source-aware thresholds", () => {
-  const bars = Array.from({ length: 30 }, (_, i) => ({ t: Date.now() - (30 - i) * 300000, c: 100, v: 10 }));
+  const bars = Array.from({ length: 30 }, () => ({ c: 100, v: 10 }));
   const windowMetrics = calculateCryptoLiquidityFromBars(bars, 100);
   const thinDailyMetrics = calculateCryptoLiquidityFromBars(bars, 100, {
     dollarVolume24h: 25_000,
@@ -372,7 +371,7 @@ test("missing independent crypto context cannot inflate the remaining decision e
     ask: 100.05,
     windowDollarVolume: 1_000_000,
     multiDayContinuationScore: 80,
-    multiDayAccumulation: { seenDays: [1, 2].map((days) => new Date(now - days * 86400000).toISOString().slice(0, 10)) },
+    multiDayAccumulation: { seenDays: ["2026-08-20", "2026-08-21"] },
   }, { now });
 
   const context = result.componentsByName.strategyEvolution;
@@ -385,7 +384,7 @@ test("missing independent crypto context cannot inflate the remaining decision e
   assert.ok(result.score < availableContribution / result.coverage);
 });
 
-test("crypto decision score uses discovery, entry and context, with separate continuation telemetry", () => {
+test("crypto decision score uses independent discovery, entry, continuation, and context families", () => {
   const result = buildCryptoDecisionScore({
     symbol: "BTC/USD",
     cryptoDiscoveryScorecard: {
@@ -410,7 +409,7 @@ test("crypto decision score uses discovery, entry and context, with separate con
     windowDollarVolume: 1_000_000,
     cryptoExecutionScore: 76,
     multiDayContinuationScore: 70,
-    multiDayAccumulation: { seenDays: [1, 2].map((days) => new Date(Date.now() - days * 86400000).toISOString().slice(0, 10)) },
+    multiDayAccumulation: { seenDays: ["2026-08-20", "2026-08-21"] },
     cryptoScoreObservations: {
       phase43: { adjustment: 4 },
       phase44: { adjustment: -8 },
@@ -489,7 +488,7 @@ test("shared crypto execution gate requires central and freshly complete evidenc
     ask: 100.05,
     windowDollarVolume: 1_000_000,
     multiDayContinuationScore: 75,
-    multiDayAccumulation: { seenDays: [1, 2].map((days) => new Date(Date.now() - days * 86400000).toISOString().slice(0, 10)) },
+    multiDayAccumulation: { seenDays: ["2026-08-20", "2026-08-21"] },
   };
 
   const missingCentral = evaluateCryptoTradeCandidate(complete, { minimumScore: 85 });
@@ -499,10 +498,9 @@ test("shared crypto execution gate requires central and freshly complete evidenc
   const approved = evaluateCryptoTradeCandidate({
     ...complete,
     centralAutonomousDecisionCore: {
-      updatedAt: new Date().toISOString(), action: "ALLOW",
       cryptoDecisionEvidence: { coreEvidencePass: true },
     },
-  }, { minimumScore: 65 });
+  }, { minimumScore: 85 });
   assert.equal(approved.approved, true);
 
   const staleCentralWideQuote = evaluateCryptoTradeCandidate({
@@ -511,7 +509,6 @@ test("shared crypto execution gate requires central and freshly complete evidenc
     ask: 100,
     spreadPercent: 0,
     centralAutonomousDecisionCore: {
-      updatedAt: new Date().toISOString(), action: "ALLOW",
       cryptoDecisionEvidence: { coreEvidencePass: true },
     },
   }, { minimumScore: 85 });
@@ -546,9 +543,8 @@ test("crypto execution gate uses a 65 minimum Final Decision score", () => {
     ask: 100.05,
     windowDollarVolume: 1_000_000,
     multiDayContinuationScore: 75,
-    multiDayAccumulation: { seenDays: [1, 2].map((days) => new Date(Date.now() - days * 86400000).toISOString().slice(0, 10)) },
+    multiDayAccumulation: { seenDays: ["2026-08-20", "2026-08-21"] },
     centralAutonomousDecisionCore: {
-      updatedAt: new Date().toISOString(), action: "ALLOW",
       cryptoDecisionEvidence: { coreEvidencePass: true },
     },
   };
@@ -566,9 +562,9 @@ test("crypto execution gate uses a 65 minimum Final Decision score", () => {
   assert.ok(belowThreshold.reasons.includes("DECISION_SCORE_BELOW_THRESHOLD"));
 });
 
-test("crypto immediate-entry F can finalize without MD, but never bypasses execution evidence", () => {
+test("crypto cannot finalize without measured continuation even at 80 percent coverage", () => {
   const now = Date.now();
-  const candidate = {
+  const result = buildCryptoDecisionScore({
     symbol: "BTC/USD",
     cryptoDiscoveryScorecard: {
       score: 90,
@@ -592,34 +588,11 @@ test("crypto immediate-entry F can finalize without MD, but never bypasses execu
     bid: 99.95,
     ask: 100.05,
     windowDollarVolume: 1_000_000,
-  };
-  const result = buildCryptoDecisionScore(candidate, { now });
-  assert.equal(result.coverage, 1);
-  assert.equal(result.coreEvidencePass, true);
-  assert.equal(result.scoreStatus, "FINAL");
-  assert.ok(result.score >= 65);
-  assert.equal(result.continuationEvidence.available, false);
-  assert.equal(result.continuationEvidence.requiredForImmediateEntry, false);
-  assert.equal(result.missingCriticalEvidence.includes("continuation"), false);
-  const days = [2, 1].map(offset => new Date(now - offset * 86400000).toISOString().slice(0, 10));
-  for (const score of [0, 50, 100]) {
-    const withMD = buildCryptoDecisionScore({ ...candidate, multiDayAccumulation: { seenDays: days }, continuationScorecard: { score, available: true } }, { now });
-    assert.equal(withMD.score, result.score, "MD is independent from immediate-entry F");
-    assert.equal(withMD.componentsByName.runner.available, true);
-  }
-  for (const overrides of [
-    { liveQuoteUpdatedAt: new Date(now - 6000).toISOString() },
-    { spreadUpdatedAt: new Date(now - 6000).toISOString() },
-    { bid: null, ask: null },
-    { bid: 99, ask: 101 },
-    { windowDollarVolume: 0 },
-    { newsCatalyst: { dataAvailable: false } },
-    { newsCatalyst: { dataAvailable: true, riskDetected: true } },
-  ]) {
-    const blocked = buildCryptoDecisionScore({ ...candidate, ...overrides }, { now });
-    assert.equal(blocked.coreEvidencePass, false, JSON.stringify(overrides));
-  }
-  assert.equal(evaluateCryptoTradeCandidate(candidate, { now }).approved, false, "a score is not central approval");
+  }, { now });
+  assert.equal(result.coverage, 0.8);
+  assert.equal(result.coreEvidencePass, false);
+  assert.equal(result.scoreStatus, "PROVISIONAL_INCOMPLETE_EVIDENCE");
+  assert.ok(result.missingCriticalEvidence.includes("continuation"));
 });
 
 test("crypto decision evidence rejects a stale quote before order submission", () => {
@@ -700,8 +673,7 @@ test("derived runner strength is not reused as independent continuation evidence
   });
 
   assert.equal(result.componentsByName.runner.available, false);
-  assert.equal(result.missingComponents.includes("runner"), false);
-  assert.equal(result.continuationEvidence.available, false);
+  assert.ok(result.missingComponents.includes("runner"));
 });
 
 test("crypto decision coverage fails closed when a derived score lacks raw spread evidence", () => {
@@ -832,8 +804,8 @@ test("a Discovery 67 with unavailable Entry evidence never becomes a finalized F
   const evidence = buildCryptoDecisionScore(candidate, { now });
   assert.equal(
     evidence.score,
-    40.2,
-    "missing Entry evidence must contribute zero rather than inflate F"
+    33.5,
+    "missing Entry and Continuation evidence must contribute zero rather than inflate F"
   );
   assert.equal(evidence.componentsByName.execution.available, false);
   assert.equal(evidence.coreEvidencePass, false);

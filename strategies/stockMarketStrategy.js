@@ -6,8 +6,6 @@ import {
   evaluateStockTradeCandidate,
 } from "../scoring/decisionScores.js";
 import { classifyStockDiscoveryLane } from "../discovery/stockDiscoveryLanes.js";
-import { normalizeSignalScoreCollection } from "../scoring/signalScoreCompleteness.js";
-import { evaluateNewsReviewEligibility } from "../scoring/newsReviewEligibility.js";
 
 export function createStockMarketStrategy(dependencies) {
   const {
@@ -83,7 +81,6 @@ export function createStockMarketStrategy(dependencies) {
     recordFailedOrder,
     recordOrder,
     recordSkippedSymbol,
-    recordCandidateEvent = () => {},
     updateAdaptiveRunnerLearningState,
     updateAutonomousCapitalRotationState,
     updateAutonomousMarketIntelligenceState,
@@ -107,6 +104,7 @@ export function createStockMarketStrategy(dependencies) {
   } = dependencies;
 
   function calculateInstitutionalScores(q) {
+    const TRADING_MODE = getTradingMode();
     const confirmations = q.confirmations || {};
     const technicals = q.technicals || {};
     const momentum = Number(q.percentChange || 0);
@@ -212,7 +210,7 @@ export function createStockMarketStrategy(dependencies) {
       institutionalScore,
       minScoreToBuy: CONFIG.minScoreToBuy,
       institutionalEntryScore: Number(q.entryQualityScore || citadelTechnical.institutionalEntryScore || 0),
-      assetClass: "stock",
+      tradingMode: TRADING_MODE,
       fundamentalDataValid,
       valuationRiskScore: institutionalDcf.valuationRiskScore,
       earningsRiskMode: earnings.earningsRiskMode,
@@ -476,15 +474,15 @@ export function createStockMarketStrategy(dependencies) {
     }
   
     if (price < CONFIG.minStockPrice) {
-      return discoveryOnly(`Watch only: price below $${CONFIG.minStockPrice}`);
+      return { ok: false, reason: `Price below $${CONFIG.minStockPrice}` };
     }
   
     if (CONFIG.maxStockPrice > 0 && price > CONFIG.maxStockPrice) {
-      return discoveryOnly(`Watch only: price above max: $${price}`);
+      return { ok: false, reason: `Price above max: $${price}` };
     }
   
     if (volume < CONFIG.minScanVolume && !discoveryRescue) {
-      return discoveryOnly(`Watch only: volume below ${CONFIG.minScanVolume}`);
+      return { ok: false, reason: `Volume below ${CONFIG.minScanVolume}` };
     }
   
     if (volume < CONFIG.minScanVolume && discoveryRescue) {
@@ -498,9 +496,10 @@ export function createStockMarketStrategy(dependencies) {
       !discoveryRescue &&
       !normalStrongLane
     ) {
-      return discoveryOnly(
-        `Watch only: RVOL below ${CONFIG.minRunnerRelativeVolume || 5}x`
-      );
+      return {
+        ok: false,
+        reason: `RVOL below ${CONFIG.minRunnerRelativeVolume || 5}x`,
+      };
     }
   
     if (
@@ -512,7 +511,7 @@ export function createStockMarketStrategy(dependencies) {
         return discoveryOnly(`Discovery only: float too high ${floatShares}`);
       }
   
-      return discoveryOnly(`Watch only: float too high ${floatShares}`);
+      return { ok: false, reason: `Float too high: ${floatShares}` };
     }
   
     if (
@@ -524,11 +523,11 @@ export function createStockMarketStrategy(dependencies) {
         return discoveryOnly(`Discovery only: market cap too high ${marketCap}`);
       }
   
-      return discoveryOnly(`Watch only: market cap too high ${marketCap}`);
+      return { ok: false, reason: `Market cap too high: ${marketCap}` };
     }
   
     if (!hasNews && !hasMomentum && !discoveryRescue) {
-      return discoveryOnly("Watch only: no news or strong momentum");
+      return { ok: false, reason: "No news or strong momentum" };
     }
   
     if (percentChange > CONFIG.maxPercentChange) {
@@ -544,9 +543,10 @@ export function createStockMarketStrategy(dependencies) {
         );
       }
   
-      return discoveryOnly(
-        `Watch only: spread too wide ${spreadPercent.toFixed(2)}%`
-      );
+      return {
+        ok: false,
+        reason: `Spread too wide: ${spreadPercent.toFixed(2)}%`,
+      };
     }
   
     if (pullbackFromHighPercent >= Number(CONFIG.maxRunnerPullbackFromHighPercent || 18)) {
@@ -556,9 +556,10 @@ export function createStockMarketStrategy(dependencies) {
         );
       }
   
-      return discoveryOnly(
-        `Watch only: too far from high ${pullbackFromHighPercent.toFixed(2)}%`
-      );
+      return {
+        ok: false,
+        reason: `Too far from high: ${pullbackFromHighPercent.toFixed(2)}%`,
+      };
     }
   
     if (CONFIG.enableAdvancedFilters && q.confirmations) {
@@ -569,9 +570,10 @@ export function createStockMarketStrategy(dependencies) {
           );
         }
   
-        return discoveryOnly(
-          `Watch only: fake breakout risk. Pulled back ${pullbackFromHighPercent}% from high`
-        );
+        return {
+          ok: false,
+          reason: `Fake breakout risk. Pulled back ${pullbackFromHighPercent}% from high`,
+        };
       }
   
       if (q.confirmations.newsRisk) {
@@ -581,9 +583,10 @@ export function createStockMarketStrategy(dependencies) {
           );
         }
   
-        return discoveryOnly(
-          `Watch only: news risk ${q.confirmations.newsRiskReason}`
-        );
+        return {
+          ok: false,
+          reason: `News risk: ${q.confirmations.newsRiskReason}`,
+        };
       }
     }
   
@@ -897,17 +900,10 @@ export function createStockMarketStrategy(dependencies) {
         new Date().toISOString();
       const symbols = await getTopMovers();
       const limitedSymbols = narrowScanUniverse(symbols);
-      const selectedSymbols = new Set(limitedSymbols);
-      for (const symbol of symbols.slice(0, 300)) recordCandidateEvent({
-        symbol, cycle: scanCycleId, stage: selectedSymbols.has(symbol) ? 'SCAN_SELECTED' : 'SCAN_NOT_SELECTED',
-        reasons: selectedSymbols.has(symbol) ? [] : ['BOUNDED_SCAN_UNIVERSE'],
-      });
       engineState.skippedSymbols = [];
       console.log(`Scanning ${limitedSymbols.length} of ${symbols.length} symbols...`);
       console.log("Advanced filters enabled:", CONFIG.enableAdvancedFilters);
-      // Keep provider load bounded without letting early quote evidence age for
-      // a minute before the central execution decision is evaluated.
-      const batchSize = 4;
+      const batchSize = 2;
       let processedSymbols = 0;
       const rawResults = await processBatches(limitedSymbols, batchSize, async (symbol) => {
         processedSymbols += 1;
@@ -953,12 +949,12 @@ export function createStockMarketStrategy(dependencies) {
             Array.isArray(quoteChartBars) &&
               quoteChartBars.length > 0
               ? quoteChartBars.map((bar) => ({
-                c: Number(bar.close ?? bar.c),
-                h: Number(bar.high ?? bar.h),
-                l: Number(bar.low ?? bar.l),
-                o: Number(bar.open ?? bar.o),
-                v: Number(bar.volume ?? bar.v),
-                t: bar.time ?? bar.t,
+                c: Number(bar.close || 0),
+                h: Number(bar.high || 0),
+                l: Number(bar.low || 0),
+                o: Number(bar.open || 0),
+                v: Number(bar.volume || 0),
+                t: bar.time,
               }))
               : [];
           quote.technicals = computeTechnicals(technicalBars);
@@ -1034,13 +1030,15 @@ export function createStockMarketStrategy(dependencies) {
           quote.displayOnlyReason = quote.displayOnlyReason || quality.reason || "";
   
           let score = scoreStock(quote);
-          const newsReviewEligible = evaluateNewsReviewEligibility(
-            quote, quality, CONFIG.enableAdvancedFilters === true
-          ).eligible;
-          recordCandidateEvent({ ...quote, cycle: scanCycleId,
-            stage: newsReviewEligible ? 'NEWS_REVIEW_REQUESTED' : 'NEWS_REVIEW_DEFERRED',
-            reasons: [evaluateNewsReviewEligibility(quote, quality, CONFIG.enableAdvancedFilters === true).reason],
-          });
+          const newsReviewEligible =
+            CONFIG.enableAdvancedFilters &&
+            quality.discoveryOnly !== true &&
+            quote.blockBuying !== true &&
+            (
+              Number(quote.entryQualityScore || 0) >= 60 ||
+              Number(quote.discoveryScore || 0) >= 70 ||
+              Number(quote.preMoveScore || 0) >= 70
+            );
           if (CONFIG.enableAdvancedFilters && newsReviewEligible) {
             quote.confirmations = await getAdvancedConfirmations(quote, {
               includeNews: true,
@@ -2078,11 +2076,7 @@ export function createStockMarketStrategy(dependencies) {
           ].join(", ") || "ENTRY_SCORE_BELOW_75";
         }
       }
-      const finalResults = normalizeSignalScoreCollection(results);
-      for (const signal of finalResults) recordCandidateEvent({ ...signal,
-        cycle: scanCycleId, stage: 'SCAN_SCORED',
-        reasons: [...(signal.entryQualityScorecard?.gates || []), ...(signal.stockTradeEvidence?.reasons || [])],
-      });
+      const finalResults = results;
       return finalResults
         .sort((a, b) => {
           const finalDifference =

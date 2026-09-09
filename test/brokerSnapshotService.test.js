@@ -19,22 +19,17 @@ function harness(responses = {}) {
 }
 
 test("stores fresh broker positions in the cache", async () => {
-  const positions = [{ symbol: "AAPL", qty: "1", market_value: '100' }];
+  const positions = [{ symbol: "AAPL", qty: "1" }];
   const { service, cache, health } = harness({ "/v2/positions": positions });
-  const fresh = await service.getPositions();
-  assert.deepEqual([...fresh], positions);
-  assert.equal(fresh.stale, false);
-  assert.ok(fresh.snapshotAt > 0);
-  assert.equal(cache.cachedPositions, fresh);
+  assert.deepEqual(await service.getPositions(), positions);
+  assert.deepEqual(cache.cachedPositions, positions);
   assert.deepEqual(health, [["alpacaPositions", true]]);
 });
 
 test("returns cached positions when the broker is unavailable", async () => {
   const { service, cache, health } = harness({ "/v2/positions": new Error("timeout") });
   cache.cachedPositions = [{ symbol: "MSFT", qty: "2" }];
-  const fallback = await service.getPositions();
-  assert.deepEqual([...fallback], cache.cachedPositions);
-  assert.equal(fallback.stale, true);
+  assert.deepEqual(await service.getPositions(), cache.cachedPositions);
   assert.deepEqual(health, [["alpacaPositions", false, "timeout"]]);
 });
 

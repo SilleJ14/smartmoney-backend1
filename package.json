@@ -9,9 +9,6 @@
     "test": "node --test",
     "test:2gb": "node --max-old-space-size=1536 --test"
   },
-  "devDependencies": {
-    "acorn": "8.16.0"
-  },
   "dependencies": {
     "cors": "^2.8.5",
     "dotenv": "^16.4.7",

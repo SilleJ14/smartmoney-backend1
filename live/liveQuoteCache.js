@@ -1,5 +1,4 @@
 const LIVE_QUOTE_SOURCE_REGISTRY = Object.freeze({
-  tradier_stock_quote: { provider: "tradier", assets: ["stock"] },
   polygon_ws_trade: { provider: "polygon", assets: ["stock"], connection: "polygon" },
   polygon_ws_quote: { provider: "polygon", assets: ["stock"], connection: "polygon" },
   polygon_ws_second_aggregate: { provider: "polygon", assets: ["stock"], connection: "polygon" },
@@ -15,9 +14,8 @@ export function getLiveQuoteProvider(source = "") {
   return LIVE_QUOTE_SOURCE_REGISTRY[String(source || "").toLowerCase()]?.provider || null;
 }
 
-export function isLiveQuoteSource(source = "", assetClass = null) {
-  const registration = LIVE_QUOTE_SOURCE_REGISTRY[String(source || "").toLowerCase()];
-  return Boolean(registration && (!assetClass || registration.assets.includes(assetClass)));
+export function isLiveQuoteSource(source = "") {
+  return getLiveQuoteProvider(source) !== null;
 }
 
 export function evaluateLiveQuoteProviderReadiness(
@@ -126,18 +124,15 @@ export function mergeLiveQuoteEvidence(
 ) {
   const incomingBid = Number(incoming.bid || incoming.bp || 0);
   const incomingAsk = Number(incoming.ask || incoming.ap || 0);
-  const incomingHasSpread = incoming.spreadAvailable !== false && incomingBid > 0 && incomingAsk >= incomingBid;
+  const incomingHasSpread = incomingBid > 0 && incomingAsk >= incomingBid;
   const previousBid = Number(previous.bid || previous.bp || 0);
   const previousAsk = Number(previous.ask || previous.ap || 0);
   const previousHasSpread =
-    incoming.spreadAvailable !== false &&
     previous.spreadAvailable === true &&
-    parsedTimestamp(getSpreadTimestamp(previous)) !== null &&
-    parsedTimestamp(getSpreadTimestamp(previous)) <= Date.now() + 5000 &&
     previousBid > 0 &&
     previousAsk >= previousBid;
   const incomingSpreadUpdatedAt = incomingHasSpread
-    ? getSpreadTimestamp(incoming)
+    ? getSpreadTimestamp(incoming) || quoteUpdatedAt
     : null;
   const incomingSpreadTimestampMs = parsedTimestamp(incomingSpreadUpdatedAt);
   const previousSpreadTimestampMs = parsedTimestamp(getSpreadTimestamp(previous));
@@ -186,188 +181,6 @@ export function calculateLiveMovePercent(previousPrice = 0, price = 0) {
   return previousPrice > 0 && price > 0
     ? Number((((price - previousPrice) / previousPrice) * 100).toFixed(4))
     : 0;
-}
-
-function firstFiniteNumber(record = {}, fields = []) {
-  for (const field of fields) {
-    const value = record?.[field];
-    if (value === null || value === undefined || value === "") continue;
-    const parsed = Number(value);
-    if (Number.isFinite(parsed)) return { field, value: parsed };
-  }
-  return null;
-}
-
-function firstPositiveNumber(record = {}, fields = []) {
-  for (const field of fields) {
-    const value = record?.[field];
-    if (value === null || value === undefined || value === "") continue;
-    const parsed = Number(value);
-    if (Number.isFinite(parsed) && parsed > 0) return { field, value: parsed };
-  }
-  return null;
-}
-
-const PERCENT_CHANGE_FIELDS = Object.freeze([
-  "percentChange",
-  "changePercent",
-  "dayChangePercent",
-  "sessionChangePercent",
-  "percentChange24h",
-  "change24hPercent",
-  "livePercentChange",
-]);
-
-const PERCENT_CHANGE_AVAILABILITY_FIELDS = Object.freeze([
-  "percentChangeAvailable",
-  "changePercentAvailable",
-  "dayChangePercentAvailable",
-  "sessionChangePercentAvailable",
-  "percentChange24hAvailable",
-  "change24hPercentAvailable",
-  "livePercentChangeAvailable",
-]);
-
-const PERCENT_CHANGE_REFERENCE_FIELDS = Object.freeze([
-  "percentChangeReferencePrice",
-  "changeReferencePrice",
-  "sessionReferencePrice",
-  "previousClose",
-  "pc",
-  "regularMarketPreviousClose",
-]);
-
-/**
- * Resolve a percent-change observation without confusing unavailable data with
- * a real 0% move. A positive reference price is authoritative; otherwise an
- * explicit availability flag is required for zero to be considered measured.
- * Legacy non-zero observations remain readable during rolling deployments.
- */
-export function resolveMeasuredPercentChange(quote = {}, { price } = {}) {
-  const currentMatch = firstPositiveNumber(
-    { suppliedPrice: price, ...quote },
-    ["suppliedPrice", "price", "current", "livePrice", "last", "close", "c"]
-  );
-  const referenceMatch = firstPositiveNumber(
-    quote,
-    PERCENT_CHANGE_REFERENCE_FIELDS
-  );
-  if (currentMatch && referenceMatch) {
-    const value = Number(
-      (((currentMatch.value - referenceMatch.value) / referenceMatch.value) * 100)
-        .toFixed(4)
-    );
-    return {
-      available: true,
-      value,
-      referencePrice: referenceMatch.value,
-      referenceField: referenceMatch.field,
-      referenceType:
-        quote.percentChangeReferenceType ||
-        quote.changeReferenceType ||
-        (referenceMatch.field === "previousClose" ||
-        referenceMatch.field === "pc" ||
-        referenceMatch.field === "regularMarketPreviousClose"
-          ? "previous_close"
-          : "measured_reference"),
-      source:
-        quote.percentChangeSource ||
-        quote.changePercentSource ||
-        quote.liveQuoteSource ||
-        quote.source ||
-        "reference_price",
-    };
-  }
-
-  for (let index = 0; index < PERCENT_CHANGE_FIELDS.length; index += 1) {
-    const percentField = PERCENT_CHANGE_FIELDS[index];
-    const availabilityField = PERCENT_CHANGE_AVAILABILITY_FIELDS[index];
-    const percentMatch = firstFiniteNumber(quote, [percentField]);
-    if (!percentMatch) continue;
-    const explicitAvailability = quote?.[availabilityField];
-    const isLegacyMeasured =
-      explicitAvailability === undefined && percentMatch.value !== 0;
-    if (explicitAvailability !== true && !isLegacyMeasured) continue;
-    const semanticReferenceType = percentField === "sessionChangePercent"
-      ? "session_measured_percent"
-      : percentField === "percentChange24h" || percentField === "change24hPercent"
-        ? "rolling_24h_measured_percent"
-        : "provider_measured_percent";
-    return {
-      available: true,
-      value: Number(percentMatch.value.toFixed(4)),
-      referencePrice: null,
-      referenceField: null,
-      referenceType:
-        quote.percentChangeReferenceType ||
-        quote.changeReferenceType ||
-        (isLegacyMeasured ? "legacy_measured_percent" : semanticReferenceType),
-      source:
-        quote.percentChangeSource ||
-        quote.changePercentSource ||
-        quote.liveQuoteSource ||
-        quote.source ||
-        (isLegacyMeasured ? "legacy_percent" : "explicit_percent"),
-    };
-  }
-
-  return {
-    available: false,
-    value: null,
-    referencePrice: null,
-    referenceField: null,
-    referenceType: null,
-    source: null,
-  };
-}
-
-export function mergeMeasuredPercentChange(
-  previous = {},
-  incoming = {},
-  { price } = {}
-) {
-  const incomingMeasurement = resolveMeasuredPercentChange(incoming, { price });
-  if (incomingMeasurement.available) return incomingMeasurement;
-
-  const previousMeasurement = resolveMeasuredPercentChange(previous, { price });
-  return previousMeasurement.available
-    ? previousMeasurement
-    : incomingMeasurement;
-}
-
-export function buildMeasuredPercentChangePatch(
-  signal = {},
-  incoming = {},
-  { price } = {}
-) {
-  const measurement = resolveMeasuredPercentChange(incoming, { price });
-  if (!measurement.available) return {};
-  const dayChangeAvailable = incoming.dayChangePercentAvailable === true || [
-    "previous_completed_utc_daily_close",
-    "current_utc_day_open",
-    "previous_close",
-  ].includes(measurement.referenceType);
-  return {
-    percentChange: measurement.value,
-    changePercent: measurement.value,
-    livePercentChange: measurement.value,
-    percentChangeAvailable: true,
-    changePercentAvailable: true,
-    livePercentChangeAvailable: true,
-    percentChangeReferencePrice: measurement.referencePrice,
-    changeReferencePrice: measurement.referencePrice,
-    percentChangeReferenceType: measurement.referenceType,
-    changeReferenceType: measurement.referenceType,
-    percentChangeSource: measurement.source,
-    changePercentSource: measurement.source,
-    ...(dayChangeAvailable
-      ? {
-        dayChangePercent: measurement.value,
-        dayChangePercentAvailable: true,
-        dayChangePercentSource: measurement.source,
-      }
-      : {}),
-  };
 }
 
 export function isFreshLiveQuote(quote = {}, {
@@ -450,7 +263,7 @@ export function getLiveQuoteAgeSeconds(symbol, {
     return Infinity;
   }
 
-  return (Date.now() - updatedAt) / 1000;
+  return Math.floor((Date.now() - updatedAt) / 1000);
 }
 
 export function cleanupLiveQuoteCache({
@@ -458,7 +271,6 @@ export function cleanupLiveQuoteCache({
   maxAgeMinutes,
   maxSymbols,
   maxSecondCandles,
-  pinnedSymbols = [],
 } = {}) {
   engineState.liveQuoteCache ||= {};
   engineState.liveMarketMemory ||= {};
@@ -467,7 +279,6 @@ export function cleanupLiveQuoteCache({
 
   let quoteRemoved = 0;
   let memoryRemoved = 0;
-  const pinned = new Set(pinnedSymbols);
 
   for (const [symbol, quote] of Object.entries(engineState.liveQuoteCache)) {
     const updatedAtMs = quote?.updatedAt
@@ -514,9 +325,7 @@ export function cleanupLiveQuoteCache({
 
   if (quoteEntries.length > Number(maxSymbols || 100)) {
     const keepQuotes = quoteEntries
-      .sort(([sa, a], [sb, b]) => {
-        const pinGap = Number(pinned.has(sb)) - Number(pinned.has(sa));
-        if (pinGap) return pinGap;
+      .sort(([, a], [, b]) => {
         return (
           new Date(b?.updatedAt || 0).getTime() -
           new Date(a?.updatedAt || 0).getTime()
@@ -532,9 +341,7 @@ export function cleanupLiveQuoteCache({
 
   if (memoryEntries.length > Number(maxSymbols || 100)) {
     const keep = memoryEntries
-      .sort(([sa, a], [sb, b]) => {
-        const pinGap = Number(pinned.has(sb)) - Number(pinned.has(sa));
-        if (pinGap) return pinGap;
+      .sort(([, a], [, b]) => {
         const scoreDiff =
           Number(b?.fastRunnerScore || 0) -
           Number(a?.fastRunnerScore || 0);

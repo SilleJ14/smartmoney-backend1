@@ -294,9 +294,6 @@ test("crypto auto-buy accepts Final Decision 65 with complete evidence and a nar
     symbol: "BTC/USD",
     score: 65,
     masterFinalScore: 65,
-    finalApprovedTradeAmount: 25,
-    recommendedTradeAmount: 25,
-    finalTradeAmount: 25,
     qualifiedToBuy: true,
     autoTradeApproved: true,
     approved: true,
@@ -314,7 +311,7 @@ test("crypto auto-buy accepts Final Decision 65 with complete evidence and a nar
     spreadUpdatedAt: new Date().toISOString(),
     spreadSource: "alpaca_crypto_latest",
     multiDayContinuationScore: 75,
-    multiDayAccumulation: { seenDays: [1, 2].map((days) => new Date(Date.now() - days * 86400000).toISOString().slice(0, 10)) },
+    multiDayAccumulation: { seenDays: ["2026-08-20", "2026-08-21"] },
     cryptoDiscoveryScorecard: {
       stage: "CRYPTO_EARLY_DISCOVERY",
       score: 90,
@@ -324,7 +321,6 @@ test("crypto auto-buy accepts Final Decision 65 with complete evidence and a nar
     },
     newsCatalyst: { dataAvailable: true, riskDetected: false },
     centralAutonomousDecisionCore: {
-      updatedAt: new Date().toISOString(), action: "ALLOW",
       cryptoDecisionEvidence: { coreEvidencePass: true },
     },
   }]);

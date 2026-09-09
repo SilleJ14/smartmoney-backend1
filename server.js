@@ -1,17 +1,4 @@
 import express from "express";
-import { BoundedTtlCache } from "./utils/boundedTtlCache.js";
-import { getApprovedTradeAmount } from "./scoring/approvedSizing.js";
-import { revalidateCandidate } from './scoring/revalidateCandidate.js';
-import { createSafetyJournal, readSafetyJournal } from './state/safetyJournal.js';
-import { createOrderRiskReservations, outstandingOrderNotional } from './risk/orderRiskReservations.js';
-import { createAssetQuotePump } from './market-data/assetQuotePump.js';
-import { createCryptoIntradayBars } from './market-data/cryptoIntradayBars.js';
-import { isUsStockMarketSessionDayKey } from "./utils/usMarketCalendar.js";
-import { readBoundedResponseText } from "./utils/boundedResponse.js";
-import { takeExplorationWindow, createFairReviewQueue } from "./discovery/fairExploration.js";
-import { createStockQuoteBatch } from "./market-data/stockQuoteBatch.js";
-import { providerDailyBar } from "./discovery/providerDailyBar.js";
-import { createTradierMarketData } from "./providers/tradierMarketData.js";
 import cors from "cors";
 import dotenv from "dotenv";
 import path from "path";
@@ -21,8 +8,6 @@ import { createRecoveryEmailSender } from "./security/recoveryEmail.js";
 import {
   fetchWithTimeout,
 } from "./utils/fetchWithTimeout.js";
-import { processBatches } from "./utils/processBatches.js";
-import { createLiveSignalPushQueue } from "./live/liveSignalPushQueue.js";
 import { normalizeSymbol } from "./utils/normalizeSymbol.js";
 import {
   getTodayKeyET,
@@ -62,11 +47,9 @@ import {
 import {
   calculateSpread,
   calculateLiveMovePercent,
-  buildMeasuredPercentChangePatch,
   getSpreadAgeSeconds,
   hasNonRegressiveProviderTimestamp,
   isFreshMeasuredSpread,
-  mergeMeasuredPercentChange,
   mergeLiveQuoteEvidence,
   isFreshLiveQuote as isFreshLiveQuoteHelper,
   getAuthoritativeLiveQuote as getAuthoritativeLiveQuoteHelper,
@@ -81,12 +64,6 @@ import {
 } from "./live/liveMarketMemory.js";
 import { resolvePreTradeQuote } from "./live/preTradeQuoteResolver.js";
 import { filterAndRankStockCandidatesByExecutionQuality } from "./market-data/stockCandidateQuality.js";
-import { buildCompactLiveQuoteDto } from "./market-data/liveQuoteDto.js";
-import {
-  getStockExecutionEvidenceFreshness,
-  mergeLiveStockQuoteWithReference,
-} from "./market-data/stockQuoteEvidence.js";
-import { createStockExecutionQuoteRefresher } from "./market-data/stockExecutionQuoteRefresh.js";
 import {
   getPolygonProviderTimestamp,
   parseProviderTimestamp,
@@ -170,12 +147,8 @@ import { calculateMultiHorizonExtension } from "./scoring/earlyDiscovery.js";
 import { calculateNewsCatalyst } from "./scoring/newsCatalyst.js";
 import {
   summarizeQuietCandidateOutcomes,
-  getQuietFollowupSymbols,
-  updateQuietCandidateOutcomes as updateQuietCandidateOutcomesCache,
+  updateQuietCandidateOutcomes,
 } from "./scoring/quietCandidateOutcomeTracker.js";
-import { createDiscoveryOutcomeStore } from './scoring/discoveryOutcomeStore.js';
-import { createCandidateTraceStore } from './discovery/candidateTraceStore.js';
-import { registerCandidateTraceRoutes } from './routes/candidateTraceRoutes.js';
 import { buildProofReport } from "./analytics/proofReport.js";
 import {
   buildStrategyExecutionPlan,
@@ -188,7 +161,6 @@ import { createCryptoIntelligenceStrategy } from "./strategies/cryptoIntelligenc
 import { createCryptoMarketScanner } from "./strategies/cryptoMarketScanner.js";
 import { createStockMarketStrategy } from "./strategies/stockMarketStrategy.js";
 import { createAlpacaCryptoMarketData } from "./market-data/alpacaCryptoMarketData.js";
-import { createCryptoExecutionQuoteRefresher } from "./market-data/cryptoExecutionQuoteRefresh.js";
 import { fetchAlpacaStockOutcomeQuotes } from "./market-data/alpacaStockOutcomeQuotes.js";
 import { createTaskScheduler } from "./engine/taskScheduler.js";
 import { resolveBoundedScanLimit } from "./engine/scanBudget.js";
@@ -230,12 +202,9 @@ import {
 } from "./state/dailySafetyState.js";
 import {
   compareCanonicalSignals,
-  dedupeSignalsByCanonicalAuthority,
   getCanonicalFinalScore,
   hasExplicitTradeApproval,
-  selectCandidateDisplayWindow,
 } from "./scoring/canonicalSignalRank.js";
-import { normalizeSignalScoreCompleteness } from "./scoring/signalScoreCompleteness.js";
 import { buildRawEarlyMoverCandidates } from "./market-data/liveMovers.js";
 import { createEngineState } from "./state/createEngineState.js";
 import { buildMemoryGuardSnapshot } from "./state/memoryGuard.js";
@@ -421,9 +390,9 @@ const POLYGON_LIVE_STREAM_LIMIT = Number(
 const LIVE_MARKET_MEMORY_MAX_SECOND_CANDLES = Number(
   process.env.LIVE_MARKET_MEMORY_MAX_SECOND_CANDLES || 120
 );
-const LIVE_MARKET_MEMORY_MAX_SYMBOLS = Math.min(500, Math.max(240,
-  Number(process.env.LIVE_MARKET_MEMORY_MAX_SYMBOLS || 240) || 240
-));
+const LIVE_MARKET_MEMORY_MAX_SYMBOLS = Number(
+  process.env.LIVE_MARKET_MEMORY_MAX_SYMBOLS || 50
+);
 const LIVE_MARKET_MEMORY_MAX_AGE_MINUTES = Number(
   process.env.LIVE_MARKET_MEMORY_MAX_AGE_MINUTES || 10
 );
@@ -440,8 +409,8 @@ const ACTIVE_CANDIDATE_QUOTE_REFRESH_INTERVAL_MS = Math.max(
   Number(process.env.ACTIVE_CANDIDATE_QUOTE_REFRESH_INTERVAL_MS || 2000)
 );
 const ACTIVE_CANDIDATE_QUOTE_REFRESH_LIMIT = Math.min(
-  120,
-  Math.max(1, Number(process.env.ACTIVE_CANDIDATE_QUOTE_REFRESH_LIMIT || 120))
+  60,
+  Math.max(1, Number(process.env.ACTIVE_CANDIDATE_QUOTE_REFRESH_LIMIT || 30))
 );
 const FAST_RUNNER_MIN_SCORE = Number(
   process.env.FAST_RUNNER_MIN_SCORE || 78
@@ -807,15 +776,6 @@ let persistedEngineState =
   pruneEngineState(
     loadPersistedEngineState(ENGINE_STATE_FILE)
   );
-const restoredSafety = readSafetyJournal(`${ENGINE_STATE_FILE}.safety.json`);
-persistedEngineState = { ...persistedEngineState, ...restoredSafety,
-  safetyReconciliationRequired: persistedEngineState.safetyReconciliationRequired === true || restoredSafety.safetyReconciliationRequired === true };
-if (persistedEngineState && (persistedEngineState.quietCandidateOutcomeState?.version !== 2 ||
-    persistedEngineState.quietCandidateOutcomeState?.measurementPolicyVersion !== 3)) {
-  // Retain historical records, but never apply weights trained on unverified observations.
-  persistedEngineState.quietCandidateOutcomeLearning = {};
-  if (persistedEngineState.quietCandidateOutcomeState) persistedEngineState.quietCandidateOutcomeState.learning = {};
-}
 function getAlpacaKeys() {
   return getAlpacaKeysFromProvider(alpacaCredentials, runtimeConfig);
 }
@@ -1157,45 +1117,12 @@ compactLiveEngineStateHistories(engineState);
 // Release the original parsed snapshot after hydration. Otherwise it keeps the
 // pre-compaction history graph reachable for the lifetime of the process.
 persistedEngineState = null;
-const persistSafetyState = createSafetyJournal(`${ENGINE_STATE_FILE}.safety.json`, engineState);
-const discoveryOutcomeStore = createDiscoveryOutcomeStore(path.resolve(DATA_DIR, 'discovery-outcomes'));
-const candidateTraceStore = createCandidateTraceStore(path.resolve(DATA_DIR, 'candidate-traces'));
-let outcomeMigrationComplete = false;
-async function updateQuietCandidateOutcomes(previous = {}, candidates = [], prices = [], options = {}) {
-  previous = previous && typeof previous === 'object' && !Array.isArray(previous) ? previous : {};
-  if (!outcomeMigrationComplete) {
-    await discoveryOutcomeStore.importObservations(Array.isArray(previous.observations) ? previous.observations : []);
-    outcomeMigrationComplete = true;
-  }
-  const settings = { ...options, now: options.now || Date.now(), dayKey: options.dayKey || new Date().toISOString().slice(0, 10) };
-  if (settings.assetClass === 'crypto') {
-    for (const signal of candidates.slice(0, 100)) candidateTraceStore.record({ ...signal,
-      assetClass: 'crypto', stage: 'CRYPTO_OUTCOME_CANDIDATE', reasons: signal.missingEvidenceReasons || [],
-    });
-  }
-  if (settings.assetClass === 'stock') {
-    const evidence = row => ({ ...row, t: row.t || row.liveQuoteUpdatedAt || row.priceUpdatedAt });
-    candidates = candidates.map(evidence);
-    prices = prices.map(evidence);
-  }
-  try {
-    const durable = await discoveryOutcomeStore.ingest(candidates, prices, settings);
-    const cache = updateQuietCandidateOutcomesCache(previous, candidates, prices, settings);
-    engineState.fullPopulationOutcomeTracking = { ...durable, ok: true, updatedAt: new Date().toISOString() };
-    return { ...cache, trackingPolicy: durable.policy, dailySampleLimit: null,
-      untrackedDiscoveriesThisUpdate: 0, durableTracking: durable, displayCacheOnly: true };
-  } catch (error) {
-    engineState.fullPopulationOutcomeTracking = { ok: false, error: error.message, updatedAt: new Date().toISOString() };
-    throw error;
-  }
-}
 const {
   saveEngineState,
   flushStateToFile,
   getSaveStatus,
 } = createEngineStateSaver({
   ENGINE_STATE_FILE,
-  writeSafetyState: persistSafetyState,
   engineState,
   getEffectiveTradingMode,
 });
@@ -1224,7 +1151,6 @@ let polygonSubscribedSymbols = new Set();
 let polygonSocketReconnectAttempts = 0;
 let polygonAuthenticated = false;
 let activeCandidateQuoteRefreshInFlight = null;
-const activeCandidateAssetPump = createAssetQuotePump();
 let activeCandidateQuoteRefreshLastStartedAt = 0;
 let activeCandidateQuoteRefreshCursor = 0;
 let activeCandidateQuoteRefreshState = {
@@ -1261,6 +1187,18 @@ const liveTaskScheduler = createTaskScheduler({
   },
 });
 const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
+async function processBatches(items, batchSize, worker) {
+  const results = [];
+  for (let i = 0; i < items.length; i += batchSize) {
+    const batch = items.slice(i, i + batchSize);
+    const batchResults = await Promise.all(
+      batch.map((item) => worker(item))
+    );
+    results.push(...batchResults.filter(Boolean));
+    await sleep(2000);
+  }
+  return results;
+}
 function updateAccountPeaks(account) {
   const mode = TRADING_MODE;
   const equity = Number(account?.equity || 0);
@@ -1335,8 +1273,6 @@ function saveSkippedSymbol(symbol, reason, extra = {}) {
 }
 
 function recordSkippedSymbol(symbol, reason, extra = {}) {
-  candidateTraceStore.record({ symbol, stage: 'SKIPPED', cycle: engineState.currentStockScanCycleId,
-    reasons: [reason], ...extra });
   return saveSkippedSymbol(symbol, reason, extra);
 }
 function markAiManagedSymbol(symbol) {
@@ -3071,20 +3007,8 @@ function buildBackendHealthPayload(clock = {}) {
       engineFreezeDetected: Boolean(engineState.engineFreezeDetected),
       engineFreezeCount: Number(engineState.engineFreezeCount || 0),
       lastEngineStopReason: engineState.lastEngineStopReason || null,
-      serviceStartupErrors: engineState.serviceStartupErrors || {},
     },
     liveScheduler: engineState.liveSchedulerState || null,
-    candidates: {
-      stocks: Array.isArray(engineState.lastStockSignals) ? engineState.lastStockSignals.length : 0,
-      crypto: Array.isArray(engineState.lastCryptoSignals) ? engineState.lastCryptoSignals.length : 0,
-      earlyMovers: Array.isArray(engineState.liveEarlyMoverSymbols) ? engineState.liveEarlyMoverSymbols.length : 0,
-      lastSuccessfulCycleAt: engineState.lastSuccessfulCycleAt || null,
-    },
-    outcomeWorker: engineState.fullPopulationOutcomeWorker ? {
-      ok: engineState.fullPopulationOutcomeWorker.ok,
-      updatedAt: engineState.fullPopulationOutcomeWorker.updatedAt,
-      error: engineState.fullPopulationOutcomeWorker.error || null,
-    } : null,
     quotes: {
       liveQuoteCount,
       lastQuoteUpdateAt: latestLiveQuoteUpdateAt,
@@ -3118,7 +3042,6 @@ function buildBackendHealthPayload(clock = {}) {
         hasLiveKey: Boolean(process.env.ALPACA_LIVE_KEY),
         hasLiveSecret: Boolean(process.env.ALPACA_LIVE_SECRET),
       },
-      tradier: tradierMarketData.getStatus(),
     },
     safety: {
       dailyLossLocked: Boolean(engineState.dailyLossLocked),
@@ -3126,45 +3049,68 @@ function buildBackendHealthPayload(clock = {}) {
     },
   };
 }
-function buildLiveQuotesPayload(symbols = [], options = {}) {
-  const compact = options.compact === true;
-  const sinceVersion = Number.isFinite(Number(options.sinceVersion))
-    ? Number(options.sinceVersion)
-    : null;
-  const sinceTimestamp = options.since ? Date.parse(options.since) : NaN;
+function buildLiveQuotesPayload(symbols = []) {
   const requestedSymbols = symbols
     .map(normalizeSymbol)
     .filter(Boolean);
   const entries = Object.entries(engineState.liveQuoteCache || {})
     .filter(([symbol]) => {
-      if (requestedSymbols.length > 0 && !requestedSymbols.includes(symbol)) {
-        return false;
-      }
-      const quote = engineState.liveQuoteCache?.[symbol] || {};
-      if (
-        sinceVersion !== null &&
-        Number(quote.quoteVersion || 0) <= sinceVersion
-      ) {
-        return false;
-      }
-      if (Number.isFinite(sinceTimestamp)) {
-        const updatedAt = Date.parse(
-          quote.liveQuoteUpdatedAt || quote.updatedAt || ""
-        );
-        if (!Number.isFinite(updatedAt) || updatedAt <= sinceTimestamp) {
-          return false;
-        }
-      }
-      return true;
+      return requestedSymbols.length === 0 || requestedSymbols.includes(symbol);
     })
     .map(([symbol, quote]) => {
       const memory = engineState.liveMarketMemory?.[symbol] || {};
-      const base = buildCompactLiveQuoteDto(symbol, quote, memory);
-      if (compact) return base;
+      const bid = Number(quote?.bid || memory.bid || 0);
+      const ask = Number(quote?.ask || memory.ask || 0);
+      const spreadAvailable = quote?.spreadAvailable === true || (
+        quote?.spreadAvailable !== false &&
+        memory?.spreadAvailable !== false &&
+        bid > 0 &&
+        ask >= bid
+      );
       return {
-        ...base,
+        symbol,
+        price: Number(quote?.price || quote?.current || 0),
+        current: Number(quote?.current || quote?.price || 0),
+        bid,
+        ask,
+        spread: Number(quote?.spread || memory.spread || 0),
+        spreadPercent: spreadAvailable
+          ? Number(quote?.spreadPercent ?? memory.spreadPercent ?? 0)
+          : null,
+        spreadAvailable,
         volume: Number(quote?.volume || memory.lastVolume || 0),
-        change: quote?.change == null ? null : Number(quote.change),
+        change: Number(quote?.change || 0),
+        percentChange: Number(
+          quote?.displayPercent ??
+          quote?.todayPercent ??
+          quote?.livePercentChange ??
+          quote?.percentChange ??
+          0
+        ),
+        todayPercent: Number(quote?.todayPercent || memory.todayPercent || 0),
+        afterhoursPercent: Number(quote?.afterhoursPercent || memory.afterhoursPercent || 0),
+        intradayPercent: Number(quote?.intradayPercent || memory.intradayPercent || 0),
+        displayPercent: Number(quote?.displayPercent || memory.displayPercent || 0),
+        displayPercentLabel:
+          quote?.displayPercentLabel ||
+          memory.displayPercentLabel ||
+          "Today",
+        source: quote?.source || "live_cache",
+        livePrice: Number(quote?.price || quote?.current || 0),
+        displayPrice: Number(quote?.price || quote?.current || 0),
+        liveQuoteSource:
+          quote?.liveQuoteSource ||
+          quote?.source ||
+          "live_cache",
+        liveQuoteUpdatedAt:
+          quote?.liveQuoteUpdatedAt ||
+          quote?.updatedAt ||
+          null,
+        priceIsLive: quote?.priceIsLive === true,
+        updatedAt: quote?.updatedAt || null,
+        previousPrice: quote?.previousPrice || null,
+        liveMoveFromPreviousPercent:
+          Number(quote?.liveMoveFromPreviousPercent || 0),
         fastRunnerScore: Number(
           quote?.fastRunnerScore || memory.fastRunnerScore || 0
         ),
@@ -3185,22 +3131,14 @@ function buildLiveQuotesPayload(symbols = [], options = {}) {
     .filter((quote) => quote.price > 0)
     .sort((a, b) => String(a.symbol).localeCompare(String(b.symbol)));
   return {
-    ok: true,
-    source: compact ? "live_quote_delta" : "live_quote_snapshot",
     generatedAt: new Date().toISOString(),
-    stateVersion: Number(engineState.liveQuoteCacheVersion || 0),
-    sinceVersion,
-    compact,
-    count: entries.length,
-    items: entries,
-    ...(compact ? {} : {
-      marketSession: getMarketSession({
-        is_open: Boolean(engineState.marketOpen),
-      }),
-      polygonLiveStreamState: engineState.polygonLiveStreamState || null,
-      finnhubLiveStreamState: engineState.liveQuoteStreamState || null,
-      quotes: entries,
+    marketSession: getMarketSession({
+      is_open: Boolean(engineState.marketOpen),
     }),
+    polygonLiveStreamState: engineState.polygonLiveStreamState || null,
+    finnhubLiveStreamState: engineState.liveQuoteStreamState || null,
+    count: entries.length,
+    quotes: entries,
   };
 }
 function buildQuoteFreshnessEngine(quote = {}) {
@@ -8683,9 +8621,11 @@ function calculateAiPortfolioManagerDecision(
     0,
     Number(maxBotBudget || 0) - Number(currentBotExposure || 0)
   );
-  // This phase also runs BEFORE canonical F exists. It supplies a budget bound,
-  // not an executable recommendation; final reconciliation sizes from current F.
-  const perTradeMax = Math.max(0, Math.min(gradeRemainingBotBudget, Number(account.cash || 0), Number(account.buying_power ?? account.cash ?? 0)));
+  const perTradeMax = Math.max(
+    Number(CONFIG.minAutonomousTradeAmount || CONFIG.eliteConcentrationMinTradeAmount || 25),
+    Number(maxBotBudget || 0) /
+    Math.max(1, Number(CONFIG.targetCapitalSlots || 15))
+  );
   rawRecommendedTradeAmount = Number(
     Number(rawRecommendedTradeAmount || recommendedTradeAmount || 0).toFixed(2)
   );
@@ -11059,9 +10999,26 @@ function calculateCorrelationIntelligenceEngine(
   const analyzedSignals = Array.isArray(signals)
     ? signals
     : [];
-  // Portfolio context must describe the whole account. The selected order
-  // mode must not hide the other asset class from correlation/risk scoring.
-  const filteredPositions = positions;
+  const tradingMode =
+    getEffectiveTradingMode(engineState.marketOpen);
+  const filteredPositions =
+    tradingMode === "live_crypto"
+      ? positions.filter((position) => {
+        const symbol = normalizeSymbol(position.symbol);
+        return (
+          symbol.includes("/") ||
+          String(position.asset_class || "")
+            .toLowerCase()
+            .includes("crypto") ||
+          String(position.assetClass || "")
+            .toLowerCase()
+            .includes("crypto")
+        );
+      })
+      : positions.filter((position) => {
+        const symbol = normalizeSymbol(position.symbol);
+        return !symbol.includes("/");
+      });
   const sectorBuckets = {};
   const cryptoPositions = [];
   const overlapWarnings = [];
@@ -11510,7 +11467,10 @@ function calculateFinalPositionSizingReconciliation({
   const currentBotExposure = getBotExposure(managedPositions);
   const maxBotBudget = equity * (Number(CONFIG.maxBotExposurePercent || 15) / 100);
   const remainingBotBudget = Math.max(0, maxBotBudget - currentBotExposure);
-  const perTradeMax = getDynamicTradeAmount(account, managedPositions, getCanonicalFinalScore(signal) ?? 0);
+  const perTradeMax = Math.max(
+    Number(CONFIG.minAutonomousTradeAmount || CONFIG.eliteConcentrationMinTradeAmount || 25),
+    maxBotBudget / Math.max(1, Number(CONFIG.targetCapitalSlots || 15))
+  );
   const governorMultiplier = Number(
     portfolioGovernor.capitalThrottleMultiplier || 1
   );
@@ -11612,7 +11572,11 @@ function calculateFinalPositionSizingReconciliation({
         "Central core is waiting for a micro pullback; no entry size assigned.",
     };
   }
-  const rawRequestedAmount = perTradeMax;
+  const rawRequestedAmount = Math.max(
+    Number(baseTradeAmount || 0),
+    Number(signal.recommendedTradeAmount || 0),
+    pressureAmount
+  );
   const eliteOverride =
     signal.tacticalEliteRunnerOverride === true ||
     portfolioManager.tacticalEliteRunnerOverride === true ||
@@ -12843,7 +12807,8 @@ function calculateInstitutionalAiPortfolioOrchestrator(signal = {}) {
     signal.assetClass || signal.asset_class || "stock";
   const isCryptoSignal =
     assetClass === "crypto" ||
-    String(signal.symbol || "").includes("/");
+    String(signal.symbol || "").includes("/") ||
+    TRADING_MODE === "live_crypto";
   const cryptoAdaptiveOpportunityScore =
     isCryptoSignal
       ? clampScore(
@@ -13329,14 +13294,13 @@ function passesAutonomousParliamentGate(signal = {}) {
   };
 }
 function getDynamicTradeAmount(account, managedPositions = [], signalScore = 80) {
-  const pending = Object.values(engineState.orderRiskReservations || {}).reduce((sum, entry) => sum + outstandingOrderNotional(entry, managedPositions, normalizeSymbol), 0);
   return calculateDynamicTradeAmount({
-    account: { ...account, cash: Math.max(0, Number(account.cash || 0) - pending), buying_power: Math.max(0, Number(account.buying_power ?? account.cash ?? 0) - pending) },
+    account,
     positions: managedPositions,
     signalScore,
     config: CONFIG,
     compoundingState: engineState.capitalCompoundingState || {},
-    getExposure: (positions) => getBotExposure(positions) + pending,
+    getExposure: getBotExposure,
   });
 }
 function calculateSectorDominationAllocation(signal = {}) {
@@ -13618,35 +13582,6 @@ const alpacaCryptoMarketData = createAlpacaCryptoMarketData({
 });
 const getStockOutcomeFollowupQuotes = (symbols) =>
   fetchAlpacaStockOutcomeQuotes(symbols, { dataRequest: alpacaDataRequest });
-let outcomeWorkerRunning = false;
-const outcomeWorkerTimer = setInterval(async () => {
-  if (outcomeWorkerRunning) return;
-  outcomeWorkerRunning = true;
-  try {
-    const result = await discoveryOutcomeStore.process(async (asset, symbols) => {
-      if (asset === 'crypto') return alpacaCryptoMarketData.getLatestQuotes(symbols);
-      const now = new Date();
-      const etHour = Number(new Intl.DateTimeFormat('en-US', { timeZone: 'America/New_York', hour: 'numeric', hourCycle: 'h23' }).format(now));
-      if (etHour < 16) return [];
-      const day = getTodayKeyET();
-      const data = await alpacaDataRequest(`/v2/stocks/bars?symbols=${encodeURIComponent(symbols.join(','))}&timeframe=1Day&start=${day}T00:00:00Z&end=${encodeURIComponent(now.toISOString())}&limit=1000&feed=iex`, { maxResponseBytes: 512 * 1024 });
-      return Object.entries(data.bars || {}).flatMap(([symbol, bars]) =>
-        bars.map(bar => providerDailyBar(symbol, bar)).filter(bar => bar?.d === day));
-    }, { maxPages: 16, tradeEvents: Object.values(engineState.orderRiskReservations || {})
-      .filter(entry => entry.filledQty > 0 && entry.filledAt > 0)
-      .map(entry => ({ symbol: entry.symbol, filledAt: entry.filledAt })) });
-    const { recentMeasurements, ...telemetry } = result;
-    const prior = engineState.quietCandidateOutcomeState || {};
-    const merged = new Map((prior.observations || []).map(o => [o.id, o]));
-    for (const row of recentMeasurements) merged.set(row.id, row);
-    prior.observations = [...merged.values()].sort((a, b) => b.observedAt - a.observedAt).slice(0, 600);
-    engineState.quietCandidateOutcomeState = prior;
-    engineState.fullPopulationOutcomeWorker = { ...telemetry, ok: result.errors.length === 0, updatedAt: new Date().toISOString() };
-  } catch (error) {
-    engineState.fullPopulationOutcomeWorker = { ok: false, error: error.message, updatedAt: new Date().toISOString() };
-  } finally { outcomeWorkerRunning = false; }
-}, 30000);
-outcomeWorkerTimer.unref();
 const brokerSnapshotService = createBrokerSnapshotService({
   tradingRequest: alpacaTradingRequest,
   getCache: (key) => engineState[key],
@@ -13657,9 +13592,6 @@ const getAccount = brokerSnapshotService.getAccount;
 const getPositions = brokerSnapshotService.getPositions;
 const getOrders = brokerSnapshotService.getOrders;
 const getOpenOrders = brokerSnapshotService.getOpenOrders;
-const orderRiskReservations = createOrderRiskReservations({ state: engineState, persist: persistSafetyState,
-  getOpenOrders, getPositions,
-  normalizeSymbol, lookupOrder: (id) => alpacaTradingRequest(`/v2/orders:by_client_order_id?client_order_id=${encodeURIComponent(id)}`) });
 const duplicateOrderGuard = createDuplicateOrderGuard({
   getOpenOrders: () => alpacaTradingRequest(
     "/v2/orders?status=open&limit=100&direction=desc"
@@ -13675,38 +13607,20 @@ const preTradeRiskGuard = {
     }
     const symbol = normalizeSymbol(order.symbol);
     const cryptoAsset = isCrypto(symbol);
+    const quoteResolution = await resolveVerifiedPreTradeQuote(
+      symbol,
+      cryptoAsset
+    );
+    const quote = quoteResolution.quote;
     const [account, positions, botOwnedSymbols, clock] = await Promise.all([
       getAccount(),
       getPositions(),
       getBotOwnedSymbols(),
-      cryptoAsset ? Promise.resolve(null) : getClock(),
+      getClock(),
     ]);
-    engineState.liveTradeLimitState = ensureLiveTradeLimitDay(engineState.liveTradeLimitState, getTodayKeyET());
-    const pendingOrderNotional = await orderRiskReservations.reconcile(positions);
     const managedPositions = positions.filter((position) =>
       isAiManagedOpenPosition(position, botOwnedSymbols)
     );
-    const quoteResolution = await resolveVerifiedPreTradeQuote(symbol, cryptoAsset);
-    const quote = quoteResolution.quote;
-    const referencePrice = Number(quote.price || quote.current || 0);
-    const notional = Number(order.notional || Number(order.qty || 0) * referencePrice);
-    options.riskNotional = notional;
-    options.riskReferencePrice = referencePrice;
-    options.riskBaseQty = Number(positions.find((p) => normalizeSymbol(p.symbol) === symbol)?.qty || 0);
-    if (options.automated !== false || options.requireCandidateDecision) {
-      const candidates = dedupeSignalsByCanonicalAuthority([
-        ...(engineState.lastStockSignals || []), ...(engineState.lastCryptoSignals || [])
-      ]);
-      const previous = candidates.find((candidate) => normalizeSymbol(candidate.symbol) === symbol);
-      if (!previous) throw new Error(`No current canonical decision for ${symbol}`);
-      const candidate = revalidateCandidate(previous, { ...previous, ...quote });
-      const gate = cryptoAsset ? evaluateCryptoTradeCandidate(candidate, { requireCentralDecision: true, requireFreshDecision: true, requireExplicitApproval: true })
-        : evaluateStockTradeCandidate(candidate, { requireCentralDecision: true, requireFreshDecision: true, requireExplicitApproval: true });
-      if (!gate.approved) throw new Error(`Current candidate rejected: ${(gate.reasons || []).join('; ')}`);
-      const availableApproval = getApprovedTradeAmount(candidate) - orderRiskReservations.consumed(symbol, candidate.decisionUpdatedAt);
-      if (!(notional > 0) || notional > availableApproval + 0.005) throw new Error(`Order exceeds remaining approved AI size ($${Math.max(0, availableApproval).toFixed(2)})`);
-      options.riskDecisionVersion = candidate.decisionUpdatedAt;
-    }
     const dateKey = getTodayKeyET();
     engineState.liveTradeLimitState = ensureLiveTradeLimitDay(engineState.liveTradeLimitState, dateKey);
     const positionsForLimitGate = positions.map((position) => ({
@@ -13733,24 +13647,19 @@ const preTradeRiskGuard = {
       spreadSource,
       cryptoAsset
     );
-    const priceTimestamp = getProviderQuoteTimestampMs(quote);
-    const priceAgeSeconds = priceTimestamp === null ? Infinity : (Date.now() - priceTimestamp) / 1000;
+    const priceAgeSeconds = getLiveQuoteAgeSeconds(symbol);
     const spreadAgeSeconds = getSpreadAgeSeconds(quote);
-    const riskInput = {
+    return assertPreTradeRisk({
       order,
       options,
       context: {
         emergencyStopActive,
-        safetyReconciliationRequired: engineState.safetyReconciliationRequired === true,
-        brokerEvidenceStale: account?.stale === true || positions?.stale === true || (!cryptoAsset && clock?.stale === true),
-        pendingOrderNotional,
-        pendingPositionSymbols: Object.values(engineState.orderRiskReservations || {}).filter(entry => outstandingOrderNotional(entry) > 0).map(entry => entry.symbol),
         realCashTradingUnlocked: CONFIG.realCashTradingUnlocked === true,
         autoTradingEnabled,
         dailyLossLocked: engineState.dailyLossLocked === true,
         profitLocked: engineState.profitLocked === true,
         isCrypto: cryptoAsset,
-        marketOpen: clock?.is_open === true && clock?.stale !== true,
+        marketOpen: clock?.is_open === true,
         price: Number(quote.price || quote.current || 0),
         quoteAgeSeconds:
           spreadAgeSeconds === null
@@ -13781,29 +13690,7 @@ const preTradeRiskGuard = {
         positions: managedPositions,
         liveTradeLimitDecision,
       },
-    };
-    const result = assertPreTradeRisk(riskInput);
-    return { ...result, assertCurrent() {
-      const elapsed = (Date.now() - Date.parse(result.checkedAt)) / 1000;
-      assertPreTradeRisk({ ...riskInput, context: { ...riskInput.context,
-        quoteAgeSeconds: riskInput.context.quoteAgeSeconds + elapsed,
-        emergencyStopActive, autoTradingEnabled,
-        maxExposurePercent: CONFIG.maxBotExposurePercent, maxOpenTrades: CONFIG.maxOpenTrades,
-        realCashTradingUnlocked: CONFIG.realCashTradingUnlocked === true,
-        safetyReconciliationRequired: engineState.safetyReconciliationRequired === true,
-        dailyLossLocked: engineState.dailyLossLocked === true, profitLocked: engineState.profitLocked === true } });
-      if (options.automated !== false || options.requireCandidateDecision) {
-        const current = dedupeSignalsByCanonicalAuthority([...(engineState.lastStockSignals || []), ...(engineState.lastCryptoSignals || [])])
-          .find(c => normalizeSymbol(c.symbol) === symbol);
-        if (!current || current.decisionUpdatedAt !== options.riskDecisionVersion) throw new Error('Canonical decision changed before submission');
-        const candidate = revalidateCandidate(current, { ...current, ...quote });
-        const gate = cryptoAsset ? evaluateCryptoTradeCandidate(candidate) : evaluateStockTradeCandidate(candidate,
-          { requireCentralDecision: true, requireFreshDecision: true, requireExplicitApproval: true });
-        if (!gate.approved || getApprovedTradeAmount(candidate) + 0.005 < orderRiskReservations.consumed(symbol, options.riskDecisionVersion)) {
-          throw new Error('Canonical approval or sizing revoked before submission');
-        }
-      }
-    } };
+    });
   },
 };
 const orderService = createOrderService({
@@ -13812,13 +13699,31 @@ const orderService = createOrderService({
   clientOrderPrefix: AI_ORDER_PREFIX,
   duplicateOrderGuard,
   preTradeRiskGuard,
-  reserveRisk: (payload, options) => orderRiskReservations.reserve(payload, options),
+  onOrderSubmitted: ({ payload, options }) => {
+    if (String(payload?.side || "").toLowerCase() !== "buy") return;
+    const dateKey = getTodayKeyET();
+    engineState.liveTradeLimitState = ensureLiveTradeLimitDay(engineState.liveTradeLimitState, dateKey);
+    recordSuccessfulEntry(engineState.liveTradeLimitState, {
+      symbol: normalizeSymbol(payload.symbol),
+      category: options.holdCategory === "crypto" ? "crypto" : normalizeHoldCategory(options.holdCategory),
+      dateKey,
+      isExistingPosition: options.liveTradeLimitDecision?.isExistingPosition === true,
+    });
+    saveEngineState("LIVE_TRADE_LIMIT_ENTRY_RECORDED");
+  },
 });
 function isValidStockSymbol(symbol) {
   const s = normalizeSymbol(symbol);
   if (!s) return false;
-  // Security type is checked using asset metadata, not ambiguous suffixes.
-  return /^[A-Z]{1,5}(?:[.-][A-Z])?$/.test(s);
+  if (s.includes(".") || s.includes("-") || s.includes("/") || s.includes("^"))
+    return false;
+  if (s.length > 5) return false;
+  if (s.length === 5 && /[YF]$/.test(s)) return false;
+  const badEndings = ["W", "WS", "WT", "R", "RT", "U", "UN", "P", "PR", "Z"];
+  for (const ending of badEndings) {
+    if (s.endsWith(ending) && s.length >= 4) return false;
+  }
+  return /^[A-Z]{1,5}$/.test(s);
 }
 async function getAsset(symbol) {
   return alpacaTradingRequest(`/v2/assets/${encodeURIComponent(symbol)}`);
@@ -13841,9 +13746,15 @@ async function checkAssetEligibility(symbol) {
 
     if (
       assetClass !== "us_equity" ||
-      ['etf', 'etn', 'fund', 'bond', 'warrant', 'preferred'].includes(String(asset.security_type || '').toLowerCase()) ||
-      /\b(etf|etn|exchange.traded fund|mutual fund|warrants?|preferred stock)\b/.test(assetName)
-      || /\b(warrants?|rights|units|preferred)\b/.test(assetName)
+      assetName.includes("etf") ||
+      assetName.includes("fund") ||
+      assetName.includes("trust") ||
+      assetName.includes("treasury") ||
+      assetName.includes("bond") ||
+      assetName.includes("income") ||
+      assetName.includes("municipal") ||
+      assetName.includes("notes") ||
+      assetName.includes("index")
     ) {
       return {
         ok: false,
@@ -13870,7 +13781,7 @@ async function isAssetSellEligible(symbol) {
     return { ok: false, reason: err.message };
   }
 }
-const polygonQuoteCache = new BoundedTtlCache({ maxEntries: 500, ttlMs: 60000 });
+const polygonQuoteCache = new Map();
 function getPolygonCacheKey(symbol) {
   return normalizeSymbol(symbol);
 }
@@ -13892,7 +13803,7 @@ function cachePolygonQuote(symbol, quote) {
     quote,
   });
 }
-const combinedStockQuoteCache = new BoundedTtlCache({ maxEntries: 500, ttlMs: 15000 });
+const combinedStockQuoteCache = new Map();
 function getStockQuoteCacheKey(symbol) {
   return normalizeSymbol(symbol);
 }
@@ -14234,7 +14145,7 @@ function normalizeAlpacaLatestStockQuote(symbol, quote = {}) {
     };
 }
 
-async function getAlpacaLatestStockQuotes(symbols = [], options = {}) {
+async function getAlpacaLatestStockQuotes(symbols = []) {
   const cleanSymbols = [...new Set(
     (Array.isArray(symbols) ? symbols : [symbols])
       .map(normalizeSymbol)
@@ -14242,7 +14153,7 @@ async function getAlpacaLatestStockQuotes(symbols = [], options = {}) {
   )];
   if (cleanSymbols.length === 0) return [];
   const data = await alpacaDataRequest(
-    `/v2/stocks/quotes/latest?symbols=${encodeURIComponent(cleanSymbols.join(","))}`, options
+    `/v2/stocks/quotes/latest?symbols=${encodeURIComponent(cleanSymbols.join(","))}`
   );
   return cleanSymbols
     .map((symbol) => normalizeAlpacaLatestStockQuote(
@@ -14251,27 +14162,6 @@ async function getAlpacaLatestStockQuotes(symbols = [], options = {}) {
     ))
     .filter(Boolean);
 }
-
-const tradierMarketData = createTradierMarketData();
-const collectStockMarketQuotes = createStockQuoteBatch({
-  primary: (symbols) => tradierMarketData.getLatestQuotes(symbols),
-  fallback: getAlpacaLatestStockQuotes,
-  normalizeSymbol,
-  onQuotes: quotes => { for (const quote of quotes) updateQuoteCache(quote.symbol, quote); },
-});
-async function getLatestStockMarketQuotes(symbols = []) {
-  const quotes = await collectStockMarketQuotes(symbols);
-  engineState.tradierMarketData = tradierMarketData.getStatus();
-  return quotes;
-}
-const refreshStockExecutionQuotes = createStockExecutionQuoteRefresher({
-  getLatestQuotes: getLatestStockMarketQuotes,
-  normalizeSymbol,
-  updateQuoteCache,
-  onError: (error) => {
-    console.warn("Alpaca stock execution quote refresh failed:", error.message);
-  },
-});
 
 async function getAlpacaStockPrice(symbol) {
   const cleanSymbol = normalizeSymbol(symbol);
@@ -14297,44 +14187,14 @@ async function getAlpacaStockPrice(symbol) {
 }
 async function getStockQuote(symbol) {
   const cleanSymbol = normalizeSymbol(symbol);
-  let liveCachedQuote = getAuthoritativeLiveQuote(cleanSymbol);
-  if (!liveCachedQuote || !getStockExecutionEvidenceFreshness(liveCachedQuote).spreadFresh) {
-    const quotes = await getLatestStockMarketQuotes([cleanSymbol]);
-    for (const quote of quotes) updateQuoteCache(cleanSymbol, quote);
-    liveCachedQuote = getAuthoritativeLiveQuote(cleanSymbol);
-  }
   const cachedCombined = getCachedStockQuote(cleanSymbol);
   if (cachedCombined) {
-    const cachedWithLivePrice = mergeLiveStockQuoteWithReference(
-      liveCachedQuote,
-      cachedCombined
-    );
-    const cachedFreshness = getStockExecutionEvidenceFreshness(
-      cachedWithLivePrice || {},
-      { maxAgeSeconds: LIVE_ORDER_MAX_QUOTE_AGE_SECONDS }
-    );
-    if (cachedFreshness.quoteFresh && cachedFreshness.spreadFresh) {
-      return cachedWithLivePrice;
-    }
+    return cachedCombined;
   }
-  let dataError = "";
-  let polygonReference = cachedCombined || null;
-  if (!polygonReference && liveCachedQuote && ENABLE_POLYGON) {
-    try {
-      polygonReference = await polygonQuote(symbol);
-    } catch (err) {
-      dataError = err.message;
-      console.error("Polygon reference enrichment failed:", symbol, err.message);
-    }
-  }
-  if (!polygonReference) {
-    polygonReference = moversCache.moverDetails?.[cleanSymbol] || null;
-  }
-  let polygon = mergeLiveStockQuoteWithReference(
-    liveCachedQuote,
-    polygonReference
-  );
+  const liveCachedQuote = getAuthoritativeLiveQuote(cleanSymbol);
+  let polygon = liveCachedQuote || null;
   let finnhub = null;
+  let dataError = "";
   try {
     if (!polygon && ENABLE_POLYGON && POLYGON_PRIMARY) {
       polygon = await polygonQuote(symbol);
@@ -14345,7 +14205,7 @@ async function getStockQuote(symbol) {
   }
   let bars = [];
   try {
-    bars = await getRecentBars(symbol, "5Min", 60);
+    bars = await getRecentBars(symbol, "5Min", 30);
   } catch (err) {
     dataError = err.message;
     bars = [];
@@ -14382,7 +14242,7 @@ async function getStockQuote(symbol) {
     ...bars.map((b) => Number(b.h || 0)),
     0
   );
-  const barDollarVolume =
+  const dollarVolume =
     Number(barStats.lastVolume || barStats.avgVolume || 0) *
     alpacaCurrent;
   const alpacaLow = Math.min(
@@ -14417,32 +14277,23 @@ async function getStockQuote(symbol) {
   const provisionalBid = Number(provisionalPrimary?.bid || provisionalPrimary?.bp || 0);
   const provisionalAsk = Number(provisionalPrimary?.ask || provisionalPrimary?.ap || 0);
   let alpacaLatestFallback = null;
-  const provisionalFreshness = getStockExecutionEvidenceFreshness(
-    provisionalPrimary || {},
-    { maxAgeSeconds: LIVE_ORDER_MAX_QUOTE_AGE_SECONDS }
-  );
   if (
     (!provisionalPrimary && (!alpacaCurrent || alpacaCurrent <= 0)) ||
     provisionalBid <= 0 ||
-    provisionalAsk <= 0 ||
-    !provisionalFreshness.quoteFresh ||
-    !provisionalFreshness.spreadFresh
+    provisionalAsk <= 0
   ) {
     alpacaLatestFallback = await getAlpacaStockPrice(cleanSymbol);
   }
-  const fallbackFreshness = getStockExecutionEvidenceFreshness(
-    alpacaLatestFallback || {},
-    { maxAgeSeconds: LIVE_ORDER_MAX_QUOTE_AGE_SECONDS }
-  );
-  const fallbackWithReference = mergeLiveStockQuoteWithReference(
-    alpacaLatestFallback,
-    provisionalPrimary
-  );
-  const primary = provisionalFreshness.quoteFresh || !fallbackFreshness.quoteFresh
-    ? provisionalPrimary || alpacaLatestFallback
-    : fallbackWithReference;
-  const spreadQuote = provisionalFreshness.spreadFresh || !fallbackFreshness.spreadFresh
-    ? provisionalPrimary || alpacaLatestFallback
+  const primary =
+    polygon ||
+    finnhub ||
+    (
+      Number(alpacaLatestFallback?.price || 0) > 0
+        ? alpacaLatestFallback
+        : null
+    );
+  const spreadQuote = provisionalBid > 0 && provisionalAsk > 0
+    ? provisionalPrimary
     : alpacaLatestFallback;
   const bid = Number(spreadQuote?.bid || spreadQuote?.bp || 0);
   const ask = Number(spreadQuote?.ask || spreadQuote?.ap || 0);
@@ -14477,27 +14328,33 @@ async function getStockQuote(symbol) {
   const open = Number(
     primary?.open ||
     primary?.o ||
+    alpacaOpen ||
     0
   );
   const previousClose = Number(
     primary?.previousClose ||
     primary?.pc ||
+    alpacaOpen ||
     0
   );
-  const percentChangeAvailable = current > 0 && previousClose > 0;
-  const percentChange = percentChangeAvailable
-    ? ((current - previousClose) / previousClose) * 100
-    : null;
-  const change = percentChangeAvailable ? current - previousClose : null;
+  const percentChange =
+    Number(primary?.percentChange || 0) ||
+    (
+      previousClose > 0
+        ? ((current - previousClose) / previousClose) * 100
+        : 0
+    );
+  const change =
+    Number(primary?.change || 0) ||
+    (
+      previousClose > 0
+        ? current - previousClose
+        : 0
+    );
   const volume = Math.max(
     Number(primary?.volume || primary?.v || 0),
     Number(barStats.lastVolume || 0),
     Number(barStats.avgVolume || 0)
-  );
-  const dollarVolume = Math.max(
-    Number(primary?.dollarVolume || 0),
-    volume * current,
-    barDollarVolume
   );
   if (!current || current <= 0) {
     console.error("STOCK PRICE FAILED:", {
@@ -14520,23 +14377,6 @@ async function getStockQuote(symbol) {
     price: current,
     change,
     percentChange,
-    changePercent: percentChange,
-    dayChangePercent: percentChange,
-    percentChangeAvailable,
-    changePercentAvailable: percentChangeAvailable,
-    dayChangePercentAvailable: percentChangeAvailable,
-    percentChangeReferencePrice:
-      percentChangeAvailable ? previousClose : null,
-    changeReferencePrice:
-      percentChangeAvailable ? previousClose : null,
-    percentChangeReferenceType:
-      percentChangeAvailable ? "previous_close" : null,
-    changeReferenceType:
-      percentChangeAvailable ? "previous_close" : null,
-    percentChangeSource:
-      percentChangeAvailable ? "provider_previous_close" : null,
-    changePercentSource:
-      percentChangeAvailable ? "provider_previous_close" : null,
     high: Number(
       primary?.high ||
       primary?.h ||
@@ -14622,37 +14462,19 @@ async function getStockQuote(symbol) {
 }
 const recentStockBarsCache = new Map();
 const RECENT_STOCK_BARS_CACHE_TTL_MS = 45_000;
-const RECENT_STOCK_DAILY_BARS_CACHE_TTL_MS = 30 * 60_000;
-const RECENT_STOCK_BARS_CACHE_MAX_ENTRIES = 240;
+const RECENT_STOCK_BARS_CACHE_MAX_ENTRIES = 80;
 
-async function getRecentBars(symbol, timeframe = "5Min", limit = 30, { maxResponseBytes = 512 * 1024 } = {}) {
-  const intervalMs = timeframe === '1Day' ? 86400000 : Number(String(timeframe).match(/^([0-9]+)Min$/)?.[1] || 5) * 60000;
-  const validateBars = rows => {
-    const seen = new Set();
-    const valid = rows.filter(bar => {
-      const t = typeof bar.t === 'number' ? bar.t : Date.parse(bar.t);
-      if (!Number.isFinite(t) || t < Date.now() - (timeframe === '1Day' ? 120 : 7) * 86400000 || t + intervalMs > Date.now() || seen.has(t) ||
-        ![bar.o, bar.h, bar.l, bar.c, bar.v].every(Number.isFinite) ||
-        Math.min(bar.o, bar.h, bar.l, bar.c) <= 0 || bar.v < 0 ||
-        bar.h < Math.max(bar.o, bar.c, bar.l) || bar.l > Math.min(bar.o, bar.c)) return false;
-      seen.add(t);
-      return true;
-    }).sort((a, b) => (typeof a.t === 'number' ? a.t : Date.parse(a.t)) - (typeof b.t === 'number' ? b.t : Date.parse(b.t)));
-    return valid.slice(-Math.max(1, Number(limit)));
-  };
+async function getRecentBars(symbol, timeframe = "5Min", limit = 30) {
   const cleanSymbol = normalizeSymbol(symbol);
   if (!cleanSymbol) return [];
   const cacheKey = `${cleanSymbol}:${timeframe}:${Number(limit || 30)}`;
   const cached = recentStockBarsCache.get(cacheKey);
-  const cacheTtlMs = timeframe === "1Day"
-    ? RECENT_STOCK_DAILY_BARS_CACHE_TTL_MS
-    : RECENT_STOCK_BARS_CACHE_TTL_MS;
   if (
     cached &&
-    Date.now() - Number(cached.at || 0) < cacheTtlMs &&
+    Date.now() - Number(cached.at || 0) < RECENT_STOCK_BARS_CACHE_TTL_MS &&
     Array.isArray(cached.bars)
   ) {
-    return validateBars(cached.bars);
+    return cached.bars;
   }
   const cacheBars = (bars) => {
     if (!Array.isArray(bars) || bars.length === 0) return bars;
@@ -14686,7 +14508,7 @@ async function getRecentBars(symbol, timeframe = "5Min", limit = 30, { maxRespon
         throw new Error(`HTTP ${data?.status || "unknown"}`);
       }
 
-      const json = JSON.parse(await readBoundedResponseText(data, { maxBytes: maxResponseBytes }));
+      const json = await data.json();
 
       const polygonBars = Array.isArray(json?.results)
         ? json.results
@@ -14696,12 +14518,11 @@ async function getRecentBars(symbol, timeframe = "5Min", limit = 30, { maxRespon
             h: Number(bar.h || 0),
             l: Number(bar.l || 0),
             c: Number(bar.c || 0),
-            v: Number(bar.v ?? NaN),
+            v: Number(bar.v || 0),
             t: bar.t || null,
           }))
         : [];
-      const valid = validateBars(polygonBars);
-      if (valid.length >= Math.min(Number(limit), timeframe === '1Day' ? 20 : 34)) return cacheBars(valid);
+      if (polygonBars.length > 0) return cacheBars(polygonBars);
     } catch (err) {
       console.warn("Polygon bars error, using Alpaca fallback:", cleanSymbol, err?.message);
     }
@@ -14714,8 +14535,8 @@ async function getRecentBars(symbol, timeframe = "5Min", limit = 30, { maxRespon
       `&start=${encodeURIComponent(from)}` +
       `&end=${encodeURIComponent(now.toISOString())}` +
       `&limit=${Math.max(1, Number(limit || 30))}` +
-      `&adjustment=all&feed=iex&sort=desc`;
-    const data = await alpacaDataRequest(alpacaPath, { maxResponseBytes });
+      `&adjustment=raw&feed=iex&sort=desc`;
+    const data = await alpacaDataRequest(alpacaPath);
     const alpacaBars = Array.isArray(data?.bars)
       ? data.bars
         .slice()
@@ -14725,11 +14546,11 @@ async function getRecentBars(symbol, timeframe = "5Min", limit = 30, { maxRespon
           h: Number(bar.h || 0),
           l: Number(bar.l || 0),
           c: Number(bar.c || 0),
-          v: Number(bar.v ?? NaN),
+          v: Number(bar.v || 0),
           t: bar.t || null,
         }))
       : [];
-    return cacheBars(validateBars(alpacaBars));
+    return cacheBars(alpacaBars);
   } catch (err) {
     console.warn("Alpaca stock bars fallback failed:", cleanSymbol, err?.message);
     return [];
@@ -15342,7 +15163,7 @@ async function getAdvancedConfirmations(
       };
     return mergeNewsConfirmationFields(baseConfirmations, newsRisk);
   }
-  const bars = await getRecentBars(q.symbol, "5Min", 60);
+  const bars = await getRecentBars(q.symbol, "5Min", 30);
   const stats = computeBarStats(bars);
   let dailyBars = [];
   let benchmarkDailyBars = [];
@@ -17717,7 +17538,7 @@ function computeEma(values = [], period = 9) {
   return ema;
 }
 function computeRsi(closes = [], period = 14) {
-  if (closes.length < period + 1 || closes.some(v => !Number.isFinite(v) || v <= 0)) return null;
+  if (closes.length < period + 1) return 50;
   let gains = 0;
   let losses = 0;
   for (let i = 1; i <= period; i++) {
@@ -17725,43 +17546,27 @@ function computeRsi(closes = [], period = 14) {
     if (diff >= 0) gains += diff;
     else losses += Math.abs(diff);
   }
-  gains /= period;
-  losses /= period;
-  for (let i = period + 1; i < closes.length; i++) {
-    const diff = closes[i] - closes[i - 1];
-    gains = (gains * (period - 1) + Math.max(0, diff)) / period;
-    losses = (losses * (period - 1) + Math.max(0, -diff)) / period;
-  }
-  if (losses === 0) return gains === 0 ? 50 : 100;
+  if (losses === 0) return 100;
   const rs = gains / losses;
   return 100 - 100 / (1 + rs);
 }
 function computeMacd(closes = []) {
-  if (closes.length < 34 || closes.some(v => !Number.isFinite(v) || v <= 0)) {
+  if (closes.length < 26) {
     return {
-      macd: null,
-      signal: null,
+      macd: 0,
+      signal: 0,
     };
   }
-  let ema12 = computeEma(closes.slice(0, 26), 12);
-  let ema26 = computeEma(closes.slice(0, 26), 26);
-  const series = [ema12 - ema26];
-  for (let i = 26; i < closes.length; i++) {
-    ema12 += (closes[i] - ema12) * 2 / 13;
-    ema26 += (closes[i] - ema26) * 2 / 27;
-    series.push(ema12 - ema26);
-  }
-  const macd = series[series.length - 1];
+  const ema12 = computeEma(closes, 12);
+  const ema26 = computeEma(closes, 26);
+  const macd = ema12 - ema26;
   return {
     macd,
-    signal: computeEma(series, 9),
+    signal: macd * 0.8,
   };
 }
 function computeTechnicals(bars = []) {
-  const closes = bars.map((b) => Number(b?.c ?? b?.close));
-  if (closes.some(value => !Number.isFinite(value) || value <= 0)) {
-    return { ema9: null, ema20: null, rsi: null, macd: null, macdSignal: null };
-  }
+  const closes = bars.map((b) => Number(b.c || 0)).filter(Boolean);
   const ema9 = computeEma(closes, 9);
   const ema20 = computeEma(closes, 20);
   const rsi = computeRsi(closes, 14);
@@ -17818,14 +17623,6 @@ function getFreshLiveCryptoQuote(symbol, maxAgeSeconds = 8) {
 async function getCryptoLatestQuote(symbol) {
   return alpacaCryptoMarketData.getLatestQuote(symbol);
 }
-const refreshCryptoExecutionQuotes = createCryptoExecutionQuoteRefresher({
-  getLatestQuotes: (symbols) => alpacaCryptoMarketData.getLatestQuotes(symbols),
-  normalizeSymbol,
-  updateQuoteCache,
-  onError: (error) => {
-    console.warn("Alpaca crypto execution quote refresh failed:", error.message);
-  },
-});
 async function getCryptoRecentBars(symbol, timeframe = "5Min", limit = 30) {
   try {
     return await alpacaCryptoMarketData.getRecentBars(symbol, timeframe, limit);
@@ -17846,44 +17643,25 @@ const { scoreCrypto, calculateCryptoInstitutionalQualification, scanCryptoMarket
   getCryptoAssets,
   getCryptoNewsIntelligence,
   getCryptoLatestQuote,
-  getCryptoLatestQuotes: (symbols) =>
-    alpacaCryptoMarketData.getLatestQuotes(symbols),
   getFreshLiveCryptoQuote,
   isCrypto,
   recordSkippedSymbol,
   updateQuoteCache,
-  getRuntime: () => ({
-    TRADING_MODE,
-    LIVE_ORDER_MAX_QUOTE_AGE_SECONDS,
-    CRYPTO_SCAN_CONCURRENCY: Math.max(
-      1,
-      Math.min(8, Number(process.env.CRYPTO_SCAN_CONCURRENCY || 4))
-    ),
-  }),
+  getRuntime: () => ({ TRADING_MODE, LIVE_ORDER_MAX_QUOTE_AGE_SECONDS }),
 });
 const cryptoDailyDiscoveryBarsCache = new Map();
+const cryptoIntradayBarsCache = new Map();
 const CRYPTO_DISCOVERY_CACHE_MAX_SYMBOLS = Math.max(
   50,
   Math.min(300, Number(process.env.CRYPTO_DISCOVERY_CACHE_MAX_SYMBOLS || 250))
 );
-const cryptoIntradayBars = createCryptoIntradayBars({
-  getRecentBars: getCryptoRecentBars,
-  normalizeSymbol,
-  maxSymbols: CRYPTO_DISCOVERY_CACHE_MAX_SYMBOLS,
-});
 async function getCryptoDailyBarsForDiscovery(symbol) {
   const clean = normalizeSymbol(symbol);
   const cached = cryptoDailyDiscoveryBarsCache.get(clean);
-  if (cached?.retryAfter > Date.now()) return cached.bars;
   if (cached && Date.now() - cached.at <= 30 * 60 * 1000) {
     return cached.bars;
   }
-  const bars = await getCryptoRecentBars(clean, "1Day", 30).catch(() => []);
-  if (!Array.isArray(bars) || bars.length === 0) {
-    cryptoDailyDiscoveryBarsCache.set(clean, { at: cached?.at || 0, bars: cached?.bars || [], retryAfter: Date.now() + 5000 });
-    if (cryptoDailyDiscoveryBarsCache.size > CRYPTO_DISCOVERY_CACHE_MAX_SYMBOLS) cryptoDailyDiscoveryBarsCache.delete(cryptoDailyDiscoveryBarsCache.keys().next().value);
-    return cached?.bars || [];
-  }
+  const bars = await getCryptoRecentBars(clean, "1Day", 30);
   cryptoDailyDiscoveryBarsCache.set(clean, {
     at: Date.now(),
     bars: Array.isArray(bars) ? bars.slice(-30) : [],
@@ -17900,7 +17678,34 @@ async function getCryptoDailyBarsForDiscovery(symbol) {
   return cryptoDailyDiscoveryBarsCache.get(clean)?.bars || [];
 }
 async function getBestCryptoBars(symbol) {
-  return cryptoIntradayBars.get(symbol);
+  const clean = normalizeSymbol(symbol);
+  const cached = cryptoIntradayBarsCache.get(clean);
+  if (cached && Date.now() - cached.at <= 2 * 60 * 1000) {
+    return cached.bars;
+  }
+  const attempts = [
+    ["5Min", 30],
+    ["1Min", 30],
+    ["15Min", 30],
+  ];
+  for (const [timeframe, limit] of attempts) {
+    const bars = await getCryptoRecentBars(symbol, timeframe, limit);
+    if (Array.isArray(bars) && bars.length >= 10) {
+      cryptoIntradayBarsCache.set(clean, { at: Date.now(), bars: bars.slice(-30) });
+      if (cryptoIntradayBarsCache.size > CRYPTO_DISCOVERY_CACHE_MAX_SYMBOLS) {
+        const oldest = [...cryptoIntradayBarsCache.entries()]
+          .sort((left, right) => Number(left[1]?.at || 0) - Number(right[1]?.at || 0))[0];
+        if (oldest) cryptoIntradayBarsCache.delete(oldest[0]);
+      }
+      return bars;
+    }
+  }
+  const fallbackBars = await getCryptoRecentBars(symbol, "1Min", 30);
+  cryptoIntradayBarsCache.set(clean, {
+    at: Date.now(),
+    bars: Array.isArray(fallbackBars) ? fallbackBars.slice(-30) : [],
+  });
+  return fallbackBars;
 }
 async function placeCryptoMarketBuy(symbol, dollars, options = {}) {
   if (CONFIG.realCashTradingUnlocked !== true) {
@@ -18079,7 +17884,7 @@ async function getPolygonMoverSymbols(limit = POLYGON_MOVERS_LIMIT, forceRefresh
           return Number(b.volume || 0) - Number(a.volume || 0);
         })
         .slice(0, Math.min(100, Math.max(Number(limit || 0) * 2, 50)));
-      const executionQuotes = await getLatestStockMarketQuotes(
+      const executionQuotes = await getAlpacaLatestStockQuotes(
         quoteReviewCandidates.map((item) => item.symbol)
       );
       const executionQuality = filterAndRankStockCandidatesByExecutionQuality({
@@ -18168,10 +17973,6 @@ async function getPolygonMoverSymbols(limit = POLYGON_MOVERS_LIMIT, forceRefresh
           .map((item) => item.symbol),
       };
     }
-    for (const candidate of rankedRaw.slice(0, 100)) candidateTraceStore.record({ ...candidate,
-      stage: 'EARLY_MOVER_RECEIVED', source: candidate.source || 'polygon_snapshot',
-      reasons: candidate.missingEvidenceReasons || [],
-    });
     const { gainers, losers, ranked } = rankPolygonMovers({
       rankedRaw,
       limit,
@@ -18532,8 +18333,16 @@ function calculateCanonicalPreMoverScore({
 } = {}) {
   const cleanSymbol = normalizeSymbol(symbol);
   const history = (Array.isArray(dailyBars) ? dailyBars : [])
-    .map((bar) => providerDailyBar(cleanSymbol, bar))
-    .filter(Boolean);
+    .map((bar) => ({
+      s: cleanSymbol,
+      d: bar.d || bar.date || null,
+      o: Number(bar.o ?? bar.open ?? 0),
+      h: Number(bar.h ?? bar.high ?? 0),
+      l: Number(bar.l ?? bar.low ?? 0),
+      c: Number(bar.c ?? bar.close ?? 0),
+      v: Math.max(0, Number(bar.v ?? bar.volume ?? 0) || 0),
+    }))
+    .filter((bar) => bar.c > 0 && bar.h >= bar.l);
   const features = calculateQuietPreMoveFeatures(history, {
     learning: engineState.quietCandidateOutcomeLearning?.stock || null,
   });
@@ -18611,7 +18420,7 @@ function getCachedPreMoverSymbols(maxAgeMs = Number(process.env.PRE_MOVER_DISCOV
 async function getPreMoverAssetUniverse(limit = Number(process.env.PRE_MOVER_ASSET_FALLBACK_LIMIT || 300)) {
   const cacheMs = Number(process.env.PRE_MOVER_ASSET_UNIVERSE_CACHE_MS || 30 * 60 * 1000);
   if (
-    assetUniverseCache.requestedLimit >= limit &&
+    assetUniverseCache.symbols.length &&
     Date.now() - Number(assetUniverseCache.at || 0) <= cacheMs
   ) {
     return assetUniverseCache.symbols.slice(0, limit);
@@ -18619,12 +18428,10 @@ async function getPreMoverAssetUniverse(limit = Number(process.env.PRE_MOVER_ASS
   const symbols = await getTradableAssets(limit);
   assetUniverseCache = {
     at: Date.now(),
-    requestedLimit: limit,
     symbols,
   };
   return symbols;
 }
-let preMoverSeedCursor = 0;
 async function getPreMoverSeedSymbols({
   moverSymbols = [],
   assetSymbols = [],
@@ -18634,10 +18441,10 @@ async function getPreMoverSeedSymbols({
   preMoverMemorySymbols = [],
 } = {}) {
   const broadLimit = Number(process.env.PRE_MOVER_BROAD_UNIVERSE_LIMIT || 300);
-  const fallbackLimit = Number(process.env.PRE_MOVER_ASSET_FALLBACK_LIMIT || 5000);
+  const fallbackLimit = Number(process.env.PRE_MOVER_ASSET_FALLBACK_LIMIT || 300);
   const alwaysExpand = process.env.PRE_MOVER_ALWAYS_EXPAND_UNIVERSE !== "false";
   let broadAssetSymbols = assetSymbols;
-  if (alwaysExpand && broadAssetSymbols.length < fallbackLimit) {
+  if (alwaysExpand && broadAssetSymbols.length < Math.min(75, fallbackLimit)) {
     try {
       broadAssetSymbols = await getPreMoverAssetUniverse(fallbackLimit);
     } catch (err) {
@@ -18645,17 +18452,20 @@ async function getPreMoverSeedSymbols({
       broadAssetSymbols = assetSymbols;
     }
   }
-  const priority = [
-      ...preMoverMemorySymbols.slice(0, 20),
-      ...repeatWatchlistSymbols.slice(0, 20),
-      ...coolingOffRunnerSymbols.slice(0, 20),
-      ...hiddenRunnerMemorySymbols.slice(0, 20),
-      ...moverSymbols.slice(0, 20),
-  ].map(normalizeSymbol).filter(isValidStockSymbol);
-  const window = takeExplorationWindow(broadAssetSymbols.map(normalizeSymbol).filter(isValidStockSymbol), priority,
-    { cursor: preMoverSeedCursor, limit: broadLimit });
-  preMoverSeedCursor = window.cursor;
-  return window.symbols;
+  return [
+    ...new Set([
+      ...preMoverMemorySymbols,
+      ...repeatWatchlistSymbols,
+      ...coolingOffRunnerSymbols,
+      ...hiddenRunnerMemorySymbols,
+      ...moverSymbols,
+      ...broadAssetSymbols,
+    ]),
+  ]
+    .filter(Boolean)
+    .map(normalizeSymbol)
+    .filter(isValidStockSymbol)
+    .slice(0, broadLimit);
 }
 function getEasternSessionClock() {
   const parts = Object.fromEntries(new Intl.DateTimeFormat("en-US", {
@@ -18670,15 +18480,12 @@ function getEasternSessionClock() {
 
 async function runBoundedQuietDiscoveryScan({ force = false } = {}) {
   const dateKey = getTodayKeyET();
-  const prior = engineState.boundedQuietDiscoveryState;
-  const warming = prior?.dateKey === dateKey && prior?.ok === true;
-  if (warming && (!prior.historicalWarmupRemaining ||
-      Date.now() - Date.parse(prior.updatedAt) < 15 * 60000)) {
-    return prior;
+  if (engineState.boundedQuietDiscoveryState?.dateKey === dateKey && engineState.boundedQuietDiscoveryState?.ok === true) {
+    return engineState.boundedQuietDiscoveryState;
   }
   const clock = getEasternSessionClock();
   const afterClose = clock.hour > 16 || (clock.hour === 16 && clock.minute >= 10);
-  if (!force && (!afterClose || !isUsStockMarketSessionDayKey(dateKey))) {
+  if (!force && (!afterClose || ["Sat", "Sun"].includes(clock.weekday))) {
     return { ok: false, skipped: true, dateKey, reason: "Quiet discovery runs once after 4:10 PM ET on trading weekdays." };
   }
   const memoryGuard = buildMemoryGuardSnapshot();
@@ -18700,9 +18507,7 @@ async function runBoundedQuietDiscoveryScan({ force = false } = {}) {
   let downloadedBytes = 0;
   let providerTelemetry = {};
   let polygonFailure = "";
-  if (warming) {
-    provider = prior.provider;
-  } else if (ENABLE_POLYGON && POLYGON_API_KEY) {
+  if (ENABLE_POLYGON && POLYGON_API_KEY) {
     try {
       const url = `https://api.polygon.io/v2/aggs/grouped/locale/us/market/stocks/${dateKey}?adjusted=true&apiKey=${POLYGON_API_KEY}`;
       const response = await fetchWithTimeout(url, {}, 30000);
@@ -18713,8 +18518,8 @@ async function runBoundedQuietDiscoveryScan({ force = false } = {}) {
       if (!response.ok) throw new Error(`Polygon grouped daily HTTP ${response.status}`);
       const declaredBytes = Number(response.headers.get("content-length") || 0);
       if (declaredBytes > DISCOVERY_MAX_DOWNLOAD_BYTES) throw new Error(`Discovery download budget exceeded before download: ${declaredBytes} bytes`);
-      const body = await readBoundedResponseText(response, { maxBytes: DISCOVERY_MAX_DOWNLOAD_BYTES, timeoutMs: 30000,
-        onBytesRead: (bytes) => { downloadedBytes += bytes; } });
+      const body = await response.text();
+      downloadedBytes = Buffer.byteLength(body);
       if (downloadedBytes > DISCOVERY_MAX_DOWNLOAD_BYTES) throw new Error(`Discovery download budget exceeded: ${downloadedBytes} bytes`);
       const payload = JSON.parse(body);
       groupedResults = Array.isArray(payload.results) ? payload.results : [];
@@ -18726,19 +18531,18 @@ async function runBoundedQuietDiscoveryScan({ force = false } = {}) {
     polygonFailure = "Polygon disabled or API key missing";
   }
   if (polygonFailure) {
-    if (downloadedBytes >= DISCOVERY_MAX_DOWNLOAD_BYTES) throw new Error("Discovery download budget exhausted before fallback");
     const symbols = await getPreMoverAssetUniverse(DISCOVERY_BUDGETS.maxUniverse);
     const alpaca = await fetchAlpacaGroupedDaily({
       symbols,
       dateKey,
       dataRequest: alpacaDataRequest,
       batchSize: DISCOVERY_BUDGETS.batchSize,
-      maxDownloadBytes: DISCOVERY_MAX_DOWNLOAD_BYTES - downloadedBytes,
+      maxDownloadBytes: DISCOVERY_MAX_DOWNLOAD_BYTES,
       feed: process.env.DISCOVERY_ALPACA_FEED || "iex",
     });
     provider = "alpaca_multi_symbol_daily_fallback";
     groupedResults = alpaca.groupedResults;
-    downloadedBytes += alpaca.downloadedBytes;
+    downloadedBytes = alpaca.downloadedBytes;
     providerTelemetry = {
       fallbackReason: polygonFailure,
       requestCount: alpaca.requestCount,
@@ -18748,19 +18552,7 @@ async function runBoundedQuietDiscoveryScan({ force = false } = {}) {
       feed: alpaca.feed,
     };
   }
-  let bootstrapReservedBytes = 0;
-  const bootstrapResponseLimit = 64 * 1024;
   const result = await runBoundedQuietDiscovery({
-    skipDailyWrite: warming,
-    bootstrapHistories: (symbols) => processBatches(symbols, 5, async (symbol) => {
-      // Reserve both possible provider responses before launching concurrent
-      // bootstrap work. Failed downloads also consume this conservative budget.
-      const reservation = 2 * bootstrapResponseLimit;
-      if (downloadedBytes + bootstrapReservedBytes + reservation > DISCOVERY_MAX_DOWNLOAD_BYTES) return [];
-      bootstrapReservedBytes += reservation;
-      const bars = await getRecentBars(symbol, "1Day", 30, { maxResponseBytes: bootstrapResponseLimit }).catch(() => []);
-      return bars.map((bar) => providerDailyBar(symbol, bar)).filter(Boolean);
-    }),
     groupedResults,
     dateKey,
     featureStore: discoveryFeatureStore,
@@ -18768,15 +18560,11 @@ async function runBoundedQuietDiscoveryScan({ force = false } = {}) {
     downloadedBytes,
     learning: engineState.quietCandidateOutcomeLearning?.stock || null,
   });
-  const { discoveryCandidates, ...boundedResult } = result;
-  const state = { ...boundedResult, ok: true, provider, providerTelemetry, resourceUsage: {
-    ...result.resourceUsage, downloadedBytes, bootstrapReservedBytes,
-    totalDownloadBudgetChargedBytes: downloadedBytes + bootstrapReservedBytes,
-    maxDownloadBytes: DISCOVERY_MAX_DOWNLOAD_BYTES } };
-  engineState.quietCandidateOutcomeState = await updateQuietCandidateOutcomes(
+  const state = { ...result, ok: true, provider, providerTelemetry, resourceUsage: { ...result.resourceUsage, downloadedBytes, maxDownloadBytes: DISCOVERY_MAX_DOWNLOAD_BYTES } };
+  engineState.quietCandidateOutcomeState = updateQuietCandidateOutcomes(
     engineState.quietCandidateOutcomeState,
-    discoveryCandidates || state.watchlist,
-    groupedResults.map((row) => providerDailyBar(row.T || row.symbol, row)).filter((row) => row?.d === dateKey),
+    state.watchlist,
+    groupedResults,
     {
       assetClass: "stock",
       dayKey: dateKey,
@@ -18818,22 +18606,20 @@ async function runBoundedQuietDiscoveryScan({ force = false } = {}) {
   saveEngineState("BOUNDED_QUIET_DISCOVERY_UPDATED");
   return state;
 }
-const takePreMoverReview = createFairReviewQueue(5000);
 async function discoverPreMovers(seedSymbols = []) {
   const maxReview = Number(process.env.PRE_MOVER_DISCOVERY_REVIEW_LIMIT || 80);
   const maxReturn = Number(process.env.PRE_MOVER_DISCOVERY_SYMBOL_LIMIT || 40);
   const minScore = Number(process.env.PRE_MOVER_DISCOVERY_MIN_SCORE || 68);
   const cacheMs = Number(process.env.PRE_MOVER_DISCOVERY_CACHE_MS || 10 * 60 * 1000);
-  const universe = [...new Set(seedSymbols)]
-    .filter(Boolean)
-    .map(normalizeSymbol)
-    .filter(isValidStockSymbol);
-  takePreMoverReview(universe, 0);
   const cachedDiscovery = getPreMoverCache(cacheMs);
   if (cachedDiscovery.fresh) {
     return cachedDiscovery.symbols.slice(0, maxReturn);
   }
-  const candidates = takePreMoverReview([], maxReview);
+  const candidates = [...new Set(seedSymbols)]
+    .filter(Boolean)
+    .map(normalizeSymbol)
+    .filter(isValidStockSymbol)
+    .slice(0, maxReview);
   if (!candidates.length) {
     engineState.preMoverDiscoveryState = {
       ok: false,
@@ -19204,7 +18990,6 @@ function getBotEntryScores() {
   return engineState.aiEntryScores;
 }
 const { calculateInstitutionalScores, passesFilters, scoreStock, scanMarket } = createStockMarketStrategy({
-  recordCandidateEvent: event => candidateTraceStore.record(event),
   CONFIG,
   activeScanLocks,
   applyAutonomousCapitalRotation,
@@ -19855,10 +19640,6 @@ function calculatePyramidScalingOpportunity({
   managedPositions = [],
 }) {
   const symbol = normalizeSymbol(signal.symbol || position.symbol);
-  const canonicalGate = evaluateStockTradeCandidate(signal, { requireCentralDecision: true, requireFreshDecision: true, requireExplicitApproval: true });
-  if (!canonicalGate.approved || getApprovedTradeAmount(signal) <= 0) return {
-    symbol, approved: false, addAmount: 0, reason: 'CURRENT_CANONICAL_DECISION_REQUIRED', reasons: canonicalGate.reasons,
-  };
   const currentPrice = Number(
     signal.price ||
     signal.current ||
@@ -19912,7 +19693,6 @@ function calculatePyramidScalingOpportunity({
   const availableBotCap = Math.max(0, maxBotBudget - currentBotExposure);
   const addAmount = Number(
     Math.min(
-      getApprovedTradeAmount(signal),
       cash,
       availableBotCap,
       marketValue * (Number(CONFIG.pyramidAddSizePercent || 35) / 100)
@@ -23363,8 +23143,6 @@ function calculatePhase41InstitutionalCompressionIntelligence({
   return state;
 }
 const { autoBuySignals, autoBuyCryptoSignals } = createAutoBuyStrategies({
-  refreshStockExecutionQuotes,
-  refreshCryptoExecutionQuotes,
   CONFIG,
   calculateAdaptiveAggressionRebalancer,
   calculateAdaptiveCryptoPositionSize,
@@ -23504,12 +23282,6 @@ function hydrateCryptoExecutionCandidate(candidate = {}) {
     spreadSource: spreadAvailable
       ? quoteSource
       : "unavailable",
-    spreadUpdatedAt: spreadAvailable
-      ? quote.spreadUpdatedAt || quote.bidAskUpdatedAt || null
-      : null,
-    bidAskUpdatedAt: spreadAvailable
-      ? quote.bidAskUpdatedAt || quote.spreadUpdatedAt || null
-      : null,
     priceIsLive,
     priceStale: !priceIsLive,
     liveQuoteUpdatedAt: quoteUpdatedAt,
@@ -23819,10 +23591,15 @@ async function rotateWeakCryptoIfBetter(signals, positions) {
   }
 }
 function getCryptoAvailableBuyingPower(account = {}) {
-  const fields = ['cash', 'buying_power', 'crypto_buying_power', 'non_marginable_buying_power'];
-  if (account.cash == null || account.cash === '') return 0;
-  const values = fields.filter(key => account[key] != null && account[key] !== '').map(key => Number(account[key]));
-  return values.some(v => !Number.isFinite(v) || v < 0) ? 0 : Math.max(0, Math.min(...values));
+  const cash = Number(account?.cash || 0);
+  const cryptoBuyingPower = Number(account?.crypto_buying_power || 0);
+  const nonMarginableBuyingPower = Number(account?.non_marginable_buying_power || 0);
+  return Math.max(
+    0,
+    cryptoBuyingPower,
+    nonMarginableBuyingPower,
+    cash
+  );
 }
 function calculateAdaptiveCryptoPositionSize(signal = {}, account = {}) {
   const equity = Number(account?.equity || 0);
@@ -24000,16 +23777,10 @@ const { executeEngineCycleBody } = createEngineCycle({
   getMemoryGuardState: buildMemoryGuardSnapshot,
   getDueStockOutcomeSymbols,
   getStockOutcomeFollowupQuotes,
-  getQuietCandidateFollowupQuotes: async () => {
-    const symbols = getQuietFollowupSymbols(engineState.quietCandidateOutcomeState);
-    return symbols.length ? alpacaCryptoMarketData.getLatestQuotes(symbols).catch(() => []) : [];
-  },
   normalizeSymbol,
   pushLiveSignalUpdate,
   recordOrder,
   refreshEarlyMoversThenPolygonSubscriptions,
-  refreshCryptoExecutionQuotes,
-  refreshStockExecutionQuotes,
   refreshFinnhubLiveSubscriptions,
   refreshPolygonLiveSubscriptions,
   resetDailySafetyStateIfNewDay,
@@ -24105,7 +23876,6 @@ registerSystemRoutes(app, {
   }),
   getClock,
   getHealthPayload: buildBackendHealthPayload,
-  getCachedClock: () => engineState.cachedClock || null,
   getFallbackMarketOpen: () => engineState.marketOpen,
   getEngineRuntime: () => engineState,
 });
@@ -27437,7 +27207,11 @@ function calculateFinalMasterDecisionProfile(signal = {}) {
     "WATCH";
   const finalScore = clampScore(
     Number(
-      getCanonicalFinalScore(signal) ?? 0
+      decision.finalDecisionScore ??
+      signal.finalAutonomousDecisionScore ??
+      signal.archetypeAdjustedScore ??
+      signal.score ??
+      0
     )
   );
   const hardBlock =
@@ -27461,7 +27235,6 @@ function calculateFinalMasterDecisionProfile(signal = {}) {
     action === "ALLOW_REDUCED_SIZE" ||
     centralExecution.executionStyle === "ENTER_REDUCED_SIZE";
   const suppressEntry =
-    !["ALLOW", "ALLOW_REDUCED_SIZE", "ACCELERATE_CAPITAL"].includes(action) ||
     hardBlock ||
     waitForPullback ||
     (
@@ -27973,7 +27746,7 @@ function collectFrontendSignalSnapshot() {
   const latestStatus = getLatestFrontendStatusSnapshot();
   const orchestration =
     latestStatus?.phase20AutonomousOrchestration || {};
-  return dedupeSignalsByCanonicalAuthority([
+  return [
     ...buildRawEarlyMoverCandidates({ state: engineState, normalizeSymbol }),
     ...(Array.isArray(engineState.topStockSignals) ? engineState.topStockSignals : []),
     ...(Array.isArray(engineState.lastStockSignals) ? engineState.lastStockSignals : []),
@@ -27982,7 +27755,14 @@ function collectFrontendSignalSnapshot() {
     ...(Array.isArray(engineState.topCryptoSignals) ? engineState.topCryptoSignals : []),
     ...(Array.isArray(engineState.lastCryptoSignals) ? engineState.lastCryptoSignals : []),
     ...(Array.isArray(orchestration.topSignals) ? orchestration.topSignals : []),
-  ], { normalizeSymbol })
+  ]
+    .filter(Boolean)
+    .filter(
+      (signal, index, arr) =>
+        arr.findIndex(
+          (item) => normalizeSymbol(item.symbol) === normalizeSymbol(signal.symbol)
+        ) === index
+    )
     .map((signal) => {
       const merged = mergeLiveQuoteIntoSignal(signal);
       return {
@@ -27996,7 +27776,7 @@ function collectFrontendSignalSnapshot() {
 function buildFrontendStartupSnapshot(limit = 50) {
   const allSignals = collectFrontendSignalSnapshot();
   const approvedSignals = allSignals.filter(hasExplicitTradeApproval);
-  const displaySignals = selectCandidateDisplayWindow(allSignals, limit);
+  const displaySignals = allSignals.slice(0, limit);
   return {
     generatedAt: new Date().toISOString(),
     source: "memory_snapshot",
@@ -28053,10 +27833,10 @@ function isLiveQuoteFresh(symbol, maxAgeSeconds = 90) {
   };
 }
 let lastLiveSignalPushAt = 0;
-const pendingLiveSignalPushes = createLiveSignalPushQueue();
+let pendingLiveSignalPushPayload = null;
 let liveSignalPushTimer = null;
 function pushLiveSignalUpdate(payload = {}) {
-  pendingLiveSignalPushes.enqueue(payload);
+  pendingLiveSignalPushPayload = payload;
   const now = Date.now();
   const elapsedMs = now - Number(lastLiveSignalPushAt || 0);
   const minPushIntervalMs = 750;
@@ -28064,20 +27844,19 @@ function pushLiveSignalUpdate(payload = {}) {
     if (!liveSignalPushTimer) {
       liveSignalPushTimer = setTimeout(() => {
         liveSignalPushTimer = null;
-        flushLiveSignalUpdates();
+        pushLiveSignalUpdate(pendingLiveSignalPushPayload || {});
       }, minPushIntervalMs - elapsedMs);
     }
     return;
   }
-  flushLiveSignalUpdates();
-}
-function flushLiveSignalUpdates() {
-  lastLiveSignalPushAt = Date.now();
-  for (const finalPayload of pendingLiveSignalPushes.drain()) {
+  lastLiveSignalPushAt = now;
+  const finalPayload =
+    pendingLiveSignalPushPayload || payload;
   const message = `data: ${JSON.stringify({
     ...finalPayload,
     pushedAt: new Date().toISOString(),
   })}\n\n`;
+  pendingLiveSignalPushPayload = null;
   pushBackendStreamEvent("SIGNAL_EVENT", {
     ...finalPayload,
   });
@@ -28087,7 +27866,6 @@ function flushLiveSignalUpdates() {
     } catch {
       liveSignalClients.delete(client);
     }
-  }
   }
 }
 function pushBackendStreamEvent(type, payload = {}) {
@@ -28139,14 +27917,9 @@ function mergeLiveQuoteIntoSignal(signal = {}) {
   const symbol = normalizeSymbol(signal.symbol);
   const liveQuote = engineState.liveQuoteCache?.[symbol];
   if (!symbol || !liveQuote?.price || !isFreshLiveQuote(liveQuote)) {
-    return normalizeSignalScoreCompleteness(signal);
+    return signal;
   }
-  const measuredPercentPatch = buildMeasuredPercentChangePatch(
-    signal,
-    liveQuote,
-    { price: liveQuote.price }
-  );
-  return normalizeSignalScoreCompleteness({
+  return {
     ...signal,
     livePrice: liveQuote.price,
     displayPrice: liveQuote.price,
@@ -28163,15 +27936,14 @@ function mergeLiveQuoteIntoSignal(signal = {}) {
     spreadAgeSeconds: getSpreadAgeSeconds(liveQuote),
     liveMoveFromPreviousPercent:
       liveQuote.liveMoveFromPreviousPercent,
-    ...measuredPercentPatch,
+    percentChange:
+      liveQuote.livePercentChange ?? liveQuote.percentChange ?? signal.percentChange,
+    livePercentChange:
+      liveQuote.livePercentChange ?? signal.livePercentChange,
     premarketPercent:
-      liveQuote.premarketPercentAvailable === true
-        ? liveQuote.premarketPercent
-        : signal.premarketPercent,
+      liveQuote.premarketPercent ?? signal.premarketPercent,
     intradayPercent:
-      liveQuote.intradayPercentAvailable === true
-        ? liveQuote.intradayPercent
-        : signal.intradayPercent,
+      liveQuote.intradayPercent ?? signal.intradayPercent,
     liveQuoteUpdatedAt:
       liveQuote.liveQuoteUpdatedAt || liveQuote.updatedAt || null,
     liveQuoteSource:
@@ -28207,7 +27979,7 @@ function mergeLiveQuoteIntoSignal(signal = {}) {
       liveQuote.liquidityPressure ?? signal.liquidityPressure,
     priceStale:
       liveQuote.priceIsLive !== true,
-  });
+  };
 }
 function buildLiveSignalPushPayload() {
   const stockSignals = getTopSignals(
@@ -28310,6 +28082,7 @@ function updateQuoteCache(symbol, quote = {}) {
     null;
   let quoteUpdatedAtMs = quoteUpdatedAt ? Date.parse(quoteUpdatedAt) : NaN;
   if (
+    quote.priceIsLive === true &&
     (
       !Number.isFinite(quoteUpdatedAtMs) ||
       quoteUpdatedAtMs > Date.now() + 5000
@@ -28318,13 +28091,15 @@ function updateQuoteCache(symbol, quote = {}) {
     return null;
   }
   if (
+    quote.priceIsLive === true &&
     !hasNonRegressiveProviderTimestamp(previous, quote)
   ) {
     const incomingBid = Number(quote.bid || quote.bp || 0);
     const incomingAsk = Number(quote.ask || quote.ap || 0);
     const incomingSpreadUpdatedAt =
       quote.spreadUpdatedAt ||
-      quote.bidAskUpdatedAt || null;
+      quote.bidAskUpdatedAt ||
+      quoteUpdatedAt;
     const incomingSpreadTimestamp = incomingSpreadUpdatedAt
       ? Date.parse(incomingSpreadUpdatedAt)
       : NaN;
@@ -28332,7 +28107,6 @@ function updateQuoteCache(symbol, quote = {}) {
       ? Date.parse(previous.spreadUpdatedAt || previous.bidAskUpdatedAt)
       : NaN;
     const hasNewerMeasuredSpread =
-      quote.spreadAvailable !== false &&
       previousPrice > 0 &&
       previous.priceIsLive === true &&
       incomingBid > 0 &&
@@ -28394,27 +28168,14 @@ function updateQuoteCache(symbol, quote = {}) {
     quote.priceIsLive === true &&
     !!quoteUpdatedAt &&
     isLiveQuoteSource(quoteSource);
-  const measuredPercentChange = mergeMeasuredPercentChange(
-    previous,
-    quote,
-    { price }
-  );
-  const measuredDayChangeAvailable = measuredPercentChange.available && (
-    quote.dayChangePercentAvailable === true ||
-    [
-      "previous_completed_utc_daily_close",
-      "current_utc_day_open",
-      "previous_close",
-    ].includes(measuredPercentChange.referenceType)
-  );
   const liveMemory = updateLiveMarketMemory(cleanSymbol, {
     price,
     liveQuoteUpdatedAt: quoteUpdatedAt,
     previousClose:
-      quote.previousClose ??
-      quote.pc ??
-      quote.regularMarketPreviousClose ??
-      null,
+      quote.previousClose ||
+      quote.pc ||
+      quote.regularMarketPreviousClose ||
+      0,
     dayOpen:
       quote.dayOpen ||
       quote.open ||
@@ -28422,11 +28183,11 @@ function updateQuoteCache(symbol, quote = {}) {
       previous.dayOpen ||
       0,
     percentChange:
-      measuredPercentChange.available
-        ? measuredPercentChange.value
-        : null,
-    percentChangeAvailable: measuredPercentChange.available,
-    livePercentChangeAvailable: measuredPercentChange.available,
+      quote.percentChange ||
+      quote.changePercent ||
+      quote.livePercentChange ||
+      previous.percentChange ||
+      0,
     vwap:
       quote.vwap ||
       quote.dayVwap ||
@@ -28460,9 +28221,7 @@ function updateQuoteCache(symbol, quote = {}) {
     spreadPreservedFromPrevious,
     volume: tradeVolume,
     size,
-    source: quoteSource,
-    eventType: quote.eventType || (/(?:ws_trade|latest_trade)$/.test(quoteSource) ? 'trade' : 'quote'),
-    tradeId: quote.tradeId || quote.raw?.i || null,
+    source: quote.source || "live_stream",
     raw: quote.raw || quote,
   });
   if (Math.abs(liveMoveFromPreviousPercent) >= 2) {
@@ -28474,10 +28233,8 @@ function updateQuoteCache(symbol, quote = {}) {
       source: quote.source || "live_stream",
     });
   }
-  const nextQuoteVersion = Number(engineState.liveQuoteCacheVersion || 0) + 1;
   const cached = {
     symbol: cleanSymbol,
-    quoteVersion: nextQuoteVersion,
     price,
     current: price,
     bid,
@@ -28503,56 +28260,14 @@ function updateQuoteCache(symbol, quote = {}) {
     previousClose: liveMemory.previousClose || null,
     dayOpen: liveMemory.dayOpen || null,
     percentChange:
-      measuredPercentChange.available ? measuredPercentChange.value : null,
-    changePercent:
-      measuredPercentChange.available ? measuredPercentChange.value : null,
-    dayChangePercent:
-      measuredDayChangeAvailable ? measuredPercentChange.value : null,
+      liveMemory.previousClose > 0 ? liveMemory.livePercentChange : 0,
     livePercentChange:
-      measuredPercentChange.available ? measuredPercentChange.value : null,
-    percentChangeAvailable: measuredPercentChange.available,
-    changePercentAvailable: measuredPercentChange.available,
-    dayChangePercentAvailable: measuredDayChangeAvailable,
-    livePercentChangeAvailable: measuredPercentChange.available,
-    percentChangeReferencePrice: measuredPercentChange.referencePrice,
-    changeReferencePrice: measuredPercentChange.referencePrice,
-    percentChangeReferenceType: measuredPercentChange.referenceType,
-    changeReferenceType: measuredPercentChange.referenceType,
-    percentChangeSource: measuredPercentChange.source,
-    changePercentSource: measuredPercentChange.source,
-    premarketPercent:
-      liveMemory.premarketPercentAvailable === true
-        ? liveMemory.premarketPercent
-        : null,
-    premarketPercentAvailable:
-      liveMemory.premarketPercentAvailable === true,
-    intradayPercent:
-      liveMemory.intradayPercentAvailable === true
-        ? liveMemory.intradayPercent
-        : null,
-    intradayPercentAvailable:
-      liveMemory.intradayPercentAvailable === true,
-    todayPercent:
-      liveMemory.todayPercentAvailable === true
-        ? liveMemory.todayPercent
-        : null,
-    todayPercentAvailable:
-      liveMemory.todayPercentAvailable === true,
-    afterhoursPercent:
-      liveMemory.afterhoursPercentAvailable === true
-        ? liveMemory.afterhoursPercent
-        : null,
-    afterhoursPercentAvailable:
-      liveMemory.afterhoursPercentAvailable === true,
-    displayPercent:
-      liveMemory.displayPercentAvailable === true
-        ? liveMemory.displayPercent
-        : measuredPercentChange.available
-          ? measuredPercentChange.value
-          : null,
-    displayPercentAvailable:
-      liveMemory.displayPercentAvailable === true ||
-      measuredPercentChange.available,
+      liveMemory.previousClose > 0 ? liveMemory.livePercentChange : 0,
+    premarketPercent: liveMemory.premarketPercent || 0,
+    intradayPercent: liveMemory.intradayPercent || 0,
+    todayPercent: liveMemory.todayPercent || liveMemory.livePercentChange || 0,
+    afterhoursPercent: liveMemory.afterhoursPercent || 0,
+    displayPercent: liveMemory.displayPercent || liveMemory.livePercentChange || 0,
     displayPercentLabel: liveMemory.displayPercentLabel || "Today",
     regularClose: liveMemory.regularClose || null,
     session: liveMemory.session || null,
@@ -28570,25 +28285,32 @@ function updateQuoteCache(symbol, quote = {}) {
     oneSecondCandles: liveMemory.secondCandles?.slice(-20) || [],
     raw: quote.raw || null,
   };
-  engineState.liveQuoteCacheVersion = nextQuoteVersion;
   engineState.liveQuoteCache[cleanSymbol] = cached;
-  const compactQuote = buildCompactLiveQuoteDto(
-    cleanSymbol,
-    cached,
-    liveMemory
-  );
   pushLiveSignalUpdate({
-    type: "LIVE_QUOTE_DELTA",
-    generatedAt: new Date().toISOString(),
-    stateVersion: nextQuoteVersion,
+    ...buildLiveSignalPushPayload(),
+    type: "LIVE_QUOTE_TICK",
     symbol: cleanSymbol,
-    quote: compactQuote,
+    quote: cached,
   });
   pushBackendStreamEvent("LIVE_QUOTE_TICK", {
     type: "LIVE_QUOTE_TICK",
-    stateVersion: nextQuoteVersion,
     symbol: cleanSymbol,
-    quote: compactQuote,
+    quote: cached,
+    price: cached.price,
+    current: cached.current,
+    livePrice: cached.price,
+    displayPrice: cached.price,
+    percentChange: cached.percentChange ?? 0,
+    livePercentChange: cached.livePercentChange ?? 0,
+    updatedAt: cached.updatedAt,
+    liveQuoteUpdatedAt: cached.liveQuoteUpdatedAt,
+    priceIsLive: cached.priceIsLive,
+    liveQuoteSource: cached.liveQuoteSource,
+  });
+  pushBackendStreamEvent("PRICE_EVENT", {
+    symbol: cleanSymbol,
+    quote: cached,
+    liveMemory,
   });
   return cached;
 }
@@ -28714,7 +28436,6 @@ function refreshPolygonLiveSubscriptions() {
   return subscribedSymbols;
 }
 function schedulePolygonReconnect() {
-  if (engineState.polygonEntitlementBlocked === true) return;
   if (polygonSocketReconnectTimer) return;
   const delayMs = Math.min(
     60000,
@@ -28758,9 +28479,6 @@ function handlePolygonLiveMessage(message = {}) {
         source: "polygon_ws_quote",
         liveQuoteSource: "polygon_ws_quote",
         liveQuoteUpdatedAt: providerTimestamp,
-        spreadUpdatedAt: providerTimestamp,
-        bidAskUpdatedAt: providerTimestamp,
-        spreadSource: "polygon_ws_quote",
         priceIsLive: true,
         raw: message,
       });
@@ -28783,7 +28501,6 @@ function handlePolygonLiveMessage(message = {}) {
   }
 }
 function startPolygonStockStream() {
-  if (engineState.polygonEntitlementBlocked === true) return engineState.polygonLiveStreamState;
   if (!ENABLE_POLYGON || !ENABLE_POLYGON_WEBSOCKET || !POLYGON_API_KEY) {
     engineState.polygonLiveStreamState = {
       ok: false,
@@ -28838,7 +28555,10 @@ function startPolygonStockStream() {
         for (const message of messages) {
           if (message.ev === "status") {
             const status = String(message.status || "").toLowerCase();
-            if (status === "auth_success") {
+            if (
+              status === "auth_success" ||
+              String(message.message || "").toLowerCase().includes("authenticated")
+            ) {
               polygonAuthenticated = true;
               polygonSocketReconnectAttempts = 0;
               const result = await refreshEarlyMoversThenPolygonSubscriptions();
@@ -28857,16 +28577,13 @@ function startPolygonStockStream() {
                 subscribedCount: symbols.length,
                 reason: `Polygon websocket authenticated with ${symbols.length} symbols.`,
               };
-            } else if (["error", "auth_failed", "auth_failure", "not_authorized"].includes(status)) {
+            } else if (status === "error") {
               const errorMsg = message.message || "Polygon websocket status error";
               const isPlanError =
                 errorMsg.toLowerCase().includes("real-time") ||
                 errorMsg.toLowerCase().includes("not authorized") ||
                 errorMsg.toLowerCase().includes("don't have access") ||
-                errorMsg.toLowerCase().includes("not entitled") ||
-                errorMsg.toLowerCase().includes("not subscribed") ||
-                errorMsg.toLowerCase().includes("delayed") ||
-                ["auth_failed", "auth_failure", "not_authorized"].includes(status);
+                errorMsg.toLowerCase().includes("delayed");
               engineState.polygonLiveStreamState = {
                 ok: false,
                 provider: "polygon",
@@ -28876,9 +28593,8 @@ function startPolygonStockStream() {
                 checkedAt: new Date().toISOString(),
               };
               if (isPlanError) {
-                engineState.polygonEntitlementBlocked = true;
                 console.warn(
-                  "[Polygon] Streaming access denied; REST fallback remains available:",
+                  "[Polygon] Plan-level access error - streaming on delayed endpoint:",
                   errorMsg
                 );
                 // Close socket to stop reconnect loop - plan does not support this endpoint
@@ -28903,23 +28619,13 @@ function startPolygonStockStream() {
         checkedAt: new Date().toISOString(),
       };
     };
-    polygonLiveSocket.onclose = (event) => {
-      if (engineState.polygonEntitlementBlocked === true) {
-        polygonAuthenticated = false;
-        polygonSubscribedSymbols = new Set();
-        engineState.polygonLiveStreamState = { ...engineState.polygonLiveStreamState, ok: false, authenticated: false, isPlanError: true, disconnectedAt: new Date().toISOString() };
-        return;
-      }
+    polygonLiveSocket.onclose = () => {
       polygonSocketReconnectAttempts += 1;
       polygonSubscribedSymbols = new Set();
       polygonAuthenticated = false;
       engineState.polygonLiveStreamState = {
-        ...engineState.polygonLiveStreamState,
         ok: false,
         provider: "polygon",
-        authenticated: false,
-        closeCode: event?.code || null,
-        closeReason: String(event?.reason || '').slice(0, 240),
         disconnectedAt: new Date().toISOString(),
         reconnectAttempts: polygonSocketReconnectAttempts,
       };
@@ -29108,11 +28814,6 @@ function classifyLiveRunnerStage({
   return "WATCHING";
 }
 function buildFastRunnerCandidateFromMemory(symbol, memory = {}) {
-  if (memory.snapshotOnly) return { symbol, price: memory.price, current: memory.price,
-    percentChange: memory.todayPercent, fastRunnerScore: memory.snapshotDiscoveryScore,
-    source: memory.source, updatedAt: memory.updatedAt, discoveryOnly: true, displayOnly: true,
-    missingEvidenceReasons: ['REAL_TRADE_TAPE_UNAVAILABLE'], masterFinalScore: null,
-    approved: false, autoTradeApproved: false, backendApproved: false, qualifiedToBuy: false };
   const cleanSymbol = normalizeSymbol(symbol);
   const price = Number(memory.price || memory.current || 0);
   if (!cleanSymbol || price <= 0) return null;
@@ -29219,9 +28920,35 @@ function buildFastRunnerCandidateFromMemory(symbol, memory = {}) {
         : `Fast runner score ${fastScore}/100 or fresh breakout score ${freshBreakout.freshBreakoutScore}/100 not ready`,
   };
 }
-function buildPolygonMoverFallbackCandles() {
-  // Daily snapshots cannot establish an intrasecond trade history.
-  return [];
+function buildPolygonMoverFallbackCandles(detail = {}) {
+  const current = Number(detail.current || detail.price || 0);
+  const previousClose = Number(detail.previousClose || 0);
+  const volume = Number(detail.volume || 0);
+  const percentChange = Number(detail.percentChange || 0);
+  if (!current || current <= 0) return [];
+  const candleCount = 12;
+  const now = Date.now();
+  const startPrice =
+    previousClose > 0
+      ? previousClose
+      : percentChange !== 0
+        ? current / (1 + percentChange / 100)
+        : current * 0.995;
+  return Array.from({ length: candleCount }, (_, index) => {
+    const progress = (index + 1) / candleCount;
+    const close = startPrice + (current - startPrice) * progress;
+    const open = index === 0 ? startPrice : startPrice + (current - startPrice) * (index / candleCount);
+    const high = Math.max(open, close);
+    const low = Math.min(open, close);
+    return {
+      at: now - (candleCount - index) * 1000,
+      open: Number(open.toFixed(4)),
+      high: Number(high.toFixed(4)),
+      low: Number(low.toFixed(4)),
+      close: Number(close.toFixed(4)),
+      volume: Math.max(1, Math.floor(volume / candleCount)),
+    };
+  });
 }
 function seedFastRunnerMemoryFromPolygonMovers(symbols = []) {
   if (!engineState.liveMarketMemory) {
@@ -29249,9 +28976,7 @@ function seedFastRunnerMemoryFromPolygonMovers(symbols = []) {
       continue;
     }
     const secondCandles = buildPolygonMoverFallbackCandles(detail);
-    const sourceTime = detail.liveQuoteUpdatedAt || detail.updatedAt;
-    const timestamp = Date.parse(sourceTime);
-    if (!Number.isFinite(timestamp) || timestamp > Date.now() + 5000 || Date.now() - timestamp > 300000) {
+    if (secondCandles.length < 10) {
       continue;
     }
     const previousClose = Number(detail.previousClose || 0);
@@ -29274,9 +28999,7 @@ function seedFastRunnerMemoryFromPolygonMovers(symbols = []) {
       lastVolume: volume,
       spreadPercent,
       source: "polygon_snapshot_mover_fallback",
-      updatedAt: new Date(timestamp).toISOString(),
-      snapshotOnly: true,
-      snapshotDiscoveryScore: Math.min(80, 35 + Math.max(0, Number(detail.percentChange || 0))),
+      updatedAt: new Date().toISOString(),
       secondCandles,
       tickWindow: secondCandles.map((candle) => ({
         at: candle.at,
@@ -29290,9 +29013,10 @@ function seedFastRunnerMemoryFromPolygonMovers(symbols = []) {
           : 0,
       raw: detail,
     };
-    memory.fastRunnerScore = memory.snapshotDiscoveryScore;
-    memory.fastRunnerBreakdown = { evidenceType: 'DAILY_SNAPSHOT_ONLY', momentum10: null, momentum30: null };
-    memory.liveMomentumPercent = null;
+    const fastScore = calculateFastRunnerScoreFromMemory(memory);
+    memory.fastRunnerScore = fastScore.fastRunnerScore;
+    memory.fastRunnerBreakdown = fastScore;
+    memory.liveMomentumPercent = fastScore.momentum10;
     engineState.liveMarketMemory[cleanSymbol] = memory;
     seededCount += 1;
   }
@@ -29330,7 +29054,7 @@ function isFastRunnerMemoryFresh(memory = {}) {
     : [];
 
 
-  return memory.snapshotOnly === true || secondCandles.length >= 1 || tickWindow.length >= 1;
+  return secondCandles.length >= 1 || tickWindow.length >= 1;
 }
 async function runFastRunnerEngine() {
   if (!ENABLE_FAST_RUNNER_ENGINE) {
@@ -29360,12 +29084,6 @@ async function runFastRunnerEngine() {
   const reviewed = memoryEntries
     .map(([symbol, memory]) => buildFastRunnerCandidateFromMemory(symbol, memory))
     .filter(Boolean);
-  if (reviewed.length) {
-    const evidenceRows = reviewed.map(candidate => ({ ...candidate,
-      t: engineState.liveMarketMemory[normalizeSymbol(candidate.symbol)]?.updatedAt }));
-    await discoveryOutcomeStore.ingest(evidenceRows, evidenceRows, {
-      assetClass: 'stock', dayKey: getTodayKeyET(), now: Date.now(), tradedSymbols: engineState.aiManagedSymbols || [] });
-  }
   const visibleCandidates = reviewed
     .filter((candidate) => {
       const price = Number(candidate.price || candidate.current || 0);
@@ -29660,14 +29378,13 @@ function runQuickInstitutionalGate() {
         : "Quick Institutional Gate active, no institutionally approved fast runners yet.",
   };
   pushBackendStreamEvent("QUICK_INSTITUTIONAL_GATE_EVENT", {
-    reviewedCount: reviewed.length,
-    approvedSymbols: approved.slice(0, 10).map((candidate) => candidate.symbol),
+    state: engineState.quickInstitutionalGateState,
+    approvedCandidates: approved.slice(0, 10),
   });
   pushLiveSignalUpdate({
+    ...buildLiveSignalPushPayload(),
     type: "QUICK_INSTITUTIONAL_GATE_UPDATE",
-    generatedAt: new Date().toISOString(),
-    reviewedCount: reviewed.length,
-    approvedSymbols: approved.slice(0, 10).map((candidate) => candidate.symbol),
+    quickInstitutionalCandidates: approved.slice(0, 10),
   });
   return engineState.quickInstitutionalGateState;
 }
@@ -29685,7 +29402,12 @@ function isSoftMasterBlockRestorable(candidate = {}) {
     master.hardBlock === true ||
     sizing.finalBlocked === true ||
     candidate.finalBlocked === true;
-  const finalAmount = getApprovedTradeAmount(candidate);
+  const finalAmount = Number(
+    candidate.finalApprovedTradeAmount ||
+    candidate.displayTradeAmount ||
+    sizing.finalTradeAmount ||
+    0
+  );
   const approvalProtected =
     candidate.finalApprovalProtection?.protected === true ||
     penalty.shouldRestoreApproval === true ||
@@ -29888,8 +29610,29 @@ function buildLiveStarterBuyDecision(candidate = {}, account = {}, managedPositi
       assetMaxBotBudget - assetExposure
     )
   );
-  const backendApprovedTradeAmount = getApprovedTradeAmount(candidate);
-  const plannedFullTradeAmount = backendApprovedTradeAmount;
+  const backendApprovedTradeAmount = Number(
+    candidate.finalApprovedTradeAmount ||
+    candidate.displayTradeAmount ||
+    candidate.finalSizingReconciliation?.finalTradeAmount ||
+    candidate.recommendedTradeAmount ||
+    0
+  );
+  const plannedFullTradeAmount =
+    backendApprovedTradeAmount > 0
+      ? backendApprovedTradeAmount
+      : typeof getDynamicTradeAmount === "function"
+        ? Number(
+          getDynamicTradeAmount(
+            account,
+            managedPositions,
+            finalLiveScore
+          ) || 0
+        )
+        : Math.min(
+          remainingBudget,
+          cash,
+          equity * 0.02
+        );
   const starterPercent = Math.max(
     1,
     Math.min(100, Number(LIVE_STARTER_BUY_PERCENT || 30))
@@ -30613,15 +30356,6 @@ async function runLivePositionManagement() {
   }
 }
 function buildLiveScaleInDecision(position = {}, account = {}, managedPositions = []) {
-  const currentCandidate = dedupeSignalsByCanonicalAuthority([
-    ...(engineState.lastStockSignals || []), ...(engineState.lastCryptoSignals || []),
-  ]).find((row) => normalizeSymbol(row.symbol) === normalizeSymbol(position.symbol));
-  const candidateGate = currentCandidate && (isCrypto(position.symbol)
-    ? evaluateCryptoTradeCandidate(currentCandidate, { requireCentralDecision: true, requireFreshDecision: true, requireExplicitApproval: true })
-    : evaluateStockTradeCandidate(currentCandidate, { requireCentralDecision: true, requireFreshDecision: true, requireExplicitApproval: true }));
-  if (!candidateGate?.approved || getApprovedTradeAmount(currentCandidate || {}) <= 0) return {
-    symbol: normalizeSymbol(position.symbol), approved: false, scaleAmount: 0, blockReasons: ['CURRENT_CANONICAL_DECISION_REQUIRED'],
-  };
   const symbol = normalizeSymbol(position.symbol);
   const qty = Number(position.qty || 0);
   const avgEntryPrice = Number(position.avg_entry_price || 0);
@@ -30688,7 +30422,6 @@ function buildLiveScaleInDecision(position = {}, account = {}, managedPositions 
     : Infinity;
   const scaleAmount = Number(
     Math.min(
-      getApprovedTradeAmount(currentCandidate),
       rawScaleAmount,
       remainingPlannedAmount,
       remainingCryptoBudget,
@@ -30917,12 +30650,13 @@ function buildFullBrainFastSyncSignal(candidate = {}) {
   const memory = engineState.liveMarketMemory?.[symbol] || {};
   return {
     symbol,
-    assetClass: isCrypto(symbol) ? "crypto" : "stock",
+    assetClass: "stock",
     source: "FULL_BRAIN_FAST_SYNC",
     price: Number(candidate.price || memory.price || 0),
     score: Math.max(
       Number(candidate.quickInstitutionalScore || 0),
-      Number(candidate.fastRunnerScore || 0)
+      Number(candidate.fastRunnerScore || 0),
+      Number(CONFIG.minScoreToBuy || 70)
     ),
     fastRunnerScore: Number(candidate.fastRunnerScore || 0),
     quickInstitutionalScore: Number(candidate.quickInstitutionalScore || 0),
@@ -30933,9 +30667,6 @@ function buildFullBrainFastSyncSignal(candidate = {}) {
     fastRunnerBreakdown: memory.fastRunnerBreakdown || candidate.fastRunnerBreakdown || null,
     institutionalGateApproved: candidate.quickInstitutionalApproved === true,
     liveFastSynced: true,
-    approved: false, backendApproved: false, qualifiedToBuy: false, autoTradeApproved: false,
-    recommendedTradeAmount: 0, finalApprovedTradeAmount: 0,
-    liveQuoteUpdatedAt: candidate.liveQuoteUpdatedAt || memory.updatedAt || null,
     syncedAt: new Date().toISOString(),
   };
 }
@@ -30955,13 +30686,25 @@ function runFullBrainFastSync() {
     .map(buildFullBrainFastSyncSignal)
     .filter((signal) => signal.symbol && Number(signal.price || 0) > 0)
     .sort((a, b) => Number(b.score || 0) - Number(a.score || 0));
-  for (const [key, crypto] of [['lastStockSignals', false], ['lastCryptoSignals', true]]) {
-    const existing = Array.isArray(engineState[key]) ? engineState[key] : [];
-    const known = new Set(existing.map(s => normalizeSymbol(s.symbol)));
-    const incoming = syncedSignals.filter(s => isCrypto(s.symbol) === crypto && !known.has(s.symbol));
-    engineState[key] = dedupeSignalsByCanonicalAuthority([...existing, ...incoming])
-      .sort(compareCanonicalSignals).slice(0, Number(CONFIG.maxSignalsToReturn || 75));
+  const existingStockSignals = Array.isArray(engineState.lastStockSignals)
+    ? engineState.lastStockSignals
+    : [];
+  const mergedBySymbol = new Map();
+  for (const signal of existingStockSignals) {
+    mergedBySymbol.set(normalizeSymbol(signal.symbol), signal);
   }
+  for (const signal of syncedSignals) {
+    const existing = mergedBySymbol.get(signal.symbol) || {};
+    mergedBySymbol.set(signal.symbol, {
+      ...existing,
+      ...signal,
+      score: Math.max(Number(existing.score || 0), Number(signal.score || 0)),
+      liveFastSynced: true,
+    });
+  }
+  engineState.lastStockSignals = [...mergedBySymbol.values()]
+    .sort((a, b) => Number(b.score || 0) - Number(a.score || 0))
+    .slice(0, Number(CONFIG.maxSignalsToReturn || 75));
   engineState.fullBrainFastSyncState = {
     ok: true,
     enabled: true,
@@ -31221,7 +30964,7 @@ function startLiveScheduler() {
     );
     void runLiveScheduledTask(
       "runBoundedQuietDiscoveryScan",
-      5 * 60 * 1000,
+      60 * 60 * 1000,
       () => runBoundedQuietDiscoveryScan()
     );
     if (ENABLE_MAIN_SWING_SCAN) {
@@ -31330,7 +31073,7 @@ async function resolveVerifiedPreTradeQuote(symbol, cryptoAsset = false) {
     isQuoteReady: (quote) => isPreTradeQuoteReady(quote, cryptoAsset),
     fetchFallback: () => cryptoAsset
       ? alpacaCryptoMarketData.getLatestQuote(symbol)
-      : getLatestStockMarketQuotes([symbol]).then((quotes) => quotes[0] || null),
+      : getAlpacaStockPrice(symbol),
     storeFallback: (quote) => updateQuoteCache(symbol, quote) || quote,
     maxFallbackAttempts: 3,
     retryDelayMs: 2_000,
@@ -31398,11 +31141,6 @@ function getActiveCandidateQuoteRefreshSymbols(
   const pinnedSymbols = new Set(pinned.map((item) => item.symbol));
   const rotating = ranked.filter((item) => !pinnedSymbols.has(item.symbol));
   const rotatingSlots = Math.max(0, boundedLimit - pinned.length);
-  engineState.candidateQuoteCoverage = {
-    trackedSymbols: ranked.length, batchLimit: boundedLimit, pinnedSymbols: pinned.length,
-    estimatedRotationMs: Math.ceil(rotating.length / Math.max(1, rotatingSlots)) * ACTIVE_CANDIDATE_QUOTE_REFRESH_INTERVAL_MS,
-    capacityWarning: Math.ceil(rotating.length / Math.max(1, rotatingSlots)) * ACTIVE_CANDIDATE_QUOTE_REFRESH_INTERVAL_MS > 5000,
-  };
   const selected = [...pinned];
   for (
     let offset = 0;
@@ -31477,8 +31215,24 @@ async function refreshActiveCandidateQuotes(symbols = []) {
   activeCandidateQuoteRefreshInFlight = (async () => {
     const stockSymbols = staleSymbols.filter((symbol) => !isCrypto(symbol));
     const cryptoSymbols = staleSymbols.filter((symbol) => isCrypto(symbol));
+    const requests = [];
+    if (stockSymbols.length > 0) {
+      requests.push(
+        getAlpacaLatestStockQuotes(stockSymbols)
+          .then((quotes) => ({ assetClass: "stock", quotes }))
+      );
+    }
+    if (cryptoSymbols.length > 0) {
+      requests.push(
+        alpacaCryptoMarketData.getLatestQuotes(cryptoSymbols)
+          .then((quotes) => ({ assetClass: "crypto", quotes }))
+      );
+    }
+    const settled = await Promise.allSettled(requests);
+    const receivedQuotes = settled
+      .filter((result) => result.status === "fulfilled")
+      .flatMap((result) => result.value.quotes || []);
     const acceptedSymbols = new Set();
-    const acceptQuotes = (receivedQuotes = []) => {
     for (const quote of receivedQuotes) {
       const symbol = normalizeSymbol(quote?.symbol);
       const incomingTimestamp = getProviderQuoteTimestampMs(quote);
@@ -31512,23 +31266,6 @@ async function refreshActiveCandidateQuotes(symbols = []) {
         };
       if (updateQuoteCache(symbol, enrichedQuote)) acceptedSymbols.add(symbol);
     }
-    };
-    const requests = [];
-    if (stockSymbols.length > 0) {
-      requests.push(
-        activeCandidateAssetPump('stock', () => getLatestStockMarketQuotes(stockSymbols), acceptQuotes)
-      );
-    }
-    if (cryptoSymbols.length > 0) {
-      requests.push(
-        activeCandidateAssetPump('crypto', () => alpacaCryptoMarketData.getLatestQuotes(cryptoSymbols), acceptQuotes)
-      );
-    }
-    let timer;
-    const settled = await Promise.race([Promise.allSettled(requests), new Promise(resolve => {
-      timer = setTimeout(() => resolve([]), 200);
-    })]);
-    clearTimeout(timer);
     const freshCount = staleSymbols.filter((symbol) => {
       const cachedQuote = engineState.liveQuoteCache?.[symbol] || {};
       const ageSeconds = getLiveQuoteAgeSeconds(symbol);
@@ -31546,7 +31283,6 @@ async function refreshActiveCandidateQuotes(symbols = []) {
       .map((result) => String(result.reason?.message || result.reason || "Quote refresh failed"));
     activeCandidateQuoteRefreshState = {
       ok: errors.length === 0,
-      pending: settled.length < requests.length,
       refreshedAt: new Date().toISOString(),
       requestedCount: staleSymbols.length,
       refreshedCount: acceptedSymbols.size,
@@ -31707,11 +31443,6 @@ function cleanupLiveQuoteCache(
     maxAgeMinutes,
     maxSymbols: LIVE_MARKET_MEMORY_MAX_SYMBOLS,
     maxSecondCandles: LIVE_MARKET_MEMORY_MAX_SECOND_CANDLES,
-    pinnedSymbols: [...(Array.isArray(engineState.cachedPositions) ? engineState.cachedPositions : []),
-      ...(Array.isArray(engineState.pendingOrders) ? engineState.pendingOrders : []),
-      ...(engineState.topStockSignals || []).filter(hasExplicitTradeApproval),
-      ...(engineState.topCryptoSignals || []).filter(hasExplicitTradeApproval)]
-      .map((item) => normalizeSymbol(item.symbol)).filter(Boolean),
   });
 }
 function getSymbolsForFinnhubLiveStream(limit = 75) {
@@ -32537,7 +32268,6 @@ registerBrokerDiagnosticRoutes(app, {
   isBotOrder,
 });
 
-registerCandidateTraceRoutes(app, { requireAdmin, store: candidateTraceStore });
 registerQuoteDiagnosticRoutes(app, {
   requireAdmin,
   normalizeSymbol,
@@ -32747,7 +32477,7 @@ startServerLifecycle({
   runStartupEngineScan: RUN_STARTUP_ENGINE_SCAN,
   runStartupScan: runEngineCycle,
   saveState: saveEngineState,
-  flushState: async () => { await candidateTraceStore.flush(); await flushStateToFile(); },
+  flushState: flushStateToFile,
   saveRenderMemory,
   checkRunnerResults: checkRunnerPredictionResults,
   startServices: [
