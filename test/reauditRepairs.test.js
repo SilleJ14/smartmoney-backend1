@@ -51,11 +51,18 @@ test("expired central decisions and WATCH actions cannot authorize crypto buys",
   }
 });
 
-test("stock-only sources and old/count-only continuation cannot qualify crypto", () => {
-  for (const changes of [{ liveQuoteSource: "tradier_stock_quote" }, { spreadSource: "polygon_rest_quote" },
-    { multiDayAccumulation: { seenDays: ["2025-01-01", "2025-01-02"] } },
-    { multiDayAccumulation: { seenDaysCount: 99 } }]) {
+test("stock-only sources cannot qualify crypto", () => {
+  for (const changes of [{ liveQuoteSource: "tradier_stock_quote" }, { spreadSource: "polygon_rest_quote" }]) {
     assert.equal(buildCryptoDecisionScore(crypto(changes), { now }).coreEvidencePass, false);
+  }
+});
+
+test("old/count-only continuation remains unavailable without invalidating immediate-entry evidence", () => {
+  for (const multiDayAccumulation of [{ seenDays: ["2025-01-01", "2025-01-02"] }, { seenDaysCount: 99 }]) {
+    const result = buildCryptoDecisionScore(crypto({ multiDayAccumulation }), { now });
+    assert.equal(result.componentsByName.runner.available, false);
+    assert.equal(result.coreEvidencePass, true);
+    assert.equal(result.score, buildCryptoDecisionScore(crypto(), { now }).score);
   }
 });
 

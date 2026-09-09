@@ -7,6 +7,7 @@ import {
 } from "../scoring/decisionScores.js";
 import { classifyStockDiscoveryLane } from "../discovery/stockDiscoveryLanes.js";
 import { normalizeSignalScoreCollection } from "../scoring/signalScoreCompleteness.js";
+import { evaluateNewsReviewEligibility } from "../scoring/newsReviewEligibility.js";
 
 export function createStockMarketStrategy(dependencies) {
   const {
@@ -82,6 +83,7 @@ export function createStockMarketStrategy(dependencies) {
     recordFailedOrder,
     recordOrder,
     recordSkippedSymbol,
+    recordCandidateEvent = () => {},
     updateAdaptiveRunnerLearningState,
     updateAutonomousCapitalRotationState,
     updateAutonomousMarketIntelligenceState,
@@ -895,6 +897,11 @@ export function createStockMarketStrategy(dependencies) {
         new Date().toISOString();
       const symbols = await getTopMovers();
       const limitedSymbols = narrowScanUniverse(symbols);
+      const selectedSymbols = new Set(limitedSymbols);
+      for (const symbol of symbols.slice(0, 300)) recordCandidateEvent({
+        symbol, cycle: scanCycleId, stage: selectedSymbols.has(symbol) ? 'SCAN_SELECTED' : 'SCAN_NOT_SELECTED',
+        reasons: selectedSymbols.has(symbol) ? [] : ['BOUNDED_SCAN_UNIVERSE'],
+      });
       engineState.skippedSymbols = [];
       console.log(`Scanning ${limitedSymbols.length} of ${symbols.length} symbols...`);
       console.log("Advanced filters enabled:", CONFIG.enableAdvancedFilters);
@@ -946,12 +953,12 @@ export function createStockMarketStrategy(dependencies) {
             Array.isArray(quoteChartBars) &&
               quoteChartBars.length > 0
               ? quoteChartBars.map((bar) => ({
-                c: Number(bar.close || 0),
-                h: Number(bar.high || 0),
-                l: Number(bar.low || 0),
-                o: Number(bar.open || 0),
-                v: Number(bar.volume || 0),
-                t: bar.time,
+                c: Number(bar.close ?? bar.c),
+                h: Number(bar.high ?? bar.h),
+                l: Number(bar.low ?? bar.l),
+                o: Number(bar.open ?? bar.o),
+                v: Number(bar.volume ?? bar.v),
+                t: bar.time ?? bar.t,
               }))
               : [];
           quote.technicals = computeTechnicals(technicalBars);
@@ -1027,15 +1034,13 @@ export function createStockMarketStrategy(dependencies) {
           quote.displayOnlyReason = quote.displayOnlyReason || quality.reason || "";
   
           let score = scoreStock(quote);
-          const newsReviewEligible =
-            CONFIG.enableAdvancedFilters &&
-            quality.discoveryOnly !== true &&
-            quote.blockBuying !== true &&
-            (
-              Number(quote.entryQualityScore || 0) >= 60 ||
-              Number(quote.discoveryScore || 0) >= 70 ||
-              Number(quote.preMoveScore || 0) >= 70
-            );
+          const newsReviewEligible = evaluateNewsReviewEligibility(
+            quote, quality, CONFIG.enableAdvancedFilters === true
+          ).eligible;
+          recordCandidateEvent({ ...quote, cycle: scanCycleId,
+            stage: newsReviewEligible ? 'NEWS_REVIEW_REQUESTED' : 'NEWS_REVIEW_DEFERRED',
+            reasons: [evaluateNewsReviewEligibility(quote, quality, CONFIG.enableAdvancedFilters === true).reason],
+          });
           if (CONFIG.enableAdvancedFilters && newsReviewEligible) {
             quote.confirmations = await getAdvancedConfirmations(quote, {
               includeNews: true,
@@ -2074,6 +2079,10 @@ export function createStockMarketStrategy(dependencies) {
         }
       }
       const finalResults = normalizeSignalScoreCollection(results);
+      for (const signal of finalResults) recordCandidateEvent({ ...signal,
+        cycle: scanCycleId, stage: 'SCAN_SCORED',
+        reasons: [...(signal.entryQualityScorecard?.gates || []), ...(signal.stockTradeEvidence?.reasons || [])],
+      });
       return finalResults
         .sort((a, b) => {
           const finalDifference =

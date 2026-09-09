@@ -58,6 +58,18 @@ test("installing a new score never restores a risk revocation or zero sizing", a
   assert.equal(row.recommendedTradeAmount, 0);
 });
 
+test("immediate-entry crypto without MD survives central installation and quote refresh with sizing", async () => {
+  const signal = { ...crypto(), multiDayContinuationScore: null,
+    multiDayAccumulation: { seenDays: [] }, multiDayScoreAvailable: false,
+    continuationScorecard: { score: 50, available: false } };
+  installCentralDecision(signal, decisionFor(signal), { crypto: true, now });
+  const [row] = await cryptoRefresh([signal]);
+  assert.equal(row.cryptoDecisionScoreAvailable, true);
+  assert.equal(evaluateCryptoTradeCandidate(row, { now }).approved, true);
+  assert.equal(row.recommendedTradeAmount, 100);
+  assert.equal(row.multiDayScoreAvailable, false);
+});
+
 test("new stock central evidence replaces pending availability and old failed evidence", () => {
   const signal = { symbol: "AAPL", stockDecisionScoreAvailable: false, stockDecisionEvidence: { coreEvidencePass: false }, masterFinalScore: 12 };
   installCentralDecision(signal, { action: "ALLOW", finalDecisionScore: 90, stockDecisionEvidence: { coreEvidencePass: true } }, { now });

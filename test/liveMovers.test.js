@@ -5,6 +5,20 @@ import { buildLiveMovers } from "../market-data/liveMovers.js";
 const normalizeSymbol = (symbol) => String(symbol || "").toUpperCase();
 const isCrypto = (symbol) => symbol.includes("/") || symbol.endsWith("USD");
 
+test('high aggregate coverage cannot resurrect F when canonical core evidence explicitly fails', () => {
+  for (const coverage of [0.79, 0.92, 1]) {
+    const movers = buildLiveMovers({ state: { marketOpen: false, lastStockSignals: [{
+      symbol: 'AUDIT', price: 4.41, previousClose: 3, masterFinalScore: 26,
+      stockDecisionScore: null, stockDecisionScoreAvailable: false,
+      stockDecisionEvidence: { coreEvidencePass: false, missingCriticalEvidence: ['entryEvidence'] },
+      decisionScoreTelemetry: { scores: { decision: 26 }, stages: { decision: { coverage, coreEvidencePass: false } } },
+    }] }, normalizeSymbol, mergeLiveQuote: row => row, isCrypto });
+    assert.equal(movers[0].stockDecisionScoreAvailable, false);
+    assert.equal(movers[0].stockDecisionScore, null);
+    assert.notEqual(movers[0].executionEligibility?.approved, true);
+  }
+});
+
 test("buildLiveMovers uses stock scoring fields for stocks and crypto fields for crypto", () => {
   const movers = buildLiveMovers({
     state: {

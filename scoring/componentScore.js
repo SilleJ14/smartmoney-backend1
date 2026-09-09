@@ -7,14 +7,14 @@ import {
 import { isLiveQuoteSource } from "../live/liveQuoteCache.js";
 import { normalizeCandidateQuote } from '../market-data/normalizeCandidateQuote.js';
 
-// Crypto decision scoring intentionally uses one component per independent
-// evidence family. Liquidity/spread are represented only by entry quality;
-// momentum is represented only by discovery; multi-timeframe evidence is
-// represented only by continuation.
+// Immediate-entry F uses independent discovery, execution and context evidence.
+// Multi-day continuation remains separate telemetry (and an acceleration gate),
+// never a prerequisite or a default-value contribution to an immediate entry.
+export const CRYPTO_DECISION_MODEL = 'CRYPTO_IMMEDIATE_ENTRY_V2';
 export const CRYPTO_DECISION_WEIGHTS = Object.freeze({
-  base: 0.35,
-  execution: 0.30,
-  runner: 0.20,
+  base: 0.45,
+  execution: 0.40,
+  runner: 0,
   strategyEvolution: 0.15,
 });
 export const CRYPTO_MIN_DECISION_COVERAGE = 0.8;
@@ -242,8 +242,8 @@ export function buildCryptoDecisionScore(
   ]);
   const continuation = {
     ...continuationValue,
-    available: continuationValue.available && seenDays >= 2,
-    source: continuationValue.available && seenDays >= 2
+    available: continuationValue.available && seenDays >= 2 && signal.continuationScorecard?.available !== false && signal.multiDayScoreAvailable !== false,
+    source: continuationValue.available && seenDays >= 2 && signal.continuationScorecard?.available !== false && signal.multiDayScoreAvailable !== false
       ? continuationValue.source
       : "unavailable_continuation_evidence",
   };
@@ -306,7 +306,6 @@ export function buildCryptoDecisionScore(
     ...(liquidity.available ? [] : ["liquidity"]),
     ...(liquidity.pass ? [] : ["minimumLiquidity"]),
     ...(entryQuality.available ? [] : ["entryQuality"]),
-    ...(continuation.available ? [] : ["continuation"]),
     ...(weighted.coverage >= CRYPTO_MIN_DECISION_COVERAGE
       ? []
       : ["decisionCoverage"]),
@@ -316,20 +315,21 @@ export function buildCryptoDecisionScore(
   const coreEvidencePass = uniqueMissingCriticalEvidence.length === 0;
 
   return {
+    model: CRYPTO_DECISION_MODEL,
     score: weighted.score,
     coverage: weighted.coverage,
     components: componentsWithSemantics,
     componentsByName: Object.fromEntries(
       componentsWithSemantics.map((component) => [component.name, component])
     ),
-    missingComponents: weighted.missingComponents,
+    missingComponents: weighted.missingComponents.filter(name => name !== 'runner'),
     missingCriticalEvidence: uniqueMissingCriticalEvidence,
     coreEvidencePass,
     barsFound,
     spread,
     liquidity,
     contextObservations: context.observations || [],
-    continuationEvidence: { seenDays },
+    continuationEvidence: { seenDays, available: continuation.available, requiredForImmediateEntry: false },
     scoreStatus: coreEvidencePass
       ? "FINAL"
       : "PROVISIONAL_INCOMPLETE_EVIDENCE",

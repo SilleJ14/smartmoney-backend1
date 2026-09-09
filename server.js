@@ -5,6 +5,7 @@ import { revalidateCandidate } from './scoring/revalidateCandidate.js';
 import { createSafetyJournal, readSafetyJournal } from './state/safetyJournal.js';
 import { createOrderRiskReservations, outstandingOrderNotional } from './risk/orderRiskReservations.js';
 import { createAssetQuotePump } from './market-data/assetQuotePump.js';
+import { createCryptoIntradayBars } from './market-data/cryptoIntradayBars.js';
 import { isUsStockMarketSessionDayKey } from "./utils/usMarketCalendar.js";
 import { readBoundedResponseText } from "./utils/boundedResponse.js";
 import { takeExplorationWindow, createFairReviewQueue } from "./discovery/fairExploration.js";
@@ -173,6 +174,8 @@ import {
   updateQuietCandidateOutcomes as updateQuietCandidateOutcomesCache,
 } from "./scoring/quietCandidateOutcomeTracker.js";
 import { createDiscoveryOutcomeStore } from './scoring/discoveryOutcomeStore.js';
+import { createCandidateTraceStore } from './discovery/candidateTraceStore.js';
+import { registerCandidateTraceRoutes } from './routes/candidateTraceRoutes.js';
 import { buildProofReport } from "./analytics/proofReport.js";
 import {
   buildStrategyExecutionPlan,
@@ -1156,6 +1159,7 @@ compactLiveEngineStateHistories(engineState);
 persistedEngineState = null;
 const persistSafetyState = createSafetyJournal(`${ENGINE_STATE_FILE}.safety.json`, engineState);
 const discoveryOutcomeStore = createDiscoveryOutcomeStore(path.resolve(DATA_DIR, 'discovery-outcomes'));
+const candidateTraceStore = createCandidateTraceStore(path.resolve(DATA_DIR, 'candidate-traces'));
 let outcomeMigrationComplete = false;
 async function updateQuietCandidateOutcomes(previous = {}, candidates = [], prices = [], options = {}) {
   previous = previous && typeof previous === 'object' && !Array.isArray(previous) ? previous : {};
@@ -1164,6 +1168,11 @@ async function updateQuietCandidateOutcomes(previous = {}, candidates = [], pric
     outcomeMigrationComplete = true;
   }
   const settings = { ...options, now: options.now || Date.now(), dayKey: options.dayKey || new Date().toISOString().slice(0, 10) };
+  if (settings.assetClass === 'crypto') {
+    for (const signal of candidates.slice(0, 100)) candidateTraceStore.record({ ...signal,
+      assetClass: 'crypto', stage: 'CRYPTO_OUTCOME_CANDIDATE', reasons: signal.missingEvidenceReasons || [],
+    });
+  }
   if (settings.assetClass === 'stock') {
     const evidence = row => ({ ...row, t: row.t || row.liveQuoteUpdatedAt || row.priceUpdatedAt });
     candidates = candidates.map(evidence);
@@ -1326,6 +1335,8 @@ function saveSkippedSymbol(symbol, reason, extra = {}) {
 }
 
 function recordSkippedSymbol(symbol, reason, extra = {}) {
+  candidateTraceStore.record({ symbol, stage: 'SKIPPED', cycle: engineState.currentStockScanCycleId,
+    reasons: [reason], ...extra });
   return saveSkippedSymbol(symbol, reason, extra);
 }
 function markAiManagedSymbol(symbol) {
@@ -17747,7 +17758,10 @@ function computeMacd(closes = []) {
   };
 }
 function computeTechnicals(bars = []) {
-  const closes = bars.map((b) => Number(b.c || 0)).filter(Boolean);
+  const closes = bars.map((b) => Number(b?.c ?? b?.close));
+  if (closes.some(value => !Number.isFinite(value) || value <= 0)) {
+    return { ema9: null, ema20: null, rsi: null, macd: null, macdSignal: null };
+  }
   const ema9 = computeEma(closes, 9);
   const ema20 = computeEma(closes, 20);
   const rsi = computeRsi(closes, 14);
@@ -17848,11 +17862,15 @@ const { scoreCrypto, calculateCryptoInstitutionalQualification, scanCryptoMarket
   }),
 });
 const cryptoDailyDiscoveryBarsCache = new Map();
-const cryptoIntradayBarsCache = new Map();
 const CRYPTO_DISCOVERY_CACHE_MAX_SYMBOLS = Math.max(
   50,
   Math.min(300, Number(process.env.CRYPTO_DISCOVERY_CACHE_MAX_SYMBOLS || 250))
 );
+const cryptoIntradayBars = createCryptoIntradayBars({
+  getRecentBars: getCryptoRecentBars,
+  normalizeSymbol,
+  maxSymbols: CRYPTO_DISCOVERY_CACHE_MAX_SYMBOLS,
+});
 async function getCryptoDailyBarsForDiscovery(symbol) {
   const clean = normalizeSymbol(symbol);
   const cached = cryptoDailyDiscoveryBarsCache.get(clean);
@@ -17882,34 +17900,7 @@ async function getCryptoDailyBarsForDiscovery(symbol) {
   return cryptoDailyDiscoveryBarsCache.get(clean)?.bars || [];
 }
 async function getBestCryptoBars(symbol) {
-  const clean = normalizeSymbol(symbol);
-  const cached = cryptoIntradayBarsCache.get(clean);
-  if (cached && Date.now() - cached.at <= 2 * 60 * 1000) {
-    return cached.bars;
-  }
-  const attempts = [
-    ["5Min", 30],
-    ["1Min", 30],
-    ["15Min", 30],
-  ];
-  for (const [timeframe, limit] of attempts) {
-    const bars = await getCryptoRecentBars(symbol, timeframe, limit);
-    if (Array.isArray(bars) && bars.length >= 10) {
-      cryptoIntradayBarsCache.set(clean, { at: Date.now(), bars: bars.slice(-30) });
-      if (cryptoIntradayBarsCache.size > CRYPTO_DISCOVERY_CACHE_MAX_SYMBOLS) {
-        const oldest = [...cryptoIntradayBarsCache.entries()]
-          .sort((left, right) => Number(left[1]?.at || 0) - Number(right[1]?.at || 0))[0];
-        if (oldest) cryptoIntradayBarsCache.delete(oldest[0]);
-      }
-      return bars;
-    }
-  }
-  const fallbackBars = await getCryptoRecentBars(symbol, "1Min", 30);
-  cryptoIntradayBarsCache.set(clean, {
-    at: Date.now(),
-    bars: Array.isArray(fallbackBars) ? fallbackBars.slice(-30) : [],
-  });
-  return fallbackBars;
+  return cryptoIntradayBars.get(symbol);
 }
 async function placeCryptoMarketBuy(symbol, dollars, options = {}) {
   if (CONFIG.realCashTradingUnlocked !== true) {
@@ -18177,6 +18168,10 @@ async function getPolygonMoverSymbols(limit = POLYGON_MOVERS_LIMIT, forceRefresh
           .map((item) => item.symbol),
       };
     }
+    for (const candidate of rankedRaw.slice(0, 100)) candidateTraceStore.record({ ...candidate,
+      stage: 'EARLY_MOVER_RECEIVED', source: candidate.source || 'polygon_snapshot',
+      reasons: candidate.missingEvidenceReasons || [],
+    });
     const { gainers, losers, ranked } = rankPolygonMovers({
       rankedRaw,
       limit,
@@ -19209,6 +19204,7 @@ function getBotEntryScores() {
   return engineState.aiEntryScores;
 }
 const { calculateInstitutionalScores, passesFilters, scoreStock, scanMarket } = createStockMarketStrategy({
+  recordCandidateEvent: event => candidateTraceStore.record(event),
   CONFIG,
   activeScanLocks,
   applyAutonomousCapitalRotation,
@@ -32541,6 +32537,7 @@ registerBrokerDiagnosticRoutes(app, {
   isBotOrder,
 });
 
+registerCandidateTraceRoutes(app, { requireAdmin, store: candidateTraceStore });
 registerQuoteDiagnosticRoutes(app, {
   requireAdmin,
   normalizeSymbol,
@@ -32750,7 +32747,7 @@ startServerLifecycle({
   runStartupEngineScan: RUN_STARTUP_ENGINE_SCAN,
   runStartupScan: runEngineCycle,
   saveState: saveEngineState,
-  flushState: flushStateToFile,
+  flushState: async () => { await candidateTraceStore.flush(); await flushStateToFile(); },
   saveRenderMemory,
   checkRunnerResults: checkRunnerPredictionResults,
   startServices: [

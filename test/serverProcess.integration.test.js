@@ -60,6 +60,12 @@ test('actual server boots, serves stocks and crypto, and completes a scan withou
     assert.ok(metrics.rss < 1024 * 1024 * 1024, 'isolated server exceeded 1GB RSS');
     assert.equal(metrics.writes || 0, 0);
     const snapshot = await read('/frontend/snapshot');
+    const trace = await read('/discovery/trace?symbol=AAPL');
+    assert.ok(trace.events.some(event => event.stage === 'SCAN_SELECTED'), 'real scan did not record candidate selection');
+    assert.ok(trace.events.some(event => event.stage === 'SCAN_SCORED' || event.stage === 'SKIPPED'), 'real scan did not record outcome');
+    assert.equal(trace.lastError, null);
+    const unauthorizedTrace = await fetch(`http://127.0.0.1:${port}/discovery/trace?symbol=AAPL`);
+    assert.equal(unauthorizedTrace.status, 401);
     assert.ok(snapshot.stockSignals.length > 0, `scan lost all stock candidates: ${log}`);
     assert.ok(snapshot.cryptoSignals.length > 0, `scan lost all crypto candidates: ${log}`);
     const soakDeadline = Date.now() + soakMs;

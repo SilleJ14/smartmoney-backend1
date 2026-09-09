@@ -385,7 +385,7 @@ test("missing independent crypto context cannot inflate the remaining decision e
   assert.ok(result.score < availableContribution / result.coverage);
 });
 
-test("crypto decision score uses independent discovery, entry, continuation, and context families", () => {
+test("crypto decision score uses discovery, entry and context, with separate continuation telemetry", () => {
   const result = buildCryptoDecisionScore({
     symbol: "BTC/USD",
     cryptoDiscoveryScorecard: {
@@ -566,9 +566,9 @@ test("crypto execution gate uses a 65 minimum Final Decision score", () => {
   assert.ok(belowThreshold.reasons.includes("DECISION_SCORE_BELOW_THRESHOLD"));
 });
 
-test("crypto cannot finalize without measured continuation even at 80 percent coverage", () => {
+test("crypto immediate-entry F can finalize without MD, but never bypasses execution evidence", () => {
   const now = Date.now();
-  const result = buildCryptoDecisionScore({
+  const candidate = {
     symbol: "BTC/USD",
     cryptoDiscoveryScorecard: {
       score: 90,
@@ -592,11 +592,34 @@ test("crypto cannot finalize without measured continuation even at 80 percent co
     bid: 99.95,
     ask: 100.05,
     windowDollarVolume: 1_000_000,
-  }, { now });
-  assert.equal(result.coverage, 0.8);
-  assert.equal(result.coreEvidencePass, false);
-  assert.equal(result.scoreStatus, "PROVISIONAL_INCOMPLETE_EVIDENCE");
-  assert.ok(result.missingCriticalEvidence.includes("continuation"));
+  };
+  const result = buildCryptoDecisionScore(candidate, { now });
+  assert.equal(result.coverage, 1);
+  assert.equal(result.coreEvidencePass, true);
+  assert.equal(result.scoreStatus, "FINAL");
+  assert.ok(result.score >= 65);
+  assert.equal(result.continuationEvidence.available, false);
+  assert.equal(result.continuationEvidence.requiredForImmediateEntry, false);
+  assert.equal(result.missingCriticalEvidence.includes("continuation"), false);
+  const days = [2, 1].map(offset => new Date(now - offset * 86400000).toISOString().slice(0, 10));
+  for (const score of [0, 50, 100]) {
+    const withMD = buildCryptoDecisionScore({ ...candidate, multiDayAccumulation: { seenDays: days }, continuationScorecard: { score, available: true } }, { now });
+    assert.equal(withMD.score, result.score, "MD is independent from immediate-entry F");
+    assert.equal(withMD.componentsByName.runner.available, true);
+  }
+  for (const overrides of [
+    { liveQuoteUpdatedAt: new Date(now - 6000).toISOString() },
+    { spreadUpdatedAt: new Date(now - 6000).toISOString() },
+    { bid: null, ask: null },
+    { bid: 99, ask: 101 },
+    { windowDollarVolume: 0 },
+    { newsCatalyst: { dataAvailable: false } },
+    { newsCatalyst: { dataAvailable: true, riskDetected: true } },
+  ]) {
+    const blocked = buildCryptoDecisionScore({ ...candidate, ...overrides }, { now });
+    assert.equal(blocked.coreEvidencePass, false, JSON.stringify(overrides));
+  }
+  assert.equal(evaluateCryptoTradeCandidate(candidate, { now }).approved, false, "a score is not central approval");
 });
 
 test("crypto decision evidence rejects a stale quote before order submission", () => {
@@ -677,7 +700,8 @@ test("derived runner strength is not reused as independent continuation evidence
   });
 
   assert.equal(result.componentsByName.runner.available, false);
-  assert.ok(result.missingComponents.includes("runner"));
+  assert.equal(result.missingComponents.includes("runner"), false);
+  assert.equal(result.continuationEvidence.available, false);
 });
 
 test("crypto decision coverage fails closed when a derived score lacks raw spread evidence", () => {
@@ -808,8 +832,8 @@ test("a Discovery 67 with unavailable Entry evidence never becomes a finalized F
   const evidence = buildCryptoDecisionScore(candidate, { now });
   assert.equal(
     evidence.score,
-    33.5,
-    "missing Entry and Continuation evidence must contribute zero rather than inflate F"
+    40.2,
+    "missing Entry evidence must contribute zero rather than inflate F"
   );
   assert.equal(evidence.componentsByName.execution.available, false);
   assert.equal(evidence.coreEvidencePass, false);
