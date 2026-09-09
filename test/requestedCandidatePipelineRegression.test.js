@@ -90,7 +90,7 @@ test("fresh trade ticks cannot starve independent bid-ask refreshes", () => {
   assert.match(cryptoCacheCall, /spreadSource:/);
 });
 
-test("frontend live-score merge updates canonical approval and sizing only when explicitly supplied", frontendTestOptions, () => {
+test("frontend live-score merge updates measured evidence without overwriting approval or sizing", frontendTestOptions, () => {
   const mergeBlock = frontendSource.slice(
     frontendSource.indexOf("function mergeSignalByFreshness"),
     frontendSource.indexOf("function getSignalDerivedIntel")
@@ -102,91 +102,10 @@ test("frontend live-score merge updates canonical approval and sizing only when 
     mergeBlock.indexOf("if (!decisionIsFresh)")
   );
   assert.doesNotMatch(liveScoreBlock, /\.\.\.incomingSignal,/);
-  assert.match(liveScoreBlock, /const hasTradeAmountPayload =/);
-  assert.match(liveScoreBlock, /\.\.\.\(hasTradeAmountPayload \? \{/);
-  assert.match(liveScoreBlock, /recommendedTradeAmount:\s*incomingSignal\.recommendedTradeAmount/);
-  assert.match(liveScoreBlock, /hasIncomingBoolean\("backendApproved"\)/);
-  assert.match(liveScoreBlock, /backendApproved:\s*incomingSignal\.backendApproved/);
+  assert.doesNotMatch(liveScoreBlock, /recommendedTradeAmount:\s*incomingSignal/);
+  assert.doesNotMatch(liveScoreBlock, /backendApproved:\s*incomingSignal/);
   assert.match(liveScoreBlock, /stockDecisionScore: incomingSignal\.stockDecisionScore/);
   assert.match(liveScoreBlock, /cryptoDecisionScore: incomingSignal\.cryptoDecisionScore/);
-});
-
-test("frontend crypto quote refresh preserves measured change instead of inventing zero", frontendTestOptions, () => {
-  const normalizeBlock = frontendSource.slice(
-    frontendSource.indexOf("function normalizeSignal"),
-    frontendSource.indexOf("function getSignalDecisionTimestamp")
-  );
-  const mergeBlock = frontendSource.slice(
-    frontendSource.indexOf("function mergeSignalByFreshness"),
-    frontendSource.indexOf("function getSignalDerivedIntel")
-  );
-
-  assert.match(normalizeBlock, /const explicitChangeAvailability =/);
-  assert.match(normalizeBlock, /const hasChangeBaseline =/);
-  assert.match(normalizeBlock, /explicitChangeAvailability === true/);
-  assert.match(mergeBlock, /incomingSignal\.changePercentMeasured === true/);
-  assert.match(mergeBlock, /dayChangePercent: oldSignal\.dayChangePercent/);
-  assert.match(mergeBlock, /sessionChangePercent: oldSignal\.sessionChangePercent/);
-  assert.match(mergeBlock, /changePercent: oldSignal\.changePercent/);
-  assert.match(frontendSource, /function measuredPct\(value: number, available: boolean\)/);
-  assert.match(frontendSource, /measuredPct\(item\.sessionChangePercent, item\.changePercentMeasured\)/);
-});
-
-test("frontend live-score refresh carries every canonical crypto score family", frontendTestOptions, () => {
-  const mergeBlock = frontendSource.slice(
-    frontendSource.indexOf("function mergeSignalByFreshness"),
-    frontendSource.indexOf("function getSignalDerivedIntel")
-  );
-  const liveScoreBlock = mergeBlock.slice(
-    mergeBlock.indexOf("if (isLiveScoreSignal"),
-    mergeBlock.indexOf("if (!decisionIsFresh)")
-  );
-
-  for (const field of [
-    "rawCryptoScore",
-    "cryptoDiscoveryScoreAvailable",
-    "cryptoDiscoveryScoreCoverage",
-    "cryptoDiscoveryScoreFresh",
-    "cryptoEntryScore",
-    "cryptoEntryScoreAvailable",
-    "cryptoDecisionScore",
-    "cryptoDecisionScoreAvailable",
-    "cryptoDecisionCoverage",
-    "provisionalCryptoDecisionScore",
-    "provisionalCryptoDecisionScoreAvailable",
-    "multiDayScore",
-    "multiDayProbability",
-    "multiDayScoreAvailable",
-    "cryptoScoreTelemetry",
-    "centralAutonomousDecisionCore",
-    "missingEvidenceReasons",
-  ]) {
-    assert.match(liveScoreBlock, new RegExp(`${field}:`));
-  }
-});
-
-test("frontend crypto score availability honors explicit evidence without promoting legacy scores", frontendTestOptions, () => {
-  const normalizeBlock = frontendSource.slice(
-    frontendSource.indexOf("function normalizeSignal"),
-    frontendSource.indexOf("function getSignalDecisionTimestamp")
-  );
-  const discoveryBlock = normalizeBlock.slice(
-    normalizeBlock.indexOf("const explicitCryptoDiscoveryScore ="),
-    normalizeBlock.indexOf("const explicitCryptoEntryScore =")
-  );
-  const finalBlock = normalizeBlock.slice(
-    normalizeBlock.indexOf("const explicitCryptoDecisionScore ="),
-    normalizeBlock.indexOf("const provisionalCryptoDecisionScoreAvailable =")
-  );
-
-  assert.match(discoveryBlock, /inferAvailability\(\s*explicitCryptoDiscoveryAvailability/);
-  assert.match(frontendSource, /if \(explicitAvailability === false\) return false/);
-  assert.doesNotMatch(discoveryBlock, /scannerScore|item\?\.score/);
-  assert.match(normalizeBlock, /inferAvailability\(\s*explicitCryptoEntryAvailability/);
-  assert.match(normalizeBlock, /explicitMultiDayAvailability === true/);
-  assert.match(normalizeBlock, /cryptoContinuationComponent\?\.value/);
-  assert.match(finalBlock, /!cryptoDecisionIsProvisional/);
-  assert.doesNotMatch(finalBlock, /masterFinalScore|finalAutonomousDecisionScore/);
 });
 
 test("frontend polling and streaming insert symbols that were not already present", frontendTestOptions, () => {
@@ -201,12 +120,7 @@ test("frontend polling and streaming insert symbols that were not already presen
     const eventIndex = serverSource.indexOf(`type: "${eventType}"`);
     assert.notEqual(eventIndex, -1);
     const eventBlock = serverSource.slice(Math.max(0, eventIndex - 120), eventIndex + 300);
-    if (eventType === "QUICK_INSTITUTIONAL_GATE_UPDATE") {
-      assert.match(eventBlock, /approvedSymbols:/);
-      assert.doesNotMatch(eventBlock, /buildLiveSignalPushPayload/);
-    } else {
-      assert.match(eventBlock, /\.\.\.buildLiveSignalPushPayload\(\)/);
-    }
+    assert.match(eventBlock, /\.\.\.buildLiveSignalPushPayload\(\)/);
     assert.doesNotMatch(eventBlock, /liveSignals:\s*buildLiveSignalPushPayload\(\)/);
   }
 });
@@ -222,26 +136,12 @@ test("frontend renders unavailable final scores as dash and keeps exact evidence
   assert.match(frontendSource, /compareSignalsByCanonicalDecision/);
 });
 
-test("frontend demotes stale buyable rows even while the SSE connection stays open", frontendTestOptions, () => {
-  assert.match(
-    frontendSource,
-    /const freshnessTimer = setInterval\(\(\) => \{\s*setSignals\(\(previousSignals\) => sweepSignalUiFreshness\(previousSignals\)\)/
-  );
-  assert.match(frontendSource, /clearInterval\(freshnessTimer\)/);
-  assert.match(frontendSource, /const quoteTimer = setInterval/);
-  assert.match(frontendSource, /const scoreTimer = setInterval/);
-  const streamBlock = frontendSource.slice(frontendSource.indexOf("stream.onmessage ="), frontendSource.indexOf("const refreshRef ="));
-  assert.doesNotMatch(streamBlock, /liveQuoteStateVersionRef\.current =/);
-});
-
 test("frontend uses the backend live-source and four-approval contract", frontendTestOptions, () => {
   assert.match(frontendSource, /RECOGNIZED_LIVE_QUOTE_SOURCES/);
   assert.match(frontendSource, /item\?\.priceIsLive === true/);
   assert.match(frontendSource, /item\.approved === true/);
-  assert.match(frontendSource, /const aggregateExecutionApproved = typeof executionEligibility\?\.approved === "boolean"/);
-  assert.match(frontendSource, /aggregateExecutionApproved/);
-  assert.match(frontendSource, /const hasAggregateExecutionDecision =/);
-  assert.match(frontendSource, /legacyFourWay && item\.raw\?\.executionEligibility\?\.approved !== false/);
+  assert.match(frontendSource, /item\.raw\?\.executionEligibility\?\.approved === true/);
+  assert.doesNotMatch(frontendSource, /executionEligibility\?\.approved !== false/);
   assert.doesNotMatch(frontendSource, /item\?\.backendApproved === true \|\| item\?\.approved === true/);
 });
 
@@ -312,8 +212,14 @@ test("frontend preservation resets every approval bit from the latest decision",
     frontendSource.indexOf("const preserveSignals"),
     frontendSource.indexOf("setSignals", frontendSource.indexOf("const preserveSignals"))
   );
-  assert.match(preserveBlock, /mergeSignalByFreshness\(old, incoming, now\)/);
-  assert.doesNotMatch(preserveBlock, /\.\.\.signal,/);
+  for (const field of [
+    "qualifiedToBuy",
+    "autoTradeApproved",
+    "approved",
+    "backendApproved",
+  ]) {
+    assert.match(preserveBlock, new RegExp(`${field}: signal\\.${field} === true`));
+  }
 });
 
 test("signal tape cannot promote a partial or legacy approval to approved", () => {

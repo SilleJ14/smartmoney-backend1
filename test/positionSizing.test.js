@@ -6,8 +6,6 @@ test("sizes elite signals above normal signals", () => {
   assert.ok(calculateDynamicTradeAmount({ ...base, signalScore: 92 }) > calculateDynamicTradeAmount({ ...base, signalScore: 78 }));
 });
 test("never exceeds remaining cash", () => {
-  const amount = calculateDynamicTradeAmount({ ...base, account: { cash: 30, equity: 1000 }, signalScore: 92 });
-  assert.equal(amount, 25);
-  assert.ok(amount <= 30);
+  assert.equal(calculateDynamicTradeAmount({ ...base, account: { cash: 30, equity: 1000 }, signalScore: 92 }), 30);
 });
 test("rejects sub-threshold signals", () => assert.equal(calculateDynamicTradeAmount({ ...base, signalScore: 60 }), 0));

@@ -49,10 +49,9 @@ export function calculateFastRunnerScoreFromMemory(memory = {}) {
     ? memory.secondCandles
     : [];
 
-  const clock = Date.parse(memory.updatedAt || '') || Date.now();
-  const prior10 = candles.filter(c => c.secondKey <= clock && c.secondKey >= clock - 10000);
-  const prior30 = candles.filter(c => c.secondKey <= clock && c.secondKey >= clock - 30000);
-  const last = prior30.at(-1) || null;
+  const last = candles[candles.length - 1] || null;
+  const prior10 = candles.slice(-10);
+  const prior30 = candles.slice(-30);
 
   const first10 = prior10[0];
   const first30 = prior30[0];
@@ -167,25 +166,19 @@ export function buildRobinhoodStylePercentFields({
   const todayPercent =
     cleanPrice > 0 && cleanPreviousClose > 0
       ? Number((((cleanPrice - cleanPreviousClose) / cleanPreviousClose) * 100).toFixed(4))
-      : null;
-  const todayPercentAvailable = todayPercent !== null;
+      : 0;
 
   const intradayPercent =
     cleanPrice > 0 && cleanDayOpen > 0
       ? Number((((cleanPrice - cleanDayOpen) / cleanDayOpen) * 100).toFixed(4))
-      : null;
-  const intradayPercentAvailable = intradayPercent !== null;
+      : todayPercent;
 
   const afterhoursPercent =
     cleanPrice > 0 && cleanRegularClose > 0
       ? Number((((cleanPrice - cleanRegularClose) / cleanRegularClose) * 100).toFixed(4))
-      : null;
-  const afterhoursPercentAvailable = afterhoursPercent !== null;
+      : 0;
 
   const displayPercent = session === "afterhours" ? afterhoursPercent : todayPercent;
-  const displayPercentAvailable = session === "afterhours"
-    ? afterhoursPercentAvailable
-    : todayPercentAvailable;
 
   const displayPercentLabel =
     session === "premarket"
@@ -196,13 +189,9 @@ export function buildRobinhoodStylePercentFields({
 
   return {
     todayPercent,
-    todayPercentAvailable,
     intradayPercent,
-    intradayPercentAvailable,
     afterhoursPercent,
-    afterhoursPercentAvailable,
     displayPercent,
-    displayPercentAvailable,
     displayPercentLabel,
   };
 }
@@ -270,29 +259,12 @@ export function updateLiveMarketMemory(symbol, tick = {}, {
       0
   );
 
-  const fallbackPercentRaw =
+  const fallbackPercent = Number(
     tick.livePercentChange ??
-    tick.percentChange ??
-    tick.changePercent;
-  const fallbackPercent = fallbackPercentRaw === null ||
-    fallbackPercentRaw === undefined ||
-    fallbackPercentRaw === ""
-    ? null
-    : Number(fallbackPercentRaw);
-  const availabilityValues = [
-    tick.livePercentChangeAvailable,
-    tick.percentChangeAvailable,
-    tick.changePercentAvailable,
-  ].filter((value) => typeof value === "boolean");
-  const fallbackPercentExplicitlyAvailable = availabilityValues.includes(true);
-  const fallbackPercentExplicitlyUnavailable =
-    !fallbackPercentExplicitlyAvailable && availabilityValues.includes(false);
-  const fallbackPercentAvailable =
-    Number.isFinite(fallbackPercent) &&
-    (
-      fallbackPercentExplicitlyAvailable ||
-      (!fallbackPercentExplicitlyUnavailable && fallbackPercent !== 0)
-    );
+      tick.percentChange ??
+      tick.changePercent ??
+      0
+  );
 
   const session = getMarketSession({
     is_open: Boolean(engineState.marketOpen),
@@ -315,31 +287,11 @@ export function updateLiveMarketMemory(symbol, tick = {}, {
     session,
   });
 
-  const previousLivePercentAvailable =
-    previous.livePercentChangeAvailable === true ||
-    previous.percentChangeAvailable === true;
-  const livePercentChange = robinhoodPercent.todayPercentAvailable
-    ? robinhoodPercent.todayPercent
-    : fallbackPercentAvailable
-      ? fallbackPercent
-      : previousLivePercentAvailable
-        ? Number(previous.livePercentChange ?? previous.percentChange)
-        : null;
-  const livePercentChangeAvailable = livePercentChange !== null &&
-    Number.isFinite(livePercentChange);
+  const livePercentChange =
+    robinhoodPercent.todayPercent || Number(fallbackPercent || 0);
 
-  const premarketPercent = robinhoodPercent.todayPercentAvailable
-    ? robinhoodPercent.todayPercent
-    : previous.premarketPercentAvailable === true
-      ? previous.premarketPercent
-      : null;
-  const premarketPercentAvailable = premarketPercent !== null;
-  const intradayPercent = robinhoodPercent.intradayPercentAvailable
-    ? robinhoodPercent.intradayPercent
-    : previous.intradayPercentAvailable === true
-      ? previous.intradayPercent
-      : null;
-  const intradayPercentAvailable = intradayPercent !== null;
+  const premarketPercent = robinhoodPercent.todayPercent;
+  const intradayPercent = robinhoodPercent.intradayPercent;
 
   const bid = Number(tick.bid || previous.bid || 0);
   const ask = Number(tick.ask || previous.ask || 0);
@@ -370,40 +322,32 @@ export function updateLiveMarketMemory(symbol, tick = {}, {
     ? previous.tickWindow
     : [];
 
-  const isTrade = tick.eventType === 'trade' || /(?:ws_trade|latest_trade)$/.test(String(tick.source || ''));
-  const volume = Number(tick.volume || tick.size || 0);
-  const tradeKey = tick.tradeId ? `${tick.source}:${tick.tradeId}` : `${now}:${price}:${volume}`;
-  const isNewTrade = isTrade && volume > 0 && !tickWindow.some(t => t.tradeKey === tradeKey);
-  if (isNewTrade) tickWindow.push({ at: now, price, volume, tradeKey });
+  tickWindow.push({
+    at: now,
+    price,
+    volume: Number(tick.volume || tick.size || 0),
+  });
 
   const cutoff = now - 10000;
   const freshTickWindow = tickWindow.filter(
     (item) => Number(item.at || 0) >= cutoff
-  ).slice(-2000);
+  );
 
   const tapeSpeed = Number((freshTickWindow.length / 10).toFixed(2));
 
   const nextMemory = {
     ...previous,
-    snapshotOnly: isNewTrade ? false : previous.snapshotOnly,
     symbol: cleanSymbol,
     price,
     current: price,
     previousClose,
     dayOpen,
     livePercentChange,
-    livePercentChangeAvailable,
-    percentChangeAvailable: livePercentChangeAvailable,
     premarketPercent,
-    premarketPercentAvailable,
     intradayPercent,
-    intradayPercentAvailable,
     todayPercent: robinhoodPercent.todayPercent,
-    todayPercentAvailable: robinhoodPercent.todayPercentAvailable,
     afterhoursPercent: robinhoodPercent.afterhoursPercent,
-    afterhoursPercentAvailable: robinhoodPercent.afterhoursPercentAvailable,
     displayPercent: robinhoodPercent.displayPercent,
-    displayPercentAvailable: robinhoodPercent.displayPercentAvailable,
     displayPercentLabel: robinhoodPercent.displayPercentLabel,
     regularClose,
     session,
@@ -428,7 +372,7 @@ export function updateLiveMarketMemory(symbol, tick = {}, {
     raw: tick.raw || null,
   };
 
-  if (isNewTrade) updateOneSecondCandle(nextMemory, tick, maxSecondCandles);
+  updateOneSecondCandle(nextMemory, tick, maxSecondCandles);
 
   const vwapCandles = Array.isArray(nextMemory.secondCandles)
     ? nextMemory.secondCandles
@@ -460,8 +404,7 @@ export function updateLiveMarketMemory(symbol, tick = {}, {
       ? Number((vwapTotals.priceVolume / vwapTotals.volume).toFixed(4))
       : Number(nextMemory.vwap || 0);
 
-  nextMemory.rollingVwap = calculatedVwap;
-  if (calculatedVwap > 0 && !(incomingVwap > 0)) {
+  if (calculatedVwap > 0) {
     nextMemory.vwap = calculatedVwap;
     nextMemory.dayVwap = calculatedVwap;
     nextMemory.avgPrice = calculatedVwap;

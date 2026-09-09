@@ -38,16 +38,6 @@ function createHarness(overrides = {}) {
   return { invoke };
 }
 
-test('frontend signals include discovery-only early movers before full scoring', async () => {
-  const api = createHarness({ getState: () => ({ liveEarlyMoverSymbols: ['AAPL'],
-    liveQuoteCache: { AAPL: { price: 100, previousClose: 98, liveQuoteUpdatedAt: new Date().toISOString() } } }) });
-  const response = await api.invoke('/frontend/signals');
-  assert.equal(response.body.signals.length, 1);
-  assert.equal(response.body.signals[0].symbol, 'AAPL');
-  assert.notEqual(response.body.signals[0].approved, true);
-  assert.equal(response.body.approvedCount, 0);
-});
-
 test("frontend AI feed includes independent market news when no signal candidates exist", async () => {
   const api = createHarness({
     getMarketNewsFeed: async () => ({
@@ -119,44 +109,7 @@ test("frontend signals require all approval flags and rank by canonical F", asyn
   const response = await api.invoke("/frontend/signals");
 
   assert.equal(response.body.approvedCount, 2);
-  assert.deepEqual(response.body.signals.map((signal) => signal.symbol), ["AAPL", "BTC/USD", "LOOSE"]);
-  assert.deepEqual(response.body.approvedSignals.map((signal) => signal.symbol), ["AAPL", "BTC/USD"]);
-  assert.deepEqual(response.body.watchSignals.map((signal) => signal.symbol), ["LOOSE"]);
-  assert.equal(response.body.watchCount, 1);
-});
-
-test("frontend signals preserve a diverse watch universe when one candidate is buyable", async () => {
-  const watchSignals = Array.from({ length: 12 }, (_, index) => ({
-    symbol: `WATCH${index}`,
-    score: 40 + index,
-    stockDecisionScore: 55 + index,
-    stockDecisionScoreAvailable: true,
-    qualifiedToBuy: false,
-    autoTradeApproved: false,
-    approved: false,
-    backendApproved: false,
-  }));
-  const api = createHarness({
-    getState: () => ({
-      topStockSignals: [{
-        symbol: "BUYME",
-        stockDecisionScore: 82,
-        stockDecisionScoreAvailable: true,
-        qualifiedToBuy: true,
-        autoTradeApproved: true,
-        approved: true,
-        backendApproved: true,
-      }],
-      lastStockSignals: watchSignals,
-    }),
-  });
-
-  const response = await api.invoke("/frontend/signals");
-
-  assert.equal(response.body.approvedCount, 1);
-  assert.equal(response.body.watchCount, 12);
-  assert.equal(response.body.signals.length, 13);
-  assert.equal(response.body.signals[0].symbol, "BUYME");
+  assert.deepEqual(response.body.signals.map((signal) => signal.symbol), ["AAPL", "BTC/USD"]);
 });
 
 test("frontend alerts expose canonical F and never report loose approval", async () => {

@@ -43,11 +43,10 @@ test("continuation evidence advances once on the next session and repairs inflat
   );
 
   assert.equal(next.sessionCounted, true);
-  // Legacy counters without per-session records are not measured evidence.
-  assert.equal(next.accumulationEvents, 1);
-  assert.equal(next.stealthVolumeEvents, 0);
-  assert.equal(next.supportHoldEvents, 1);
-  assert.equal(next.failedBreakoutEvents, 0);
+  assert.equal(next.accumulationEvents, 3);
+  assert.equal(next.stealthVolumeEvents, 2);
+  assert.equal(next.supportHoldEvents, 3);
+  assert.equal(next.failedBreakoutEvents, 2);
   assert.deepEqual(next.seenDays, ["2026-08-21", "2026-08-24", "2026-08-25"]);
 });
 

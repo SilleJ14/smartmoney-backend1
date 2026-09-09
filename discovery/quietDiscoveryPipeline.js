@@ -1,9 +1,7 @@
 import { calculateMultiHorizonExtension } from "../scoring/earlyDiscovery.js";
-import { providerDailyBar } from "./providerDailyBar.js";
 
 const clamp = (value) => Math.max(0, Math.min(100, Number(value) || 0));
 const avg = (values) => values.length ? values.reduce((sum, value) => sum + Number(value || 0), 0) / values.length : 0;
-const bootstrapAttempts = new WeakMap();
 
 export const DEFAULT_DISCOVERY_BUDGETS = Object.freeze({
   maxUniverse: 5000,
@@ -18,7 +16,7 @@ export const DEFAULT_DISCOVERY_BUDGETS = Object.freeze({
   maxWorkingMemoryMb: 96,
 });
 
-function normalizeQuietHistory(history = [], now = Date.now()) {
+function normalizeQuietHistory(history = []) {
   const bySession = new Map();
   (Array.isArray(history) ? history : []).forEach((item, index) => {
     const symbol = String(item?.s || item?.T || item?.symbol || "").toUpperCase();
@@ -29,10 +27,7 @@ function normalizeQuietHistory(history = [], now = Date.now()) {
     const close = Number(item?.c ?? item?.close);
     const volume = Number(item?.v ?? item?.volume ?? 0);
     const valid =
-      /^\d{4}-\d{2}-\d{2}$/.test(dayKey) && Number.isFinite(Date.parse(dayKey)) &&
-      new Date(dayKey).toISOString().slice(0, 10) === dayKey && Date.parse(dayKey) <= Number(now) &&
       symbol &&
-      [open, high, low, close, volume].every(Number.isFinite) &&
       open > 0 &&
       high > 0 &&
       low > 0 &&
@@ -63,11 +58,8 @@ function normalizeQuietHistory(history = [], now = Date.now()) {
 
 export function compactGroupedRows(results = [], dateKey, maxUniverse = 5000) {
   const bySymbol = new Map();
-  for (const item of (Array.isArray(results) ? results : [])) {
-    if (bySymbol.size >= maxUniverse) break;
+  for (const item of (Array.isArray(results) ? results : []).slice(0, maxUniverse)) {
     const symbol = String(item?.T || item?.symbol || "").toUpperCase();
-    const dated = providerDailyBar(symbol, item);
-    if (!dated || dated.d !== dateKey) continue;
     const row = {
       s: symbol,
       d: dateKey,
@@ -79,7 +71,6 @@ export function compactGroupedRows(results = [], dateKey, maxUniverse = 5000) {
     };
     if (
       !row.s ||
-      ![row.o, row.h, row.l, row.c, row.v].every(Number.isFinite) ||
       !(row.o > 0) ||
       !(row.h > 0) ||
       !(row.l > 0) ||
@@ -93,14 +84,8 @@ export function compactGroupedRows(results = [], dateKey, maxUniverse = 5000) {
   return [...bySymbol.values()];
 }
 
-export function calculateQuietPreMoveFeatures(history = [], { learning = null, now = Date.now() } = {}) {
-  history = normalizeQuietHistory(history, now);
-  if (history.length && Number(now) - Date.parse(history.at(-1).d) > 7 * 86400000) return null;
-  let contiguousStart = 0;
-  for (let i = 1; i < history.length; i++) {
-    if (Date.parse(history[i].d) - Date.parse(history[i - 1].d) > 4.5 * 86400000) contiguousStart = i;
-  }
-  history = history.slice(contiguousStart);
+export function calculateQuietPreMoveFeatures(history = [], { learning = null } = {}) {
+  history = normalizeQuietHistory(history);
   if (history.length < 10) return null;
   const recent = history.slice(-5);
   const baseline = history.slice(-20, -5);
@@ -176,7 +161,6 @@ export function calculateQuietPreMoveFeatures(history = [], { learning = null, n
     bars: history,
     currentPrice: latest.c,
     assetClass: "stock",
-    now,
   });
   let preMoveScore = clamp(rawPreMoveScore - extension.extensionPenalty);
   if (extension.alreadyExtended) preMoveScore = Math.min(preMoveScore, 55);
@@ -244,33 +228,20 @@ export function calculateQuietPreMoveFeatures(history = [], { learning = null, n
   };
 }
 
-export async function runBoundedQuietDiscovery({ groupedResults = [], dateKey, featureStore, budgets = {}, downloadedBytes = 0, learning = null, bootstrapHistories, skipDailyWrite = false, now = () => Date.now() } = {}) {
+export async function runBoundedQuietDiscovery({ groupedResults = [], dateKey, featureStore, budgets = {}, downloadedBytes = 0, learning = null, now = () => Date.now() } = {}) {
   const config = { ...DEFAULT_DISCOVERY_BUDGETS, ...budgets };
   const startedAt = now();
   const startingHeapBytes = process.memoryUsage().heapUsed;
   const compactRows = compactGroupedRows(groupedResults, dateKey, config.maxUniverse);
-  const write = skipDailyWrite ? { bytesWritten: 0 } : featureStore.writeDaily(dateKey, compactRows);
-  let read = await featureStore.readRecentHistories({ days: config.historyDays, maxSymbols: config.maxUniverse });
-  const attempts = bootstrapAttempts.get(featureStore) || new Map();
-  bootstrapAttempts.set(featureStore, attempts);
-  for (const symbol of attempts.keys()) if (!read.histories.has(symbol)) attempts.delete(symbol);
-  const bootstrapSymbols = [...read.histories].filter(([symbol, rows]) => rows.length < 21 &&
-    (!attempts.has(symbol) || now() - attempts.get(symbol) >= 30 * 60000))
-    .sort(([a], [b]) => (attempts.get(a) || 0) - (attempts.get(b) || 0))
-    .slice(0, 40).map(([symbol]) => symbol);
-  if (bootstrapSymbols.length && typeof bootstrapHistories === "function" && typeof featureStore.seedHistories === "function") {
-    for (const symbol of bootstrapSymbols) attempts.set(symbol, now());
-    const histories = await bootstrapHistories(bootstrapSymbols);
-    featureStore.seedHistories(histories, dateKey);
-    read = await featureStore.readRecentHistories({ days: config.historyDays, maxSymbols: config.maxUniverse });
-  }
+  const write = featureStore.writeDaily(dateKey, compactRows);
+  const read = await featureStore.readRecentHistories({ days: config.historyDays, maxSymbols: config.maxUniverse });
   const stageA = [];
   let memoryBudgetExceeded = false;
   const histories = [...read.histories.values()];
   for (let index = 0; index < histories.length; index += config.batchSize) {
     for (const history of histories.slice(index, index + config.batchSize)) {
       if (history.at(-1)?.d !== dateKey) continue;
-      const features = calculateQuietPreMoveFeatures(history, { learning, now: now() });
+      const features = calculateQuietPreMoveFeatures(history, { learning });
       if (!features) continue;
       if (Math.abs(features.dayChangePercent) > config.maxCurrentMovePercent) continue;
       if (history.at(-1).c < config.minPrice || features.averageDollarVolume < config.minAverageDollarVolume) continue;
@@ -289,16 +260,12 @@ export async function runBoundedQuietDiscovery({ groupedResults = [], dateKey, f
     phase: "BOUNDED_QUIET_DISCOVERY",
     updatedAt: new Date().toISOString(),
     dateKey,
-    universeRows: skipDailyWrite ? read.histories.size : compactRows.length,
-    bootstrapAttempted: bootstrapSymbols.length,
+    universeRows: compactRows.length,
     eligibleCount: stageA.length,
     deepCandidateCount: deepCandidates.length,
     watchlistCount: watchlist.length,
     liveSymbols: watchlist.slice(0, config.liveSymbols).map((item) => item.symbol),
-    historicalWarmupRemaining: [...read.histories.values()].filter((rows) => rows.length < 21).length,
     watchlist,
-    discoveryCandidates: stageA,
-    trackingPopulation: { eligible: stageA.length, policy: "ALL_ELIGIBLE_DISCOVERIES_BOUNDED_RETENTION" },
     budgets: config,
     resourceUsage: { downloadedBytes, bytesWritten: write.bytesWritten, rowsRead: read.rowsRead, filesRead: read.filesRead, durationMs: now() - startedAt, workingHeapDeltaBytes: Math.max(0, process.memoryUsage().heapUsed - startingHeapBytes), memoryBudgetExceeded, store: featureStore.stats() },
   };

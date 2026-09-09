@@ -1,15 +1,10 @@
-import { CRYPTO_MIN_FINAL_SCORE_TO_BUY, evaluateCryptoTradeCandidate } from "../scoring/componentScore.js";
+import { CRYPTO_MIN_FINAL_SCORE_TO_BUY } from "../scoring/componentScore.js";
 import { applyCrossAssetCryptoContext } from "../scoring/cryptoContext.js";
 import {
   compareCanonicalSignals,
   getCanonicalFinalScore,
   hasExplicitTradeApproval,
 } from "../scoring/canonicalSignalRank.js";
-import { normalizeSignalScoreCollection } from "../scoring/signalScoreCompleteness.js";
-import { installCentralDecision } from "../scoring/installCentralDecision.js";
-import { calculateDynamicTradeAmount } from '../risk/positionSizing.js';
-import { outstandingOrderNotional } from '../risk/orderRiskReservations.js';
-import { availableBuyingPower } from '../risk/brokerEvidence.js';
 
 export function createEngineCycle(dependencies) {
   const {
@@ -110,8 +105,6 @@ export function createEngineCycle(dependencies) {
     normalizeSymbol,
     pushLiveSignalUpdate,
     recordOrder,
-    refreshCryptoExecutionQuotes,
-    refreshStockExecutionQuotes,
     refreshEarlyMoversThenPolygonSubscriptions,
     refreshFinnhubLiveSubscriptions,
     refreshPolygonLiveSubscriptions,
@@ -134,7 +127,6 @@ export function createEngineCycle(dependencies) {
     updateInstitutionalWatchlist,
     updateMultiTimeframeCryptoState,
     updateQuietCandidateOutcomes,
-    getQuietCandidateFollowupQuotes,
     updateStockScoreOutcomes,
     updateWhaleSmartMoneyState,
     getRuntime,
@@ -237,9 +229,9 @@ export function createEngineCycle(dependencies) {
       await autoExitPositions(marketOpen);
       const { stockModeEnabled, cryptoModeEnabled } =
         getEnabledStrategyModes(effectiveMode);
-      // Exit protection follows held positions, never the currently selected
-      // entry mode. Crypto positions remain managed 24/7 in stock mode too.
-      await autoExitCryptoPositions();
+      if (cryptoModeEnabled) {
+        await autoExitCryptoPositions();
+      }
       let stockSignals = [];
       let cryptoSignals = [];
       const memoryGuard = typeof getMemoryGuardState === "function"
@@ -255,23 +247,22 @@ export function createEngineCycle(dependencies) {
         return;
       }
       const scanStartedAt = Date.now();
-      // The selected trading mode controls order routing, not market
-      // observability. Always score both asset classes so switching to a stock
-      // or crypto execution mode cannot make the other dashboard disappear.
-      {
+      if (cryptoModeEnabled) {
         markCycleStage("SCANNING_CRYPTO");
         cryptoSignals = await scanCryptoMarket();
         markCycleStage("CRYPTO_SCAN_COMPLETED", {
           signalCount: cryptoSignals.length,
         });
-        const selectedQuietCrypto = cryptoSignals;
+        const selectedQuietCrypto = Array.isArray(
+          engineState.cryptoQuietDiscoveryState?.topCandidates
+        )
+          ? engineState.cryptoQuietDiscoveryState.topCandidates
+          : [];
         if (typeof updateQuietCandidateOutcomes === "function") {
-          const followupQuotes = typeof getQuietCandidateFollowupQuotes === "function"
-            ? await getQuietCandidateFollowupQuotes() : [];
-          engineState.quietCandidateOutcomeState = await updateQuietCandidateOutcomes(
+          engineState.quietCandidateOutcomeState = updateQuietCandidateOutcomes(
             engineState.quietCandidateOutcomeState,
             selectedQuietCrypto,
-            [...cryptoSignals, ...followupQuotes],
+            cryptoSignals,
             {
               assetClass: "crypto",
               dayKey: new Date().toISOString().slice(0, 10),
@@ -282,16 +273,9 @@ export function createEngineCycle(dependencies) {
             engineState.quietCandidateOutcomeState.learning;
         }
       }
-      {
+      if (stockModeEnabled) {
         markCycleStage("SCANNING_STOCKS");
         stockSignals = await scanMarket();
-        if (typeof updateQuietCandidateOutcomes === 'function') {
-          engineState.quietCandidateOutcomeState = await updateQuietCandidateOutcomes(
-            engineState.quietCandidateOutcomeState, stockSignals, stockSignals, {
-              assetClass: 'stock', dayKey: new Intl.DateTimeFormat('en-CA', { timeZone: 'America/New_York' }).format(new Date()),
-              tradedSymbols: engineState.aiManagedSymbols || [],
-            });
-        }
         markCycleStage("STOCK_SCAN_COMPLETED", {
           signalCount: stockSignals.length,
         });
@@ -577,20 +561,6 @@ export function createEngineCycle(dependencies) {
             "Blocked By Phase 60 Adaptive Execution";
         }
       }
-      if (
-        stockSignals.length > 0 &&
-        typeof refreshStockExecutionQuotes === "function"
-      ) {
-        stockSignals = await refreshStockExecutionQuotes(stockSignals);
-        signals = [...stockSignals, ...cryptoSignals];
-      }
-      if (
-        cryptoSignals.length > 0 &&
-        typeof refreshCryptoExecutionQuotes === "function"
-      ) {
-        cryptoSignals = await refreshCryptoExecutionQuotes(cryptoSignals);
-        signals = [...stockSignals, ...cryptoSignals];
-      }
       const earlyCentralAutonomousDecisionCore =
         calculateCentralAutonomousDecisionCore(stockSignals, cryptoSignals);
       for (const decision of earlyCentralAutonomousDecisionCore.rankedDecisions) {
@@ -599,7 +569,8 @@ export function createEngineCycle(dependencies) {
             normalizeSymbol(signal.symbol) === normalizeSymbol(decision.symbol)
         );
         if (!matchingSignal) continue;
-        installCentralDecision(matchingSignal, decision, { crypto: cryptoSignals.includes(matchingSignal) });
+        matchingSignal.centralAutonomousDecisionCore = decision;
+        matchingSignal.decisionUpdatedAt = new Date().toISOString();
         matchingSignal.finalAutonomousDecisionScore =
           decision.finalDecisionScore;
         if (cryptoSignals.includes(matchingSignal)) {
@@ -1236,20 +1207,6 @@ export function createEngineCycle(dependencies) {
         blockRate:
           autonomousMetaReinforcement.state.blockRate,
       });
-      if (
-        stockSignals.length > 0 &&
-        typeof refreshStockExecutionQuotes === "function"
-      ) {
-        stockSignals = await refreshStockExecutionQuotes(stockSignals);
-        signals = [...stockSignals, ...cryptoSignals];
-      }
-      if (
-        cryptoSignals.length > 0 &&
-        typeof refreshCryptoExecutionQuotes === "function"
-      ) {
-        cryptoSignals = await refreshCryptoExecutionQuotes(cryptoSignals);
-        signals = [...stockSignals, ...cryptoSignals];
-      }
       const centralAutonomousDecisionCore =
         calculateCentralAutonomousDecisionCore(stockSignals, cryptoSignals);
       engineState.aiParliamentVotingState = {
@@ -1299,7 +1256,8 @@ export function createEngineCycle(dependencies) {
             normalizeSymbol(signal.symbol) === normalizeSymbol(decision.symbol)
         );
         if (!matchingSignal) continue;
-        installCentralDecision(matchingSignal, decision, { crypto: cryptoSignals.includes(matchingSignal) });
+        matchingSignal.centralAutonomousDecisionCore = decision;
+        matchingSignal.decisionUpdatedAt = new Date().toISOString();
         matchingSignal.tradeArchetype = decision.tradeArchetype;
         matchingSignal.dynamicEngineWeights = decision.dynamicEngineWeights;
         matchingSignal.archetypeAdjustedScore = decision.archetypeAdjustedScore;
@@ -2470,10 +2428,11 @@ export function createEngineCycle(dependencies) {
         engineState.marketStressLevel >= 25;
       const volatilityLocked =
         engineState.marketVolatility >= 18;
-      const [portfolioRefreshAccount, portfolioBrokerPositions] = await Promise.all([getAccount(), getPositions()]);
+      const portfolioRefreshAccount =
+        engineState.cachedAccount || account;
       const portfolioRefreshPositions =
-        Array.isArray(portfolioBrokerPositions)
-          ? portfolioBrokerPositions.filter((position) => {
+        Array.isArray(engineState.cachedPositions)
+          ? engineState.cachedPositions.filter((position) => {
             const symbol = normalizeSymbol(position.symbol);
             if (!symbol) return false;
             if (
@@ -2485,18 +2444,6 @@ export function createEngineCycle(dependencies) {
             return String(position.asset_class || "").toLowerCase() === "us_equity";
           })
           : [];
-      Object.assign(portfolioRefreshPositions, { stale: portfolioBrokerPositions?.stale === true, snapshotAt: portfolioBrokerPositions?.snapshotAt });
-      // The analytics phases between the central decision and sizing can take
-      // longer than the execution freshness window. Refresh once more at the
-      // actual stock execution boundary; this updates quote/spread evidence
-      // only and does not bypass or recompute any approval gate.
-      if (
-        stockSignals.length > 0 &&
-        typeof refreshStockExecutionQuotes === "function"
-      ) {
-        stockSignals = await refreshStockExecutionQuotes(stockSignals);
-        signals = [...stockSignals, ...cryptoSignals];
-      }
       for (const signal of stockSignals) {
         if (
           !signal.institutionalExecutionPlan &&
@@ -2541,8 +2488,8 @@ export function createEngineCycle(dependencies) {
         const finalSizingReconciliation =
           calculateFinalPositionSizingReconciliation({
             signal,
-            account: portfolioRefreshAccount,
-            managedPositions: portfolioRefreshPositions,
+            account,
+            managedPositions,
             portfolioGovernor: engineState.portfolioGovernorState || {},
             portfolioManager: refreshedPortfolioManager,
             institutionalExecutionPlan:
@@ -2553,12 +2500,10 @@ export function createEngineCycle(dependencies) {
               signal.recommendedTradeAmount || 0,
           });
         signal.finalSizingReconciliation = finalSizingReconciliation;
-        signal.sizingDecisionUpdatedAt = signal.decisionUpdatedAt;
         signal.recommendedTradeAmount =
           finalSizingReconciliation.finalTradeAmount;
         signal.finalApprovedTradeAmount =
           finalSizingReconciliation.finalTradeAmount;
-        signal.finalTradeAmount = finalSizingReconciliation.finalTradeAmount;
         signal.displayTradeAmount =
           finalSizingReconciliation.finalTradeAmount;
         signal.aiAllocationPercentOfBotBudget =
@@ -2584,12 +2529,9 @@ export function createEngineCycle(dependencies) {
         const finalStockExecutionGate = evaluateStockTradeCandidate(signal, {
           requireCentralDecision: true,
           requireFreshDecision: true,
-          maxQuoteAgeSeconds: Math.min(
-            5,
-            Math.max(
-              1,
-              Number(getRuntime()?.LIVE_ORDER_MAX_QUOTE_AGE_SECONDS) || 5
-            )
+          maxQuoteAgeSeconds: Number(
+            getRuntime()?.LIVE_ORDER_MAX_QUOTE_AGE_SECONDS ||
+            15
           ),
           maxSpreadPercent: Number(
             getRuntime()?.LIVE_ORDER_MAX_SPREAD_PERCENT ||
@@ -2615,39 +2557,6 @@ export function createEngineCycle(dependencies) {
           signal.backendApproved = true;
         }
       }
-      stockSignals = normalizeSignalScoreCollection(stockSignals);
-      for (const signal of cryptoSignals) {
-        const finalEligibility = evaluateCryptoTradeCandidate(signal);
-        signal.executionEligibility = finalEligibility;
-        if (!finalEligibility.approved) Object.assign(signal, {
-          approved: false, backendApproved: false, autoTradeApproved: false, qualifiedToBuy: false,
-          buyableNow: false, blockedReasons: [...new Set([...(signal.blockedReasons || []), ...finalEligibility.reasons])],
-        });
-        const finalScore = getCanonicalFinalScore(signal);
-        const sizingPositions = portfolioBrokerPositions;
-        const reserved = Object.values(engineState.orderRiskReservations || {}).reduce((sum, entry) => sum + outstandingOrderNotional(entry, sizingPositions), 0);
-        const suggested = hasExplicitTradeApproval(signal) ? calculateDynamicTradeAmount({
-          account: { ...portfolioRefreshAccount, cash: Math.max(0, Number(portfolioRefreshAccount.cash || 0) - reserved),
-            buying_power: Math.max(0, Number(portfolioRefreshAccount.buying_power ?? portfolioRefreshAccount.cash ?? 0) - reserved) }, positions: sizingPositions,
-          signalScore: finalScore ?? 0, config: CONFIG,
-          getExposure: (rows) => rows.reduce((sum, row) => sum + Math.abs(Number(row.market_value || 0)), reserved),
-        }) : 0;
-        const cryptoExposure = sizingPositions.filter((row) => String(row.asset_class || '').toLowerCase() === 'crypto' || String(row.symbol || '').includes('/') || String(row.symbol || '').endsWith('USD'))
-          .reduce((sum, row) => sum + Math.abs(Number(row.market_value || 0)), 0);
-        const cryptoBudget = Number(portfolioRefreshAccount.equity || 0) * Number(CONFIG.maxBotExposurePercent || 0) / 100 * Number(CONFIG.cryptoMaxExposureShareOfBotExposure ?? 100) / 100;
-        const bounded = Math.min(suggested, Math.max(0, cryptoBudget - cryptoExposure - reserved),
-          Math.max(0, availableBuyingPower(portfolioRefreshAccount, true) - reserved));
-        const amount = bounded >= Number(CONFIG.minCryptoTradeAmount || 25) ? Math.floor(bounded * 100) / 100 : 0;
-        signal.sizingDecisionUpdatedAt = signal.decisionUpdatedAt;
-        signal.finalApprovedTradeAmount = amount;
-        signal.finalTradeAmount = amount;
-        signal.recommendedTradeAmount = amount;
-        signal.displayTradeAmount = amount;
-        signal.finalSizingReconciliation = { finalTradeAmount: amount, finalBlocked: amount <= 0, basis: 'REMAINING_SHARED_BOT_CAP' };
-        if (amount <= 0) Object.assign(signal, { approved: false, backendApproved: false,
-          autoTradeApproved: false, qualifiedToBuy: false, buyableNow: false });
-      }
-      cryptoSignals = normalizeSignalScoreCollection(cryptoSignals);
       signals = [...stockSignals, ...cryptoSignals];
       const finalFullInstitutionalAiBrain =
         calculateFullInstitutionalAiBrain(signals);
@@ -2891,8 +2800,6 @@ export function createEngineCycle(dependencies) {
         !riskLocked
       ) {
         if (shouldRunStockAutoBuy) {
-          if (typeof refreshStockExecutionQuotes === "function") stockSignals = await refreshStockExecutionQuotes(stockSignals);
-          engineState.lastStockSignals = stockSignals;
           await autoBuySignals(stockSignals);
           engineState.aiDecisionHistory.unshift({
             timestamp: new Date().toISOString(),
@@ -2907,8 +2814,6 @@ export function createEngineCycle(dependencies) {
             engineState.aiDecisionHistory.slice(0, 300);
         }
         if (shouldRunCryptoAutoBuy) {
-          if (typeof refreshCryptoExecutionQuotes === "function") cryptoSignals = await refreshCryptoExecutionQuotes(cryptoSignals);
-          engineState.lastCryptoSignals = cryptoSignals;
           await autoBuyCryptoSignals(cryptoSignals);
           engineState.aiDecisionHistory.unshift({
             timestamp: new Date().toISOString(),

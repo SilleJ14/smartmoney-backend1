@@ -10,7 +10,7 @@ function getBackendRelease() {
 export function registerSystemRoutes(app, dependencies) {
   const {
     requireAdmin, getSystemSnapshot, getInfrastructureSnapshot,
-    getCachedClock = () => null, getHealthPayload, getEngineRuntime,
+    getClock, getHealthPayload, getFallbackMarketOpen, getEngineRuntime,
     now = () => new Date(),
   } = dependencies;
 
@@ -18,16 +18,11 @@ export function registerSystemRoutes(app, dependencies) {
   app.get("/infra-status", requireAdmin, (_req, res) => {
     res.json({ ...getInfrastructureSnapshot(), savedAt: now().toISOString() });
   });
-  // Liveness must never depend on a broker request. A provider outage should
-  // degrade discovery, not cause the hosting platform to restart this process.
-  app.get("/health", (_req, res) => {
+  app.get("/health", async (_req, res) => {
     try {
-      const cached = getCachedClock();
-      const age = now().getTime() - Date.parse(cached?.timestamp || '');
-      const fresh = cached?.stale !== true && Number.isFinite(age) && age >= -5000 && age <= 60000;
-      const clock = { ...(cached || {}), is_open: fresh && cached?.is_open === true,
-        stale: !fresh, available: Boolean(cached),
-        ...(!fresh ? { staleReason: 'Broker clock unavailable or older than 60 seconds' } : {}) };
+      const clock = await getClock().catch((error) => ({
+        is_open: Boolean(getFallbackMarketOpen()), error: error.message,
+      }));
       res.json({ ...getHealthPayload(clock), release: getBackendRelease() });
     } catch (error) {
       const engine = getEngineRuntime();
