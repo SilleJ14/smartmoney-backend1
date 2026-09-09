@@ -7,7 +7,9 @@ import { createOrderRiskReservations, outstandingOrderNotional } from './risk/or
 import { createAssetQuotePump } from './market-data/assetQuotePump.js';
 import { createCryptoIntradayBars } from './market-data/cryptoIntradayBars.js';
 import { isUsStockMarketSessionDayKey } from "./utils/usMarketCalendar.js";
-import { readBoundedResponseText } from "./utils/boundedResponse.js";
+import { readBoundedResponseText, readBoundedResponseJson, cancelResponseBody } from "./utils/boundedResponse.js";
+import { createSingleFlight } from "./utils/singleFlight.js";
+import { installProcessDiagnostics } from "./bootstrap/processDiagnostics.js";
 import { takeExplorationWindow, createFairReviewQueue } from "./discovery/fairExploration.js";
 import { createStockQuoteBatch } from "./market-data/stockQuoteBatch.js";
 import { providerDailyBar } from "./discovery/providerDailyBar.js";
@@ -254,6 +256,10 @@ import {
 } from "./live/finnhubStreamSymbols.js";
 dotenv.config({ path: path.resolve(process.cwd(), ".env") });
 const DATA_DIR = process.env.DATA_DIR || process.cwd();
+const processDiagnostics = installProcessDiagnostics({ directory: path.resolve(DATA_DIR, "process-diagnostics") });
+if (process.env.RENDER && (!process.env.DATA_DIR || path.resolve(DATA_DIR) === process.cwd())) {
+  console.warn("PERSISTENT_STORAGE_UNVERIFIED: DATA_DIR uses the checkout directory. Configure an attached persistent disk and migrate existing state before changing DATA_DIR.");
+}
 try {
   fs.mkdirSync(DATA_DIR, { recursive: true });
 } catch { }
@@ -1154,6 +1160,10 @@ engineState = createEngineState({
   config: CONFIG,
 });
 compactLiveEngineStateHistories(engineState);
+processDiagnostics.setSnapshotReader(() => ({
+  phase: engineState.engineCycleStage?.stage, running: engineState.running,
+  stocks: engineState.lastStockSignals?.length, crypto: engineState.lastCryptoSignals?.length,
+}));
 // Release the original parsed snapshot after hydration. Otherwise it keeps the
 // pre-compaction history graph reachable for the lifetime of the process.
 persistedEngineState = null;
@@ -13995,7 +14005,7 @@ async function getStockIdentity(symbol, asset = {}) {
         throw new Error("Polygon ticker details rate limit");
       }
       if (response.ok) {
-        const data = await response.json();
+        const data = await readBoundedResponseJson(response);
         const result = data?.results || {};
         const polygonName = cleanStockDisplayName(
           result?.name ||
@@ -14089,7 +14099,7 @@ async function polygonQuote(symbol) {
       );
     }
     const snapshotData =
-      await snapshotResponse.json();
+      await readBoundedResponseJson(snapshotResponse);
     const ticker =
       snapshotData?.ticker || {};
     const prevBar = ticker?.prevDay || {};
@@ -15038,7 +15048,7 @@ async function getMarketNewsFeed() {
       ["general", "crypto"].map(async (category) => {
         const url = `https://finnhub.io/api/v1/news?category=${category}&minId=0&token=${FINNHUB_API_KEY}`;
         const response = await fetchWithTimeout(url, {}, 15000);
-        const data = await response.json();
+        const data = await readBoundedResponseJson(response);
         if (!response.ok || !Array.isArray(data)) {
           throw new Error(`Finnhub ${category} news HTTP ${response.status}`);
         }
@@ -15134,7 +15144,7 @@ async function getNewsRisk(symbol) {
   )}&from=${fromDate}&to=${toDate}&token=${FINNHUB_API_KEY}`;
   try {
     const res = await fetchWithTimeout(url);
-    const data = await res.json();
+    const data = await readBoundedResponseJson(res);
     if (!res.ok || !Array.isArray(data)) {
       throw new Error(`Finnhub company news HTTP ${res.status}`);
     }
@@ -15217,7 +15227,7 @@ async function getCryptoNewsIntelligence(symbol) {
     try {
       const url = `https://finnhub.io/api/v1/news?category=crypto&minId=0&token=${FINNHUB_API_KEY}`;
       const response = await fetchWithTimeout(url, {}, 15000);
-      const data = await response.json();
+      const data = await readBoundedResponseJson(response);
       if (!response.ok || !Array.isArray(data)) {
         throw new Error(`Finnhub crypto news HTTP ${response.status}`);
       }
@@ -17958,7 +17968,16 @@ async function getClock() {
     };
   }
 }
+const polygonMoversFlight = createSingleFlight();
 async function getPolygonMoverSymbols(limit = POLYGON_MOVERS_LIMIT, forceRefresh = false) {
+  const budget = Math.min(200, Math.max(1, POLYGON_MOVERS_LIMIT || 70, LIVE_EARLY_MOVER_LIMIT || 50));
+  const requested = Math.min(budget, Math.max(1, Number(limit) || budget));
+  // Small callers cannot truncate the scanner's refresh or start another
+  // full-market download while a refresh is already in flight.
+  const symbols = await polygonMoversFlight(() => loadPolygonMoverSymbols(budget, forceRefresh));
+  return symbols.slice(0, requested);
+}
+async function loadPolygonMoverSymbols(limit, forceRefresh) {
   const now = Date.now();
   const marketSession = getMarketSession({ is_open: engineState.marketOpen === true });
   engineState.marketSession = marketSession;
@@ -18000,6 +18019,7 @@ async function getPolygonMoverSymbols(limit = POLYGON_MOVERS_LIMIT, forceRefresh
       `https://api.polygon.io/v2/snapshot/locale/us/markets/stocks/tickers?apiKey=${POLYGON_API_KEY}`;
     const response = await fetchWithTimeout(snapshotUrl);
     if (response.status === 429) {
+      cancelResponseBody(response);
       throttlePolygon(2);
       moversCache = {
         at: Date.now(),
@@ -18021,10 +18041,11 @@ async function getPolygonMoverSymbols(limit = POLYGON_MOVERS_LIMIT, forceRefresh
         moverDetails: moversCache.moverDetails || {},
         reason: `polygon_http_${response.status}`,
       };
+      cancelResponseBody(response);
       console.log("Polygon movers failed:", moversCache.reason);
       return moversCache.symbols.slice(0, limit);
     }
-    const data = await response.json();
+    const data = await readBoundedResponseJson(response, { maxBytes: 16 * 1024 * 1024, timeoutMs: 12000 });
     const tickers = Array.isArray(data?.tickers) ? data.tickers : [];
     let rankedRaw = parsePolygonSnapshotTickers({
       tickers,
@@ -32740,6 +32761,7 @@ registerMorningStrikeRoutes(app, {
 
 startServerLifecycle({
   app,
+  diagnostics: processDiagnostics,
   port: PORT,
   state: engineState,
   config: CONFIG,

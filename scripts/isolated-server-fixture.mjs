@@ -1,13 +1,34 @@
 // Test-only process: parent supplies an empty temporary cwd and fake credentials.
 // Never contact a provider or submit an order from this fixture.
 import http from 'node:http';
+import { Session } from 'node:inspector';
+if (process.env.SMARTMONEY_FIXTURE_PROFILE === 'true') {
+  const session = new Session(); session.connect();
+  const post = (method) => new Promise((resolve, reject) => session.post(method, (error, result) => error ? reject(error) : resolve(result)));
+  await post('Profiler.enable'); await post('Profiler.start');
+  let busy = false;
+  setInterval(async () => {
+    if (busy) return; busy = true;
+    try {
+      const { profile } = await post('Profiler.stop');
+      const nodes = new Map(profile.nodes.map(node => [node.id, node]));
+      const totals = new Map();
+      (profile.samples || []).forEach((id, index) => totals.set(id, (totals.get(id) || 0) + (profile.timeDeltas?.[index] || 0)));
+      process.send?.({ type: 'profile', top: [...totals].sort((a, b) => b[1] - a[1]).slice(0, 12).map(([id, micros]) => ({
+        ms: Math.round(micros / 1000), name: nodes.get(id)?.callFrame?.functionName,
+        file: nodes.get(id)?.callFrame?.url?.split('/').at(-1), line: nodes.get(id)?.callFrame?.lineNumber,
+      })) });
+      await post('Profiler.start');
+    } finally { busy = false; }
+  }, 1000).unref();
+}
 const originalListen = http.Server.prototype.listen;
 http.Server.prototype.listen = function (...args) {
   this.once('listening', () => process.send?.({ type: 'listening', port: this.address().port }));
   return originalListen.apply(this, args);
 };
 globalThis.WebSocket = class { constructor() { throw new Error('Fixture blocks external sockets'); } };
-let reads = 0, writes = 0;
+let reads = 0, writes = 0, polygonReads = 0;
 const stocks = ['AAPL', 'MSFT', 'NVDA'];
 const crypto = ['BTC/USD', 'ETH/USD', 'SOL/USD'];
 if (process.env.SMARTMONEY_FIXTURE_LOAD === 'full') {
@@ -25,6 +46,19 @@ globalThis.fetch = async (input, options = {}) => {
   const url = new URL(String(input));
   const p = url.pathname;
   const now = Date.now(), stamp = new Date(now).toISOString();
+  if (url.hostname === 'api.polygon.io' && p.endsWith('/markets/stocks/tickers')) {
+    polygonReads++;
+    const fault = process.env.SMARTMONEY_FIXTURE_POLYGON;
+    if (fault === 'oversized') return new Response(new ReadableStream({
+      start(c) { for (let i = 0; i < 17; i++) c.enqueue(new Uint8Array(1024 * 1024)); c.close(); },
+    }));
+    if (fault === 'stalled') return new Response(new ReadableStream({ start() {} }));
+    if (fault === 'unavailable') return json({ error: 'fixture provider outage' }, 503);
+    if (fault === 'malformed') return new Response('{invalid');
+    return json({ tickers: stocks.map(ticker => ({ ticker, todaysChangePerc: 2,
+      day: { c: 100, v: 3000000 }, prevDay: { c: 98 }, lastTrade: { p: 100, t: now * 1000000 },
+      lastQuote: { bp: 100, ap: 100.02, t: now * 1000000 } })) });
+  }
   const asset = symbol => ({ symbol, tradable: true, fractionable: true, status: 'active',
     class: symbol.includes('/') ? 'crypto' : 'us_equity', exchange: 'NASDAQ', marginable: true });
   if (p === '/v2/clock') return json({ is_open: false, timestamp: stamp,
@@ -53,5 +87,5 @@ globalThis.fetch = async (input, options = {}) => {
   if (p.endsWith('/quote')) return json({ c: 100, pc: 98, o: 98, h: 101, l: 97, t: Math.floor(now / 1000) });
   return json({ error: `No fixture for ${p}` }, 404);
 };
-setInterval(() => process.send?.({ type: 'metrics', reads, writes, rss: process.memoryUsage().rss }), 1000).unref();
+setInterval(() => process.send?.({ type: 'metrics', reads, writes, polygonReads, rss: process.memoryUsage().rss }), 1000).unref();
 await import('../server.js');

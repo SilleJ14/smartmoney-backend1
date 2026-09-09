@@ -1,6 +1,9 @@
 import fs from "fs";
 
-const DEFAULT_MAX_LOAD_BYTES = 256 * 1024 * 1024;
+// JSON parsing needs substantially more memory than the file itself. Keep
+// hydration bounded on the 2 GB host, even if an environment value is too large.
+const DEFAULT_MAX_LOAD_BYTES = 32 * 1024 * 1024;
+const HARD_MAX_LOAD_BYTES = 64 * 1024 * 1024;
 const DEFAULT_BACKUP_THRESHOLD_BYTES = 25 * 1024 * 1024;
 
 export function loadPersistedEngineState(
@@ -14,7 +17,9 @@ export function loadPersistedEngineState(
     if (!fs.existsSync(engineStateFile)) return {};
 
     const fileSize = fs.statSync(engineStateFile).size;
-    if (fileSize > maxLoadBytes) {
+    const budget = Number.isFinite(maxLoadBytes) && maxLoadBytes > 0
+      ? Math.min(maxLoadBytes, HARD_MAX_LOAD_BYTES) : DEFAULT_MAX_LOAD_BYTES;
+    if (fileSize > budget) {
       const oversizedFile = `${engineStateFile}.oversized-${Date.now()}`;
       fs.renameSync(engineStateFile, oversizedFile);
       console.error(

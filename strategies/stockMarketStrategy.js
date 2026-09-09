@@ -1,3 +1,4 @@
+import { setImmediate as yieldToEventLoop } from 'node:timers/promises';
 import {
   buildDecisionScoreTelemetry,
   calculateEarlyDiscoveryScore,
@@ -1407,6 +1408,8 @@ export function createStockMarketStrategy(dependencies) {
           reason: "Multi-day accumulation failed safely.",
         };
       }
+      // Keep liveness responsive between complete scoring passes.
+      await yieldToEventLoop();
       for (const signal of results) {
         const sym = normalizeSymbol(signal.symbol);
   
@@ -1477,6 +1480,8 @@ export function createStockMarketStrategy(dependencies) {
           adaptiveRunnerLearningState.learnedRunnerCount,
         topTwoSymbols: adaptiveRunnerLearningState.topTwoSymbols,
       });
+      // Keep liveness responsive between complete scoring passes.
+      await yieldToEventLoop();
       for (const signal of results) {
         const adaptiveRunnerLearning =
           calculateAdaptiveRunnerLearning(signal);
@@ -1552,6 +1557,8 @@ export function createStockMarketStrategy(dependencies) {
         averageExecutionConfidence:
           institutionalExecutionLayerState.averageExecutionConfidence,
       });
+      // Keep liveness responsive between complete scoring passes.
+      await yieldToEventLoop();
       for (const signal of results) {
         const executionPlan =
           calculateInstitutionalExecutionPlan(signal, 0);
@@ -1572,6 +1579,8 @@ export function createStockMarketStrategy(dependencies) {
           signal.executionQualityBoost = 3;
         }
       }
+      // Keep liveness responsive between complete scoring passes.
+      await yieldToEventLoop();
       for (const signal of results) {
         const phase15ExecutionDominance =
           calculatePhase15AutonomousExecutionDominance(signal, 0);
@@ -1637,6 +1646,8 @@ export function createStockMarketStrategy(dependencies) {
             fullInstitutionalAiBrainState.topTwoSymbols,
         }
       );
+      // Keep liveness responsive between complete scoring passes.
+      await yieldToEventLoop();
       for (const signal of results) {
         const rankedSignal =
           fullInstitutionalAiBrainState.rankedOpportunities.find(
@@ -1670,6 +1681,8 @@ export function createStockMarketStrategy(dependencies) {
       results.push(...themeBoostedResults);
       const refreshedFullInstitutionalAiBrainState =
         updateFullInstitutionalAiBrainState(results);
+      // Keep liveness responsive between complete scoring passes.
+      await yieldToEventLoop();
       for (const signal of results) {
         const rankedSignal =
           refreshedFullInstitutionalAiBrainState.rankedOpportunities.find(
@@ -1743,6 +1756,8 @@ export function createStockMarketStrategy(dependencies) {
         sniperCount: premarketDominanceState.sniperCount,
         topTwoSymbols: premarketDominanceState.topTwoSymbols,
       });
+      // Keep liveness responsive between complete scoring passes.
+      await yieldToEventLoop();
       for (const signal of results) {
         signal.premarketDominance =
           calculatePremarketDominanceEngine(signal);
@@ -1757,6 +1772,8 @@ export function createStockMarketStrategy(dependencies) {
       }
       const finalFullInstitutionalAiBrainState =
         updateFullInstitutionalAiBrainState(results);
+      // Keep liveness responsive between complete scoring passes.
+      await yieldToEventLoop();
       for (const signal of results) {
         const rankedSignal =
           finalFullInstitutionalAiBrainState.rankedOpportunities.find(
@@ -1785,6 +1802,8 @@ export function createStockMarketStrategy(dependencies) {
             0
           );
       }
+      // Keep liveness responsive between complete scoring passes.
+      await yieldToEventLoop();
       for (const signal of results) {
         const phase7Reinforcement =
           calculatePhase7ReinforcementLearning(signal);
@@ -1838,6 +1857,8 @@ export function createStockMarketStrategy(dependencies) {
           averageSetupTrust: phase7ReinforcementLearningState.averageSetupTrust,
         }
       );
+      // Keep liveness responsive between complete scoring passes.
+      await yieldToEventLoop();
       for (const signal of results) {
         const phase9LiquidityIntelligence =
           calculatePhase9LiquidityIntelligence(signal);
@@ -1871,6 +1892,8 @@ export function createStockMarketStrategy(dependencies) {
         averageLiquidityScore:
           phase9LiquidityIntelligenceState.averageLiquidityScore,
       });
+      // Keep liveness responsive between complete scoring passes.
+      await yieldToEventLoop();
       for (const signal of results) {
         const phase10RunnerMemory =
           calculatePhase10RunnerFingerprint(signal);
@@ -1909,6 +1932,8 @@ export function createStockMarketStrategy(dependencies) {
         explosiveRunnerCount:
           phase10RunnerMemoryState.explosiveRunnerCount,
       });
+      // Keep liveness responsive between complete scoring passes.
+      await yieldToEventLoop();
       for (const signal of results) {
         const phase11MetaStrategy =
           calculatePhase11MetaStrategyMutation(signal);
@@ -1939,6 +1964,8 @@ export function createStockMarketStrategy(dependencies) {
         suppressedSetupCount:
           phase11MetaStrategyState.suppressedSetupCount,
       });
+      // Keep liveness responsive between complete scoring passes.
+      await yieldToEventLoop();
       for (const signal of results) {
         const phase12MacroCorrelation =
           calculatePhase12MacroCorrelationSignal(signal);
@@ -1972,6 +1999,8 @@ export function createStockMarketStrategy(dependencies) {
         shouldReduceExposure:
           phase12MacroCorrelationState.shouldReduceExposure,
       });
+      // Keep liveness responsive between complete scoring passes.
+      await yieldToEventLoop();
       for (const signal of results) {
         const phase13HedgeFundBrain =
           calculatePhase13HedgeFundBrain(signal);
@@ -2000,6 +2029,8 @@ export function createStockMarketStrategy(dependencies) {
         deployableCount: phase13HedgeFundBrainState.deployableCount,
         blockedCount: phase13HedgeFundBrainState.blockedCount,
       });
+      // Keep liveness responsive between complete scoring passes.
+      await yieldToEventLoop();
       for (const signal of results) {
         const phase14Governor =
           calculatePhase14ProfitAccelerationGovernor(signal);
@@ -2024,6 +2055,8 @@ export function createStockMarketStrategy(dependencies) {
         blockedCount:
           phase14GovernorState.blockedCount,
       });
+      // Keep liveness responsive between complete scoring passes.
+      await yieldToEventLoop();
       for (const signal of results) {
         const finalGrade =
           calculateInstitutionalGrade(signal);
@@ -2049,6 +2082,8 @@ export function createStockMarketStrategy(dependencies) {
       // Rebuild every separated score after all discovery memory and scoring
       // layers have finished. This is the canonical telemetry returned to the
       // engine and prevents stale pre-boost contributions from being displayed.
+      // Keep liveness responsive between complete scoring passes.
+      await yieldToEventLoop();
       for (const signal of results) {
         signal.stockOutcomeLearning =
           engineState.stockScoreOutcomeLearning || null;

@@ -1,3 +1,11 @@
 .env
 node_modules
 discovery-features/
+engine-state.json
+engine-state.json.tmp
+engine-state.json.bad-*
+engine-state.json.oversized-*
+engine-state.json.safety.json
+engine-state.json.safety.json.tmp
+engine-state.json.pre-memory-compaction
+process-diagnostics/

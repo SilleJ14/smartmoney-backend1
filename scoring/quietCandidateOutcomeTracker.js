@@ -1,6 +1,10 @@
 import { addUsStockMarketSessionDays } from "../utils/usMarketCalendar.js";
 
 const HORIZONS = Object.freeze([1, 3, 5]);
+// Construct ICU formatters once, not two or three times for every price in
+// every durable observation page. Keep the evaluated time local to each update.
+const etDayFormatter = new Intl.DateTimeFormat('en-CA', { timeZone: 'America/New_York' });
+const etHourFormatter = new Intl.DateTimeFormat('en-US', { timeZone: 'America/New_York', hour: 'numeric', hourCycle: 'h23' });
 
 export function normalizeOutcomeObservation(observation) {
   const next = { ...observation, measurements: { ...(observation.measurements || {}) },
@@ -20,14 +24,13 @@ export function normalizeOutcomeObservation(observation) {
   return next;
 }
 
-function observationEvidence(candidate, assetClass, dayKey, now) {
+function observationEvidence(candidate, assetClass, dayKey, now, stockClock) {
   if (assetClass === "stock") {
     const providerTime = candidate.t == null ? NaN : new Date(candidate.t).getTime();
     const day = candidate.evidenceDay || candidate.d || candidate.date ||
       (Number.isFinite(providerTime) && providerTime <= now + 5000
-        ? new Intl.DateTimeFormat('en-CA', { timeZone: 'America/New_York' }).format(new Date(providerTime)) : null);
-    const etDay = new Intl.DateTimeFormat('en-CA', { timeZone: 'America/New_York' }).format(new Date(now));
-    const etHour = Number(new Intl.DateTimeFormat('en-US', { timeZone: 'America/New_York', hour: 'numeric', hourCycle: 'h23' }).format(new Date(now)));
+        ? etDayFormatter.format(new Date(providerTime)) : null);
+    const { etDay, etHour } = stockClock;
     const dailyBar = Boolean(candidate.evidenceDay || candidate.d || candidate.date) &&
       Number(candidate.c ?? candidate.close) > 0;
     const completedClose = dailyBar && (day < etDay || day === etDay && etHour >= 16);
@@ -406,6 +409,7 @@ export function updateQuietCandidateOutcomes(
   const safePreviousState = previousState && typeof previousState === "object"
     ? previousState
     : {};
+  const stockClock = { etDay: etDayFormatter.format(new Date(now)), etHour: Number(etHourFormatter.format(new Date(now))) };
   const safeMaxObservations = Math.max(
     50,
     Math.min(600, Number(maxObservations || 600))
@@ -436,7 +440,7 @@ export function updateQuietCandidateOutcomes(
       .map((candidate) => [symbolOf(candidate), {
         price: priceOf(candidate),
         high: highOf(candidate),
-        ...observationEvidence(candidate, assetClass, dayKey, Number(now)),
+        ...observationEvidence(candidate, assetClass, dayKey, Number(now), stockClock),
       }])
       .filter(([symbol, value]) => symbol && value.price > 0 && value.valid)
   );
@@ -595,11 +599,11 @@ export function updateQuietCandidateOutcomes(
   };
   const registrationCandidates = (Array.isArray(selectedCandidates) ? selectedCandidates : [])
     .filter((candidate) => !existing.has(`${assetClass}:${symbolOf(candidate)}:${dayKey}`))
-    .filter((candidate) => prices.has(symbolOf(candidate)) || observationEvidence(candidate, assetClass, dayKey, Number(now)).valid)
+    .filter((candidate) => prices.has(symbolOf(candidate)) || observationEvidence(candidate, assetClass, dayKey, Number(now), stockClock).valid)
     .sort((a, b) => sampleHash(a) - sampleHash(b)).slice(0, dailySlots);
   for (const candidate of registrationCandidates) {
     const symbol = symbolOf(candidate);
-    const ownEvidence = observationEvidence(candidate, assetClass, dayKey, Number(now));
+    const ownEvidence = observationEvidence(candidate, assetClass, dayKey, Number(now), stockClock);
     const evidence = prices.get(symbol) || (ownEvidence.valid ? { ...ownEvidence, price: priceOf(candidate) } : null);
     const price = evidence?.price || 0;
     const id = `${assetClass}:${symbol}:${dayKey}`;
@@ -670,7 +674,7 @@ export function updateQuietCandidateOutcomes(
         .sort((a, b) => b.observedAt - a.observedAt).slice(0, Math.floor(safeMaxPerAsset / 3));
       const reserved = new Set(completed.map((o) => o.id));
       const pending = (o) => o.evidenceVersion === 2 && !o.measurements?.[5] &&
-        (o.assetClass === "stock" ? o.targets?.[5] >= new Intl.DateTimeFormat("en-CA", { timeZone: "America/New_York" }).format(new Date(now)) : Number(o.targetTimestamps?.[5]) + 6 * 3600000 >= Number(now));
+        (o.assetClass === "stock" ? o.targets?.[5] >= stockClock.etDay : Number(o.targetTimestamps?.[5]) + 6 * 3600000 >= Number(now));
       const remaining = rows.filter((o) => !reserved.has(o.id)).sort((a, b) =>
         Number(pending(b)) - Number(pending(a)) || a.observedAt - b.observedAt);
       return [...completed, ...remaining].slice(0, safeMaxPerAsset);

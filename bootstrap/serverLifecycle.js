@@ -4,15 +4,29 @@ export function startServerLifecycle(options) {
     saveState, flushState, saveRenderMemory, checkRunnerResults,
     startServices = [], runStartupEngineScan = false,
     setIntervalFn = setInterval, setTimeoutFn = setTimeout, logger = console,
+    clearTimeoutFn = clearTimeout, shutdownTimeoutMs = 10000, diagnostics,
   } = options;
   let shuttingDown = false;
   const shutdown = async (signal) => {
     if (shuttingDown) return;
     shuttingDown = true;
-    saveState(`SHUTDOWN_${signal}`);
-    if (typeof flushState === "function") await flushState();
-    else saveState("SHUTDOWN");
-    processRef.exit(0);
+    diagnostics?.record(`SHUTDOWN_${signal}`);
+    let timer;
+    try {
+      await Promise.race([
+        Promise.resolve().then(async () => {
+          await saveState(`SHUTDOWN_${signal}`);
+          if (typeof flushState === "function") await flushState();
+          else await saveState("SHUTDOWN");
+        }),
+        new Promise((_, reject) => { timer = setTimeoutFn(() => reject(new Error('Shutdown deadline')), shutdownTimeoutMs); }),
+      ]);
+      processRef.exit(0);
+    } catch (error) {
+      diagnostics?.record('SHUTDOWN_FAILED', error);
+      logger.error('SHUTDOWN_FAILED: persistence failed or exceeded the shutdown deadline');
+      processRef.exit(1);
+    } finally { clearTimeoutFn(timer); }
   };
   processRef.on("SIGINT", () => void shutdown("SIGINT"));
   processRef.on("SIGTERM", () => void shutdown("SIGTERM"));
@@ -20,7 +34,7 @@ export function startServerLifecycle(options) {
     try { saveRenderMemory("RENDER_MEMORY_INTERVAL"); saveState("RENDER_MEMORY_INTERVAL"); }
     catch (error) { logger.error("RENDER_MEMORY_INTERVAL", error?.message); }
   }, 300000);
-  setIntervalFn(() => void checkRunnerResults().catch((error) =>
+  setIntervalFn(() => void Promise.resolve().then(checkRunnerResults).catch((error) =>
     logger.error("RUNNER_RESULT_CHECKER_INTERVAL", error?.message)), 60 * 60 * 1000);
   return app.listen(port, "0.0.0.0", async () => {
     logger.log(`SmartMoney Pro backend running on port ${port}`);
@@ -39,7 +53,7 @@ export function startServerLifecycle(options) {
     });
     logger.log(`Auto trading enabled: ${options.autoTradingEnabled}`);
     if (!runStartupEngineScan || state.running || state.engineFreezeDetected) return;
-    setTimeoutFn(() => void runStartupScan().then(() => {
+    setTimeoutFn(() => void Promise.resolve().then(runStartupScan).then(() => {
       state.startupScanState = { ok: true, completedAt: new Date().toISOString() };
       saveState("STARTUP_SCAN_COMPLETED");
     }).catch((error) => {
