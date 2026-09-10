@@ -1,3 +1,4 @@
+import { assessContinuationSetup } from '../scoring/continuationSetup.js';
 function finite(value) {
   const parsed = Number(value);
   return Number.isFinite(parsed) ? parsed : 0;
@@ -39,10 +40,14 @@ export function classifyStockDiscoveryLane(
       relativeVolume >= 1.2 ||
       volume >= Number(minScanVolume || 300_000) * 2
     );
+  const continuation = assessContinuationSetup(candidate);
+  const continuationLane = percentChange > 0 && volume >= Number(minScanVolume || 300000) && continuation.eligible;
 
   return {
-    lane: normalStrong ? "NORMAL_STRONG" : "EXPLOSIVE_RUNNER",
+    lane: continuationLane ? 'MEASURED_CONTINUATION' : normalStrong ? "NORMAL_STRONG" : "EXPLOSIVE_RUNNER",
     normalStrong,
+    continuationLane,
+    continuation,
     evidence: {
       volume,
       relativeVolume,

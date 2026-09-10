@@ -409,7 +409,8 @@ export function createStockMarketStrategy(dependencies) {
     const discoveryLane = classifyStockDiscoveryLane(q, {
       minScanVolume: Number(CONFIG.minScanVolume || 300000),
     });
-    const normalStrongLane = discoveryLane.normalStrong;
+    const normalStrongLane = discoveryLane.normalStrong || discoveryLane.continuationLane;
+    q.continuationSetup = discoveryLane.continuation;
     q.discoveryLane = discoveryLane.lane;
     q.discoveryLaneEvidence = discoveryLane.evidence;
   
@@ -871,7 +872,9 @@ export function createStockMarketStrategy(dependencies) {
   
   }
   
-  async function scanMarket() {
+  let activeAnalysis = null;
+  async function scanMarket({ analysisOnly = false, targetSymbols = [] } = {}) {
+    if (!analysisOnly && activeAnalysis) await activeAnalysis;
     if (activeScanLocks.scanMarket) {
       console.warn("scanMarket skipped: scan already running");
       return Array.isArray(engineState.lastStockSignals)
@@ -896,8 +899,8 @@ export function createStockMarketStrategy(dependencies) {
         "NEW_STOCK_SCAN_STARTED_KEEP_LAST_GOOD_DASHBOARD";
       engineState.lastStockScanPreservedDashboardAt =
         new Date().toISOString();
-      const symbols = await getTopMovers();
-      const limitedSymbols = narrowScanUniverse(symbols);
+      const symbols = analysisOnly ? [...new Set(targetSymbols.map(normalizeSymbol).filter(Boolean))].slice(0, 4) : await getTopMovers();
+      const limitedSymbols = analysisOnly ? symbols : narrowScanUniverse(symbols);
       const selectedSymbols = new Set(limitedSymbols);
       for (const symbol of symbols.slice(0, 300)) recordCandidateEvent({
         symbol, cycle: scanCycleId, stage: selectedSymbols.has(symbol) ? 'SCAN_SELECTED' : 'SCAN_NOT_SELECTED',
@@ -1055,7 +1058,7 @@ export function createStockMarketStrategy(dependencies) {
                 `News risk: ${quote.confirmations.newsRiskReason}`;
             }
             score = scoreStock(quote);
-          } else if (CONFIG.enableAdvancedFilters) {
+          } else if (CONFIG.enableAdvancedFilters && quote.confirmations?.newsRiskAvailable !== true) {
             quote.confirmations = {
               ...quote.confirmations,
               newsRiskAvailable: false,
@@ -1445,6 +1448,21 @@ export function createStockMarketStrategy(dependencies) {
         signal.discoveryScore = signal.discoveryScorecard.score;
         signal.discoveryTier = signal.discoveryScorecard.tier;
         signal.decisionScoreTelemetry = buildDecisionScoreTelemetry(signal);
+      }
+      if (analysisOnly) {
+        // A bounded research pass shares the real evidence pipeline but cannot
+        // reach pyramid buys, allocation mutations or any submission path.
+        return normalizeSignalScoreCollection(results.map(signal => ({
+          ...signal, stockDecisionScore: signal.decisionScoreTelemetry.scores.decision,
+          stockDecisionEvidence: signal.decisionScoreTelemetry.stages.decision,
+          stockDecisionScoreAvailable: signal.decisionScoreTelemetry.stages.decision.analysisEvidencePass === true,
+          analysisUpdatedAt: new Date().toISOString(),
+          candidateSource: 'early_evidence_reassessment', rawEarlyMover: false,
+          discoveryPending: false, centralAutonomousDecisionCore: null,
+          approved: false, backendApproved: false, autoTradeApproved: false, qualifiedToBuy: false,
+          buyableNow: false, recommendedTradeAmount: 0, finalApprovedTradeAmount: 0, finalTradeAmount: 0,
+          executionEligibility: { approved: false, reasons: ['CENTRAL_RISK_AND_SIZING_REVIEW_REQUIRED'] },
+        })));
       }
       try {
         const latestAccountForPyramids = await getAccount();
@@ -2140,5 +2158,12 @@ export function createStockMarketStrategy(dependencies) {
     }
   }
 
-  return { calculateInstitutionalScores, passesFilters, scoreStock, scanMarket };
+  function analyzeCandidates(symbols) {
+    if (activeAnalysis) return activeAnalysis;
+    if (activeScanLocks.scanMarket) return Promise.resolve([]);
+    activeAnalysis = scanMarket({ analysisOnly: true, targetSymbols: symbols })
+      .finally(() => { activeAnalysis = null; });
+    return activeAnalysis;
+  }
+  return { calculateInstitutionalScores, passesFilters, scoreStock, scanMarket, analyzeCandidates };
 }

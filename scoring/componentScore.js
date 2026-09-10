@@ -6,6 +6,9 @@ import {
 } from "./cryptoScoring.js";
 import { isLiveQuoteSource } from "../live/liveQuoteCache.js";
 import { normalizeCandidateQuote } from '../market-data/normalizeCandidateQuote.js';
+import { assessCryptoSetup, cryptoSetupGate } from './cryptoSetup.js';
+import { evaluateCryptoTradePlan } from './cryptoTradePlan.js';
+import { getApprovedTradeAmount } from './approvedSizing.js';
 
 // Immediate-entry F uses independent discovery, execution and context evidence.
 // Multi-day continuation remains separate telemetry (and an acceleration gate),
@@ -151,9 +154,14 @@ export function buildCryptoDecisionScore(
   );
   signal = normalizeCandidateQuote(signal);
   const barsFound = Math.max(0, finiteNumber(signal.barsFound) || 0);
-  const discovery = resolveComponent([
+  const earlyDiscovery = resolveComponent([
     { value: signal.cryptoDiscoveryScorecard?.score, source: "cryptoDiscoveryScorecard.score" },
   ]);
+  const setup = assessCryptoSetup(signal, { now });
+  const setupGate = cryptoSetupGate(signal, { now });
+  const continuationEntry = signal.scoringModelVersion === 'SMARTMONEY_CRYPTO_DECISION_V4' && setup.available && setup.eligible;
+  const discovery = continuationEntry
+    ? { value: setup.score, available: true, source: 'measured_crypto_continuation_setup' } : earlyDiscovery;
   const discoveryTimestampRaw = signal.cryptoDiscoveryScorecard?.calculatedAt;
   const discoveryTimestamp = discoveryTimestampRaw
     ? Date.parse(discoveryTimestampRaw)
@@ -292,7 +300,7 @@ export function buildCryptoDecisionScore(
       ? []
       : ["discoveryCoverage"]),
     ...(discoveryFresh ? [] : ["freshDiscoveryScorecard"]),
-    ...(signal.cryptoDiscoveryScorecard?.extension?.alreadyExtended === true
+    ...(signal.cryptoDiscoveryScorecard?.extension?.alreadyExtended === true && !continuationEntry
       ? ["multiHorizonExtension"]
       : []),
     ...(signal.newsCatalyst?.riskDetected === true ? ["negativeNewsRisk"] : []),
@@ -312,7 +320,10 @@ export function buildCryptoDecisionScore(
     ...(quoteFresh ? [] : ["freshLiveQuote"]),
   ];
   const uniqueMissingCriticalEvidence = [...new Set(missingCriticalEvidence)];
-  const coreEvidencePass = uniqueMissingCriticalEvidence.length === 0;
+  const coreEvidencePass = uniqueMissingCriticalEvidence.length === 0 &&
+    (signal.scoringModelVersion !== 'SMARTMONEY_CRYPTO_DECISION_V4' || setupGate.approved);
+  const measuredRejections = new Set(['multiHorizonExtension', 'negativeNewsRisk', 'acceptableSpread', 'minimumLiquidity']);
+  const analysisEvidencePass = uniqueMissingCriticalEvidence.every(reason => measuredRejections.has(reason));
 
   return {
     model: CRYPTO_DECISION_MODEL,
@@ -323,8 +334,13 @@ export function buildCryptoDecisionScore(
       componentsWithSemantics.map((component) => [component.name, component])
     ),
     missingComponents: weighted.missingComponents.filter(name => name !== 'runner'),
-    missingCriticalEvidence: uniqueMissingCriticalEvidence,
+    missingCriticalEvidence: [...new Set([...uniqueMissingCriticalEvidence,
+      ...(signal.scoringModelVersion === 'SMARTMONEY_CRYPTO_DECISION_V4' ? setupGate.reasons : [])])],
     coreEvidencePass,
+    analysisEvidencePass,
+    setup, setupGate: { approved: setupGate.approved, reasons: setupGate.reasons },
+    opportunityBasis: continuationEntry ? setup.route : 'EARLY_DISCOVERY',
+    earlyDiscovery,
     barsFound,
     spread,
     liquidity,
@@ -332,7 +348,7 @@ export function buildCryptoDecisionScore(
     continuationEvidence: { seenDays, available: continuation.available, requiredForImmediateEntry: false },
     scoreStatus: coreEvidencePass
       ? "FINAL"
-      : "PROVISIONAL_INCOMPLETE_EVIDENCE",
+      : analysisEvidencePass ? 'FINAL_ANALYSIS_NOT_APPROVED' : "PROVISIONAL_INCOMPLETE_EVIDENCE",
     minimumDecisionCoverage: CRYPTO_MIN_DECISION_COVERAGE,
     quoteFreshness: {
       timestamp: Number.isFinite(quoteTimestamp)
@@ -401,6 +417,9 @@ export function evaluateCryptoTradeCandidate(
     Number(now) - decisionTime <= 15 * 60000;
   const centralAction = String(signal.centralAutonomousAction || signal.centralAutonomousDecisionCore?.action || "").toUpperCase();
   const reasons = [
+    ...cryptoSetupGate(signal, { now }).reasons,
+    ...(signal.scoringModelVersion === 'SMARTMONEY_CRYPTO_DECISION_V4' && getApprovedTradeAmount(signal) > 0
+      ? evaluateCryptoTradePlan(signal, { now, notional: getApprovedTradeAmount(signal) }).reasons : []),
     ...(signal.blockBuying === true ? ['BUYING_BLOCKED'] : []),
     ...(signal.displayOnly === true ? ['DISPLAY_ONLY'] : []),
     ...(signal.centralCoreHardBlock === true ? ['CENTRAL_HARD_BLOCK'] : []),

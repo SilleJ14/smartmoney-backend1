@@ -7,9 +7,9 @@ function candidateDecisionVersion(state) {
   // Include in-place mutations as well as collection replacement. Do not hash
   // technical histories/news/debug payloads on this high-frequency route.
   for (const key of ['quickInstitutionalCandidates', 'fastRunnerCandidates', 'topStockSignals',
-    'lastStockSignals', 'topCryptoSignals', 'lastCryptoSignals', 'topSignals', 'lastSignals']) {
+    'lastStockSignals', 'topCryptoSignals', 'lastCryptoSignals', 'topSignals', 'lastSignals', 'earlyAssessedStockSignals']) {
     for (const s of state[key] || []) hash.update(JSON.stringify([
-      s.symbol, s.decisionUpdatedAt, s.centralAutonomousDecisionCore?.updatedAt,
+      s.symbol, s.decisionUpdatedAt, s.analysisUpdatedAt, s.centralAutonomousDecisionCore?.updatedAt,
       s.approved, s.backendApproved, s.autoTradeApproved, s.qualifiedToBuy,
       s.buyableNow, s.executionEligibility, s.finalStockExecutionGate,
       s.stockDecisionScoreAvailable, s.cryptoDecisionScoreAvailable, s.masterFinalScore,

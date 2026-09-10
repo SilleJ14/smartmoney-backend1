@@ -8,13 +8,16 @@ import { fileURLToPath } from 'node:url';
 
 const soakMs = Math.max(0, Math.min(600000, Number(process.env.SMARTMONEY_SOAK_MS) || 0));
 const scenarios = process.env.SMARTMONEY_FIXTURE_POLYGON ? [process.env.SMARTMONEY_FIXTURE_POLYGON]
-  : ['', 'healthy', 'stream-burst', 'oversized', 'stalled', 'unavailable', 'malformed'];
+  : ['', 'healthy', 'stream-burst', 'oversized', 'stalled', 'unavailable', 'malformed', 'early-analysis', 'crypto-setup', 'autopilot'];
 for (const polygonFault of scenarios) {
 test(`actual server boots, serves stocks and crypto, and completes a scan without trading (Polygon: ${polygonFault || 'disabled'})`, { timeout: 80000 + soakMs }, async t => {
   const fullLoad = process.env.SMARTMONEY_FIXTURE_LOAD === 'full' || polygonFault === 'healthy';
   const streamBurst = polygonFault === 'stream-burst';
+  const earlyProbe = process.env.SMARTMONEY_EARLY_PROBE === 'true' || polygonFault === 'early-analysis';
   const directory = await fs.mkdtemp(path.join(os.tmpdir(), 'smartmoney-isolated-server-'));
   const token = 'isolated-fixture-admin-not-a-real-credential';
+  const autopilot = polygonFault === 'autopilot';
+  if (autopilot) await fs.writeFile(path.join(directory, 'runtime-config.json'), JSON.stringify({ autoTradingEnabled: true }));
   const row = symbol => ({ symbol, price: 100, current: 100, assetClass: symbol.includes('/') ? 'crypto' : 'stock',
     approved: false, backendApproved: false, qualifiedToBuy: false, autoTradeApproved: false });
   await fs.writeFile(path.join(directory, 'engine-state.json'), JSON.stringify({
@@ -30,6 +33,7 @@ test(`actual server boots, serves stocks and crypto, and completes a scan withou
     SMARTMONEY_FIXTURE_STREAM: streamBurst ? 'finnhub' : '',
     SMARTMONEY_FIXTURE_LOAD: fullLoad ? 'full' : 'small',
     SMARTMONEY_FIXTURE_POPULATION: process.env.SMARTMONEY_FIXTURE_POPULATION || '',
+    SMARTMONEY_FIXTURE_MARKET_OPEN: earlyProbe ? 'true' : 'false',
     SMARTMONEY_FIXTURE_PROFILE: process.env.SMARTMONEY_FIXTURE_PROFILE || 'false',
     MAX_SYMBOLS_TO_SCAN: fullLoad ? '60' : '3',
     MIN_SYMBOLS_NEEDED: '3', MAX_ASSETS_FALLBACK: '60',
@@ -83,13 +87,29 @@ test(`actual server boots, serves stocks and crypto, and completes a scan withou
     const deadline = Date.now() + 55000;
     do {
       health = await read('/health');
-      assert.equal(health.autoTradingEnabled, false);
+      assert.equal(health.autoTradingEnabled, autopilot);
       assert.equal(unsafe, false, 'fixture observed a provider mutation');
       if (health.engine.lastError) assert.fail(`${health.engine.lastError}\n${log}`);
       if (health.engine.lastSuccessfulCycleAt) break;
       await new Promise(resolve => setTimeout(resolve, 500));
     } while (Date.now() < deadline);
     assert.ok(health.engine.lastSuccessfulCycleAt, `Scan did not finish: ${log}`);
+    if (autopilot) {
+      assert.equal(health.autopilot.savedEnabled, true, 'startup retained saved ON despite an environment default of false');
+      const update = async body => {
+        const result = await fetch(`http://127.0.0.1:${port}/api/config`, { method: 'POST',
+          headers: { Authorization: `Bearer ${token}`, 'Content-Type': 'application/json' },
+          body: JSON.stringify(body), signal: AbortSignal.timeout(3000) });
+        assert.equal(result.status, 200); return result.json();
+      };
+      await update({ tradingMode: 'live_crypto' });
+      assert.equal((await read('/health')).autoTradingEnabled, true);
+      await update({ autoTradingEnabled: false });
+      assert.equal((await read('/health')).autoTradingEnabled, false);
+      const saved = JSON.parse(await fs.readFile(path.join(directory, 'runtime-config.json'), 'utf8'));
+      assert.equal(saved.autoTradingEnabled, false, 'explicit OFF is durable for the next startup');
+      assert.equal(unsafe, false);
+    }
     // Metrics arrive over IPC once a second, independently of the HTTP scan result.
     // Await that observation rather than racing a fast successful scan.
     const metricsDeadline = Date.now() + 3000;
@@ -100,6 +120,37 @@ test(`actual server boots, serves stocks and crypto, and completes a scan withou
     assert.equal(metrics.writes || 0, 0);
     if (polygonFault) assert.ok(metrics.polygonReads > 0, 'fixture did not exercise Polygon snapshot path');
     const snapshot = await read('/frontend/snapshot');
+    if (polygonFault === 'crypto-setup') {
+      const scores = await read('/frontend/signals');
+      const signal = scores.signals.find(s => s.symbol === 'BTC/USD');
+      assert.equal(signal?.cryptoSetup?.eligible, true, JSON.stringify(signal?.cryptoSetup));
+      assert.equal(signal.cryptoOpportunityLane, 'RETEST_CONTINUATION');
+      assert.ok(signal.cryptoSetup.ema.ema200 > 0);
+      assert.equal(signal.cryptoDerivativesContext.funding.available, false);
+      assert.equal(signal.cryptoDerivativesContext.funding.required, false);
+      assert.equal(signal.cryptoOrderbook?.source, 'alpaca_crypto_orderbook');
+      assert.equal(signal.cryptoDecisionScoreAvailable, true);
+      assert.equal(signal.approved, false, 'analysis fixture must never enable trading');
+      t.diagnostic('Actual scanner -> central scoring -> frontend: crypto retest, EMA200, BTC context and orderbook verified; trading disabled.');
+    }
+    if (process.env.SMARTMONEY_SCORE_PROBE === 'true' || earlyProbe) {
+      const scores = await read('/frontend/signals');
+      for (const symbol of ['AAPL', 'BTC/USD']) {
+        const signal = scores.signals.find(row => row.symbol === symbol);
+        assert.ok(signal, `Missing measured fixture symbol ${symbol}`);
+        const crypto = symbol.includes('/');
+        assert.equal(crypto ? signal.cryptoDiscoveryScoreAvailable : signal.discoveryScoreAvailable, true, `${symbol}: D`);
+        assert.equal(crypto ? signal.cryptoEntryScoreAvailable : signal.entryQualityScoreAvailable, true, `${symbol}: E`);
+        assert.equal(crypto ? signal.cryptoDecisionScoreAvailable : signal.stockDecisionScoreAvailable, true,
+          `${symbol}: F ${JSON.stringify({ score: signal.cryptoDecisionScore, master: signal.masterFinalScore, central: signal.centralAutonomousDecisionCore?.cryptoDecisionScore, telemetry: signal.cryptoScoreTelemetry?.decision, missing: signal.missingEvidenceReasons, evidence: signal.centralAutonomousDecisionCore?.cryptoDecisionEvidence })}`);
+        assert.equal(signal.approved, false, 'disabled trading must stay disabled');
+      }
+      t.diagnostic(JSON.stringify({ scoreProbe: (scores.signals || []).filter(s =>
+        ['AAPL', 'MSFT', 'BTC/USD', 'ETH/USD'].includes(s.symbol)).map(s => ({ symbol: s.symbol,
+        D: s.discoveryScore ?? s.cryptoDiscoveryScore, E: s.entryQualityScore ?? s.cryptoEntryScore,
+        F: s.stockDecisionScore ?? s.cryptoDecisionScore, MD: s.multiDayContinuationScore,
+        missing: s.missingEvidenceReasons?.slice(0, 8), approved: s.approved })) }));
+    }
     const trace = await read('/discovery/trace?symbol=AAPL');
     assert.ok(trace.events.some(event => event.stage === 'SCAN_SELECTED'), 'real scan did not record candidate selection');
     assert.ok(trace.events.some(event => event.stage === 'SCAN_SCORED' || event.stage === 'SKIPPED'), 'real scan did not record outcome');
@@ -108,6 +159,18 @@ test(`actual server boots, serves stocks and crypto, and completes a scan withou
     assert.equal(unauthorizedTrace.status, 401);
     assert.ok(snapshot.stockSignals.length > 0, `scan lost all stock candidates: ${log}`);
     assert.ok(snapshot.cryptoSignals.length > 0, `scan lost all crypto candidates: ${log}`);
+    if (earlyProbe) {
+      const deadline = Date.now() + 35000;
+      let early;
+      do {
+        early = await read('/discovery/trace?symbol=AAPL');
+        if (early.events.some(event => event.stage === 'EARLY_ANALYSIS_COMPLETED')) break;
+        await new Promise(resolve => setTimeout(resolve, 500));
+      } while (Date.now() < deadline);
+      assert.ok(early.events.some(event => event.stage === 'EARLY_ANALYSIS_COMPLETED'), `Early analysis did not finish: ${log}`);
+      assert.equal(unsafe, false); assert.equal(metrics.writes || 0, 0);
+      t.diagnostic('Real scheduler completed early-candidate research with no provider order writes.');
+    }
     if (streamBurst) {
       for (let burstIndex = 0; burstIndex < 3; burstIndex++) {
         burst = null;

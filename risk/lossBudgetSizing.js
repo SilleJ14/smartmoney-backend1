@@ -24,7 +24,8 @@ export function calculateLossBudgetSizing({ account = {}, positions = [], config
     return { approved: false, maxNotional: 0, reason: 'INVALID_LONG_STOP_PLAN' };
   }
   const stopPercent = Math.max(fallbackStop, explicitStop !== null ? (price - explicitStop) / price * 100 : 0);
-  const costPercent = number(config.riskExecutionBufferPercent, 0.25);
+  const costPercent = Math.max(number(config.riskExecutionBufferPercent, 0.25),
+    signal.scoringModelVersion === 'SMARTMONEY_CRYPTO_DECISION_V4' ? 1 : 0);
   const riskFraction = (stopPercent + costPercent) / 100;
   if (![equity, startEquity, dailyLimit, perTradeLimit, pending, configStop, hardStop, costPercent, riskFraction].every(Number.isFinite) ||
     equity <= 0 || startEquity <= 0 || dailyLimit <= 0 || perTradeLimit <= 0 || pending < 0 ||

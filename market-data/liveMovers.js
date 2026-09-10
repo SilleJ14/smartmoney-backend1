@@ -1,6 +1,8 @@
 import { getApprovedTradeAmount } from "../scoring/approvedSizing.js";
 import { revalidateCandidate } from "../scoring/revalidateCandidate.js";
+import { hasDecisionAnalysis } from '../scoring/decisionAnalysis.js';
 import { candidateFeedDecision } from "../discovery/candidateFeedPolicy.js";
+import { freshEarlyAssessments } from '../discovery/earlyCandidateReassessment.js';
 import {
   buildStockDecisionScore,
   calculateEarlyDiscoveryScore,
@@ -155,6 +157,7 @@ export function buildLiveMovers({
   // live score refresh.  In particular, a raw early-mover placeholder must not
   // be scored and then compete with an already-complete canonical scan result.
   const sourceSignals = dedupeSignalsByCanonicalAuthority([
+    ...freshEarlyAssessments(state.earlyAssessedStockSignals, now().getTime()),
     ...buildRawEarlyMoverCandidates({ state, normalizeSymbol }),
     ...asArray(state.quickInstitutionalCandidates),
     ...asArray(state.fastRunnerCandidates),
@@ -431,10 +434,9 @@ export function buildLiveMovers({
         merged.decisionScoreTelemetry?.scores?.decision
       );
     const preservedStockDecisionEvidenceAvailable =
-      merged.stockDecisionEvidence?.coreEvidencePass === true ||
-      merged.centralAutonomousDecisionCore?.stockDecisionEvidence
-        ?.coreEvidencePass === true ||
-      merged.decisionScoreTelemetry?.stages?.decision?.coreEvidencePass === true;
+      hasDecisionAnalysis(merged.stockDecisionEvidence ||
+        merged.centralAutonomousDecisionCore?.stockDecisionEvidence ||
+        merged.decisionScoreTelemetry?.stages?.decision);
     const preservedStockDecisionAvailable =
       !cryptoAsset &&
       merged.stockDecisionScoreAvailable !== false &&
@@ -485,9 +487,8 @@ export function buildLiveMovers({
       cryptoAsset &&
       merged.cryptoDecisionScoreAvailable !== false &&
       preservedCryptoDecision !== undefined &&
-      preservedCryptoDecisionEvidence?.coreEvidencePass === true;
-    const liveCryptoDecisionAvailable =
-      cryptoDecision?.coreEvidencePass === true;
+      hasDecisionAnalysis(preservedCryptoDecisionEvidence);
+    const liveCryptoDecisionAvailable = hasDecisionAnalysis(cryptoDecision);
     const resolvedCryptoDecision = liveCryptoDecisionAvailable
       ? Number(cryptoDecision?.score || 0)
       : preservedCryptoDecisionAvailable
@@ -659,6 +660,7 @@ export function buildLiveMovers({
           ),
           stockDecisionEvidence: {
             ...(merged.stockDecisionEvidence || {}),
+            analysisEvidencePass: preservedStockDecisionAvailable || hasDecisionAnalysis(stockDecision),
             coreEvidencePass:
               merged.stockDecisionEvidence?.coreEvidencePass === true ||
               merged.centralAutonomousDecisionCore?.stockDecisionEvidence

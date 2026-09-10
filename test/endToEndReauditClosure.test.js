@@ -215,8 +215,9 @@ test('Polygon uses actual trade timestamp, does not freshen it from snapshot upd
   assert.equal(parse({ p: 100, t: start * 1e6 }).priceIsLive, false);
 });
 
+import { cryptoSetupEvidence } from './fixtures/cryptoSetupFixture.js';
 function approvedCrypto(now) {
-  const signal = { symbol: 'BTC/USD', price: 100, current: 100,
+  const signal = { symbol: 'BTC/USD', price: 100, current: 100, ...cryptoSetupEvidence(100, now),
     cryptoDiscoveryScorecard: { score: 90, coverage: 1, calculatedAt: iso(now), extension: { alreadyExtended: false } },
     newsCatalyst: { dataAvailable: true, riskDetected: false }, barsFound: 30, windowDollarVolume: 1000000,
     bid: 99.95, ask: 100.05, spreadAvailable: true, priceIsLive: true,

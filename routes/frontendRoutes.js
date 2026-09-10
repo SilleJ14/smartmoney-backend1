@@ -7,6 +7,7 @@ import {
 } from "../scoring/canonicalSignalRank.js";
 import { buildRawEarlyMoverCandidates } from "../market-data/liveMovers.js";
 import { candidateFeedDecision } from "../discovery/candidateFeedPolicy.js";
+import { freshEarlyAssessments } from '../discovery/earlyCandidateReassessment.js';
 
 function uniqueSignals(signals, normalizeSymbol) {
   return dedupeSignalsByCanonicalAuthority(signals, { normalizeSymbol });
@@ -17,6 +18,7 @@ function collectSignals(state, latestStatus, normalizeSymbol, includeFastRunners
   return uniqueSignals(
     [
       ...(includeFastRunners ? buildRawEarlyMoverCandidates({ state, normalizeSymbol }) : []),
+      ...freshEarlyAssessments(state.earlyAssessedStockSignals),
       ...(Array.isArray(state.topStockSignals) ? state.topStockSignals : []),
       ...(Array.isArray(state.lastStockSignals) ? state.lastStockSignals : []),
       ...(includeFastRunners && Array.isArray(state.fastRunnerCandidates)
@@ -26,6 +28,7 @@ function collectSignals(state, latestStatus, normalizeSymbol, includeFastRunners
         ? state.quickInstitutionalCandidates
         : []),
       ...(Array.isArray(state.topCryptoSignals) ? state.topCryptoSignals : []),
+      ...(Array.isArray(state.lastCryptoSignals) ? state.lastCryptoSignals : []),
       ...(Array.isArray(state.lastCryptoSignals) ? state.lastCryptoSignals : []),
       ...(Array.isArray(orchestration.topSignals) ? orchestration.topSignals : []),
     ],

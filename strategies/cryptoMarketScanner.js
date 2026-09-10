@@ -6,6 +6,7 @@ import {
   scoreSparseCryptoMarket,
 } from "../scoring/cryptoScoring.js";
 import { calculateCryptoEarlyDiscoveryScore } from "../scoring/earlyDiscovery.js";
+import { assessCryptoSetup, assessBtcContext, cryptoSetupGate } from '../scoring/cryptoSetup.js';
 
 export async function mapWithConcurrency(items = [], concurrency = 4, worker) {
   const values = Array.isArray(items) ? items : [];
@@ -158,6 +159,7 @@ export function createCryptoMarketScanner(dependencies) {
     getCryptoNewsIntelligence,
     getCryptoLatestQuote,
     getCryptoLatestQuotes,
+    getCryptoOrderbooks,
     getFreshLiveCryptoQuote,
     isCrypto,
     recordSkippedSymbol,
@@ -533,6 +535,7 @@ export function createCryptoMarketScanner(dependencies) {
       CRYPTO_SCAN_CONCURRENCY = 4,
     } = getRuntime();
     const symbols = await getCryptoAssets();
+    const btcBars = await getBestCryptoBars('BTC/USD').catch(() => []);
     const cryptoSkipped = [];
     const results = [];
     console.log("CRYPTO SCAN START", {
@@ -773,6 +776,7 @@ export function createCryptoMarketScanner(dependencies) {
                 close,
                 price: close,
                 volume,
+                intervalMs: bar.intervalMs,
               };
             })
             .filter((bar) => Number.isFinite(bar.close) && bar.close > 0)
@@ -791,7 +795,7 @@ export function createCryptoMarketScanner(dependencies) {
           });
         results.push({
           ...quote,
-          scoringModelVersion: "SMARTMONEY_CRYPTO_DECISION_V3",
+          scoringModelVersion: "SMARTMONEY_CRYPTO_DECISION_V4",
           assetClass: "crypto",
           asset_class: "crypto",
           livePrice: latestPrice,
@@ -1124,6 +1128,30 @@ export function createCryptoMarketScanner(dependencies) {
         console.warn("Final Alpaca crypto quote batch failed:", error.message);
       }
     }
+    const btcMarketContext = assessBtcContext(btcBars);
+    for (const signal of results) {
+      signal.btcMarketContext = btcMarketContext;
+      signal.cryptoSetup = assessCryptoSetup(signal);
+      signal.cryptoOpportunityLane = signal.cryptoSetup.eligible ? signal.cryptoSetup.route : 'EARLY_DISCOVERY';
+      signal.stopPrice = signal.cryptoSetup.eligible ? signal.cryptoSetup.stopPrice : null;
+      signal.cryptoDerivativesContext = signal.cryptoSetup.derivatives;
+      const gate = cryptoSetupGate(signal);
+      signal.cryptoSetupGate = { approved: gate.approved, reasons: gate.reasons };
+      signal.missingEvidenceReasons = [...new Set([...(signal.missingEvidenceReasons || []), ...gate.reasons])];
+      // A measured continuation can qualify despite an intentionally low early-D.
+      const continuation = signal.cryptoSetup.eligible;
+      const q = signal.cryptoInstitutionalQualification;
+      const approved = gate.approved && q?.dataPass && q?.entryQualityPass && q?.liquidityPass && q?.macroPass &&
+        (q?.discoveryPass && q?.institutionalStructurePass || continuation && q?.cryptoTrapRiskScore <= 60) && !signal.newsRisk;
+      Object.assign(signal, { qualifiedToBuy: Boolean(approved), autoTradeApproved: Boolean(approved), approved: Boolean(approved),
+        backendApproved: Boolean(approved), decisionLevel: approved ? 'Auto-Trade Approved' : 'Watchlist' });
+    }
+    // Depth is needed only for actionable setups; keep routine provider load bounded.
+    const depthSymbols = results.filter(s => s.cryptoSetup?.eligible).sort((a, b) => b.cryptoSetup.score - a.cryptoSetup.score)
+      .slice(0, 20).map(s => s.symbol);
+    const books = typeof getCryptoOrderbooks === 'function' && depthSymbols.length
+      ? await getCryptoOrderbooks(depthSymbols).catch(() => []) : [];
+    for (const signal of results) signal.cryptoOrderbook = books.find(b => b.symbol === signal.symbol) || null;
     console.log("CRYPTO SCAN DEBUG", {
       totalCryptoAssets: symbols.length,
       usdPairs: symbols.filter((s) => String(s || "").endsWith("/USD")).length,

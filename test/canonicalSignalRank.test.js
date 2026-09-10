@@ -8,6 +8,12 @@ import {
   isCryptoSignal,
 } from "../scoring/canonicalSignalRank.js";
 
+test('unscored positive movers rank before larger negative moves without inventing F', () => {
+  const rows = [{ symbol: 'DROP/USD', percentChange: -30, cryptoDiscoveryScore: 60 },
+    { symbol: 'RISE/USD', percentChange: 4, cryptoDiscoveryScore: 60 }].sort(compareCanonicalSignals);
+  assert.equal(rows[0].symbol, 'RISE/USD'); assert.equal(getCanonicalFinalScore(rows[0]), null);
+});
+
 test("explicit unavailable F wins over stale nested positive evidence", () => {
   assert.equal(getCanonicalFinalScore({ symbol: "AAPL", stockDecisionScore: 85,
     stockDecisionScoreAvailable: false, stockDecisionEvidence: { coreEvidencePass: true } }), null);

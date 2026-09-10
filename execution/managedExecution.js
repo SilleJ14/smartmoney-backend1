@@ -117,6 +117,15 @@ export function createManagedExecution({ state, persist, request, getManagedSymb
   }
   function submitting(payload, options, position) {
     if (payload.side === 'sell') track(payload, position, options.reason || 'MANUAL_OR_AI_EXIT');
+    if (payload.side === 'buy' && isCrypto(payload.symbol) && options.cryptoTradePlan) {
+      ledger.buyPlans ||= {};
+      if (Object.keys(ledger.buyPlans).length >= 64 && !ledger.buyPlans[key(payload.symbol)]) throw new Error('Crypto protection plan capacity reached');
+      const previous = ledger.buyPlans[key(payload.symbol)];
+      ledger.buyPlans[key(payload.symbol)] = { ...options.cryptoTradePlan,
+        stopPrice: Math.max(previous?.stopPrice || 0, options.cryptoTradePlan.stopPrice),
+        clientId: payload.client_order_id, symbol: payload.symbol };
+      save(); // Durable before POST, including uncertain/partial fills.
+    }
   }
   async function submitted({ payload, result }) {
     if (payload.side === 'sell') {
@@ -150,7 +159,9 @@ export function createManagedExecution({ state, persist, request, getManagedSymb
     const distance = Math.max(6, Math.abs(Number(config.stopLossPercent) || 2), Math.abs(Number(config.liveHardStopPercent) || 3.5));
     if (!(distance < 100)) throw new Error('Invalid protective stop distance');
     const oldStop = Math.max(0, ...rows.map(r => Number(r.stopPrice) || 0));
-    const rawStop = Math.max(oldStop, Number(position.avg_entry_price) * (1 - distance / 100));
+    const planStop = crypto ? Number(ledger.buyPlans?.[key(symbol)]?.stopPrice || 0) : 0;
+    if (!Number.isFinite(planStop) || planStop < 0) throw new Error('Invalid persisted crypto protective plan');
+    const rawStop = Math.max(oldStop, Number(position.avg_entry_price) * (1 - distance / 100), planStop);
     if (crypto && (!increments.has(symbol) || now() - increments.get(symbol).at > 3600000)) {
       const asset = await request(`/v2/assets/${encodeURIComponent(symbol)}`);
       if (increments.size >= 64) increments.delete(increments.keys().next().value);
@@ -204,6 +215,7 @@ export function createManagedExecution({ state, persist, request, getManagedSymb
         onFlat({ ...total, profitPercent: (total.proceeds / total.cost - 1) * 100,
           exitPrice: total.proceeds / total.qty, entryPrice: total.cost / total.qty, fillConfirmed: true });
         delete ledger.realized[symbol];
+        if (ledger.buyPlans) delete ledger.buyPlans[symbol];
         save();
       }
       for (const position of current) if (managed.has(key(position.symbol)) && !uncertainSymbols.has(key(position.symbol))) {

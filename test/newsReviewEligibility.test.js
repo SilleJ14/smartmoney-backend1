@@ -44,3 +44,11 @@ test('shortlist remains selective and never returns a substitute execution score
   const result = evaluateNewsReviewEligibility(fixture());
   assert.deepEqual(Object.keys(result).sort(), ['eligible', 'reason']);
 });
+
+test('a measured positive watch candidate gets risk research without lifting its buy block', () => {
+  const quote = { ...fixture(), volume: 1000000, percentChange: 2, blockBuying: true };
+  const before = structuredClone(quote);
+  assert.equal(evaluateNewsReviewEligibility(quote, { discoveryOnly: true }).eligible, true);
+  assert.deepEqual(quote, before);
+  assert.equal(calculateEntryQualityScore(quote).approved, false);
+});

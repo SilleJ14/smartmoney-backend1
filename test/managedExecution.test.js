@@ -51,6 +51,17 @@ test('crypto uses supported GTC stop-limit protection', async () => {
   const stop = [...f.orders.values()][0]; assert.equal(stop.type, 'stop_limit');
   assert.equal(stop.time_in_force, 'gtc'); assert.ok(Number(stop.limit_price) < Number(stop.stop_price));
 });
+test('a verified crypto structural stop is durable before submission and protects actual fills after restart', async () => {
+  const f = fixture({ symbol: 'BTCUSD', qty: 0 });
+  f.life.submitting({ side: 'buy', symbol: 'BTCUSD', client_order_id: 'fixture-buy' }, {
+    cryptoTradePlan: { stopPrice: 98, targetPrice: 105, source: 'CRYPTO_SETUP_V1' },
+  });
+  assert.equal(f.snapshots.at(-1).managedExecution.buyPlans.BTCUSD.stopPrice, 98);
+  f.positions([{ symbol: 'BTCUSD', qty: '.1', avg_entry_price: '100', current_price: '101' }]);
+  await f.build().reconcile();
+  assert.equal([...f.orders.values()][0].stop_price, '98');
+  assert.equal([...f.orders.values()][0].qty, '0.1');
+});
 test('never protects positions outside the managed universe', async () => {
   const f = fixture({ managed: [] }); await f.life.reconcile(); assert.equal(f.orders.size, 0);
 });

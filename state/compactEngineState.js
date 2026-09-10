@@ -18,6 +18,7 @@ const CURRENT_SIGNAL_COLLECTION_KEYS = new Set([
   "topCryptoSignals",
   "fastRunnerCandidates",
   "quickInstitutionalCandidates",
+  "earlyAssessedStockSignals",
 ]);
 
 function removeDuplicatedSignalBars(signal = {}) {

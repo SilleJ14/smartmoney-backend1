@@ -1,4 +1,5 @@
 import test from "node:test";
+import { cryptoSetupEvidence } from './fixtures/cryptoSetupFixture.js';
 import assert from "node:assert/strict";
 import {
   createAutoBuyStrategies,
@@ -124,6 +125,7 @@ test("crypto auto-buy fails closed when spread availability has no measurement",
   });
 
   await strategies.autoBuyCryptoSignals([{
+    ...cryptoSetupEvidence(),
     symbol: "BTC/USD",
     score: 90,
     masterFinalScore: 90,
@@ -294,6 +296,7 @@ test("crypto auto-buy accepts Final Decision 65 with complete evidence and a nar
     symbol: "BTC/USD",
     score: 65,
     masterFinalScore: 65,
+    ...cryptoSetupEvidence(),
     finalApprovedTradeAmount: 25,
     recommendedTradeAmount: 25,
     finalTradeAmount: 25,

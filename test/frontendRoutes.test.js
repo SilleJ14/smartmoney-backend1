@@ -48,6 +48,21 @@ test('frontend signals include discovery-only early movers before full scoring',
   assert.equal(response.body.approvedCount, 0);
 });
 
+test('completed early evidence replaces raw placeholders through the real frontend route', async () => {
+  const scored = { symbol: 'EARLY', price: 10, percentChange: 2, analysisUpdatedAt: new Date().toISOString(),
+    rawEarlyMover: false, stockDecisionScore: 72, stockDecisionScoreAvailable: true,
+    stockDecisionEvidence: { analysisEvidencePass: true, coreEvidencePass: false },
+    discoveryScore: 80, discoveryScoreAvailable: true, entryQualityScore: 65, entryQualityScoreAvailable: true,
+    approved: false, backendApproved: false, autoTradeApproved: false, qualifiedToBuy: false };
+  const api = createHarness({ getState: () => ({ liveEarlyMoverSymbols: ['EARLY'],
+    earlyAssessedStockSignals: [scored], liveQuoteCache: { EARLY: { price: 10, previousClose: 9.8 } } }) });
+  const response = await api.invoke('/frontend/signals');
+  assert.equal(response.body.signals.length, 1);
+  assert.equal(response.body.signals[0].stockDecisionScore, 72);
+  assert.equal(response.body.approvedCount, 0);
+  assert.equal(response.body.watchCount, 1);
+});
+
 test("frontend AI feed includes independent market news when no signal candidates exist", async () => {
   const api = createHarness({
     getMarketNewsFeed: async () => ({

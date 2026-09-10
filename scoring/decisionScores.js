@@ -1,6 +1,7 @@
 import { isUsStockMarketSessionDayKey } from "../utils/usMarketCalendar.js";
 import { isLiveQuoteSource } from "../live/liveQuoteCache.js";
 import { hasExplicitTradeApproval } from "./canonicalSignalRank.js";
+import { assessContinuationSetup } from './continuationSetup.js';
 
 const clamp = (value) => Math.max(0, Math.min(100, Number(value) || 0));
 const newYorkDayFormatter = new Intl.DateTimeFormat("en-CA", {
@@ -712,6 +713,7 @@ export function calculateEntryQualityScore(signal = {}) {
     ...card,
     approved,
     newsRiskRequired,
+    missingCriticalEvidence,
     spreadPercent: measuredSpread,
     spreadSource: spreadEvidence.source,
     spreadPenalty: Number(spreadPenalty.toFixed(2)),
@@ -813,6 +815,8 @@ export function calculateMultiDayContinuationScore(signal = {}, { now = Date.now
 
 export function buildStockDecisionScore(signal = {}) {
   const discovery = signal.discoveryScorecard || calculateEarlyDiscoveryScore(signal);
+  const continuationSetup = assessContinuationSetup(signal);
+  const useContinuation = signal.discoveryLane === 'MEASURED_CONTINUATION' && continuationSetup.eligible;
   const entry = signal.entryQualityScorecard || calculateEntryQualityScore(signal);
   const contextScore = firstFinite(
     signal.contextScore,
@@ -887,7 +891,8 @@ export function buildStockDecisionScore(signal = {}) {
     Object.entries(learnedWeights).map(([name, value]) => [name, Number((value / learnedWeightTotal).toFixed(6))])
   );
   const components = [
-    component("discovery", discovery.score, effectiveWeights.discovery, "discoveryScorecard", true),
+    component("discovery", useContinuation ? continuationSetup.score : discovery.score, effectiveWeights.discovery,
+      useContinuation ? 'measured_continuation_setup' : 'discoveryScorecard', true),
     component("entry", entry.score, effectiveWeights.entry, "entryQualityScorecard", true),
     component("marketContext", contextScore, effectiveWeights.marketContext, "macro_sector_context", contextScore !== undefined),
     component("riskPortfolio", riskPortfolioScore, effectiveWeights.riskPortfolio, riskPortfolioSource, riskPortfolioScore !== undefined),
@@ -927,9 +932,14 @@ export function buildStockDecisionScore(signal = {}) {
   return {
     ...card,
     coreEvidencePass: missingCriticalEvidence.length === 0,
+    analysisEvidencePass: missingCriticalEvidence.every(reason => reason === 'approvedEntry') &&
+      (entry.missingCriticalEvidence || []).length === 0 &&
+      !entry.gates?.includes('NEWS_RISK_UNAVAILABLE'),
     missingCriticalEvidence,
     missingEvidencePenalty,
     canonicalDiscoveryPass,
+    opportunityBasis: useContinuation ? 'MEASURED_CONTINUATION' : 'EARLY_DISCOVERY',
+    continuationSetup,
     effectiveWeights,
     reinforcementWeightsApplied: Object.keys(reinforcementWeights).length > 0,
     reinforcementLearningActive,

@@ -1,4 +1,5 @@
 import test from "node:test";
+import { cryptoSetupEvidence } from './fixtures/cryptoSetupFixture.js';
 import assert from "node:assert/strict";
 import fs from "node:fs";
 import os from "node:os";
@@ -22,7 +23,7 @@ import { createAutoBuyStrategies } from "../strategies/autoBuyStrategies.js";
 
 const now = Date.now();
 const iso = (time = now) => new Date(time).toISOString();
-const crypto = (overrides = {}) => ({ symbol: "BTC/USD", price: 100, current: 100,
+const crypto = (overrides = {}) => ({ symbol: "BTC/USD", price: 100, current: 100, ...cryptoSetupEvidence(100, now),
   cryptoDiscoveryScorecard: { score: 90, coverage: 1, calculatedAt: iso(), extension: { alreadyExtended: false } },
   newsCatalyst: { dataAvailable: true, riskDetected: false }, barsFound: 30, windowDollarVolume: 1_000_000,
   bid: 99.95, ask: 100.05, spreadAvailable: true, priceIsLive: true,

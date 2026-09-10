@@ -1,4 +1,6 @@
 import { calculateLossBudgetSizing } from './lossBudgetSizing.js';
+import { evaluateCryptoTradePlan } from '../scoring/cryptoTradePlan.js';
+import { assessCryptoOrderLiquidity } from '../scoring/cryptoOrderLiquidity.js';
 
 export function calculateDynamicTradeAmount({ account = {}, positions = [], signalScore = 80, config = {}, compoundingState = {}, getExposure,
   signal = {}, dailyStartEquity, pendingNotional = 0 }) {
@@ -18,7 +20,17 @@ export function calculateDynamicTradeAmount({ account = {}, positions = [], sign
   const fraction = signalScore >= 90 ? 0.5 : signalScore >= 85 ? 0.4 : signalScore >= 78 ? 0.3 : signalScore >= 72 ? 0.2 : signalScore >= 65 ? 0.15 : 0;
   if (!fraction) return 0;
   const lossBudget = calculateLossBudgetSizing({ account, positions, config, signal, dailyStartEquity, pendingNotional });
-  const amount = Math.floor(Math.min(Math.max(minimum, available * fraction), available, lossBudget.maxNotional) * 100) / 100;
+  let amount = Math.floor(Math.min(Math.max(minimum, available * fraction), available, lossBudget.maxNotional) * 100) / 100;
+  if (signal.scoringModelVersion === 'SMARTMONEY_CRYPTO_DECISION_V4') {
+    const existing = positions.some(p => String(p.symbol).replaceAll('/', '') === String(signal.symbol).replaceAll('/', ''));
+    // A starter is half of the allocation, not half of the whole account.
+    if (!existing) amount = Math.min(amount, Math.max(minimum, Math.floor(amount * .5 * 100) / 100));
+    const depth = assessCryptoOrderLiquidity(signal.cryptoOrderbook, { symbol: signal.symbol, notional: Math.max(minimum, amount) });
+    amount = Math.min(amount, depth.maxNotional);
+    const plan = evaluateCryptoTradePlan(signal, { notional: amount });
+    signal.cryptoTradePlan = plan;
+    if (!plan.approved) return 0;
+  }
   // Never round a risk-constrained amount UP to the broker minimum.
   return lossBudget.approved && amount >= minimum ? amount : 0;
 }

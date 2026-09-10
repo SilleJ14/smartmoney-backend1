@@ -5,7 +5,8 @@ import { revalidateCandidate } from './scoring/revalidateCandidate.js';
 import { createSafetyJournal, readSafetyJournal } from './state/safetyJournal.js';
 import { createOrderRiskReservations, outstandingOrderNotional } from './risk/orderRiskReservations.js';
 import { createManagedExecution } from './execution/managedExecution.js';
-import { createAssetQuotePump } from './market-data/assetQuotePump.js';
+import { createQuoteRefreshCoordinator } from './market-data/quoteRefreshCoordinator.js';
+import { evaluateCryptoTradePlan } from './scoring/cryptoTradePlan.js';
 import { createCryptoIntradayBars } from './market-data/cryptoIntradayBars.js';
 import { isUsStockMarketSessionDayKey } from "./utils/usMarketCalendar.js";
 import { readBoundedResponseText, readBoundedResponseJson, cancelResponseBody } from "./utils/boundedResponse.js";
@@ -15,7 +16,11 @@ import { ingestMixedAssetDiscoveryOutcomes } from "./scoring/mixedAssetDiscovery
 import { takeExplorationWindow, createFairReviewQueue } from "./discovery/fairExploration.js";
 import { createStockQuoteBatch } from "./market-data/stockQuoteBatch.js";
 import { providerDailyBar } from "./discovery/providerDailyBar.js";
+import { quietDiscoverySessionDay } from './discovery/quietDiscoverySession.js';
+import { createEarlyCandidateReassessment, freshEarlyAssessments } from './discovery/earlyCandidateReassessment.js';
 import { createTradierMarketData } from "./providers/tradierMarketData.js";
+import { createTradierQuoteStream } from "./providers/tradierQuoteStream.js";
+import TradierWebSocket from 'ws';
 import cors from "cors";
 import dotenv from "dotenv";
 import path from "path";
@@ -1246,9 +1251,7 @@ let polygonSocketReconnectTimer = null;
 let polygonSubscribedSymbols = new Set();
 let polygonSocketReconnectAttempts = 0;
 let polygonAuthenticated = false;
-let activeCandidateQuoteRefreshInFlight = null;
-const activeCandidateAssetPump = createAssetQuotePump();
-let activeCandidateQuoteRefreshLastStartedAt = 0;
+let activeCandidateQuoteCoordinator = null;
 let activeCandidateQuoteRefreshCursor = 0;
 let activeCandidateQuoteRefreshState = {
   ok: true,
@@ -3068,6 +3071,16 @@ function buildBackendHealthPayload(clock = {}) {
     mode: TRADING_MODE,
     effectiveMode: engineState.effectiveMode,
     autoTradingEnabled,
+    autopilot: {
+      enabled: autoTradingEnabled,
+      entriesPaused: !autoTradingEnabled || emergencyStopActive || engineState.dailyLossLocked === true || engineState.profitLocked === true,
+      pauseReason: emergencyStopActive ? 'EMERGENCY_STOP' : !autoTradingEnabled ? 'OWNER_DISABLED'
+        : engineState.dailyLossLocked ? 'DAILY_LOSS_LOCK' : engineState.profitLocked ? 'PROFIT_LOCK' : null,
+      savedEnabled: typeof runtimeConfig.autoTradingEnabled === 'boolean' ? runtimeConfig.autoTradingEnabled : null,
+      runtimeConfigPersisted: fs.existsSync(CONFIG_FILE),
+      externalDataDirectoryConfigured: Boolean(process.env.DATA_DIR && path.resolve(DATA_DIR) !== process.cwd()),
+      persistenceNote: 'Restart retention requires the configured data directory to survive host replacement.',
+    },
     market: {
       marketOpen: Boolean(clock?.is_open),
       marketSession: getMarketSession(clock),
@@ -3144,7 +3157,7 @@ function buildBackendHealthPayload(clock = {}) {
         hasLiveKey: Boolean(process.env.ALPACA_LIVE_KEY),
         hasLiveSecret: Boolean(process.env.ALPACA_LIVE_SECRET),
       },
-      tradier: tradierMarketData.getStatus(),
+      tradier: { ...tradierMarketData.getStatus(), stream: tradierQuoteStream.getStatus() },
     },
     safety: {
       dailyLossLocked: Boolean(engineState.dailyLossLocked),
@@ -8451,7 +8464,7 @@ function calculateAiPortfolioManagerDecision(
           getDynamicTradeAmount(
             account,
             managedPositions,
-            Number(signal.score || signal.institutionalScore || 0)
+            Number(signal.score || signal.institutionalScore || 0), signal
           ),
         concentrationTier: "LEGACY_SIZING",
         concentrationMultiplier: 1,
@@ -13735,6 +13748,21 @@ const preTradeRiskGuard = {
       if (!(notional > 0) || notional > availableApproval + 0.005) throw new Error(`Order exceeds remaining approved AI size ($${Math.max(0, availableApproval).toFixed(2)})`);
       options.riskDecisionVersion = candidate.decisionUpdatedAt;
     }
+    if (cryptoAsset) {
+      // Every crypto buy path (starter, manual, rotation and scale-in) reaches
+      // this final guard. Never trust a cached depth/sizing approval.
+      const books = await alpacaCryptoMarketData.getLatestOrderbooks([symbol]);
+      sizingSignal.cryptoOrderbook = books.find(b => b.symbol === symbol) || null;
+      const plan = evaluateCryptoTradePlan(sizingSignal, { notional });
+      if (!plan.approved) throw new Error(`Crypto trade plan rejected: ${plan.reasons.join('; ')}`);
+      const existing = positions.find(p => normalizeSymbol(p.symbol) === symbol);
+      if (existing && !(referencePrice > Number(existing.avg_entry_price) * 1.005)) {
+        throw new Error('Crypto scale-in requires price confirmation above the existing entry');
+      }
+      options.cryptoTradePlan = { stopPrice: plan.economics.stopPrice, targetPrice: plan.economics.targetPrice,
+        targetBasis: plan.economics.targetBasis, checkedAt: new Date().toISOString(), source: 'CRYPTO_SETUP_V1' };
+      sizingSignal.stopPrice = plan.economics.stopPrice;
+    }
     const dateKey = getTodayKeyET();
     engineState.liveTradeLimitState = ensureLiveTradeLimitDay(engineState.liveTradeLimitState, dateKey);
     const positionsForLimitGate = positions.map((position) => ({
@@ -13817,6 +13845,10 @@ const preTradeRiskGuard = {
     };
     const result = assertPreTradeRisk(riskInput);
     return { ...result, assertCurrent() {
+      if (cryptoAsset) {
+        const plan = evaluateCryptoTradePlan(sizingSignal, { notional });
+        if (!plan.approved) throw new Error(`Crypto evidence expired before submission: ${plan.reasons.join('; ')}`);
+      }
       const elapsed = (Date.now() - Date.parse(result.checkedAt)) / 1000;
       assertPreTradeRisk({ ...riskInput, context: { ...riskInput.context,
         quoteAgeSeconds: riskInput.context.quoteAgeSeconds + elapsed,
@@ -14339,6 +14371,12 @@ async function getAlpacaLatestStockQuotes(symbols = [], options = {}) {
 }
 
 const tradierMarketData = createTradierMarketData();
+const tradierQuoteStream = createTradierQuoteStream({
+  apiKey: process.env.TRADIER_API_KEY, WebSocketImpl: TradierWebSocket,
+  sandbox: process.env.TRADIER_SANDBOX === 'true',
+  enabled: process.env.ENABLE_TRADIER_STREAM !== 'false',
+  onQuote: quote => updateQuoteCache(quote.symbol, quote),
+});
 const collectStockMarketQuotes = createStockQuoteBatch({
   primary: (symbols) => tradierMarketData.getLatestQuotes(symbols),
   fallback: getAlpacaLatestStockQuotes,
@@ -17947,6 +17985,7 @@ const { scoreCrypto, calculateCryptoInstitutionalQualification, scanCryptoMarket
   getCryptoLatestQuote,
   getCryptoLatestQuotes: (symbols) =>
     alpacaCryptoMarketData.getLatestQuotes(symbols),
+  getCryptoOrderbooks: symbols => alpacaCryptoMarketData.getLatestOrderbooks(symbols),
   getFreshLiveCryptoQuote,
   isCrypto,
   recordSkippedSymbol,
@@ -17969,6 +18008,7 @@ const cryptoIntradayBars = createCryptoIntradayBars({
   getRecentBars: getCryptoRecentBars,
   normalizeSymbol,
   maxSymbols: CRYPTO_DISCOVERY_CACHE_MAX_SYMBOLS,
+  historyLimit: 220,
 });
 async function getCryptoDailyBarsForDiscovery(symbol) {
   const clean = normalizeSymbol(symbol);
@@ -18772,18 +18812,16 @@ function getEasternSessionClock() {
 }
 
 async function runBoundedQuietDiscoveryScan({ force = false } = {}) {
-  const dateKey = getTodayKeyET();
+  const clock = getEasternSessionClock();
+  const dateKey = quietDiscoverySessionDay(getTodayKeyET(), clock.hour, clock.minute);
+  if (!dateKey) return { ok: false, skipped: true, reason: 'Completed discovery session unavailable.' };
   const prior = engineState.boundedQuietDiscoveryState;
   const warming = prior?.dateKey === dateKey && prior?.ok === true;
   if (warming && (!prior.historicalWarmupRemaining ||
       Date.now() - Date.parse(prior.updatedAt) < 15 * 60000)) {
     return prior;
   }
-  const clock = getEasternSessionClock();
-  const afterClose = clock.hour > 16 || (clock.hour === 16 && clock.minute >= 10);
-  if (!force && (!afterClose || !isUsStockMarketSessionDayKey(dateKey))) {
-    return { ok: false, skipped: true, dateKey, reason: "Quiet discovery runs once after 4:10 PM ET on trading weekdays." };
-  }
+  // Bootstrap on premarket/restart, retaining daily deduplication and budgets.
   const memoryGuard = buildMemoryGuardSnapshot();
   engineState.memoryGuardState = {
     ...memoryGuard,
@@ -19145,6 +19183,7 @@ async function getTopMovers() {
   }
   const combinedSymbols = [
     ...new Set([
+      ...freshEarlyAssessments(engineState.earlyAssessedStockSignals).map(row => row.symbol),
       ...moverSymbols,
       ...repeatWatchlistSymbols,
       ...coolingOffRunnerSymbols,
@@ -19214,6 +19253,8 @@ function narrowScanUniverse(symbols = []) {
   const requestedMaxSymbolsToScan = Number(process.env.MAX_SYMBOLS_TO_SCAN || 60);
   const maxSymbolsToScan = resolveBoundedScanLimit(requestedMaxSymbolsToScan);
   const guaranteedEarlySymbols = [
+    ...freshEarlyAssessments(engineState.earlyAssessedStockSignals)
+      .filter(row => getCanonicalFinalScore(row) !== null).sort(compareCanonicalSignals).slice(0, 10).map(row => row.symbol),
     ...(engineState.liveEarlyMoverSymbols || []),
     ...(engineState.preMoverDiscoveryState?.topCandidates || []).map((item) => item.symbol || item),
     ...Object.values(engineState.preMoverDiscoveryMemory || {}).map((item) => item.symbol || item),
@@ -19287,7 +19328,7 @@ function getBotEntryScores() {
   }
   return engineState.aiEntryScores;
 }
-const { calculateInstitutionalScores, passesFilters, scoreStock, scanMarket } = createStockMarketStrategy({
+const { calculateInstitutionalScores, passesFilters, scoreStock, scanMarket, analyzeCandidates } = createStockMarketStrategy({
   recordCandidateEvent: event => candidateTraceStore.record(event),
   CONFIG,
   activeScanLocks,
@@ -19877,7 +19918,7 @@ async function checkDailyLossAndProfitLock(account, marketOpen) {
   ) {
     engineState.dailyLossLocked = true;
     saveEngineState("DAILY_LOSS_LOCKED");
-    autoTradingEnabled = false;
+    // A daily risk pause is not a change to the owner's saved Autopilot intent.
     recordOrder("DAILY_LOSS_LOCKED", "ACCOUNT", {
       equity,
       dailyStart,
@@ -19913,7 +19954,7 @@ async function checkDailyLossAndProfitLock(account, marketOpen) {
   ) {
     engineState.profitLocked = true;
     saveEngineState("PROFIT_LOCKED");
-    autoTradingEnabled = false;
+    // Preserve Autopilot ON; the profit lock still blocks buys and manages exits.
     recordOrder("PROFIT_LOCK_HIT", "ACCOUNT", {
       equity,
       dailyStart,
@@ -23560,6 +23601,9 @@ function hydrateCryptoExecutionCandidate(candidate = {}) {
   return {
     ...candidate,
     ...finalized,
+    ...(Date.parse(candidate.cryptoDiscoveryScorecard?.calculatedAt || '') >= Date.parse(finalized.cryptoDiscoveryScorecard?.calculatedAt || '')
+      ? { chartBars: candidate.chartBars, cryptoSetup: candidate.cryptoSetup, btcMarketContext: candidate.btcMarketContext,
+        cryptoOrderbook: candidate.cryptoOrderbook, scoringModelVersion: candidate.scoringModelVersion } : {}),
     symbol,
     assetClass: "crypto",
     asset_class: "crypto",
@@ -27222,7 +27266,7 @@ function calculateCentralAutonomousDecisionCore(stockSignals = [], cryptoSignals
         reason: "SEPARATED_STOCK_DECISION_FAMILIES",
       };
     const decisionScoreComponents = isCryptoSignal
-      ? archetypeDecision.decisionComponents.map((component) => ({
+      ? cryptoDecisionEvidence.components.map((component) => ({
         ...component,
         semanticName:
           cryptoDecisionEvidence?.componentsByName?.[component.name]?.semanticName ||
@@ -27235,7 +27279,7 @@ function calculateCentralAutonomousDecisionCore(stockSignals = [], cryptoSignals
         .map((component) => component.semanticName)
       : archetypeDecision.missingComponents;
     const finalDecisionScore =
-      archetypeDecision.finalDecisionScore;
+      isCryptoSignal ? Math.min(cryptoDecisionEvidence.score, archetypeDecision.finalDecisionScore) : archetypeDecision.finalDecisionScore;
     const contradictionState =
       detectCentralCoreContradictions({
         signal,
@@ -27368,10 +27412,10 @@ function calculateCentralAutonomousDecisionCore(stockSignals = [], cryptoSignals
       scoreCoverage: archetypeDecision.scoreCoverage,
       missingScoreComponents,
       scoreComponents: decisionScoreComponents,
-      cryptoDecisionScore: isCryptoSignal && !cryptoEvidenceBlock
+      cryptoDecisionScore: isCryptoSignal && cryptoDecisionEvidence.analysisEvidencePass === true
         ? finalDecisionScore
         : null,
-      provisionalCryptoDecisionScore: isCryptoSignal && cryptoEvidenceBlock
+      provisionalCryptoDecisionScore: isCryptoSignal && cryptoDecisionEvidence.analysisEvidencePass !== true
         ? finalDecisionScore
         : null,
       stockDecisionScore: isCryptoSignal ? null : finalDecisionScore,
@@ -27391,6 +27435,7 @@ function calculateCentralAutonomousDecisionCore(stockSignals = [], cryptoSignals
         ? null
         : {
           coreEvidencePass: stockDecisionEvidence.coreEvidencePass,
+          analysisEvidencePass: stockDecisionEvidence.analysisEvidencePass,
           missingCriticalEvidence: stockDecisionEvidence.missingCriticalEvidence,
           discoveryCoverage: stockDecisionEvidence.discovery.coverage,
           entryCoverage: stockDecisionEvidence.entry.coverage,
@@ -27404,6 +27449,7 @@ function calculateCentralAutonomousDecisionCore(stockSignals = [], cryptoSignals
           coverage: cryptoDecisionEvidence.coverage,
           scoreStatus: cryptoDecisionEvidence.scoreStatus,
           coreEvidencePass: cryptoDecisionEvidence.coreEvidencePass,
+          analysisEvidencePass: cryptoDecisionEvidence.analysisEvidencePass,
           missingCriticalEvidence: cryptoDecisionEvidence.missingCriticalEvidence,
           componentsByName: cryptoDecisionEvidence.componentsByName,
           barsFound: cryptoDecisionEvidence.barsFound,
@@ -27411,6 +27457,9 @@ function calculateCentralAutonomousDecisionCore(stockSignals = [], cryptoSignals
           liquidity: cryptoDecisionEvidence.liquidity,
           quoteFreshness: cryptoDecisionEvidence.quoteFreshness,
           contextObservations: cryptoDecisionEvidence.contextObservations,
+          setup: cryptoDecisionEvidence.setup,
+          setupGate: cryptoDecisionEvidence.setupGate,
+          opportunityBasis: cryptoDecisionEvidence.opportunityBasis,
         }
         : null,
       baseScore,
@@ -28035,6 +28084,7 @@ function collectFrontendSignalSnapshot() {
   const orchestration =
     latestStatus?.phase20AutonomousOrchestration || {};
   return dedupeSignalsByCanonicalAuthority([
+    ...freshEarlyAssessments(engineState.earlyAssessedStockSignals),
     ...buildRawEarlyMoverCandidates({ state: engineState, normalizeSymbol }),
     ...(Array.isArray(engineState.topStockSignals) ? engineState.topStockSignals : []),
     ...(Array.isArray(engineState.lastStockSignals) ? engineState.lastStockSignals : []),
@@ -28262,6 +28312,7 @@ function mergeLiveQuoteIntoSignal(signal = {}) {
 function buildLiveSignalPushPayload() {
   const stockSignals = getTopSignals(
     [
+      ...freshEarlyAssessments(engineState.earlyAssessedStockSignals),
       ...buildRawEarlyMoverCandidates({ state: engineState, normalizeSymbol }),
       ...(engineState.lastStockSignals || []),
       ...(engineState.fastRunnerCandidates || []),
@@ -31235,9 +31286,30 @@ function requestFastRunnerRefresh() {
     console.error("FAST_RUNNER_REFRESH_FAILED", engineState.fastRunnerRefreshError.message);
   });
 }
+const earlyCandidateReassessment = createEarlyCandidateReassessment({
+  analyze: symbols => analyzeCandidates(symbols),
+  canRun: () => !engineState.running && !activeScanLocks.scanMarket &&
+    !buildMemoryGuardSnapshot().shouldPauseHeavyWork &&
+    canRefreshStockQuotes({ marketOpen: engineState.marketOpen === true,
+      marketSession: getMarketSession({ is_open: engineState.marketOpen === true }) }),
+  trace: event => candidateTraceStore.record(event),
+  publish: rows => {
+    const completed = new Map(freshEarlyAssessments(engineState.earlyAssessedStockSignals)
+      .map(row => [row.symbol, row]));
+    for (const row of rows) completed.set(row.symbol, row);
+    engineState.earlyAssessedStockSignals = [...completed.values()].slice(-60);
+  },
+});
 function startLiveScheduler() {
   if (liveSchedulerTimer) return engineState.liveSchedulerState;
   liveSchedulerTimer = setInterval(() => {
+    void runLiveScheduledTask('reassessEarlyCandidates', 15000, () => earlyCandidateReassessment.run([
+      ...(engineState.boundedQuietDiscoveryState?.liveSymbols || []),
+      ...(engineState.liveEarlyMoverSymbols || []),
+      ...(engineState.lastStockSignals || []).filter(row => getCanonicalFinalScore(row) === null || row.setupRevalidationRequired),
+    ]));
+    void runLiveScheduledTask('refreshTradierQuoteStream', 5000,
+      () => tradierQuoteStream.refresh(getActiveCandidateQuoteRefreshSymbols(ACTIVE_CANDIDATE_QUOTE_REFRESH_LIMIT, false).filter(s => !isCrypto(s))));
     void runLiveScheduledTask('reconcileManagedExecution', 5000, () => managedExecution.reconcile());
     void runLiveScheduledTask(
       "cleanupLiveQuoteCache",
@@ -31427,7 +31499,7 @@ function getProviderQuoteTimestampMs(quote = {}) {
 }
 
 function getActiveCandidateQuoteRefreshSymbols(
-  limit = ACTIVE_CANDIDATE_QUOTE_REFRESH_LIMIT
+  limit = ACTIVE_CANDIDATE_QUOTE_REFRESH_LIMIT, advanceCursor = true
 ) {
   const marketSession = getMarketSession({ is_open: engineState.marketOpen === true });
   engineState.marketSession = marketSession;
@@ -31443,6 +31515,7 @@ function getActiveCandidateQuoteRefreshSymbols(
     ...(engineState.fastRunnerCandidates || []).map((item) => ({ ...item, quotePriority: 2500 })),
     ...(engineState.topStockSignals || []),
     ...(engineState.lastStockSignals || []),
+    ...freshEarlyAssessments(engineState.earlyAssessedStockSignals),
     ...(engineState.topCryptoSignals || []),
     ...(engineState.lastCryptoSignals || []),
   ];
@@ -31491,13 +31564,29 @@ function getActiveCandidateQuoteRefreshSymbols(
       rotating[(activeCandidateQuoteRefreshCursor + offset) % rotating.length]
     );
   }
-  if (rotating.length > 0) {
+  if (advanceCursor && rotating.length > 0) {
     activeCandidateQuoteRefreshCursor =
       (activeCandidateQuoteRefreshCursor + rotatingSlots) % rotating.length;
   }
   return selected.map((item) => item.symbol);
 }
 
+async function refreshCryptoExecutionEvidence(symbols) {
+  const candidates = dedupeSignalsByCanonicalAuthority([...(engineState.lastCryptoSignals || []), ...(engineState.topCryptoSignals || [])]);
+  const depthSymbols = candidates.filter(s => symbols.includes(s.symbol) && s.cryptoSetup?.eligible)
+    .sort((a, b) => (getCanonicalFinalScore(b) ?? 0) - (getCanonicalFinalScore(a) ?? 0)).slice(0, 20).map(s => s.symbol);
+  const [quotes, books] = await Promise.all([
+    alpacaCryptoMarketData.getLatestQuotes(symbols),
+    depthSymbols.length ? alpacaCryptoMarketData.getLatestOrderbooks(depthSymbols).catch(() => []) : [],
+  ]);
+  for (const collection of [engineState.lastCryptoSignals, engineState.topCryptoSignals, engineState.lastSignals, engineState.topSignals]) {
+    for (const candidate of collection || []) {
+      const book = books.find(b => b.symbol === candidate.symbol);
+      if (book) candidate.cryptoOrderbook = book;
+    }
+  }
+  return quotes;
+}
 async function refreshActiveCandidateQuotes(symbols = []) {
   const marketSession = getMarketSession({ is_open: engineState.marketOpen === true });
   engineState.marketSession = marketSession;
@@ -31537,26 +31626,20 @@ async function refreshActiveCandidateQuotes(symbols = []) {
         : "No visible candidate symbols were supplied.",
     };
   }
-  if (activeCandidateQuoteRefreshInFlight) {
-    return activeCandidateQuoteRefreshInFlight;
-  }
-  const nowMs = Date.now();
-  if (
-    activeCandidateQuoteRefreshLastStartedAt > 0 &&
-    nowMs - activeCandidateQuoteRefreshLastStartedAt < ACTIVE_CANDIDATE_QUOTE_REFRESH_INTERVAL_MS
-  ) {
-    return {
-      ...activeCandidateQuoteRefreshState,
-      throttled: true,
-      reason: "Visible candidate refresh is within its bounded cooldown.",
-    };
-  }
-  activeCandidateQuoteRefreshLastStartedAt = nowMs;
-  activeCandidateQuoteRefreshInFlight = (async () => {
-    const stockSymbols = staleSymbols.filter((symbol) => !isCrypto(symbol));
-    const cryptoSymbols = staleSymbols.filter((symbol) => isCrypto(symbol));
+  if (!activeCandidateQuoteCoordinator) {
+    activeCandidateQuoteCoordinator = createQuoteRefreshCoordinator({
+      fetchers: { stock: getLatestStockMarketQuotes, crypto: refreshCryptoExecutionEvidence },
+      intervalMs: ACTIVE_CANDIDATE_QUOTE_REFRESH_INTERVAL_MS,
+      maxSymbols: ACTIVE_CANDIDATE_QUOTE_REFRESH_LIMIT,
+      isFresh: symbol => {
+        const age = getLiveQuoteAgeSeconds(symbol);
+        return age !== null && age >= -5 && age <= LIVE_ORDER_MAX_QUOTE_AGE_SECONDS &&
+          isFreshMeasuredSpread(engineState.liveQuoteCache?.[symbol] || {}, { maxAgeSeconds: LIVE_ORDER_MAX_QUOTE_AGE_SECONDS });
+      },
+      onState: state => { activeCandidateQuoteRefreshState = state; },
+      publish: (receivedQuotes = []) => {
     const acceptedSymbols = new Set();
-    const acceptQuotes = (receivedQuotes = []) => {
+    const marketSession = getMarketSession({ is_open: engineState.marketOpen === true });
     for (const quote of receivedQuotes) {
       const symbol = normalizeSymbol(quote?.symbol);
       const incomingTimestamp = getProviderQuoteTimestampMs(quote);
@@ -31590,58 +31673,14 @@ async function refreshActiveCandidateQuotes(symbols = []) {
         };
       if (updateQuoteCache(symbol, enrichedQuote)) acceptedSymbols.add(symbol);
     }
-    };
-    const requests = [];
-    if (stockSymbols.length > 0) {
-      requests.push(
-        activeCandidateAssetPump('stock', () => getLatestStockMarketQuotes(stockSymbols), acceptQuotes)
-      );
-    }
-    if (cryptoSymbols.length > 0) {
-      requests.push(
-        activeCandidateAssetPump('crypto', () => alpacaCryptoMarketData.getLatestQuotes(cryptoSymbols), acceptQuotes)
-      );
-    }
-    let timer;
-    const settled = await Promise.race([Promise.allSettled(requests), new Promise(resolve => {
-      timer = setTimeout(() => resolve([]), 200);
-    })]);
-    clearTimeout(timer);
-    const freshCount = staleSymbols.filter((symbol) => {
-      const cachedQuote = engineState.liveQuoteCache?.[symbol] || {};
-      const ageSeconds = getLiveQuoteAgeSeconds(symbol);
-      return (
-        ageSeconds !== null &&
-        ageSeconds <= LIVE_ORDER_MAX_QUOTE_AGE_SECONDS &&
-        isFreshMeasuredSpread(cachedQuote, {
-          maxAgeSeconds: LIVE_ORDER_MAX_QUOTE_AGE_SECONDS,
-        })
-      );
-    }).length;
-    const failedSymbols = staleSymbols.filter((symbol) => !acceptedSymbols.has(symbol));
-    const errors = settled
-      .filter((result) => result.status === "rejected")
-      .map((result) => String(result.reason?.message || result.reason || "Quote refresh failed"));
-    activeCandidateQuoteRefreshState = {
-      ok: errors.length === 0,
-      pending: settled.length < requests.length,
-      refreshedAt: new Date().toISOString(),
-      requestedCount: staleSymbols.length,
-      refreshedCount: acceptedSymbols.size,
-      freshCount,
-      failedSymbols: failedSymbols.slice(0, ACTIVE_CANDIDATE_QUOTE_REFRESH_LIMIT),
-      errors: errors.slice(0, 2),
-      reason: freshCount > 0
-        ? `Actively refreshed ${freshCount} visible candidate quote${freshCount === 1 ? "" : "s"}.`
-        : "Provider returned no quote within the five-second freshness window.",
-    };
-    return activeCandidateQuoteRefreshState;
-  })();
-  try {
-    return await activeCandidateQuoteRefreshInFlight;
-  } finally {
-    activeCandidateQuoteRefreshInFlight = null;
+    return acceptedSymbols.size;
+      },
+    });
   }
+  return activeCandidateQuoteCoordinator.refresh({
+    stock: staleSymbols.filter(symbol => !isCrypto(symbol)),
+    crypto: staleSymbols.filter(isCrypto),
+  });
 }
 function buildLiveOrderDedupKey(symbol, side, action = "LIVE_ORDER") {
   return `${normalizeSymbol(symbol)}_${String(side || "").toUpperCase()}_${String(action || "").toUpperCase()}`;
@@ -32674,17 +32713,16 @@ registerOperationalControlRoutes(app, {
     profitLocked: engineState.profitLocked,
   }),
   updateControlState: (updates) => {
-    if (typeof updates.emergencyStopActive === "boolean") {
-      emergencyStopActive = updates.emergencyStopActive;
-    }
-    if (typeof updates.autoTradingEnabled === "boolean") {
-      autoTradingEnabled = updates.autoTradingEnabled;
-    }
-    runtimeConfig = saveRuntimeConfig(CONFIG_FILE, {
+    const nextEmergencyStop = typeof updates.emergencyStopActive === "boolean" ? updates.emergencyStopActive : emergencyStopActive;
+    const nextAutoTrading = typeof updates.autoTradingEnabled === "boolean" ? updates.autoTradingEnabled : autoTradingEnabled;
+    const saved = saveRuntimeConfig(CONFIG_FILE, {
       ...runtimeConfig,
-      emergencyStopActive,
-      autoTradingEnabled,
+      emergencyStopActive: nextEmergencyStop,
+      autoTradingEnabled: nextAutoTrading,
     });
+    runtimeConfig = saved;
+    emergencyStopActive = nextEmergencyStop;
+    autoTradingEnabled = nextAutoTrading;
     return { emergencyStopActive, autoTradingEnabled };
   },
   recordOrder,
@@ -32777,18 +32815,23 @@ registerConfigRoutes(app, {
     profitLocked: engineState.profitLocked,
   }),
   resetRuntimeConfig: () => {
-    const preserved = { alpacaLiveKey: runtimeConfig.alpacaLiveKey, alpacaLiveSecret: runtimeConfig.alpacaLiveSecret };
+    const preserved = { alpacaLiveKey: runtimeConfig.alpacaLiveKey, alpacaLiveSecret: runtimeConfig.alpacaLiveSecret,
+      autoTradingEnabled, emergencyStopActive };
     if (fs.existsSync(CONFIG_FILE)) fs.unlinkSync(CONFIG_FILE);
     runtimeConfig = saveRuntimeConfig(CONFIG_FILE, preserved);
   },
   applyPermanentUpdates: (updates) => {
+    const saved = sanitizeRuntimeConfig(saveRuntimeConfig(CONFIG_FILE, {
+      ...runtimeConfig, ...updates,
+      tradingMode: updates.tradingMode ?? TRADING_MODE,
+      tradingModeLocked: updates.tradingModeLocked ?? tradingModeLocked,
+      autoTradingEnabled: updates.autoTradingEnabled ?? autoTradingEnabled,
+    }));
     Object.assign(CONFIG, updates);
     if (updates.autoTradingEnabled !== undefined) autoTradingEnabled = updates.autoTradingEnabled;
     if (updates.tradingModeLocked !== undefined) tradingModeLocked = updates.tradingModeLocked;
     if (updates.tradingMode !== undefined) TRADING_MODE = updates.tradingMode;
-    runtimeConfig = sanitizeRuntimeConfig(saveRuntimeConfig(CONFIG_FILE, {
-      ...runtimeConfig, ...updates, tradingMode: TRADING_MODE, tradingModeLocked, autoTradingEnabled,
-    }));
+    runtimeConfig = saved;
     Object.assign(CONFIG, runtimeConfig);
     CONFIG.minScoreToBuy = Math.max(70, Number(CONFIG.minScoreToBuy || 70));
     applyRuntimeLiveSettings();
@@ -32801,11 +32844,11 @@ registerConfigRoutes(app, {
         LIVE_SCALE_IN_MIN_PROFIT_PERCENT, LIVE_SCALE_IN_MIN_FAST_SCORE } };
   },
   applyApiUpdates: (updates) => {
-    runtimeConfig = sanitizeRuntimeConfig({ ...runtimeConfig, ...updates });
+    const saved = sanitizeRuntimeConfig(saveRuntimeConfig(CONFIG_FILE, { ...runtimeConfig, ...updates }));
+    runtimeConfig = saved;
     if (updates.tradingMode) TRADING_MODE = runtimeConfig.tradingMode = String(updates.tradingMode);
     if (updates.tradingModeLocked !== undefined) tradingModeLocked = runtimeConfig.tradingModeLocked = updates.tradingModeLocked === true || updates.tradingModeLocked === "true";
     if (updates.autoTradingEnabled !== undefined) autoTradingEnabled = runtimeConfig.autoTradingEnabled = updates.autoTradingEnabled === true || updates.autoTradingEnabled === "true";
-    runtimeConfig = sanitizeRuntimeConfig(saveRuntimeConfig(CONFIG_FILE, runtimeConfig));
     Object.assign(CONFIG, runtimeConfig);
     CONFIG.minScoreToBuy = Math.max(70, Number(CONFIG.minScoreToBuy || 70));
     applyRuntimeLiveSettings();
@@ -32837,7 +32880,7 @@ startServerLifecycle({
   runStartupEngineScan: RUN_STARTUP_ENGINE_SCAN,
   runStartupScan: runEngineCycle,
   saveState: saveEngineState,
-  flushState: async () => { await candidateTraceStore.flush(); await flushStateToFile(); },
+    flushState: async () => { tradierQuoteStream.stop(); await candidateTraceStore.flush(); await flushStateToFile(); },
   saveRenderMemory,
   checkRunnerResults: checkRunnerPredictionResults,
   startServices: [

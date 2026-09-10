@@ -4,6 +4,16 @@ import { createCryptoIntradayBars } from '../market-data/cryptoIntradayBars.js';
 
 const bars = Array.from({ length: 30 }, (_, i) => ({ t: 1000 + i * 300000, c: 100 + i, v: 10 }));
 const normalizeSymbol = symbol => symbol.trim().toUpperCase();
+test('EMA history is configurable and bounded to 220 bars without changing provider data', async () => {
+  let requested;
+  const supplied = Array.from({ length: 300 }, (_, i) => ({ ...bars[0], t: i }));
+  const store = createCryptoIntradayBars({ normalizeSymbol, historyLimit: 10000,
+    getRecentBars: async (_, __, limit) => { requested = limit; return supplied; } });
+  const result = await store.get('BTC/USD');
+  assert.equal(requested, 220);
+  assert.equal(result.length, 220);
+  assert.equal(result[0].t, 80);
+});
 
 test('crypto bars try the next timeframe after a failed request, without changing timestamps', async () => {
   const calls = [];

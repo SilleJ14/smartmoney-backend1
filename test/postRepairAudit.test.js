@@ -1,4 +1,5 @@
 import test from "node:test";
+import { cryptoSetupEvidence } from './fixtures/cryptoSetupFixture.js';
 import assert from "node:assert/strict";
 import fs from "node:fs";
 import { installCentralDecision } from "../scoring/installCentralDecision.js";
@@ -19,7 +20,7 @@ import { fetchAlpacaGroupedDaily } from "../discovery/alpacaDailyBars.js";
 const now = Date.now();
 const iso = (t = now) => new Date(t).toISOString();
 const approvals = { approved: true, backendApproved: true, autoTradeApproved: true, qualifiedToBuy: true };
-const crypto = () => ({ symbol: "BTC/USD", price: 100, current: 100,
+const crypto = () => ({ symbol: "BTC/USD", price: 100, current: 100, ...cryptoSetupEvidence(100, now),
   cryptoDiscoveryScorecard: { score: 90, coverage: 1, calculatedAt: iso(), extension: { alreadyExtended: false } },
   newsCatalyst: { dataAvailable: true, riskDetected: false }, barsFound: 30, windowDollarVolume: 1000000,
   bid: 99.95, ask: 100.05, spreadAvailable: true, priceIsLive: true,

@@ -124,6 +124,25 @@ export function createAlpacaCryptoMarketData({ dataRequest, normalizeSymbol, now
     return quotes[0];
   }
 
+  async function getLatestOrderbooks(symbols = []) {
+    const clean = [...new Set(symbols.map(normalizeSymbol).filter(s => /^[A-Z0-9]+\/USD$/.test(s)))].slice(0, 120);
+    const results = [];
+    for (let i = 0; i < clean.length; i += 20) {
+      const batch = clean.slice(i, i + 20);
+      const data = await dataRequest(`/v1beta3/crypto/us/latest/orderbooks?symbols=${encodeURIComponent(batch.join(','))}`,
+        { maxResponseBytes: 512 * 1024 });
+      for (const symbol of batch) {
+        const book = findMarketEvent(data?.orderbooks, symbol);
+        if (!book) continue;
+        const levels = (rows, side) => Array.isArray(rows) ? rows.map(r => ({ p: Number(r.p), s: Number(r.s) }))
+          .sort((a, b) => side === 'ask' ? a.p - b.p : b.p - a.p).slice(0, 50) : [];
+        results.push({ symbol, source: 'alpaca_crypto_orderbook', location: 'us', updatedAt: providerTimestamp(book.t),
+          asks: levels(book.a, 'ask'), bids: levels(book.b, 'bid') });
+      }
+    }
+    return results;
+  }
+
   async function getRecentBars(symbol, timeframe = "5Min", limit = 30) {
     const cleanSymbol = normalizeSymbol(symbol);
     const data = await dataRequest(
@@ -139,7 +158,8 @@ export function createAlpacaCryptoMarketData({ dataRequest, normalizeSymbol, now
         c: bar.close,
         v: bar.volume,
         source: "alpaca_crypto_bars",
+        intervalMs: timeframeMilliseconds(timeframe),
       }));
   }
-  return { getLatestQuote, getLatestQuotes, getRecentBars };
+  return { getLatestQuote, getLatestQuotes, getRecentBars, getLatestOrderbooks };
 }

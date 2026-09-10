@@ -1647,6 +1647,10 @@ export function createEngineCycle(dependencies) {
               signal.finalAutonomousDecisionScore ??
               null,
             source: "central_crypto_decision",
+            analysisEvidencePass: signal.centralAutonomousDecisionCore?.cryptoDecisionEvidence?.analysisEvidencePass === true,
+            setup: signal.centralAutonomousDecisionCore?.cryptoDecisionEvidence?.setup,
+            setupGate: signal.centralAutonomousDecisionCore?.cryptoDecisionEvidence?.setupGate,
+            opportunityBasis: signal.centralAutonomousDecisionCore?.cryptoDecisionEvidence?.opportunityBasis,
             coverage: Number(
               signal.centralAutonomousDecisionCore?.cryptoDecisionEvidence
                 ?.coverage || 0

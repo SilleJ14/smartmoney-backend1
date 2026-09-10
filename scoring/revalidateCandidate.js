@@ -3,6 +3,7 @@ import { buildCryptoDecisionScore, evaluateCryptoTradeCandidate } from './compon
 import { getCanonicalFinalScore, isCryptoSignal } from './canonicalSignalRank.js';
 import { getStockExecutionEvidenceFreshness } from '../market-data/stockQuoteEvidence.js';
 import { normalizeCandidateQuote } from '../market-data/normalizeCandidateQuote.js';
+import { hasDecisionAnalysis } from './decisionAnalysis.js';
 
 // Shared by display and execution: quote changes cannot issue new permission.
 export function revalidateCandidate(previous, incoming, { now = Date.now() } = {}) {
@@ -37,20 +38,31 @@ export function revalidateCandidate(previous, incoming, { now = Date.now() } = {
     next.cryptoScoreTelemetry = { ...(next.cryptoScoreTelemetry || {}), entry: next.cryptoEntryScorecard, decision: evidence };
   }
   const priorFinal = getCanonicalFinalScore(previous);
-  const basis = previous.quoteRevalidationBasis?.version === version
+  const basis = previous.quoteRevalidationBasis && previous.quoteRevalidationBasis.version === version
     ? previous.quoteRevalidationBasis
     : { version, final: priorFinal, component: before.score };
   next.quoteRevalidationBasis = basis;
-  const available = priorFinal !== null && evidence.coreEvidencePass === true;
-  const evidenceCeiling = evidence.score < basis.component - 0.001 ? evidence.score : priorFinal;
-  const final = available ? Number(Math.max(0, Math.min(priorFinal, evidenceCeiling,
-    basis.final + Math.min(0, evidence.score - basis.component))).toFixed(2)) : null;
+  // A temporary outage must not permanently latch F to null. Rebuild measured
+  // analysis when evidence returns; a recovered score NEVER revives permission.
+  const age = now - Date.parse(version || '');
+  const validBasis = Number.isFinite(basis.final) && Number.isFinite(basis.component) &&
+    Number.isFinite(age) && age >= -5000 && age <= 300000;
+  const available = !setupInvalid && hasDecisionAnalysis(evidence);
+  const ceiling = validBasis && evidence.score < basis.component - 0.001 ? evidence.score : basis.final;
+  const final = available ? Number(Math.max(0, validBasis
+    ? Math.min(priorFinal ?? basis.final, ceiling, basis.final + Math.min(0, evidence.score - basis.component))
+    : evidence.score).toFixed(2)) : null;
   Object.assign(next, { masterFinalScore: final, finalAutonomousDecisionScore: final,
+    scoreAssessmentUpdatedAt: new Date(now).toISOString(),
     ...(crypto ? { cryptoDecisionScore: final, cryptoDecisionScoreAvailable: available }
       : { stockDecisionScore: final, stockDecisionScoreAvailable: available, stockDecisionEvidence: evidence }) });
   const gate = crypto ? evaluateCryptoTradeCandidate(next, { now }) : evaluateStockTradeCandidate(next, {
     requireCentralDecision: true, requireFreshDecision: true, requireExplicitApproval: true, now,
   });
+  if (priorFinal === null && available) {
+    gate.approved = false;
+    gate.reasons = [...new Set([...(gate.reasons || []), 'RECOVERED_SCORE_REQUIRES_CENTRAL_REVIEW'])];
+  }
   if (setupInvalid) {
     gate.approved = false;
     gate.reasons = [...new Set([...(gate.reasons || []), 'SETUP_PRICE_MOVED_RESCAN_REQUIRED'])];

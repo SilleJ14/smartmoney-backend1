@@ -1,3 +1,4 @@
+import { hasDecisionAnalysis } from './decisionAnalysis.js';
 function finiteNumber(...values) {
   for (const value of values) {
     if (value === null || value === undefined || value === "") continue;
@@ -99,8 +100,8 @@ export function normalizeSignalScoreCompleteness(signal = {}) {
           : entry?.available === true
     );
     const finalAvailable = signal.cryptoDecisionScoreAvailable !== false && finalScore !== null && (
-      typeof decisionEvidence?.coreEvidencePass === "boolean"
-        ? decisionEvidence.coreEvidencePass
+      typeof decisionEvidence?.coreEvidencePass === "boolean" || typeof decisionEvidence?.analysisEvidencePass === 'boolean'
+        ? hasDecisionAnalysis(decisionEvidence)
         : signal.cryptoDecisionScoreAvailable === true
     );
     const provisionalScore = finalAvailable
@@ -112,7 +113,7 @@ export function normalizeSignalScoreCompleteness(signal = {}) {
         decisionEvidence?.score
       );
     const missingEvidenceReasons = uniqueReasons([
-      currentStoredReasons(signal),
+      currentStoredReasons(signal, finalAvailable),
       discovery?.missingCriticalEvidence,
       discovery?.missingComponents,
       entry?.missingCriticalEvidence,
@@ -197,15 +198,15 @@ export function normalizeSignalScoreCompleteness(signal = {}) {
       : Number(entry?.coverage || 0) >= 0.8
   );
   const finalAvailable = signal.stockDecisionScoreAvailable !== false && finalScore !== null && (
-    typeof decisionEvidence?.coreEvidencePass === "boolean"
-      ? decisionEvidence.coreEvidencePass
+    typeof decisionEvidence?.coreEvidencePass === "boolean" || typeof decisionEvidence?.analysisEvidencePass === 'boolean'
+      ? hasDecisionAnalysis(decisionEvidence)
       : signal.stockDecisionScoreAvailable === true
   );
   const provisionalScore = finalAvailable
     ? finiteNumber(signal.provisionalStockDecisionScore)
     : finiteNumber(signal.provisionalStockDecisionScore, finalScore);
   const missingEvidenceReasons = uniqueReasons([
-    currentStoredReasons(signal),
+    currentStoredReasons(signal, finalAvailable),
     discovery?.missingCriticalEvidence,
     discovery?.missingComponents,
     entry?.missingCriticalEvidence,
@@ -256,7 +257,8 @@ export function normalizeSignalScoreCollection(signals = []) {
     .map(normalizeSignalScoreCompleteness);
 }
 import { getApprovedTradeAmount } from './approvedSizing.js';
-function currentStoredReasons(signal) {
+function currentStoredReasons(signal, finalAvailable = false) {
   return (Array.isArray(signal.missingEvidenceReasons) ? signal.missingEvidenceReasons : [])
+    .filter(reason => !(finalAvailable && /^CANONICAL_(STOCK|CRYPTO)_FINAL_DECISION_PENDING_CENTRAL_CORE$/.test(reason)))
     .filter(reason => !/^(CANONICAL_(STOCK|CRYPTO)_FINAL_DECISION_UNAVAILABLE|(STOCK|CRYPTO)_(DISCOVERY_SCORE|ENTRY_SCORE|MULTI_DAY_EVIDENCE)_UNAVAILABLE|POSITION_SIZING_PENDING)$/.test(reason));
 }

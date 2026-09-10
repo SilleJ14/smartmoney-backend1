@@ -76,6 +76,7 @@ const marketPopulation = Math.max(stocks.length, Math.min(12000, Number(process.
 for (let i = marketSymbols.length; i < marketPopulation; i++) {
   marketSymbols.push(`M${String.fromCharCode(65 + Math.floor(i / 676) % 26)}${String.fromCharCode(65 + Math.floor(i / 26) % 26)}${String.fromCharCode(65 + i % 26)}`);
 }
+import { cryptoSetupEvidence } from '../test/fixtures/cryptoSetupFixture.js';
 const json = (body, status = 200) => new Response(JSON.stringify(body), { status, headers: { 'content-type': 'application/json' } });
 globalThis.fetch = async (input, options = {}) => {
   if ((options.method || 'GET').toUpperCase() !== 'GET') {
@@ -102,7 +103,7 @@ globalThis.fetch = async (input, options = {}) => {
   }
   const asset = symbol => ({ symbol, tradable: true, fractionable: true, status: 'active',
     class: symbol.includes('/') ? 'crypto' : 'us_equity', exchange: 'NASDAQ', marginable: true });
-  if (p === '/v2/clock') return json({ is_open: false, timestamp: stamp,
+  if (p === '/v2/clock') return json({ is_open: process.env.SMARTMONEY_FIXTURE_MARKET_OPEN === 'true', timestamp: stamp,
     next_open: '2026-09-09T09:30:00-04:00', next_close: '2026-09-09T16:00:00-04:00' });
   if (p === '/v2/account') return json({ equity: '10000', cash: '10000', buying_power: '10000', last_equity: '10000', status: 'ACTIVE' });
   if (p === '/v2/positions' || p === '/v2/orders') return json([]);
@@ -113,9 +114,17 @@ globalThis.fetch = async (input, options = {}) => {
   if (p.includes('/quotes/latest')) return json(p.includes('/stocks/') && !url.searchParams.has('symbols')
     ? { quote: quote() } : { quotes: Object.fromEntries(symbols.map(s => [s, quote()])) });
   if (p.endsWith('/latest/quotes')) return json({ quotes: Object.fromEntries(symbols.map(s => [s, quote()])) });
+  if (p.endsWith('/latest/orderbooks')) return json({ orderbooks: Object.fromEntries(symbols.map(s => [s, {
+    t: stamp, a: [{ p: 100.02, s: 10000 }], b: [{ p: 100, s: 10000 }],
+  }])) });
   if (p.endsWith('/bars')) {
     const daily = (url.searchParams.get('timeframe') || '').includes('Day');
-    const bars = Array.from({ length: 80 }, (_, i) => ({ t: new Date(now - (80 - i) * (daily ? 86400000 : 60000)).toISOString(),
+    if (!daily && p.includes('/crypto/') && process.env.SMARTMONEY_FIXTURE_POLYGON === 'crypto-setup') {
+      const bars = cryptoSetupEvidence(100.01, now).chartBars.map(b => ({ t: new Date(b.time).toISOString(), o: b.open, h: b.high, l: b.low, c: b.close, v: b.volume * 10000 }));
+      return json({ bars: Object.fromEntries(symbols.map(s => [s, bars])) });
+    }
+    const duration = daily ? 86400000 : p.includes('/crypto/') ? Number.parseInt(url.searchParams.get('timeframe')) * 60000 || 300000 : 60000;
+    const bars = Array.from({ length: 80 }, (_, i) => ({ t: new Date(Math.floor(now / duration) * duration - (80 - i) * duration).toISOString(),
       o: 98 + i * .02, h: 99 + i * .02, l: 97.9 + i * .02, c: 98.1 + i * .02, v: 300000 + i * 1000, vw: 99 }));
     return json({ bars: p.match(/\/stocks\/[^/]+\/bars/) ? bars.reverse() : Object.fromEntries(symbols.map(s => [s, bars])), next_page_token: null });
   }

@@ -2,6 +2,25 @@ import test from "node:test";
 import assert from "node:assert/strict";
 import { createAlpacaCryptoMarketData } from "../market-data/alpacaCryptoMarketData.js";
 const normalizeSymbol = (s) => String(s).toUpperCase();
+test('crypto orderbooks use execution location, bounded batches and original timestamps', async () => {
+  const calls = [], stamp = '2026-09-10T18:00:00Z';
+  const service = createAlpacaCryptoMarketData({ normalizeSymbol, dataRequest: async (path, options) => {
+    calls.push({ path, options });
+    const symbols = new URL(path, 'https://fixture.invalid').searchParams.get('symbols').split(',');
+    return { orderbooks: Object.fromEntries(symbols.map(s => [s, { t: stamp,
+      a: Array.from({ length: 60 }, (_, i) => ({ p: 100 + i, s: 2 })), b: [{ p: 99, s: 2 }] }])) };
+  } });
+  const books = await service.getLatestOrderbooks(Array.from({ length: 140 }, (_, i) => `C${i}/USD`));
+  assert.equal(books.length, 120);
+  assert.equal(calls.length, 6);
+  assert.ok(calls.every(c => c.path.startsWith('/v1beta3/crypto/us/latest/orderbooks?') && c.options.maxResponseBytes === 512 * 1024));
+  assert.equal(books[0].asks.length, 50);
+  assert.equal(books[0].updatedAt, '2026-09-10T18:00:00.000Z');
+});
+test('missing crypto orderbooks never fall back to another venue or invented depth', async () => {
+  const service = createAlpacaCryptoMarketData({ normalizeSymbol, dataRequest: async () => ({}) });
+  assert.deepEqual(await service.getLatestOrderbooks(['BTC/USD']), []);
+});
 test("uses quote midpoint for crypto price", async () => {
   const service = createAlpacaCryptoMarketData({ dataRequest: async () => ({ quotes: { "BTC/USD": { bp: 99, ap: 101 } } }), normalizeSymbol, now: () => new Date("2026-01-01T00:00:00Z") });
   const quote = await service.getLatestQuote("BTC/USD");
@@ -48,7 +67,7 @@ test("batches visible crypto quote refreshes into one provider request", async (
 test("normalizes and filters crypto bars", async () => {
   const time = "2026-08-30T12:00:00Z";
   const service = createAlpacaCryptoMarketData({ dataRequest: async () => ({ bars: { "BTC/USD": [{ t: time, c: 100, o: 90, h: 110, l: 80, v: 4 }, { c: 0 }, { c: 100, o: 90, h: 110, l: 80, v: 4 }] } }), normalizeSymbol });
-  assert.deepEqual(await service.getRecentBars("BTC/USD"), [{ t: time, o: 90, h: 110, l: 80, c: 100, v: 4, source: "alpaca_crypto_bars" }]);
+  assert.deepEqual(await service.getRecentBars("BTC/USD"), [{ t: time, o: 90, h: 110, l: 80, c: 100, v: 4, source: "alpaca_crypto_bars", intervalMs: 300000 }]);
 });
 
 test("requests a bounded newest-first lookback instead of Alpaca's current-day default", async () => {

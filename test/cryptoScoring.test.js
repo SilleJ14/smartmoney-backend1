@@ -1,4 +1,5 @@
 import test from "node:test";
+import { cryptoSetupEvidence } from './fixtures/cryptoSetupFixture.js';
 import assert from "node:assert/strict";
 import {
   calculateCryptoLiquidityFromBars,
@@ -464,6 +465,7 @@ test("score-derived crypto phase observations cannot become context points", () 
 
 test("shared crypto execution gate requires central and freshly complete evidence", () => {
   const complete = {
+    ...cryptoSetupEvidence(),
     symbol: "BTC/USD",
     cryptoDiscoveryScorecard: {
       stage: "CRYPTO_EARLY_DISCOVERY",
@@ -522,6 +524,7 @@ test("shared crypto execution gate requires central and freshly complete evidenc
 test("crypto execution gate uses a 65 minimum Final Decision score", () => {
   const now = Date.now();
   const candidate = {
+    ...cryptoSetupEvidence(100, now),
     symbol: "BTC/USD",
     cryptoDiscoveryScorecard: {
       stage: "CRYPTO_EARLY_DISCOVERY",

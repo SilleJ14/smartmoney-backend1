@@ -1,4 +1,5 @@
 import { mergeLiveQuoteEvidence } from "../live/liveQuoteCache.js";
+import { hasDecisionAnalysis } from './decisionAnalysis.js';
 
 function finite(value) {
   if (value === null || value === undefined || value === "") return null;
@@ -49,8 +50,8 @@ export function getCanonicalFinalScore(signal = {}) {
     // evidence than a current failed scorecard.
     const evidence = signal.cryptoScoreTelemetry?.decision ||
       signal.centralAutonomousDecisionCore?.cryptoDecisionEvidence;
-    const available = typeof evidence?.coreEvidencePass === "boolean"
-      ? evidence.coreEvidencePass
+    const available = typeof evidence?.coreEvidencePass === "boolean" || typeof evidence?.analysisEvidencePass === 'boolean'
+      ? hasDecisionAnalysis(evidence)
       : signal.cryptoDecisionScoreAvailable === true;
     return available && score !== null ? score : null;
   }
@@ -65,8 +66,8 @@ export function getCanonicalFinalScore(signal = {}) {
   const evidence = signal.stockDecisionEvidence ||
     signal.centralAutonomousDecisionCore?.stockDecisionEvidence ||
     signal.decisionScoreTelemetry?.stages?.decision;
-  const available = typeof evidence?.coreEvidencePass === "boolean"
-    ? evidence.coreEvidencePass
+  const available = typeof evidence?.coreEvidencePass === "boolean" || typeof evidence?.analysisEvidencePass === 'boolean'
+    ? hasDecisionAnalysis(evidence)
     : signal.stockDecisionScoreAvailable === true;
   return available && score !== null ? score : null;
 }
@@ -95,8 +96,14 @@ export function compareCanonicalSignals(left = {}, right = {}) {
   if (leftFinal !== null && rightFinal !== null && leftFinal !== rightFinal) {
     return rightFinal - leftFinal;
   }
-  return Math.abs(Number(right.changePercent || right.percentChange || 0)) -
-    Math.abs(Number(left.changePercent || left.percentChange || 0));
+  // Unknown finals are not a biggest-absolute-move contest: a crash is not
+  // bullish opportunity. Prefer measured discovery, then signed performance.
+  const discovery = s => finite(isCryptoSignal(s)
+    ? s.cryptoDiscoveryScore ?? s.rawCryptoScore : s.discoveryScore) ?? -1;
+  const change = s => finite(s.dayChangePercent ?? s.changePercent ?? s.percentChange) ?? -Infinity;
+  const direction = s => Number(change(s) >= 0);
+  return direction(right) - direction(left) || discovery(right) - discovery(left) ||
+    (change(right) === change(left) ? 0 : change(right) > change(left) ? 1 : -1);
 }
 
 // Display capacity is not an execution gate. Keep both asset classes reachable
