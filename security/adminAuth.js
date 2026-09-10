@@ -71,10 +71,17 @@ export function createAdminAuth({ adminToken, userFile = "", sessionTtlMs = 12 *
   failureWindowMs = 15 * 60 * 1000, failureLimit = 20, ticketTtlMs = 30 * 1000,
   recoveryTtlMs = 10 * 60 * 1000, now = () => Date.now(), googleClientIds = [],
   googleTokenVerifier = verifyGoogleIdToken, appleClientIds = [],
-  appleTokenVerifier = verifyAppleIdentityToken, recoveryEmailSender = null,
+  appleTokenVerifier = verifyAppleIdentityToken, recoveryEmailSender = null, recoveryOwnerEmail = "",
   recoveryRequestWindowMs = 60 * 60 * 1000, recoveryRequestLimit = 3 }) {
   const failures = new Map(), tickets = new Map(), recoveryCodes = new Map(), recoveryRequests = new Map();
   let users = userFile ? safeUsers(userFile) : [];
+  const configuredOwnerEmail = normalizeIdentity(recoveryOwnerEmail);
+  const ownerRecoveryConfigured = /^\S+@\S+\.\S+$/.test(configuredOwnerEmail);
+  const recoveryDeliveries = new Set();
+  const recoveryTarget = (email) => users.find(candidate => candidate.email === email) ||
+    (users.length === 0 && ownerRecoveryConfigured && email === configuredOwnerEmail
+      ? { id: `owner-recovery:${crypto.createHash('sha256').update(email).digest('hex')}`, email,
+        name: 'SmartMoney Owner', restoringOwner: true } : null);
   const allowedGoogleClientIds = [...new Set(
     (Array.isArray(googleClientIds) ? googleClientIds : String(googleClientIds || "").split(","))
       .map((value) => String(value || "").trim())
@@ -260,19 +267,29 @@ export function createAdminAuth({ adminToken, userFile = "", sessionTtlMs = 12 *
     });
     app.post("/auth/request-password-reset", async (req, res) => {
       const email = normalizeIdentity(req.body?.email);
-      const genericMessage = "If this email belongs to the SmartMoney owner, an 8-digit recovery code has been sent.";
+      const genericMessage = `If this email matches the SmartMoney owner, an 8-digit code will arrive shortly. Check your inbox and spam folder. It expires in ${Math.max(1, Math.ceil(recoveryTtlMs / 60000))} minutes.`;
       if (!/^\S+@\S+\.\S+$/.test(email)) {
         return res.status(400).json({ ok: false, error: "Enter a valid email address" });
       }
       if (typeof recoveryEmailSender !== "function") {
         return res.status(503).json({ ok: false, error: "Email recovery is not configured yet" });
       }
+      if (users.length === 0 && !ownerRecoveryConfigured) {
+        return res.status(503).json({ ok: false, error: "Owner recovery needs one-time setup: set RECOVERY_OWNER_EMAIL in Render Environment. No shell-generated code is needed after setup." });
+      }
       if (!consumeRecoveryRequest(req, email)) {
-        return res.status(429).json({ ok: false, error: "Too many recovery requests. Try again later." });
+        const resetAt = Math.max(...[recoveryRequestKey('ip', getClientIp(req)), recoveryRequestKey('email', email)]
+          .map(key => recoveryRequests.get(key)?.resetAt || now()));
+        const retryAfterSeconds = Math.max(1, Math.ceil((resetAt - now()) / 1000));
+        res.setHeader?.('Retry-After', String(retryAfterSeconds));
+        return res.status(429).json({ ok: false, retryAfterSeconds,
+          error: `Too many recovery requests. Try again in ${Math.ceil(retryAfterSeconds / 60)} minutes.` });
       }
 
-      const user = users.find((candidate) => candidate.email === email) || null;
+      const user = recoveryTarget(email);
       if (user) {
+        if (recoveryDeliveries.has(user.id)) return res.status(202).json({ ok: true, message: genericMessage });
+        recoveryDeliveries.add(user.id);
         const code = crypto.randomInt(0, 100000000).toString().padStart(8, "0");
         try {
           await recoveryEmailSender({
@@ -284,6 +301,9 @@ export function createAdminAuth({ adminToken, userFile = "", sessionTtlMs = 12 *
           recoveryCodes.set(user.id, { digest: recoveryDigest(code), expiresAt: now() + recoveryTtlMs, attempts: 0 });
         } catch (error) {
           console.error("SmartMoney recovery email delivery failed", error instanceof Error ? error.message : "Unknown error");
+          return res.status(503).json({ ok: false, error: "The email service could not accept the recovery email. No new code was activated. Try again later or ask the server owner to check the email provider configuration." });
+        } finally {
+          recoveryDeliveries.delete(user.id);
         }
       }
 
@@ -341,7 +361,7 @@ export function createAdminAuth({ adminToken, userFile = "", sessionTtlMs = 12 *
       const email = normalizeIdentity(req.body?.email);
       const code = String(req.body?.code || "").trim();
       const newPassword = String(req.body?.newPassword || "");
-      const user = users.find((candidate) => candidate.email === email);
+      const user = recoveryTarget(email);
       const record = user ? recoveryCodes.get(user.id) : null;
       if (!user || !recoveryCodeIsValid(code, record)) {
         if (record) record.attempts += 1;
@@ -349,12 +369,18 @@ export function createAdminAuth({ adminToken, userFile = "", sessionTtlMs = 12 *
       }
       if (newPassword.length < 12) return res.status(400).json({ ok: false, error: "New password must contain at least 12 characters" });
       const passwordRecord = passwordDigest(newPassword);
-      Object.assign(user, { salt: passwordRecord.salt, passwordDigest: passwordRecord.digest,
-        passwordChangedAt: new Date(now()).toISOString(), authVersion: crypto.randomUUID() });
+      const changedAt = new Date(now()).toISOString();
+      const updatedUser = { ...user, salt: passwordRecord.salt, passwordDigest: passwordRecord.digest,
+        passwordChangedAt: changedAt, authVersion: crypto.randomUUID(),
+        ...(user.restoringOwner ? { id: crypto.randomUUID(), createdAt: changedAt } : {}) };
+      delete updatedUser.restoringOwner;
+      const updatedUsers = user.restoringOwner ? [updatedUser] : users.map(existing => existing.id === user.id ? updatedUser : existing);
+      try { persistUsers(userFile, updatedUsers); }
+      catch { return res.status(503).json({ ok: false, error: "Account storage is unavailable. Your password was not changed; retry after storage is restored." }); }
+      users = updatedUsers;
       recoveryCodes.delete(user.id);
       failures.delete(getClientIp(req));
-      persistUsers(userFile, users);
-      return res.json({ ok: true, token: signSession(user), expiresInSeconds: sessionTtlMs / 1000, user: publicUser(user) });
+      return res.json({ ok: true, token: signSession(updatedUser), expiresInSeconds: sessionTtlMs / 1000, user: publicUser(updatedUser) });
     });
     if (typeof app.get === "function") {
       app.get("/auth/session", requireAdmin, (req, res) => res.json({ ok: true, user: req.authUser || null }));
@@ -377,5 +403,6 @@ export function createAdminAuth({ adminToken, userFile = "", sessionTtlMs = 12 *
       res.json({ ok: true, ticket, expiresInSeconds: ticketTtlMs / 1000 });
     });
   };
-  return { requireAdmin, registerRoutes, getClientIp, sessionUser };
+  const getRecoveryConfiguration = () => ({ emailConfigured: typeof recoveryEmailSender === 'function', ownerRecoveryConfigured });
+  return { requireAdmin, registerRoutes, getClientIp, sessionUser, getRecoveryConfiguration };
 }

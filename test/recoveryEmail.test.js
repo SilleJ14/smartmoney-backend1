@@ -13,7 +13,7 @@ test("recovery email sender uses the provider API without exposing its key in co
   let request;
   global.fetch = async (url, options) => {
     request = { url, options };
-    return { ok: true, status: 200, json: async () => ({ id: "email-id" }) };
+    return new Response(JSON.stringify({ id: "email-id" }), { status: 200 });
   };
 
   try {
@@ -39,4 +39,20 @@ test("recovery email sender uses the provider API without exposing its key in co
   } finally {
     global.fetch = originalFetch;
   }
+});
+
+test('recovery email requires a bounded, successful provider acknowledgment', async () => {
+  const originalFetch = global.fetch;
+  try {
+    const sender = createRecoveryEmailSender({ apiKey: 'fixture', from: 'owner@example.com' });
+    for (const [body, status, expected] of [
+      ['{}', 403, /rejected.*403/],
+      ['{}', 200, /did not confirm/],
+      ['not json', 200, /JSON/],
+      ['x'.repeat(17000), 200, /byte budget/],
+    ]) {
+      global.fetch = async () => new Response(body, { status });
+      await assert.rejects(sender({ to: 'owner@example.com', code: '01234567', expiresInMinutes: 10 }), expected);
+    }
+  } finally { global.fetch = originalFetch; }
 });

@@ -174,6 +174,7 @@ test("public password recovery is rate limited and requires email delivery confi
     adminToken: "server-secret",
     userFile: path.join(directory, "users.json"),
     recoveryRequestLimit: 2,
+    recoveryOwnerEmail: 'owner@example.com',
     recoveryEmailSender: async () => {},
   });
   configuredAuth.registerRoutes(app);

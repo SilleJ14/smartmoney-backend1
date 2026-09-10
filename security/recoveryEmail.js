@@ -1,5 +1,6 @@
 import crypto from "crypto";
 import { fetchWithTimeout } from "../utils/fetchWithTimeout.js";
+import { cancelResponseBody, readBoundedResponseJson } from "../utils/boundedResponse.js";
 
 const RESEND_EMAILS_URL = "https://api.resend.com/emails";
 
@@ -34,9 +35,13 @@ export function createRecoveryEmailSender({ apiKey = "", from = "" } = {}) {
     }, 10000);
 
     if (!response.ok) {
-      await response.text().catch(() => "");
+      cancelResponseBody(response);
       throw new Error(`Email provider rejected the request (${response.status})`);
     }
-    return response.json().catch(() => ({}));
+    const result = await readBoundedResponseJson(response, { maxBytes: 16384, timeoutMs: 5000 });
+    if (typeof result?.id !== 'string' || !result.id.trim()) {
+      throw new Error('Email provider did not confirm acceptance');
+    }
+    return result;
   };
 }
