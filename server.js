@@ -19903,6 +19903,12 @@ async function checkDailyLossAndProfitLock(account, marketOpen) {
     engineState.lastMode = currentMode;
     return false;
   }
+  if (engineState.dailyLossLocked || engineState.profitLocked) {
+    // A failed/partial exit must be retried on subsequent cycles, not forgotten
+    // because the lock was already set. Broker reconciliation deduplicates exits.
+    await forceCloseAllPositions(engineState.dailyLossLocked ? "DAILY_LOSS_LIMIT" : "PROFIT_LOCK_EXIT", marketOpen);
+    return true;
+  }
   engineState.dailyPeakEquity = Math.max(
     Number(engineState.dailyPeakEquity || engineState.dailyStartEquity),
     equity

@@ -31,6 +31,9 @@ test('actual daily-loss and profit handlers preserve ON while locking buys and r
     assert.equal(state[profit ? 'profitLocked' : 'dailyLossLocked'], true);
     assert.equal(exits.length, 1);
     assert.equal(saves.length, 1);
+    assert.equal((await check({ equity: profit ? 1040 : 970 })).locked, true);
+    assert.equal(exits.length, 2, 'an existing lock retries unfinished exits');
+    assert.equal(saves.length, 1, 'do not re-create the same daily lock');
     assert.equal(resetDailySafetyState(state, { todayKey: '2026-09-11', equity: 1000 }).reset, true);
     assert.equal(state.dailyLossLocked, false);
     assert.equal(state.profitLocked, false);
