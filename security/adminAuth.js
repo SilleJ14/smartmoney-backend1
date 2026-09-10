@@ -67,6 +67,7 @@ function persistUsers(file, users) {
 }
 
 export function createAdminAuth({ adminToken, userFile = "", sessionTtlMs = 12 * 60 * 60 * 1000,
+  allowInitialSignup = true,
   failureWindowMs = 15 * 60 * 1000, failureLimit = 20, ticketTtlMs = 30 * 1000,
   recoveryTtlMs = 10 * 60 * 1000, now = () => Date.now(), googleClientIds = [],
   googleTokenVerifier = verifyGoogleIdToken, appleClientIds = [],
@@ -173,6 +174,8 @@ export function createAdminAuth({ adminToken, userFile = "", sessionTtlMs = 12 *
   };
   const registerRoutes = (app) => {
     app.post("/auth/signup", (req, res) => {
+      if (!allowInitialSignup) return res.status(403).json({ ok: false,
+        error: "Account creation is closed. Ask the server owner to provision access." });
       const email = normalizeIdentity(req.body?.email), password = String(req.body?.password || ""), name = String(req.body?.name || "").trim();
       if (users.length > 0) return res.status(403).json({ ok: false, error: "Account creation is closed. Ask the server owner to provision access." });
       if (!/^\S+@\S+\.\S+$/.test(email)) return res.status(400).json({ ok: false, error: "Enter a valid email address" });

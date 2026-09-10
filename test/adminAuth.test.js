@@ -45,7 +45,25 @@ test("server-backed signup, login and session validation use persisted password 
   const session = response(); let passed = false;
   auth.requireAdmin({ method: "GET", headers: { authorization: `Bearer ${signup.body.token}` }, ip: "1", query: {} }, session, () => { passed = true; });
   assert.equal(passed, true);
+  const restarted = createAdminAuth({ adminToken: "server-secret", userFile: path.join(directory, "users.json"), now: () => 2000 });
+  assert.equal(restarted.sessionUser(signup.body.token)?.email, 'owner@example.com', 'a restart must not invalidate a stored account session');
+  const loginRoutes = new Map();
+  const expired = createAdminAuth({ adminToken: "server-secret", userFile: path.join(directory, "users.json"), now: () => 86400000 });
+  expired.registerRoutes({ post(route, ...handlers) { loginRoutes.set(route, handlers.at(-1)); }, get() {} });
+  assert.equal(expired.sessionUser(signup.body.token), null);
+  const login = response();
+  loginRoutes.get('/auth/login')({ headers: {}, ip: '1', body: { email: 'owner@example.com', password: 'twelve-chars!' } }, login);
+  assert.equal(login.body.ok, true, 'session expiry requires ordinary login, not password reset');
   fs.rmSync(directory, { recursive: true, force: true });
+});
+
+test('production cannot reopen public ownership when the user store is missing', () => {
+  const auth = createAdminAuth({ adminToken: 'fixture', allowInitialSignup: false });
+  const routes = new Map();
+  auth.registerRoutes({ post(route, ...handlers) { routes.set(route, handlers.at(-1)); }, get() {} });
+  const response = { status(code) { this.code = code; return this; }, json(body) { this.body = body; return this; } };
+  routes.get('/auth/signup')({ body: { email: 'stranger@example.com', password: 'long-password' }, headers: {} }, response);
+  assert.equal(response.code, 403);
 });
 
 test("owner recovery codes are admin-only, expire, are single-use, and invalidate old sessions", () => {

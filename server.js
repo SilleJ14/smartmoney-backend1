@@ -337,6 +337,9 @@ app.use(cors(corsOptions));
 app.use(express.json({ limit: "100kb" }));
 const adminAuth = createAdminAuth({
   adminToken: process.env.ADMIN_API_TOKEN || "",
+  // Losing an ephemeral user file must never open ownership of the live broker
+  // account to the first visitor after a deployment.
+  allowInitialSignup: !process.env.RENDER,
   userFile: path.resolve(DATA_DIR, "users.json"),
   sessionTtlMs: Math.max(15 * 60 * 1000, Number(process.env.AUTH_SESSION_TTL_HOURS || 12) * 60 * 60 * 1000),
   googleClientIds: [
