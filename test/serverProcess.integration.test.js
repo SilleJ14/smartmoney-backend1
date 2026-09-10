@@ -8,12 +8,13 @@ import { fileURLToPath } from 'node:url';
 
 const soakMs = Math.max(0, Math.min(600000, Number(process.env.SMARTMONEY_SOAK_MS) || 0));
 const scenarios = process.env.SMARTMONEY_FIXTURE_POLYGON ? [process.env.SMARTMONEY_FIXTURE_POLYGON]
-  : ['', 'healthy', 'stream-burst', 'oversized', 'stalled', 'unavailable', 'malformed', 'early-analysis', 'crypto-setup', 'autopilot'];
+  : ['', 'healthy', 'stream-burst', 'oversized', 'stalled', 'unavailable', 'malformed', 'early-analysis', 'afterhours-analysis', 'crypto-setup', 'autopilot'];
 for (const polygonFault of scenarios) {
 test(`actual server boots, serves stocks and crypto, and completes a scan without trading (Polygon: ${polygonFault || 'disabled'})`, { timeout: 80000 + soakMs }, async t => {
   const fullLoad = process.env.SMARTMONEY_FIXTURE_LOAD === 'full' || polygonFault === 'healthy';
   const streamBurst = polygonFault === 'stream-burst';
-  const earlyProbe = process.env.SMARTMONEY_EARLY_PROBE === 'true' || polygonFault === 'early-analysis';
+  const afterhoursProbe = polygonFault === 'afterhours-analysis';
+  const earlyProbe = process.env.SMARTMONEY_EARLY_PROBE === 'true' || polygonFault === 'early-analysis' || afterhoursProbe;
   const directory = await fs.mkdtemp(path.join(os.tmpdir(), 'smartmoney-isolated-server-'));
   const token = 'isolated-fixture-admin-not-a-real-credential';
   const autopilot = polygonFault === 'autopilot';
@@ -33,7 +34,7 @@ test(`actual server boots, serves stocks and crypto, and completes a scan withou
     SMARTMONEY_FIXTURE_STREAM: streamBurst ? 'finnhub' : '',
     SMARTMONEY_FIXTURE_LOAD: fullLoad ? 'full' : 'small',
     SMARTMONEY_FIXTURE_POPULATION: process.env.SMARTMONEY_FIXTURE_POPULATION || '',
-    SMARTMONEY_FIXTURE_MARKET_OPEN: earlyProbe ? 'true' : 'false',
+    SMARTMONEY_FIXTURE_MARKET_OPEN: earlyProbe && !afterhoursProbe ? 'true' : 'false',
     SMARTMONEY_FIXTURE_PROFILE: process.env.SMARTMONEY_FIXTURE_PROFILE || 'false',
     MAX_SYMBOLS_TO_SCAN: fullLoad ? '60' : '3',
     MIN_SYMBOLS_NEEDED: '3', MAX_ASSETS_FALLBACK: '60',
@@ -168,6 +169,20 @@ test(`actual server boots, serves stocks and crypto, and completes a scan withou
         await new Promise(resolve => setTimeout(resolve, 500));
       } while (Date.now() < deadline);
       assert.ok(early.events.some(event => event.stage === 'EARLY_ANALYSIS_COMPLETED'), `Early analysis did not finish: ${log}`);
+      if (afterhoursProbe) {
+        let afterhours;
+        const quoteDeadline = Date.now() + 10000;
+        do {
+          afterhours = await read('/health');
+          if (afterhours.quotes.activeCandidateQuoteRefreshState?.assets?.stock?.requestedCount > 0) break;
+          await new Promise(resolve => setTimeout(resolve, 250));
+        } while (Date.now() < quoteDeadline);
+        assert.equal(afterhours.market.marketSession, 'afterhours');
+        assert.equal(afterhours.market.marketOpen, false);
+        assert.ok(afterhours.api.tradier.stream.subscribedCount > 0, 'real scheduler dropped after-hours stock subscriptions');
+        assert.ok(afterhours.quotes.activeCandidateQuoteRefreshState?.assets?.stock?.requestedCount > 0, 'stock quote refresh did not run');
+        assert.equal(afterhours.autoTradingEnabled, false);
+      }
       assert.equal(unsafe, false); assert.equal(metrics.writes || 0, 0);
       t.diagnostic('Real scheduler completed early-candidate research with no provider order writes.');
     }

@@ -2,6 +2,7 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import { EventEmitter } from 'node:events';
 import { createTradierQuoteStream } from '../providers/tradierQuoteStream.js';
+import { canRefreshStockQuotes } from '../market-data/stockQuoteSessionPolicy.js';
 
 function fixture() {
   let now = Date.now(), requests = 0;
@@ -52,4 +53,20 @@ test('missing credentials and sandbox never open production sessions', async () 
     const stream = createTradierQuoteStream({ ...config, fetchImpl: () => assert.fail('unexpected request') });
     await stream.refresh(['AAPL']); assert.equal(stream.getStatus().connected, false);
   }
+});
+
+test('market close keeps research subscriptions until the after-hours session ends', async () => {
+  const f = fixture();
+  const refresh = (marketOpen, marketSession) => f.stream.refresh(
+    canRefreshStockQuotes({ marketOpen, marketSession }) ? ['AAPL', 'MSFT'] : []);
+  await refresh(true, 'regular'); f.sockets[0].open();
+  await refresh(false, 'afterhours');
+  assert.equal(f.stream.getStatus().connected, true);
+  assert.equal(f.stream.getStatus().subscribedCount, 2);
+  assert.equal(f.requests(), 1);
+  f.sockets[0].quote(); assert.equal(f.quotes.length, 1);
+  await refresh(false, 'closed');
+  assert.equal(f.stream.getStatus().connected, false);
+  assert.equal(f.stream.getStatus().subscribedCount, 0);
+  f.stream.stop();
 });

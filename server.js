@@ -31633,7 +31633,7 @@ async function refreshActiveCandidateQuotes(symbols = []) {
         return ageSeconds !== null && ageSeconds <= LIVE_ORDER_MAX_QUOTE_AGE_SECONDS;
       }).length,
       reason: requestedSymbols.length > 0
-        ? "Visible candidate quotes are already fresh or outside regular/premarket stock sessions."
+        ? "Visible candidate quotes are already fresh or outside regular/premarket/afterhours stock research sessions."
         : "No visible candidate symbols were supplied.",
     };
   }

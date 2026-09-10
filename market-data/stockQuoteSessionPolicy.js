@@ -1,5 +1,9 @@
 export function canRefreshStockQuotes({ marketOpen = false, marketSession = "closed" } = {}) {
-  return marketOpen === true || String(marketSession).toLowerCase() === "premarket";
+  // Research availability is not permission to trade. Keep after-hours quote
+  // polling, Tradier subscriptions and early reassessment alive; order paths
+  // still require the broker's regular-market-open clock independently.
+  const session = String(marketSession).toLowerCase();
+  return marketOpen === true || session === "premarket" || session === "afterhours";
 }
 
 export function getStockMoverQuotePolicy({

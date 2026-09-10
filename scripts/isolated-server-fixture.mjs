@@ -2,6 +2,16 @@
 // Never contact a provider or submit an order from this fixture.
 import http from 'node:http';
 import { Session } from 'node:inspector';
+// Keep the after-hours regression independent of when CI runs; clock advances
+// normally so quote freshness and scheduler deadlines remain exercised.
+if (process.env.SMARTMONEY_FIXTURE_POLYGON === 'afterhours-analysis') {
+  const RealDate = Date;
+  const offset = RealDate.parse('2026-09-10T22:00:00Z') - RealDate.now();
+  globalThis.Date = class extends RealDate {
+    constructor(...args) { super(...(args.length ? args : [RealDate.now() + offset])); }
+    static now() { return RealDate.now() + offset; }
+  };
+}
 if (process.env.SMARTMONEY_FIXTURE_PROFILE === 'true') {
   const session = new Session(); session.connect();
   const post = (method) => new Promise((resolve, reject) => session.post(method, (error, result) => error ? reject(error) : resolve(result)));
