@@ -4,8 +4,8 @@ import { registerLiveSignalRoutes } from "../routes/liveSignalRoutes.js";
 
 test("live signals combines stock candidate sources and reports count", async () => {
   const routes = new Map(), app = { get: (path, ...handlers) => routes.set(path, handlers.at(-1)) };
-  registerLiveSignalRoutes(app, { requireAdmin: () => {}, getState: () => ({ lastStockSignals: [{ symbol: "A" }],
-    fastRunnerCandidates: [{ symbol: "B" }], lastCryptoSignals: [{ symbol: "BTC/USD" }] }), runFastRunnerEngine: async () => {},
+  registerLiveSignalRoutes(app, { requireAdmin: () => {}, getState: () => ({ lastStockSignals: [{ symbol: "A", price: 10 }],
+    fastRunnerCandidates: [{ symbol: "B", price: 10 }], lastCryptoSignals: [{ symbol: "BTC/USD", price: 10 }] }), runFastRunnerEngine: async () => {},
     getTopSignals: (items) => items, mergeLiveQuote: (item) => item, getMarketSession: () => "closed",
     getMode: () => "smart", getAutoTradingEnabled: () => false, buildTopBrains: () => [] });
   const res = { json(body) { this.body = body; } }; await routes.get("/live-signals")({}, res);

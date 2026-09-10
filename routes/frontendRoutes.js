@@ -6,6 +6,7 @@ import {
   selectCandidateDisplayWindow,
 } from "../scoring/canonicalSignalRank.js";
 import { buildRawEarlyMoverCandidates } from "../market-data/liveMovers.js";
+import { candidateFeedDecision } from "../discovery/candidateFeedPolicy.js";
 
 function uniqueSignals(signals, normalizeSymbol) {
   return dedupeSignalsByCanonicalAuthority(signals, { normalizeSymbol });
@@ -108,7 +109,7 @@ export function registerFrontendRoutes(app, dependencies) {
         getLatestStatus(),
         normalizeSymbol,
         true
-      ).map(mergeLiveQuote);
+      ).map(mergeLiveQuote).filter(signal => candidateFeedDecision(signal, getConfig()).visible);
       const approvedSignals = signals
         .filter(hasExplicitTradeApproval)
         .sort(compareCanonicalSignals);

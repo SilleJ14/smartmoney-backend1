@@ -1,5 +1,6 @@
 import { addUsStockMarketSessionDays } from "../utils/usMarketCalendar.js";
 import { isCryptoSignal } from './canonicalSignalRank.js';
+import { validateQuietLearning } from './quietLearningValidation.js';
 
 const HORIZONS = Object.freeze([1, 3, 5]);
 // Construct ICU formatters once, not two or three times for every price in
@@ -114,6 +115,12 @@ function componentScores(candidate = {}) {
       .filter((component) => component?.name && component.available !== false)
       .map((component) => [component.name, Number(clamp(component.value).toFixed(2))])
   );
+}
+
+function componentWeights(candidate = {}) {
+  const components = candidate.discoveryScorecard?.components || candidate.cryptoDiscoveryScorecard?.components || candidate.components || [];
+  return Object.fromEntries((Array.isArray(components) ? components : []).filter(c => c?.name && c.available !== false && Number(c.weight ?? c.configuredWeight) > 0)
+    .map(c => [c.name, Number(c.weight ?? c.configuredWeight)]));
 }
 
 function liquidityBucket(candidate = {}) {
@@ -357,9 +364,11 @@ export function calculateQuietCandidateLearning(
   );
   const measurementCoverage = due.length > 0 ? measured.length / due.length : 0;
   const uniqueSymbols = new Set(measured.map((observation) => observation.symbol)).size;
-  const active = measured.length >= minSamples &&
+  const sampleReady = measured.length >= minSamples &&
     measurementCoverage >= minCoverage &&
     uniqueSymbols >= minUniqueSymbols;
+  const validation = validateQuietLearning(measured, horizonDays, Math.max(30, minSamples), safeState.learningTrainingCutoffs?.[assetClass]);
+  const active = sampleReady && validation.active;
   const names = [...new Set(measured.flatMap(
     (observation) => Object.keys(observation.componentScores || {})
   ))];
@@ -369,7 +378,7 @@ export function calculateQuietCandidateLearning(
     const pairs = measured
       .map((observation) => ({
         x: Number(observation.componentScores?.[name]),
-        y: Number(observation.measurements?.[horizonDays]?.peakReturnPercent),
+        y: Number(observation.measurements?.[horizonDays]?.closeReturnPercent),
       }))
       .filter((pair) => Number.isFinite(pair.x) && Number.isFinite(pair.y));
     const correlation = pairs.length >= minSamples ? pearson(pairs) : 0;
@@ -377,13 +386,13 @@ export function calculateQuietCandidateLearning(
       sampleCount: pairs.length,
       correlation: Number(correlation.toFixed(4)),
     };
-    componentMultipliers[name] = active && pairs.length >= minSamples
-      ? Number(Math.max(0.9, Math.min(1.1, 1 + correlation * 0.1)).toFixed(4))
-      : 1;
+    componentMultipliers[name] = active ? validation.componentMultipliers[name] ?? 1 : 1;
   }
   return {
     assetClass,
     active,
+    learningPolicyVersion: 2,
+    validation,
     horizonDays,
     sampleCount: measured.length,
     quarantinedObservationCount: observations.filter(isOutcomeEvidenceQuarantined).length,
@@ -401,7 +410,7 @@ export function calculateQuietCandidateLearning(
         ? "QUIET_CANDIDATE_MEASUREMENT_COVERAGE_TOO_LOW"
         : uniqueSymbols < minUniqueSymbols
           ? "QUIET_CANDIDATE_SYMBOL_DIVERSITY_TOO_LOW"
-          : "BOUNDED_QUIET_DISCOVERY_LEARNING_ACTIVE",
+          : validation.reason,
   };
 }
 
@@ -419,6 +428,7 @@ export function updateQuietCandidateOutcomes(
     tradeEvents = [],
     cryptoMeasurementMaxLagMs = 6 * 60 * 60 * 1000,
     fullPopulationPage = false,
+    estimatedRoundTripCostPercent = assetClass === 'crypto' ? 0.6 : 0.25,
   } = {}
 ) {
   const safePreviousState = previousState && typeof previousState === "object"
@@ -637,6 +647,9 @@ export function updateQuietCandidateOutcomes(
       observedDay: dayKey,
       observedAt: Number(now),
       baselinePrice: Number(price.toFixed(8)),
+      executionCostModelVersion: 1,
+      estimatedRoundTripCostPercent: estimatedRoundTripCostPercent != null && estimatedRoundTripCostPercent !== '' && Number.isFinite(Number(estimatedRoundTripCostPercent)) && Number(estimatedRoundTripCostPercent) >= 0
+        ? Number(estimatedRoundTripCostPercent) : null,
       baselineEvidenceTimestamp: evidence.evidenceTimestamp || null,
       baselineEvidenceDay: evidence.evidenceDay || null,
       // Start future-outcome tracking at the observation price. The current
@@ -654,6 +667,7 @@ export function updateQuietCandidateOutcomes(
       liquidityBucket: liquidityBucket(candidate),
       marketCapBucket: marketCapBucket(candidate),
       componentScores: componentScores(candidate),
+      componentWeights: componentWeights(candidate),
       extensionProfile: candidate.extension || candidate.extensionProfile ||
         candidate.cryptoDiscoveryScorecard?.extension || null,
       newsCatalyst: candidate.newsCatalyst || candidate.catalystRanking || null,
@@ -701,6 +715,7 @@ export function updateQuietCandidateOutcomes(
     version: 2,
     measurementPolicyVersion: 3,
     updatedAt: new Date(now).toISOString(),
+    learningTrainingCutoffs: { ...(safePreviousState.learningTrainingCutoffs || {}) },
     updatedDayKey: dayKey,
     maxObservations: safeMaxObservations,
     maxObservationsPerAsset: safeMaxPerAsset,
@@ -731,5 +746,8 @@ export function updateQuietCandidateOutcomes(
     stock: calculateQuietCandidateLearning(nextState, { assetClass: "stock" }),
     crypto: calculateQuietCandidateLearning(nextState, { assetClass: "crypto" }),
   };
+  for (const className of ['stock', 'crypto']) {
+    nextState.learningTrainingCutoffs[className] = nextState.learning[className].validation.trainingCutoffAt;
+  }
   return nextState;
 }

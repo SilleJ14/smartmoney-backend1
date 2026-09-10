@@ -3,7 +3,7 @@ import path from 'node:path';
 
 const fields = ['dailyDateKey', 'dailyStartEquity', 'dailyPeakEquity', 'profitLockFloorEquity',
   'dailyLossLocked', 'profitLocked', 'stockTradingStoppedForDay', 'cryptoTradingStoppedForDay',
-  'liveTradeLimitState', 'orderRiskReservations', 'safetyReconciliationRequired'];
+  'liveTradeLimitState', 'orderRiskReservations', 'managedExecution', 'safetyReconciliationRequired'];
 const maxBytes = 2 * 1024 * 1024;
 function validSafetyState(state) {
   if (!state || Array.isArray(state) || typeof state !== 'object') return false;
@@ -22,6 +22,19 @@ function validSafetyState(state) {
       !Number.isFinite(Date.parse(intent.enteredAt)) || (intent.pending != null && typeof intent.pending !== 'boolean')) return false;
   }
   const entries = state.orderRiskReservations;
+  const execution = state.managedExecution;
+  if (execution != null) {
+    if (execution.version !== 1 || !execution.orders || !execution.realized ||
+      Object.keys(execution.orders).length > 300) return false;
+    for (const [id, row] of Object.entries(execution.orders)) {
+      if (!row || id !== row.clientId || !row.symbol || !nonnegative(row.qty) || row.qty === 0 ||
+        !nonnegative(row.entryPrice) || row.entryPrice === 0 || !nonnegative(row.filledQty) ||
+        !nonnegative(row.proceeds) || typeof row.done !== 'boolean') return false;
+    }
+    for (const row of Object.values(execution.realized)) {
+      if (!row?.id || !row.symbol || !nonnegative(row.qty) || !nonnegative(row.cost) || !nonnegative(row.proceeds)) return false;
+    }
+  }
   if (entries != null && (typeof entries !== 'object' || Array.isArray(entries))) return false;
   for (const [id, entry] of Object.entries(entries || {})) {
     if (entry && ['released', 'reflectedInPositions', 'countedIntraday', 'imported'].some(

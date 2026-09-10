@@ -395,6 +395,8 @@ test("bounded outcome learning changes weights only when activated", () => {
     stockOutcomeLearning: {
       active: true,
       sampleCount: 30,
+      learningPolicyVersion: 2,
+      validation: { active: true },
       componentMultipliers: {
         discovery: 1.05,
         entry: 0.95,

@@ -2,8 +2,9 @@ import test from "node:test";
 import assert from "node:assert/strict";
 import { calculateDynamicTradeAmount } from "../risk/positionSizing.js";
 const base = { account: { cash: 1000, equity: 1000, buying_power: 1000 }, positions: [], config: { minAutonomousTradeAmount: 25, targetCapitalSlots: 10, maxBotExposurePercent: 80 }, getExposure: () => 0 };
-test("sizes elite signals above normal signals", () => {
-  assert.ok(calculateDynamicTradeAmount({ ...base, signalScore: 92 }) > calculateDynamicTradeAmount({ ...base, signalScore: 78 }));
+test("conviction changes allocation when loss budget is not the binding limit", () => {
+  const roomy = { ...base, config: { ...base.config, maxBotExposurePercent: 10 } };
+  assert.ok(calculateDynamicTradeAmount({ ...roomy, signalScore: 92 }) > calculateDynamicTradeAmount({ ...roomy, signalScore: 78 }));
 });
 test("never exceeds remaining cash", () => {
   const amount = calculateDynamicTradeAmount({ ...base, account: { cash: 30, equity: 1000 }, signalScore: 92 });

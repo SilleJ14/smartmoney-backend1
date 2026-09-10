@@ -856,7 +856,7 @@ export function buildStockDecisionScore(signal = {}) {
     ? signal.reinforcementWeights || {}
     : {};
   const outcomeLearning = signal.stockOutcomeLearning || {};
-  const outcomeLearningActive = outcomeLearning.active === true;
+  const outcomeLearningActive = outcomeLearning.active === true && outcomeLearning.learningPolicyVersion === 2 && outcomeLearning.validation?.active === true;
   const outcomeMultiplier = (name) => {
     if (!outcomeLearningActive) return 1;
     const value = firstFinite(outcomeLearning.componentMultipliers?.[name]);

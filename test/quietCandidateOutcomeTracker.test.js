@@ -222,7 +222,8 @@ test("learning remains inactive until 30 measured and diverse examples exist", (
   );
   const learned = calculateQuietCandidateLearning(state, { assetClass: "crypto" });
 
-  assert.equal(learned.active, true);
+  assert.equal(learned.active, false);
+  assert.equal(learned.reason, 'WAITING_FOR_PURGED_OUT_OF_SAMPLE_EVIDENCE');
   assert.equal(learned.sampleCount, 30);
   assert.equal(learned.uniqueSymbolCount, 30);
   assert.ok(Object.values(learned.componentMultipliers).every(

@@ -62,6 +62,9 @@ export function evaluatePreTradeRisk({ order = {}, context = {}, options = {} } 
     if (context.profitLocked) reasons.push("Profit lock is active");
     if (!context.isCrypto && !context.marketOpen) reasons.push("Stock market is closed");
     if (price <= 0) reasons.push("Missing valid live price");
+    if (!context.isCrypto && price > 0 && price < Math.max(0.5, finiteNumber(context.minStockPrice, 0.5))) {
+      reasons.push("Stock price is below the configured minimum ($0.50 floor)");
+    }
     if (!context.quoteIsLive) reasons.push("Quote is not from a live source");
     if (!spreadAvailable) reasons.push("Live bid/ask spread is unavailable");
     if (quoteAgeSeconds < -5) {
@@ -88,6 +91,10 @@ export function evaluatePreTradeRisk({ order = {}, context = {}, options = {} } 
       );
     }
     if (value <= 0) reasons.push("Order value cannot be calculated");
+    if (context.lossBudgetSizing && (context.lossBudgetSizing.approved !== true ||
+      !Number.isFinite(context.lossBudgetSizing.maxNotional) || value > context.lossBudgetSizing.maxNotional + 0.005)) {
+      reasons.push(`Stop-distance/daily loss budget exceeded: ${context.lossBudgetSizing.reason || 'RISK_LIMIT'}`);
+    }
     if (exposure + value > maxExposure) {
       reasons.push(
         `Maximum bot exposure exceeded: ${Number((exposure + value).toFixed(2))} > ` +

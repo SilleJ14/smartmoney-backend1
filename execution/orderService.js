@@ -23,15 +23,19 @@ export function createOrderService({
   preTradeRiskGuard,
   onOrderSubmitted,
   reserveRisk,
+  executionLifecycle,
+  isCrypto = () => false,
 }) {
   let buyQueue = Promise.resolve();
   function submit(payload, options = {}) {
+    if (executionLifecycle) return executionLifecycle.exclusive(() => submitNow(payload, options));
     if (payload.side !== 'buy') return submitNow(payload, options);
     const work = buyQueue.then(() => submitNow(payload, options));
     buyQueue = work.catch(() => {});
     return work;
   }
   async function submitNow(payload, options = {}) {
+    const position = await executionLifecycle?.beforeSubmit(payload, options);
     const release = duplicateOrderGuard
       ? await duplicateOrderGuard.reserve(payload, options)
       : () => {};
@@ -42,11 +46,13 @@ export function createOrderService({
       const authorization = preTradeRiskGuard ? await preTradeRiskGuard.assertAllowed(payload, options) : null;
       if (payload.side === 'buy' && reserveRisk) riskReservation = await reserveRisk(payload, options);
       authorization?.assertCurrent?.();
+      executionLifecycle?.submitting(payload, options, position);
       submitted = true;
       const result = await tradingRequest("/v2/orders", {
         method: "POST",
         body: JSON.stringify(payload),
       });
+      await executionLifecycle?.submitted({ payload, options, result });
       if (typeof onOrderSubmitted === "function") {
         await onOrderSubmitted({ payload, options, result });
       }
@@ -54,6 +60,7 @@ export function createOrderService({
       await riskReservation?.settle?.({ result });
       return result;
     } catch (error) {
+      executionLifecycle?.failed({ payload, error, submitted });
       release({ success: false });
       await riskReservation?.settle?.({ error, notSubmitted: !submitted });
       throw error;
@@ -83,7 +90,7 @@ export function createOrderService({
       type: "market",
       time_in_force: "gtc",
       client_order_id: `${clientOrderPrefix}_${reason}_${cleanSymbol}_${now()}`,
-    });
+    }, { reason });
   }
 
   function stockBuy({
@@ -116,7 +123,7 @@ export function createOrderService({
         `${clientOrderPrefix}_BUY_${cleanSymbol}_${Math.round(score)}_${now()}`,
     };
 
-    if (fractionable) {
+    if (fractionable && cleanHoldCategory !== 'multi_day') {
       return submit(
         { ...payload, notional: cleanNotional, type: "market" },
         { allowExistingOpenOrder, holdCategory: cleanHoldCategory }
@@ -162,7 +169,7 @@ export function createOrderService({
       client_order_id:
         `${clientOrderPrefix}_SELL_${cleanSymbol}_${reason}_${now()}`,
     };
-    return submit({ ...payload, type: "market" });
+    return submit({ ...payload, type: "market" }, { reason });
   }
 
   function manualStockBuy({
@@ -194,6 +201,9 @@ export function createOrderService({
 
     if (buyMode === "shares") {
       const shareAmount = positiveNumber(shares, "share amount");
+      if (cleanHoldCategory === 'multi_day' && !Number.isInteger(shareAmount)) {
+        throw new Error('Multi-day stocks require whole shares for persistent broker-held protection');
+      }
       if (!fractionable && Math.floor(shareAmount) < 1) {
         throw new Error(`${cleanSymbol} is not fractionable. Enter at least 1 whole share.`);
       }
@@ -205,7 +215,7 @@ export function createOrderService({
 
     const amount = positiveNumber(dollars, "dollar amount");
     if (amount < 1) throw new Error("Invalid dollar amount");
-    if (fractionable) {
+    if (fractionable && cleanHoldCategory !== 'multi_day') {
       return submit(
         { ...payload, notional: Number(amount.toFixed(2)) },
         { automated: false, requireCandidateDecision, holdCategory: cleanHoldCategory }
@@ -229,6 +239,9 @@ export function createOrderService({
   async function closePosition(symbol) {
     const cleanSymbol = normalizeSymbol(symbol);
     if (!cleanSymbol) throw new Error("Missing symbol");
+    if (executionLifecycle) return submit({ symbol: cleanSymbol, side: 'sell', qty: Infinity,
+      type: 'market', time_in_force: isCrypto(cleanSymbol) ? 'gtc' : 'day',
+      client_order_id: `${clientOrderPrefix}_CLOSE_${cleanSymbol}_${now()}` }, { reason: 'MANUAL_CLOSE' });
     const release = duplicateOrderGuard
       ? await duplicateOrderGuard.reserve({ symbol: cleanSymbol, side: "sell" })
       : () => {};

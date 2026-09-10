@@ -2630,7 +2630,9 @@ export function createEngineCycle(dependencies) {
         const suggested = hasExplicitTradeApproval(signal) ? calculateDynamicTradeAmount({
           account: { ...portfolioRefreshAccount, cash: Math.max(0, Number(portfolioRefreshAccount.cash || 0) - reserved),
             buying_power: Math.max(0, Number(portfolioRefreshAccount.buying_power ?? portfolioRefreshAccount.cash ?? 0) - reserved) }, positions: sizingPositions,
-          signalScore: finalScore ?? 0, config: CONFIG,
+          signalScore: finalScore ?? 0, config: CONFIG, signal,
+          dailyStartEquity: engineState.dailyStartEquity || portfolioRefreshAccount.last_equity,
+          pendingNotional: reserved,
           getExposure: (rows) => rows.reduce((sum, row) => sum + Math.abs(Number(row.market_value || 0)), reserved),
         }) : 0;
         const cryptoExposure = sizingPositions.filter((row) => String(row.asset_class || '').toLowerCase() === 'crypto' || String(row.symbol || '').includes('/') || String(row.symbol || '').endsWith('USD'))
@@ -2807,6 +2809,7 @@ export function createEngineCycle(dependencies) {
         engineState.stockScoreOutcomeState.summary;
       engineState.stockScoreOutcomeLearning =
         calculateStockOutcomeLearning(engineState.stockScoreOutcomeState);
+      engineState.stockScoreOutcomeState.learningTrainingCutoffAt = engineState.stockScoreOutcomeLearning.validation?.trainingCutoffAt || null;
       engineState.lastSignals = [...signals].sort(compareCanonicalSignals);
       engineState.lastStockSignals =
         Array.isArray(stockSignals) && stockSignals.length > 0

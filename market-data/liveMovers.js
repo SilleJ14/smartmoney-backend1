@@ -1,5 +1,6 @@
 import { getApprovedTradeAmount } from "../scoring/approvedSizing.js";
 import { revalidateCandidate } from "../scoring/revalidateCandidate.js";
+import { candidateFeedDecision } from "../discovery/candidateFeedPolicy.js";
 import {
   buildStockDecisionScore,
   calculateEarlyDiscoveryScore,
@@ -757,7 +758,7 @@ export function buildLiveMovers({
     }
   }
 
-  return selectCandidateDisplayWindow(Array.from(moversBySymbol.values())
+  return selectCandidateDisplayWindow(Array.from(moversBySymbol.values()).filter(candidate => candidateFeedDecision(candidate).visible)
     .map((candidate) => ({
       ...candidate,
       canonicalFinalScore: getCanonicalFinalScore(candidate),

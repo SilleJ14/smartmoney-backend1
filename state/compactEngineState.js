@@ -208,6 +208,8 @@ function compactQuietCandidateObservation(observation = {}) {
     observedDay: observation.observedDay || null,
     observedAt: Number(observation.observedAt || 0),
     baselinePrice: Number(observation.baselinePrice || 0),
+    executionCostModelVersion: observation.executionCostModelVersion || null,
+    estimatedRoundTripCostPercent: observation.estimatedRoundTripCostPercent ?? null,
     trackingPeakPrice: Number(observation.trackingPeakPrice || 0),
     lastTrackedDay: observation.lastTrackedDay || null,
     discoveryScore: Number(observation.discoveryScore || 0),
@@ -217,6 +219,7 @@ function compactQuietCandidateObservation(observation = {}) {
     liquidityBucket: observation.liquidityBucket || "UNKNOWN",
     marketCapBucket: observation.marketCapBucket || "UNKNOWN",
     componentScores: observation.componentScores || {},
+    componentWeights: observation.componentWeights || {},
     extensionProfile: extension
       ? {
         assetClass: extension.assetClass || observation.assetClass || null,

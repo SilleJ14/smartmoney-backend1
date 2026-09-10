@@ -35,7 +35,7 @@ test("buildLiveMovers uses stock scoring fields for stocks and crypto fields for
   assert.equal(movers.find((mover) => mover.symbol === "BTC/USD").score, 88);
 });
 
-test("buildLiveMovers deduplicates symbols and keeps the largest absolute move", () => {
+test("live movers do not resurrect an older positive stock row after its merged move turns negative", () => {
   const movers = buildLiveMovers({
     state: {
       topStockSignals: [{ symbol: "AAPL", price: 102, previousClose: 100 }],
@@ -47,8 +47,7 @@ test("buildLiveMovers deduplicates symbols and keeps the largest absolute move",
     isCrypto,
   });
 
-  assert.equal(movers.length, 1);
-  assert.equal(movers[0].changePercent, -10);
+  assert.equal(movers.length, 0);
 });
 
 test("live movers preserve provider quote time and never manufacture live freshness", () => {

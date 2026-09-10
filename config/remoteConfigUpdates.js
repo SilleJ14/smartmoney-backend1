@@ -7,7 +7,8 @@ export function parseRemoteConfigUpdates(body = {}, emergencyStopActive = false)
     if (body[key] === undefined) continue;
     const value = Number(body[key]);
     if (!Number.isFinite(value)) return { error: `Invalid number for ${key}`, received: body[key] };
-    updates[key] = key === "minScoreToBuy" ? Math.max(70, value) : value;
+    updates[key] = key === "minScoreToBuy" ? Math.max(70, value)
+      : key === "minStockPrice" ? Math.max(0.5, value) : value;
   }
   for (const key of BOOLEAN_CONFIG_KEYS) {
     if (body[key] === undefined) continue;

@@ -208,7 +208,7 @@ export function registerManualExecutionRoutes(app, dependencies) {
       }
       const result = await closePosition(normalized);
       recordOrder("MANUAL_CLOSE", normalized, { result });
-      clearClosedPositionState(getState(), normalized, now().toISOString());
+      // Submission is not a fill; the shared broker reconciler clears state when flat.
       res.json({ message: `Close position submitted for ${normalized}`, result });
     } catch (error) {
       recordFailedOrder("MANUAL_CLOSE_FAILED", symbol, error.message);

@@ -1,4 +1,7 @@
-export function calculateDynamicTradeAmount({ account = {}, positions = [], signalScore = 80, config = {}, compoundingState = {}, getExposure }) {
+import { calculateLossBudgetSizing } from './lossBudgetSizing.js';
+
+export function calculateDynamicTradeAmount({ account = {}, positions = [], signalScore = 80, config = {}, compoundingState = {}, getExposure,
+  signal = {}, dailyStartEquity, pendingNotional = 0 }) {
   const cash = Number(account.cash || 0);
   const equity = Number(account.equity || 0);
   const buyingPower = Number(account.buying_power ?? cash);
@@ -14,5 +17,8 @@ export function calculateDynamicTradeAmount({ account = {}, positions = [], sign
   // are allocation fractions, not probabilities or expected returns.
   const fraction = signalScore >= 90 ? 0.5 : signalScore >= 85 ? 0.4 : signalScore >= 78 ? 0.3 : signalScore >= 72 ? 0.2 : signalScore >= 65 ? 0.15 : 0;
   if (!fraction) return 0;
-  return Math.floor(Math.min(Math.max(minimum, available * fraction), available) * 100) / 100;
+  const lossBudget = calculateLossBudgetSizing({ account, positions, config, signal, dailyStartEquity, pendingNotional });
+  const amount = Math.floor(Math.min(Math.max(minimum, available * fraction), available, lossBudget.maxNotional) * 100) / 100;
+  // Never round a risk-constrained amount UP to the broker minimum.
+  return lossBudget.approved && amount >= minimum ? amount : 0;
 }

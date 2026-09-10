@@ -27,16 +27,13 @@ export function createPositionExitManager(dependencies) {
     getExitReinforcementAdjustment,
     getPositions,
     isAiManagedOpenPosition,
-    journalTradeExit,
     normalizeSymbol,
     placeCryptoMarketSell,
     placeMarketSell,
     recordFailedOrder,
     recordOrder,
-    rememberTradeResult,
     saveEngineState,
     updateExitDashboardState,
-    updateReloadReentryMemory,
     getTradingMode,
   } = dependencies;
 
@@ -506,24 +503,7 @@ export function createPositionExitManager(dependencies) {
             scaleQty,
             institutionalExitDecision.scaleLevel
           );
-          engineState.runnerPositions[symbol] = {
-            ...(engineState.runnerPositions[symbol] || {}),
-            institutionalExitLadder: {
-              ...(engineState.runnerPositions[symbol]?.institutionalExitLadder || {}),
-              firstScaleTaken:
-                institutionalExitDecision.scaleLevel === "FIRST_SCALE"
-                  ? true
-                  : engineState.runnerPositions[symbol]?.institutionalExitLadder?.firstScaleTaken || false,
-              secondScaleTaken:
-                institutionalExitDecision.scaleLevel === "SECOND_SCALE"
-                  ? true
-                  : engineState.runnerPositions[symbol]?.institutionalExitLadder?.secondScaleTaken || false,
-              lastScaleTakenAt: new Date().toISOString(),
-              lastScaleProfitPercent: unrealizedPercent,
-              lastScaleQty: scaleQty,
-            },
-          };
-          recordOrder("INSTITUTIONAL_PROFIT_SCALE_OUT", symbol, {
+          recordOrder("INSTITUTIONAL_PROFIT_SCALE_OUT_SUBMITTED", symbol, {
             scaleQty,
             remainingQty: qty - scaleQty,
             price: currentPrice,
@@ -556,14 +536,7 @@ export function createPositionExitManager(dependencies) {
             partialQty,
             "SMART_PARTIAL_PROFIT"
           );
-          engineState.runnerPositions[symbol] = {
-            ...(engineState.runnerPositions[symbol] || {}),
-            partialProfitTaken: true,
-            partialProfitTakenAt: new Date().toISOString(),
-            partialProfitPercent: unrealizedPercent,
-            partialProfitQty: partialQty,
-          };
-          recordOrder("SMART_PARTIAL_PROFIT_TAKEN", symbol, {
+          recordOrder("SMART_PARTIAL_PROFIT_SUBMITTED", symbol, {
             partialQty,
             remainingQty: qty - partialQty,
             price: currentPrice,
@@ -687,7 +660,7 @@ export function createPositionExitManager(dependencies) {
             smartTrimDecision.trimQty,
             "SMART_RUNNER_TRIM"
           );
-          recordOrder("SMART_RUNNER_TRIM_EXECUTED", symbol, {
+          recordOrder("SMART_RUNNER_TRIM_SUBMITTED", symbol, {
             trimQty: smartTrimDecision.trimQty,
             originalQty: qty,
             price: currentPrice,
@@ -702,7 +675,7 @@ export function createPositionExitManager(dependencies) {
             profitPercent: unrealizedPercent,
             smartTrimDecision,
           });
-          saveEngineState("SMART_RUNNER_TRIM_EXECUTED");
+          saveEngineState("SMART_RUNNER_TRIM_SUBMITTED");
           continue;
         } catch (err) {
           recordFailedOrder("SMART_RUNNER_TRIM_FAILED", symbol, err.message, {
@@ -777,69 +750,7 @@ export function createPositionExitManager(dependencies) {
       }
       try {
         const order = await placeMarketSell(symbol, qty, reason);
-        if (
-          unrealizedPercent >=
-          Number(CONFIG.runnerTriggerPercent || 6)
-        ) {
-          if (!engineState.statisticalMemoryState) {
-            engineState.statisticalMemoryState = {
-              updatedAt: new Date().toISOString(),
-              setupHistory: [],
-              setupPerformance: {},
-              expectancyHistory: [],
-              probabilityHistory: [],
-            };
-          }
-          const reinforcementSetupType =
-            engineState.aiEntryScores?.[symbol]
-              ?.setupType || "UNKNOWN_SETUP";
-          engineState.statisticalMemoryState.setupHistory.unshift({
-            symbol,
-            setupType: reinforcementSetupType,
-            timestamp: new Date().toISOString(),
-            profitPercent: Number(
-              unrealizedPercent.toFixed(2)
-            ),
-            reinforcementSource: "LIVE_RUNNER_EXIT",
-          });
-          engineState.statisticalMemoryState.setupHistory =
-            engineState.statisticalMemoryState.setupHistory.slice(
-              0,
-              500
-            );
-        }
-        if (
-          unrealizedPercent <=
-          -Number(CONFIG.stopLossPercent || 1)
-        ) {
-          if (!engineState.statisticalMemoryState) {
-            engineState.statisticalMemoryState = {
-              updatedAt: new Date().toISOString(),
-              setupHistory: [],
-              setupPerformance: {},
-              expectancyHistory: [],
-              probabilityHistory: [],
-            };
-          }
-          const weakeningSetupType =
-            engineState.aiEntryScores?.[symbol]
-              ?.setupType || "UNKNOWN_SETUP";
-          engineState.statisticalMemoryState.setupHistory.unshift({
-            symbol,
-            setupType: weakeningSetupType,
-            timestamp: new Date().toISOString(),
-            profitPercent: Number(
-              unrealizedPercent.toFixed(2)
-            ),
-            reinforcementSource: "LIVE_STOP_LOSS",
-          });
-          engineState.statisticalMemoryState.setupHistory =
-            engineState.statisticalMemoryState.setupHistory.slice(
-              0,
-              500
-            );
-        }
-        recordOrder(reason, symbol, {
+        recordOrder(`${reason}_SUBMITTED`, symbol, {
           dynamicRunnerTrailingStopPercent,
           trendHoldMode: trendHoldDecision.mode,
           trendHoldReason: trendHoldDecision.reason,
@@ -858,38 +769,8 @@ export function createPositionExitManager(dependencies) {
           isRunner,
           order,
         });
-        const reloadReentryMemory =
-          updateReloadReentryMemory({
-            symbol,
-            reason,
-            unrealizedPercent,
-            isRunner,
-          });
-        updateExitDashboardState({
-          symbol,
-          action: "FULL_EXIT_EXECUTED",
-          reason,
-          profitPercent: unrealizedPercent,
-          isRunner,
-          reloadReentryMemory,
-        });
-        saveEngineState("PROBABILITY_REINFORCEMENT_UPDATED");
-        rememberTradeResult(symbol, {
-          profitPercent: unrealizedPercent,
-          reason,
-        });
-        saveEngineState("CRYPTO_PROBABILITY_REINFORCEMENT_UPDATED");
-        journalTradeExit(symbol, {
-          assetClass: "stock",
-          exitType: "AUTO_STOCK_EXIT",
-          exitPrice: currentPrice,
-          profitPercent: unrealizedPercent,
-          exitReason: reason,
-        });
-        delete engineState.highWaterMarks[symbol];
-        engineState.lastSoldAt[symbol] = Date.now();
-        delete engineState.aiEntryScores[symbol];
-        delete engineState.runnerPositions[symbol];
+        updateExitDashboardState({ symbol, action: "FULL_EXIT_SUBMITTED", reason });
+        saveEngineState("EXIT_SUBMITTED_AWAITING_FILL");
       } catch (err) {
         recordFailedOrder(`${reason}_FAILED`, symbol, err.message, {
           dynamicRunnerTrailingStopPercent,
@@ -997,19 +878,7 @@ export function createPositionExitManager(dependencies) {
           reason,
           order,
         });
-        journalTradeExit(symbol, {
-          assetClass: "crypto",
-          exitType: "AUTO_CRYPTO_EXIT",
-          exitPrice: currentPrice,
-          profitPercent,
-          exitReason: reason,
-        });
-        rememberTradeResult(symbol, {
-          profitPercent,
-          reason,
-        });
-        delete engineState.highWaterMarks[symbol];
-        engineState.lastSoldAt[symbol] = Date.now();
+        saveEngineState("CRYPTO_EXIT_SUBMITTED_AWAITING_FILL");
       } catch (err) {
         recordFailedOrder("AUTO_CRYPTO_SELL_FAILED", symbol, err.message, {
           qty,

@@ -52,8 +52,12 @@ export function mergeLiveStockQuoteWithReference(
   const previousClose = finitePositive(
     referenceQuote.previousClose,
     referenceQuote.pc,
+    (referenceQuote.percentChangeReferenceType || referenceQuote.changeReferenceType) === "previous_close"
+      ? referenceQuote.percentChangeReferencePrice ?? referenceQuote.changeReferencePrice : null,
     liveQuote.previousClose,
-    liveQuote.pc
+    liveQuote.pc,
+    (liveQuote.percentChangeReferenceType || liveQuote.changeReferenceType) === "previous_close"
+      ? liveQuote.percentChangeReferencePrice ?? liveQuote.changeReferencePrice : null
   );
   const open = finitePositive(
     referenceQuote.open,

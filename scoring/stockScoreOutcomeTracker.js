@@ -3,6 +3,8 @@ import {
   isUsStockMarketSessionDayKey,
 } from "../utils/usMarketCalendar.js";
 
+import { validateQuietLearning } from './quietLearningValidation.js';
+
 const ET_TIME_ZONE = "America/New_York";
 const DEFAULT_MAX_OBSERVATIONS = 500;
 const DEFAULT_MAX_NEW_PER_CYCLE = 25;
@@ -317,6 +319,8 @@ export function updateStockScoreOutcomes(
       symbol,
       observedDay,
       observedAt: now,
+      executionCostModelVersion: 1,
+      estimatedRoundTripCostPercent: 0.25,
       baselinePrice: round(price, 6),
       scoreBand: resolveScoreBand(signal, score),
       finalScore: round(score, 2),
@@ -324,6 +328,7 @@ export function updateStockScoreOutcomes(
       entryScore: round(signal.entryQualityScore || signal.entryQualityScorecard?.score || 0, 2),
       continuationScore: round(signal.multiDayContinuationScore || signal.continuationScorecard?.score || 0, 2),
       componentScores: decisionComponentScores(signal),
+      componentWeights: signal.decisionScoreTelemetry?.stages?.decision?.effectiveWeights || signal.stockDecisionEvidence?.effectiveWeights || {},
       targets: buildTargets(now),
       measurements: {},
     });
@@ -343,6 +348,7 @@ export function updateStockScoreOutcomes(
     observationCount: boundedObservations.length,
     completedCount,
     pendingCount: boundedObservations.length - completedCount,
+    learningTrainingCutoffAt: previousState?.learningTrainingCutoffAt || null,
     horizons: HORIZONS.map(([name]) => name),
     summary: buildSummary(boundedObservations),
     observations: boundedObservations,
@@ -438,7 +444,7 @@ export function calculateStockOutcomeLearning(
   );
   const measuredObservations = dueObservations.filter((observation) => {
     const measurement = observation.measurements?.[horizon];
-    return measurement &&
+    return measurement && measurement.returnPercent !== null && measurement.returnPercent !== undefined && measurement.returnPercent !== '' &&
       Number.isFinite(Number(measurement.returnPercent)) &&
       Number(measurement.delayMinutes || 0) <= maxMeasurementDelayMinutes;
   });
@@ -451,7 +457,14 @@ export function calculateStockOutcomeLearning(
   ).size;
   const diversityPass = uniqueSymbolCount >= minUniqueSymbols;
   const coveragePass = measurementCoverage >= minMeasurementCoverage;
-  const active = enoughSamples && coveragePass && diversityPass;
+  const validation = validateQuietLearning(measuredObservations.map(observation => ({
+    ...observation,
+    measurements: { [horizon]: {
+      closeReturnPercent: observation.measurements[horizon].returnPercent,
+      evidenceTimestamp: observation.measurements[horizon].measuredAt,
+    } },
+  })), horizon, Math.max(30, minSamples), outcomeState.learningTrainingCutoffAt, 0.05);
+  const active = enoughSamples && coveragePass && diversityPass && validation.active;
   const componentNames = [
     "discovery",
     "entry",
@@ -481,12 +494,14 @@ export function calculateStockOutcomeLearning(
       correlation: round(correlation, 4),
     };
     componentMultipliers[name] = active && pairs.length >= minSamples
-      ? round(Math.max(0.95, Math.min(1.05, 1 + correlation * 0.05)), 4)
+      ? Math.max(0.95, Math.min(1.05, validation.componentMultipliers[name] ?? 1))
       : 1;
   }
 
   return {
-    version: 1,
+    version: 2,
+    learningPolicyVersion: 2,
+    validation,
     calculatedAt: new Date(evaluatedAt).toISOString(),
     active,
     horizon,
@@ -506,6 +521,6 @@ export function calculateStockOutcomeLearning(
         ? "OUTCOME_MEASUREMENT_COVERAGE_TOO_LOW"
         : !diversityPass
           ? "OUTCOME_SYMBOL_DIVERSITY_TOO_LOW"
-          : "BOUNDED_OUTCOME_LEARNING_ACTIVE",
+          : validation.reason,
   };
 }

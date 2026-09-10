@@ -1,3 +1,5 @@
+import { candidateFeedDecision } from '../discovery/candidateFeedPolicy.js';
+
 export function registerLiveSignalRoutes(app, dependencies) {
   const { requireAdmin, getState, runFastRunnerEngine, getTopSignals, mergeLiveQuote,
     getMarketSession, getMode, getAutoTradingEnabled, buildTopBrains,
@@ -7,16 +9,17 @@ export function registerLiveSignalRoutes(app, dependencies) {
       const state = getState(), refresh = String(req.query.refresh || "").toLowerCase() === "true";
       if (refresh || !state.fastRunnerEngineState) await runFastRunnerEngine();
       const current = getState();
+      const candidates = (current.fastRunnerCandidates || []).map(mergeLiveQuote).filter(signal => candidateFeedDecision(signal).visible);
       res.json({ ok: true, generatedAt: now().toISOString(), state: current.fastRunnerEngineState || null,
-        count: current.fastRunnerCandidates?.length || 0, candidates: current.fastRunnerCandidates || [],
-        visibleCandidates: current.visibleLiveCandidates || [] });
+        count: candidates.length, candidates,
+        visibleCandidates: (current.visibleLiveCandidates || []).map(mergeLiveQuote).filter(signal => candidateFeedDecision(signal).visible) });
     } catch (error) { res.status(500).json({ ok: false, error: "Failed to load fast runners", details: error.message }); }
   });
   app.get("/live-signals", requireAdmin, async (_req, res) => {
     try {
       const state = getState();
       const stockSignals = getTopSignals([...(state.lastStockSignals || []), ...(state.fastRunnerCandidates || []),
-        ...(state.quickInstitutionalCandidates || [])], 25).map(mergeLiveQuote);
+        ...(state.quickInstitutionalCandidates || [])].map(mergeLiveQuote).filter(signal => candidateFeedDecision(signal).visible), 25);
       const cryptoSignals = getTopSignals(state.lastCryptoSignals || [], 25).map(mergeLiveQuote);
       res.json({ generatedAt: now().toISOString(), marketOpen: Boolean(state.marketOpen),
         marketSession: getMarketSession({ is_open: Boolean(state.marketOpen) }), mode: getMode(),

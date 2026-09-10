@@ -13,7 +13,7 @@ export const DEFAULT_DISCOVERY_BUDGETS = Object.freeze({
   liveSymbols: 15,
   historyDays: 60,
   maxCurrentMovePercent: 3,
-  minPrice: 1,
+  minPrice: 0.5,
   minAverageDollarVolume: 500000,
   maxWorkingMemoryMb: 96,
 });
@@ -145,7 +145,7 @@ export function calculateQuietPreMoveFeatures(history = [], { learning = null, n
     { name: "volumeLifecycle", source: "volume_dry_up", value: volumeDryUpScore, weight: 0.15, available: baselineVolume > 0 },
     { name: "liquidity", source: "average_dollar_volume", value: liquidityScore, weight: 0.1, available: latest.c > 0 },
   ];
-  const activeLearning = learning?.active === true;
+  const activeLearning = learning?.active === true && learning.learningPolicyVersion === 2 && learning.validation?.active === true;
   const adjustedComponents = baseComponents.map((component) => {
     const learningMultiplier = activeLearning
       ? Math.max(0.9, Math.min(1.1, Number(learning?.componentMultipliers?.[component.name] || 1)))

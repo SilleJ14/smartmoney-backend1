@@ -1,5 +1,9 @@
 export function sanitizeRuntimeConfig(config = {}) {
   const safe = { ...config };
+  if (safe.minStockPrice !== undefined) {
+    const minimum = Number(safe.minStockPrice);
+    safe.minStockPrice = Number.isFinite(minimum) ? Math.max(0.5, minimum) : 0.5;
+  }
   if (safe.minScoreToBuy !== undefined) {
     safe.minScoreToBuy = Math.max(70, Number(safe.minScoreToBuy || 70));
   }

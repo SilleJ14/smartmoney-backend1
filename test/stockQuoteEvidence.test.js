@@ -139,3 +139,17 @@ test("stock reference merge leaves change unavailable without a real previous cl
   assert.equal(merged.changePercent, null);
   assert.equal(merged.percentChangeAvailable, false);
 });
+
+test("stock reference merge accepts explicitly typed previous-close aliases, not crypto or intraday references", () => {
+  for (const type of ["previous_close", "current_utc_day_open", "intraday_open", undefined]) {
+    const merged = mergeLiveStockQuoteWithReference({ price: 110 }, {
+      percentChangeReferencePrice: 100, percentChangeReferenceType: type,
+    });
+    assert.equal(merged.percentChangeAvailable, type === "previous_close");
+    assert.equal(merged.percentChange, type === "previous_close" ? 10 : null);
+  }
+  const alias = mergeLiveStockQuoteWithReference({ price: 100,
+    changeReferencePrice: 100, changeReferenceType: "previous_close" });
+  assert.equal(alias.percentChange, 0);
+  assert.equal(alias.percentChangeAvailable, true);
+});

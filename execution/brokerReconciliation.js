@@ -32,11 +32,13 @@ export function buildPendingExits({
     .filter(isExitOrder)
     .map((order) => {
       const filledQty = Number(order.filled_qty || 0);
-      const totalQty = Number(order.qty || order.notional || 0);
+      // Notional is dollars, never shares. Unknown quantity stays unknown.
+      const totalQty = Number(order.qty || 0);
       return {
         source: "alpaca_open_order",
         symbol: normalizeSymbol(order.symbol),
-        qty: Math.max(0, totalQty - filledQty) || totalQty,
+        qty: Math.max(0, totalQty - filledQty),
+        notional: order.notional == null ? null : Number(order.notional),
         originalQty: totalQty,
         filledQty,
         reason: classifyExitOrder(order),
@@ -54,7 +56,7 @@ export function buildPendingExits({
         submittedAt: order.submitted_at || null,
       };
     })
-    .filter((exit) => exit.symbol && Number(exit.qty || 0) > 0);
+    .filter((exit) => exit.symbol && (Number(exit.qty || 0) > 0 || Number(exit.notional || 0) > 0));
 
   const engineExits = (Array.isArray(enginePendingExits) ? enginePendingExits : [])
     .map((exit) => ({

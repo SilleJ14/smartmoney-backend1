@@ -179,10 +179,11 @@ test("outcome learning waits for 30 well-measured samples and stays bounded", ()
   assert.equal(lowDiversity.reason, "OUTCOME_SYMBOL_DIVERSITY_TOO_LOW");
 
   const active = calculateStockOutcomeLearning(learningState(30));
-  assert.equal(active.active, true);
+  assert.equal(active.active, false);
+  assert.equal(active.reason, 'WAITING_FOR_PURGED_OUT_OF_SAMPLE_EVIDENCE');
   assert.equal(active.measurementCoverage, 1);
-  assert.equal(active.componentMultipliers.discovery, 1.05);
-  assert.equal(active.componentMultipliers.entry, 0.95);
+  assert.equal(active.componentMultipliers.discovery, 1);
+  assert.equal(active.componentMultipliers.entry, 1);
   assert.equal(active.componentMultipliers.fundamentals, 1);
   assert.ok(
     Object.values(active.componentMultipliers).every(

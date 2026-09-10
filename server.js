@@ -4,6 +4,7 @@ import { getApprovedTradeAmount } from "./scoring/approvedSizing.js";
 import { revalidateCandidate } from './scoring/revalidateCandidate.js';
 import { createSafetyJournal, readSafetyJournal } from './state/safetyJournal.js';
 import { createOrderRiskReservations, outstandingOrderNotional } from './risk/orderRiskReservations.js';
+import { createManagedExecution } from './execution/managedExecution.js';
 import { createAssetQuotePump } from './market-data/assetQuotePump.js';
 import { createCryptoIntradayBars } from './market-data/cryptoIntradayBars.js';
 import { isUsStockMarketSessionDayKey } from "./utils/usMarketCalendar.js";
@@ -133,6 +134,9 @@ import {
   calculateTrendQualityHoldDuration as calculateTrendQualityHoldDurationCore,
 } from "./risk/exitRiskEngine.js";
 import { calculateDynamicTradeAmount } from "./risk/positionSizing.js";
+import { calculateLossBudgetSizing } from "./risk/lossBudgetSizing.js";
+import { confirmedBotOwnedSymbols } from "./execution/confirmedOwnership.js";
+import { candidateFeedDecision, migrateStockFloorPreference } from "./discovery/candidateFeedPolicy.js";
 import { createPositionExitManager } from "./risk/positionExitManager.js";
 import {
   calculateInstitutionalRiskScore,
@@ -473,6 +477,11 @@ const QUICK_GATE_MAX_SPREAD_PERCENT = Number(
 const QUICK_GATE_BLOCK_PANIC =
   process.env.QUICK_GATE_BLOCK_PANIC !== "false";
 let runtimeConfig = loadRuntimeConfig(CONFIG_FILE);
+// One-time application of the requested $0.50 floor, preserving every other
+// saved preference. Subsequent user-selected higher floors remain persistent.
+if (Number(runtimeConfig.stockFloorPolicyVersion || 0) < 1) {
+  runtimeConfig = saveRuntimeConfig(CONFIG_FILE, migrateStockFloorPreference(runtimeConfig));
+}
 function runtimeNumber(key, envName, defaultValue) {
   const runtimeValue = runtimeConfig?.[key];
   if (runtimeValue !== undefined && runtimeValue !== null && runtimeValue !== "") {
@@ -864,7 +873,7 @@ const CONFIG = {
   maxCryptoOpenTrades: Number(process.env.MAX_CRYPTO_OPEN_TRADES || 3),
   targetCapitalSlots: Number(process.env.TARGET_CAPITAL_SLOTS || 15),
   minAutonomousTradeAmount: Number(process.env.MIN_AUTONOMOUS_TRADE_AMOUNT || 25),
-  minStockPrice: Number(process.env.MIN_STOCK_PRICE || 1),
+  minStockPrice: Number(process.env.MIN_STOCK_PRICE || 0.5),
   maxStockPrice: Number(process.env.MAX_STOCK_PRICE || 1000),
   replaceWeakestMinScoreGap: Number(process.env.REPLACE_SCORE_GAP || 8),
   maxRotationsPerDay: Number(process.env.MAX_ROTATIONS_PER_DAY || 6),
@@ -1110,7 +1119,7 @@ const NUMERIC_CONFIG_DEFAULTS = {
   maxCryptoOpenTrades: 3,
   targetCapitalSlots: 15,
   minAutonomousTradeAmount: 25,
-  minStockPrice: 1,
+  minStockPrice: 0.5,
   maxStockPrice: 1000,
   minScoreToBuy: 70,
   minCryptoDiscoveryScore: 60,
@@ -2609,13 +2618,19 @@ function journalTradeEntry(symbol, entry = {}) {
   saveEngineState("TRADE_JOURNAL_ENTRY");
 }
 function journalTradeExit(symbol, exit = {}) {
+  if (exit.fillConfirmed !== true || !exit.executionId) return;
   initTradeJournalState();
+  if (engineState.tradeJournalHistory.some(row => row.executionId === exit.executionId)) return;
   const cleanSymbol = normalizeSymbol(symbol);
   if (!cleanSymbol) return;
   const entry =
     engineState.tradeJournalOpenEntries[cleanSymbol] || {};
   const profitPercent = Number(exit.profitPercent || 0);
   const closedTrade = {
+    executionId: exit.executionId,
+    fillConfirmed: true,
+    filledQty: exit.filledQty,
+    realizedPnl: exit.realizedPnl,
     symbol: cleanSymbol,
     assetClass: exit.assetClass || entry.assetClass || "stock",
     entryType: entry.entryType || "AI_ENTRY",
@@ -2627,7 +2642,7 @@ function journalTradeExit(symbol, exit = {}) {
       exit.marketRegime ||
       engineState.marketRegime?.state ||
       "unknown",
-    entryPrice: Number(entry.entryPrice || 0),
+    entryPrice: Number(exit.entryPrice || entry.entryPrice || 0),
     exitPrice: Number(exit.exitPrice || 0),
     score: Number(entry.score || exit.score || 0),
     tradeAmount: Number(entry.tradeAmount || 0),
@@ -3083,6 +3098,7 @@ function buildBackendHealthPayload(clock = {}) {
     },
     liveScheduler: engineState.liveSchedulerState || null,
     outcomeStorage: discoveryOutcomeStore.getStatus(),
+    positionProtection: engineState.positionProtection || { ok: false, reason: 'Awaiting broker reconciliation' },
     fastRunnerRefreshError: engineState.fastRunnerRefreshError || null,
     candidates: {
       stocks: Array.isArray(engineState.lastStockSignals) ? engineState.lastStockSignals.length : 0,
@@ -11513,7 +11529,7 @@ function calculateFinalPositionSizingReconciliation({
   const currentBotExposure = getBotExposure(managedPositions);
   const maxBotBudget = equity * (Number(CONFIG.maxBotExposurePercent || 15) / 100);
   const remainingBotBudget = Math.max(0, maxBotBudget - currentBotExposure);
-  const perTradeMax = getDynamicTradeAmount(account, managedPositions, getCanonicalFinalScore(signal) ?? 0);
+  const perTradeMax = getDynamicTradeAmount(account, managedPositions, getCanonicalFinalScore(signal) ?? 0, signal);
   const governorMultiplier = Number(
     portfolioGovernor.capitalThrottleMultiplier || 1
   );
@@ -13331,12 +13347,15 @@ function passesAutonomousParliamentGate(signal = {}) {
     phase21,
   };
 }
-function getDynamicTradeAmount(account, managedPositions = [], signalScore = 80) {
+function getDynamicTradeAmount(account, managedPositions = [], signalScore = 80, signal = {}) {
   const pending = Object.values(engineState.orderRiskReservations || {}).reduce((sum, entry) => sum + outstandingOrderNotional(entry, managedPositions, normalizeSymbol), 0);
   return calculateDynamicTradeAmount({
     account: { ...account, cash: Math.max(0, Number(account.cash || 0) - pending), buying_power: Math.max(0, Number(account.buying_power ?? account.cash ?? 0) - pending) },
     positions: managedPositions,
     signalScore,
+    signal,
+    dailyStartEquity: engineState.dailyStartEquity || account.last_equity,
+    pendingNotional: pending,
     config: CONFIG,
     compoundingState: engineState.capitalCompoundingState || {},
     getExposure: (positions) => getBotExposure(positions) + pending,
@@ -13678,6 +13697,7 @@ const preTradeRiskGuard = {
     }
     const symbol = normalizeSymbol(order.symbol);
     const cryptoAsset = isCrypto(symbol);
+    managedExecution.assertReady();
     const [account, positions, botOwnedSymbols, clock] = await Promise.all([
       getAccount(),
       getPositions(),
@@ -13693,9 +13713,13 @@ const preTradeRiskGuard = {
     const quote = quoteResolution.quote;
     const referencePrice = Number(quote.price || quote.current || 0);
     const notional = Number(order.notional || Number(order.qty || 0) * referencePrice);
+    let sizingSignal = { symbol, price: referencePrice };
     options.riskNotional = notional;
     options.riskReferencePrice = referencePrice;
     options.riskBaseQty = Number(positions.find((p) => normalizeSymbol(p.symbol) === symbol)?.qty || 0);
+    if (!cryptoAsset && options.holdCategory === 'multi_day' && !Number.isInteger(options.riskBaseQty)) {
+      throw new Error('Multi-day additions require a whole-share position for persistent protection');
+    }
     if (options.automated !== false || options.requireCandidateDecision) {
       const candidates = dedupeSignalsByCanonicalAuthority([
         ...(engineState.lastStockSignals || []), ...(engineState.lastCryptoSignals || [])
@@ -13703,6 +13727,7 @@ const preTradeRiskGuard = {
       const previous = candidates.find((candidate) => normalizeSymbol(candidate.symbol) === symbol);
       if (!previous) throw new Error(`No current canonical decision for ${symbol}`);
       const candidate = revalidateCandidate(previous, { ...previous, ...quote });
+      sizingSignal = { ...candidate, symbol, price: referencePrice };
       const gate = cryptoAsset ? evaluateCryptoTradeCandidate(candidate, { requireCentralDecision: true, requireFreshDecision: true, requireExplicitApproval: true })
         : evaluateStockTradeCandidate(candidate, { requireCentralDecision: true, requireFreshDecision: true, requireExplicitApproval: true });
       if (!gate.approved) throw new Error(`Current candidate rejected: ${(gate.reasons || []).join('; ')}`);
@@ -13747,6 +13772,10 @@ const preTradeRiskGuard = {
         safetyReconciliationRequired: engineState.safetyReconciliationRequired === true,
         brokerEvidenceStale: account?.stale === true || positions?.stale === true || (!cryptoAsset && clock?.stale === true),
         pendingOrderNotional,
+        lossBudgetSizing: options.automated !== false ? calculateLossBudgetSizing({
+          account, positions: managedPositions, config: CONFIG, signal: sizingSignal,
+          dailyStartEquity: engineState.dailyStartEquity || account.last_equity, pendingNotional: pendingOrderNotional,
+        }) : null,
         pendingPositionSymbols: Object.values(engineState.orderRiskReservations || {}).filter(entry => outstandingOrderNotional(entry) > 0).map(entry => entry.symbol),
         realCashTradingUnlocked: CONFIG.realCashTradingUnlocked === true,
         autoTradingEnabled,
@@ -13779,6 +13808,7 @@ const preTradeRiskGuard = {
           ? Math.min(LIVE_ORDER_MAX_SPREAD_PERCENT, CRYPTO_MAX_ENTRY_SPREAD_PERCENT)
           : LIVE_ORDER_MAX_SPREAD_PERCENT,
         maxExposurePercent: CONFIG.maxBotExposurePercent,
+        minStockPrice: CONFIG.minStockPrice,
         maxOpenTrades: CONFIG.maxOpenTrades,
         account,
         positions: managedPositions,
@@ -13792,6 +13822,11 @@ const preTradeRiskGuard = {
         quoteAgeSeconds: riskInput.context.quoteAgeSeconds + elapsed,
         emergencyStopActive, autoTradingEnabled,
         maxExposurePercent: CONFIG.maxBotExposurePercent, maxOpenTrades: CONFIG.maxOpenTrades,
+        minStockPrice: CONFIG.minStockPrice,
+        lossBudgetSizing: options.automated !== false ? calculateLossBudgetSizing({
+          account, positions: managedPositions, config: CONFIG, signal: sizingSignal,
+          dailyStartEquity: engineState.dailyStartEquity || account.last_equity, pendingNotional: pendingOrderNotional,
+        }) : null,
         realCashTradingUnlocked: CONFIG.realCashTradingUnlocked === true,
         safetyReconciliationRequired: engineState.safetyReconciliationRequired === true,
         dailyLossLocked: engineState.dailyLossLocked === true, profitLocked: engineState.profitLocked === true } });
@@ -13809,6 +13844,52 @@ const preTradeRiskGuard = {
     } };
   },
 };
+let protectionOwnershipOrders = null;
+let protectionOwnershipCheckedAt = 0;
+const managedExecution = createManagedExecution({
+  state: engineState, persist: persistSafetyState, request: alpacaTradingRequest,
+  getConfig: () => CONFIG, isCrypto,
+  getManagedSymbols: async (positions) => {
+    if (!protectionOwnershipOrders || Date.now() - protectionOwnershipCheckedAt > 30000) {
+      const orders = await getOrders();
+      if (orders.stale === true) throw new Error('Managed-position evidence stale');
+      protectionOwnershipOrders = orders;
+      protectionOwnershipCheckedAt = Date.now();
+    }
+    const orders = protectionOwnershipOrders;
+    const owned = confirmedBotOwnedSymbols({ orders, positions, isBotOrder, normalizeSymbol });
+    for (const row of Object.values(engineState.orderRiskReservations || {})) {
+      if (Number(row.filledQty) > 0) owned.add(normalizeSymbol(row.symbol));
+    }
+    return positions.filter(p => isAiManagedOpenPosition(p, owned)).map(p => p.symbol);
+  },
+  onFill: (fill) => {
+    const symbol = normalizeSymbol(fill.symbol);
+    if (fill.reason === 'SMART_PARTIAL_PROFIT') Object.assign(engineState.runnerPositions[symbol] ||= {}, {
+      partialProfitTaken: true, partialProfitTakenAt: new Date().toISOString(), partialProfitQty: fill.filledQty,
+    });
+    if (['FIRST_SCALE', 'SECOND_SCALE'].includes(fill.reason)) {
+      const runner = engineState.runnerPositions[symbol] ||= {};
+      runner.institutionalExitLadder ||= {};
+      runner.institutionalExitLadder[fill.reason === 'FIRST_SCALE' ? 'firstScaleTaken' : 'secondScaleTaken'] = true;
+    }
+    recordOrder('SELL_FILL_CONFIRMED', symbol, fill);
+    saveEngineState('SELL_FILL_CONFIRMED');
+  },
+  onFlat: (fill) => {
+    const symbol = normalizeSymbol(fill.symbol);
+    journalTradeExit(symbol, { ...fill, executionId: fill.id, assetClass: fill.crypto ? 'crypto' : 'stock',
+      exitType: 'BROKER_FILL_CONFIRMED', exitReason: fill.reason, filledQty: fill.qty,
+      realizedPnl: fill.proceeds - fill.cost });
+    engineState.lastSoldAt[symbol] = Date.now();
+    engineState.symbolCooldowns[symbol] = new Date().toISOString();
+    delete engineState.highWaterMarks[symbol];
+    delete engineState.aiEntryScores[symbol];
+    delete engineState.runnerPositions[symbol];
+    engineState.pendingExits = (engineState.pendingExits || []).filter(row => normalizeSymbol(row.symbol) !== symbol);
+    saveEngineState('POSITION_FLAT_CONFIRMED');
+  },
+});
 const orderService = createOrderService({
   tradingRequest: alpacaTradingRequest,
   normalizeSymbol,
@@ -13816,6 +13897,8 @@ const orderService = createOrderService({
   duplicateOrderGuard,
   preTradeRiskGuard,
   reserveRisk: (payload, options) => orderRiskReservations.reserve(payload, options),
+  executionLifecycle: managedExecution,
+  isCrypto,
 });
 function isValidStockSymbol(symbol) {
   const s = normalizeSymbol(symbol);
@@ -14316,15 +14399,20 @@ async function getStockQuote(symbol) {
       cachedWithLivePrice || {},
       { maxAgeSeconds: LIVE_ORDER_MAX_QUOTE_AGE_SECONDS }
     );
-    if (cachedFreshness.quoteFresh && cachedFreshness.spreadFresh) {
+    const referenceAttemptAge = Date.now() - Number(cachedCombined.referenceRefreshAttemptedAt || 0);
+    if (cachedFreshness.quoteFresh && cachedFreshness.spreadFresh &&
+        (cachedWithLivePrice?.previousClose > 0 ||
+         (referenceAttemptAge >= 0 && referenceAttemptAge < 15000))) {
       return cachedWithLivePrice;
     }
   }
   let dataError = "";
   let polygonReference = cachedCombined || null;
-  if (!polygonReference && liveCachedQuote && ENABLE_POLYGON) {
+  if (!(mergeLiveStockQuoteWithReference(liveCachedQuote, polygonReference)?.previousClose > 0) &&
+      liveCachedQuote && ENABLE_POLYGON) {
     try {
-      polygonReference = await polygonQuote(symbol);
+      const enrichedReference = await polygonQuote(symbol);
+      if (enrichedReference) polygonReference = enrichedReference;
     } catch (err) {
       dataError = err.message;
       console.error("Polygon reference enrichment failed:", symbol, err.message);
@@ -14394,7 +14482,7 @@ async function getStockQuote(symbol) {
   const safeAlpacaLow = Number.isFinite(alpacaLow)
     ? alpacaLow
     : 0;
-  if (!polygon) {
+  if (!polygon || !(polygon.previousClose > 0)) {
     try {
       finnhub = await finnhubQuote({
         symbol,
@@ -14407,6 +14495,11 @@ async function getStockQuote(symbol) {
       dataError = err.message;
       console.error("Finnhub fallback failed:", symbol, err.message);
     }
+  }
+  // Reference-only enrichment must not replace a fresh trade or bid/ask pair
+  // with Finnhub's older price or attach a receipt-time timestamp to it.
+  if (polygon && finnhub) {
+    polygon = mergeLiveStockQuoteWithReference(polygon, finnhub);
   }
   if (!polygon && !finnhub && ENABLE_POLYGON && !POLYGON_PRIMARY) {
     try {
@@ -14620,6 +14713,9 @@ async function getStockQuote(symbol) {
               ? "Alpaca price/quote + Alpaca bars"
               : "No valid price/quote",
   };
+  // This receipt-time marker limits reference retries only; it is never a
+  // trade/quote timestamp and cannot make stale execution evidence fresh.
+  combinedQuote.referenceRefreshAttemptedAt = Date.now();
   cacheStockQuote(cleanSymbol, combinedQuote);
   return combinedQuote;
 }
@@ -18771,7 +18867,7 @@ async function runBoundedQuietDiscoveryScan({ force = false } = {}) {
     groupedResults,
     dateKey,
     featureStore: discoveryFeatureStore,
-    budgets: DISCOVERY_BUDGETS,
+    budgets: { ...DISCOVERY_BUDGETS, minPrice: Math.max(0.5, Number(CONFIG.minStockPrice) || 0.5) },
     downloadedBytes,
     learning: engineState.quietCandidateOutcomeLearning?.stock || null,
   });
@@ -19183,26 +19279,7 @@ function isBotOrder(order = {}) {
 async function getBotOwnedSymbols() {
   const orders = await getOrders();
   const positions = await getPositions();
-  const openSymbols = new Set(
-    positions.map((position) => normalizeSymbol(position.symbol))
-  );
-  const botNetQtyBySymbol = {};
-  for (const order of orders) {
-    const side = String(order.side || "").toLowerCase();
-    const status = String(order.status || "").toLowerCase();
-    if (status !== "filled" || !isBotOrder(order)) continue;
-    const symbol = normalizeSymbol(order.symbol);
-    const filledQty = Number(order.filled_qty || order.qty || 0);
-    if (!symbol || !filledQty) continue;
-    botNetQtyBySymbol[symbol] =
-      Number(botNetQtyBySymbol[symbol] || 0) +
-      (side === "buy" ? filledQty : side === "sell" ? -filledQty : 0);
-  }
-  return new Set(
-    Object.entries(botNetQtyBySymbol)
-      .filter(([symbol, netQty]) => openSymbols.has(symbol) && Number(netQty || 0) > 0)
-      .map(([symbol]) => symbol)
-  );
+  return confirmedBotOwnedSymbols({ orders, positions, isBotOrder, normalizeSymbol });
 }
 function getBotEntryScores() {
   if (!engineState.aiEntryScores || typeof engineState.aiEntryScores !== "object") {
@@ -19674,6 +19751,7 @@ async function flattenStocksBeforeMarketClose(clock) {
       const cryptoOrder = isCrypto(symbol);
       return (
         !cryptoOrder &&
+        !String(order.client_order_id || '').startsWith('SM_PROTECT_') &&
         (status === "new" ||
           status === "accepted" ||
           status === "partially_filled" ||
@@ -19715,15 +19793,12 @@ async function flattenStocksBeforeMarketClose(clock) {
         qty,
         "STOCK_FLATTEN_1_HOUR_BEFORE_MARKET_CLOSE"
       );
-      recordOrder("POSITION_CLOSED_1_HOUR_BEFORE_CLOSE", symbol, {
+      recordOrder("POSITION_CLOSE_SUBMITTED_1_HOUR_BEFORE_CLOSE", symbol, {
         qty,
         assetClass: "stock",
         minutesUntilClose: Number(minsUntilClose.toFixed(2)),
         order,
       });
-      delete engineState.highWaterMarks[symbol];
-      delete engineState.aiEntryScores[symbol];
-      delete engineState.runnerPositions[symbol];
     } catch (err) {
       recordFailedOrder(
         "POSITION_CLOSE_1_HOUR_BEFORE_CLOSE_FAILED",
@@ -19759,15 +19834,12 @@ async function forceCloseAllPositions(reason, marketOpen) {
       const order = isCrypto
         ? await placeCryptoMarketSell(symbol, qty, reason)
         : await placeMarketSell(symbol, qty, reason);
-      recordOrder("FORCE_CLOSE_EXECUTED", symbol, {
+      recordOrder("FORCE_CLOSE_SUBMITTED", symbol, {
         qty,
         reason,
         assetClass: isCrypto ? "crypto" : "stock",
         order,
       });
-      delete engineState.highWaterMarks[symbol];
-      delete engineState.aiEntryScores[symbol];
-      delete engineState.runnerPositions[symbol];
     } catch (err) {
       recordFailedOrder("FORCE_CLOSE_FAILED", symbol, err.message, {
         qty,
@@ -20034,17 +20106,11 @@ async function executePendingExits() {
         Number(exit.qty),
         exit.reason
       );
-      recordOrder("PENDING_EXIT_EXECUTED", exit.symbol, {
+      recordOrder("PENDING_EXIT_SUBMITTED", exit.symbol, {
         qty: exit.qty,
         reason: exit.reason,
         order,
       });
-      engineState.pendingExits = engineState.pendingExits.filter(
-        (item) => normalizeSymbol(item.symbol) !== normalizeSymbol(exit.symbol)
-      );
-      delete engineState.highWaterMarks[normalizeSymbol(exit.symbol)];
-      delete engineState.aiEntryScores[normalizeSymbol(exit.symbol)];
-      delete engineState.runnerPositions[normalizeSymbol(exit.symbol)];
     } catch (err) {
       recordFailedOrder("PENDING_EXIT_FAILED", exit.symbol, err.message, exit);
     }
@@ -20932,9 +20998,6 @@ async function replaceWeakestIfBetter(signals, positions, aiOwnedSymbols) {
       scoreGap,
       sellOrder,
     });
-    delete engineState.highWaterMarks[weakestSymbol];
-    delete engineState.aiEntryScores[weakestSymbol];
-    delete engineState.runnerPositions[weakestSymbol];
     markSwingSafeRotationUsed(weakestSymbol, topCandidate.symbol);
     setTimeout(async () => {
       try {
@@ -23646,7 +23709,6 @@ async function rotateWeakCryptoIfBetter(signals, positions) {
       sellOrder,
     });
     markSwingSafeRotationUsed(weakestSymbol, topCandidate.symbol);
-    delete engineState.highWaterMarks[weakestSymbol];
     const maxReplacementAttempts = 3;
     const scheduleReplacementAttempt = (attempt) => {
       setTimeout(() => {
@@ -27993,7 +28055,7 @@ function collectFrontendSignalSnapshot() {
     .sort(compareCanonicalSignals);
 }
 function buildFrontendStartupSnapshot(limit = 50) {
-  const allSignals = collectFrontendSignalSnapshot();
+  const allSignals = collectFrontendSignalSnapshot().filter(signal => candidateFeedDecision(signal, CONFIG).visible);
   const approvedSignals = allSignals.filter(hasExplicitTradeApproval);
   const displaySignals = selectCandidateDisplayWindow(allSignals, limit);
   return {
@@ -31176,6 +31238,7 @@ function requestFastRunnerRefresh() {
 function startLiveScheduler() {
   if (liveSchedulerTimer) return engineState.liveSchedulerState;
   liveSchedulerTimer = setInterval(() => {
+    void runLiveScheduledTask('reconcileManagedExecution', 5000, () => managedExecution.reconcile());
     void runLiveScheduledTask(
       "cleanupLiveQuoteCache",
       60000,

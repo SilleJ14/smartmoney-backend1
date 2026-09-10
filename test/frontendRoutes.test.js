@@ -107,11 +107,11 @@ test("frontend signals require all approval flags and rank by canonical F", asyn
   const api = createHarness({
     getState: () => ({
       topStockSignals: [
-        { symbol: "AAPL", score: 5, masterFinalScore: 81, stockDecisionScoreAvailable: true, ...approval },
-        { symbol: "LOOSE", score: 100, masterFinalScore: 99, stockDecisionScoreAvailable: true, qualifiedToBuy: true, autoTradeApproved: true },
+        { symbol: "AAPL", price: 100, score: 5, masterFinalScore: 81, stockDecisionScoreAvailable: true, ...approval },
+        { symbol: "LOOSE", price: 100, score: 100, masterFinalScore: 99, stockDecisionScoreAvailable: true, qualifiedToBuy: true, autoTradeApproved: true },
       ],
       topCryptoSignals: [
-        { symbol: "BTC/USD", score: 99, cryptoDecisionScore: 72, cryptoDecisionScoreAvailable: true, ...approval },
+        { symbol: "BTC/USD", price: 100, score: 99, cryptoDecisionScore: 72, cryptoDecisionScoreAvailable: true, ...approval },
       ],
     }),
   });
@@ -128,6 +128,7 @@ test("frontend signals require all approval flags and rank by canonical F", asyn
 test("frontend signals preserve a diverse watch universe when one candidate is buyable", async () => {
   const watchSignals = Array.from({ length: 12 }, (_, index) => ({
     symbol: `WATCH${index}`,
+    price: 10,
     score: 40 + index,
     stockDecisionScore: 55 + index,
     stockDecisionScoreAvailable: true,
@@ -140,6 +141,7 @@ test("frontend signals preserve a diverse watch universe when one candidate is b
     getState: () => ({
       topStockSignals: [{
         symbol: "BUYME",
+        price: 10,
         stockDecisionScore: 82,
         stockDecisionScoreAvailable: true,
         qualifiedToBuy: true,

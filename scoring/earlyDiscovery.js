@@ -175,7 +175,7 @@ export function calculateMultiHorizonExtension({
 }
 
 function normalizedComponentScore(components = [], learning = {}) {
-  const activeLearning = learning?.active === true;
+  const activeLearning = learning?.active === true && learning.learningPolicyVersion === 2 && learning.validation?.active === true;
   const adjusted = components.map((component) => {
     const multiplier = activeLearning
       ? Math.max(

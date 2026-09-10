@@ -90,6 +90,12 @@ test(`actual server boots, serves stocks and crypto, and completes a scan withou
       await new Promise(resolve => setTimeout(resolve, 500));
     } while (Date.now() < deadline);
     assert.ok(health.engine.lastSuccessfulCycleAt, `Scan did not finish: ${log}`);
+    // Metrics arrive over IPC once a second, independently of the HTTP scan result.
+    // Await that observation rather than racing a fast successful scan.
+    const metricsDeadline = Date.now() + 3000;
+    while ((!metrics.rss || (polygonFault && !metrics.polygonReads)) && Date.now() < metricsDeadline) {
+      await new Promise(resolve => setTimeout(resolve, 50));
+    }
     assert.ok(peakRss < 1024 * 1024 * 1024, 'isolated server exceeded 1GB RSS');
     assert.equal(metrics.writes || 0, 0);
     if (polygonFault) assert.ok(metrics.polygonReads > 0, 'fixture did not exercise Polygon snapshot path');

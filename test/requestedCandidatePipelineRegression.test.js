@@ -124,7 +124,7 @@ test("frontend crypto quote refresh preserves measured change instead of inventi
   assert.match(normalizeBlock, /const explicitChangeAvailability =/);
   assert.match(normalizeBlock, /const hasChangeBaseline =/);
   assert.match(normalizeBlock, /explicitChangeAvailability === true/);
-  assert.match(mergeBlock, /incomingSignal\.changePercentMeasured === true/);
+  assert.match(mergeBlock, /incomingSignal\.changePercentMeasured !== true/);
   assert.match(mergeBlock, /dayChangePercent: oldSignal\.dayChangePercent/);
   assert.match(mergeBlock, /sessionChangePercent: oldSignal\.sessionChangePercent/);
   assert.match(mergeBlock, /changePercent: oldSignal\.changePercent/);
