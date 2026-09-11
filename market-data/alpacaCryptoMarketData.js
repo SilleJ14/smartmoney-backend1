@@ -6,7 +6,7 @@ function providerTimestamp(value) {
   const parsed = Number.isFinite(numeric)
     ? numeric < 10_000_000_000 ? numeric * 1000 : numeric
     : Date.parse(value);
-  return Number.isFinite(parsed) ? new Date(parsed).toISOString() : null;
+  return Number.isFinite(parsed) && Math.abs(parsed) <= 8.64e15 ? new Date(parsed).toISOString() : null;
 }
 
 function timeframeMilliseconds(timeframe = "5Min") {
@@ -62,6 +62,8 @@ export function createAlpacaCryptoMarketData({ dataRequest, normalizeSymbol, now
     const eventTimestamp = providerTimestamp(
       marketEvent?.t ?? marketEvent?.timestamp ?? marketEvent?.time
     );
+    const ageMs = eventTimestamp ? now().getTime() - Date.parse(eventTimestamp) : NaN;
+    const priceIsLive = Number.isFinite(ageMs) && ageMs >= -5000 && ageMs <= 5000;
     const spreadAvailable = bid > 0 && ask >= bid;
     return {
       symbol, current: price, price, bid, ask, previousClose: null,
@@ -80,8 +82,8 @@ export function createAlpacaCryptoMarketData({ dataRequest, normalizeSymbol, now
       spreadSource: spreadAvailable ? "alpaca_crypto_latest" : null,
       providerTimestampAvailable: Boolean(eventTimestamp),
       fetchedAt: now().toISOString(),
-      priceIsLive: Boolean(eventTimestamp),
-      priceStale: !eventTimestamp,
+      priceIsLive,
+      priceStale: !priceIsLive,
       raw: quotePrice > 0 ? quote : trade,
     };
   }

@@ -2,6 +2,20 @@ import test from "node:test";
 import assert from "node:assert/strict";
 import { createAlpacaCryptoMarketData } from "../market-data/alpacaCryptoMarketData.js";
 const normalizeSymbol = (s) => String(s).toUpperCase();
+test('crypto live flags use provider age, not the time the HTTP response arrived', async () => {
+  const now = new Date('2026-09-11T21:45:30Z');
+  for (const [stamp, live] of [['2026-09-11T21:45:29Z', true],
+    ['2026-09-11T21:44:47Z', false], ['2026-09-11T21:46:00Z', false],
+    [null, false], [1e100, false]]) {
+    const service = createAlpacaCryptoMarketData({ normalizeSymbol, now: () => now,
+      dataRequest: async () => ({ quotes: { 'BTC/USD': { bp: 100, ap: 100.01, t: stamp } } }) });
+    const quote = await service.getLatestQuote('BTC/USD');
+    assert.equal(quote.priceIsLive, live);
+    assert.equal(quote.priceStale, !live);
+    assert.equal(quote.fetchedAt, now.toISOString());
+    if (typeof stamp === 'string') assert.equal(quote.spreadUpdatedAt, new Date(stamp).toISOString());
+  }
+});
 test('crypto orderbooks use execution location, bounded batches and original timestamps', async () => {
   const calls = [], stamp = '2026-09-10T18:00:00Z';
   const service = createAlpacaCryptoMarketData({ normalizeSymbol, dataRequest: async (path, options) => {

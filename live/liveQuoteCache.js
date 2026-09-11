@@ -127,10 +127,14 @@ export function mergeLiveQuoteEvidence(
   const incomingBid = Number(incoming.bid || incoming.bp || 0);
   const incomingAsk = Number(incoming.ask || incoming.ap || 0);
   const incomingHasSpread = incoming.spreadAvailable !== false && incomingBid > 0 && incomingAsk >= incomingBid;
+  const previousSpreadAt = parsedTimestamp(getSpreadTimestamp(previous));
+  const incomingEvidenceAt = parsedTimestamp(getSpreadTimestamp(incoming)) ?? getLiveQuoteTimestampMs(incoming);
+  const rejectsCurrentSpread = incoming.spreadAvailable === false &&
+    (incomingEvidenceAt === null || previousSpreadAt === null || incomingEvidenceAt >= previousSpreadAt);
   const previousBid = Number(previous.bid || previous.bp || 0);
   const previousAsk = Number(previous.ask || previous.ap || 0);
   const previousHasSpread =
-    incoming.spreadAvailable !== false &&
+    !rejectsCurrentSpread &&
     previous.spreadAvailable === true &&
     parsedTimestamp(getSpreadTimestamp(previous)) !== null &&
     parsedTimestamp(getSpreadTimestamp(previous)) <= Date.now() + 5000 &&

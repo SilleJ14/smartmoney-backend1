@@ -5,6 +5,7 @@ export function createStockExecutionQuoteRefresher({
   getLatestQuotes,
   normalizeSymbol,
   updateQuoteCache,
+  getCachedQuote = () => null,
   onError = () => {},
 } = {}) {
   return async function refreshStockExecutionQuotes(signals = []) {
@@ -34,8 +35,7 @@ export function createStockExecutionQuoteRefresher({
     return sourceSignals.map((signal) => {
       const symbol = normalizeSymbol(signal?.symbol);
       const quote = quoteBySymbol.get(symbol);
-      if (!quote) return signal;
-      const cached = updateQuoteCache(symbol, {
+      const cached = (quote ? updateQuoteCache(symbol, {
         ...quote,
         source: quote.source || quote.liveQuoteSource || "alpaca_latest_stock_quote",
         liveQuoteSource:
@@ -44,7 +44,7 @@ export function createStockExecutionQuoteRefresher({
         bidAskUpdatedAt: quote.bidAskUpdatedAt || quote.spreadUpdatedAt || null,
         spreadSource:
           quote.spreadSource || quote.liveQuoteSource || quote.source || null,
-      });
+      }) : null) || getCachedQuote(symbol);
       if (!cached?.price) return signal;
       const percentPatch = buildMeasuredPercentChangePatch(
         signal,

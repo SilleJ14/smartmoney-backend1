@@ -11,6 +11,7 @@ import { calculateDynamicTradeAmount } from '../risk/positionSizing.js';
 import { outstandingOrderNotional } from '../risk/orderRiskReservations.js';
 import { availableBuyingPower } from '../risk/brokerEvidence.js';
 import { refreshCycleSubscriptions } from './refreshCycleSubscriptions.js';
+import { refreshCandidateQuotes } from '../market-data/refreshCandidateQuotes.js';
 
 export function createEngineCycle(dependencies) {
   const {
@@ -580,20 +581,9 @@ export function createEngineCycle(dependencies) {
             "Blocked By Phase 60 Adaptive Execution";
         }
       }
-      if (
-        stockSignals.length > 0 &&
-        typeof refreshStockExecutionQuotes === "function"
-      ) {
-        stockSignals = await refreshStockExecutionQuotes(stockSignals);
-        signals = [...stockSignals, ...cryptoSignals];
-      }
-      if (
-        cryptoSignals.length > 0 &&
-        typeof refreshCryptoExecutionQuotes === "function"
-      ) {
-        cryptoSignals = await refreshCryptoExecutionQuotes(cryptoSignals);
-        signals = [...stockSignals, ...cryptoSignals];
-      }
+      [stockSignals, cryptoSignals] = await refreshCandidateQuotes(
+        stockSignals, cryptoSignals, refreshStockExecutionQuotes, refreshCryptoExecutionQuotes);
+      signals = [...stockSignals, ...cryptoSignals];
       const earlyCentralAutonomousDecisionCore =
         calculateCentralAutonomousDecisionCore(stockSignals, cryptoSignals);
       for (const decision of earlyCentralAutonomousDecisionCore.rankedDecisions) {
@@ -1239,20 +1229,9 @@ export function createEngineCycle(dependencies) {
         blockRate:
           autonomousMetaReinforcement.state.blockRate,
       });
-      if (
-        stockSignals.length > 0 &&
-        typeof refreshStockExecutionQuotes === "function"
-      ) {
-        stockSignals = await refreshStockExecutionQuotes(stockSignals);
-        signals = [...stockSignals, ...cryptoSignals];
-      }
-      if (
-        cryptoSignals.length > 0 &&
-        typeof refreshCryptoExecutionQuotes === "function"
-      ) {
-        cryptoSignals = await refreshCryptoExecutionQuotes(cryptoSignals);
-        signals = [...stockSignals, ...cryptoSignals];
-      }
+      [stockSignals, cryptoSignals] = await refreshCandidateQuotes(
+        stockSignals, cryptoSignals, refreshStockExecutionQuotes, refreshCryptoExecutionQuotes);
+      signals = [...stockSignals, ...cryptoSignals];
       const centralAutonomousDecisionCore =
         calculateCentralAutonomousDecisionCore(stockSignals, cryptoSignals);
       engineState.aiParliamentVotingState = {
@@ -2495,15 +2474,11 @@ export function createEngineCycle(dependencies) {
       Object.assign(portfolioRefreshPositions, { stale: portfolioBrokerPositions?.stale === true, snapshotAt: portfolioBrokerPositions?.snapshotAt });
       // The analytics phases between the central decision and sizing can take
       // longer than the execution freshness window. Refresh once more at the
-      // actual stock execution boundary; this updates quote/spread evidence
+      // actual stock AND crypto sizing boundary; this updates quote/spread evidence
       // only and does not bypass or recompute any approval gate.
-      if (
-        stockSignals.length > 0 &&
-        typeof refreshStockExecutionQuotes === "function"
-      ) {
-        stockSignals = await refreshStockExecutionQuotes(stockSignals);
-        signals = [...stockSignals, ...cryptoSignals];
-      }
+      [stockSignals, cryptoSignals] = await refreshCandidateQuotes(
+        stockSignals, cryptoSignals, refreshStockExecutionQuotes, refreshCryptoExecutionQuotes);
+      signals = [...stockSignals, ...cryptoSignals];
       for (const signal of stockSignals) {
         if (
           !signal.institutionalExecutionPlan &&

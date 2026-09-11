@@ -163,6 +163,20 @@ test("a fresh trade cannot make an old spread execution-ready", () => {
   assert.equal(isFreshMeasuredSpread(quote, { maxAgeSeconds: 5, now }), false);
 });
 
+test('older invalid quote responses cannot revoke a newer measured pair for either asset class', () => {
+  for (const assetClass of ['stock', 'crypto']) {
+    const newer = '2026-09-11T18:00:10Z', older = '2026-09-11T18:00:01Z';
+    const previous = { assetClass, bid: 100, ask: 100.02, spreadAvailable: true, spreadUpdatedAt: newer };
+    const stale = mergeLiveQuoteEvidence(previous,
+      { spreadAvailable: false, liveQuoteUpdatedAt: older }, { price: 100.01, quoteUpdatedAt: older });
+    assert.equal(stale.spreadAvailable, true);
+    assert.equal(stale.spreadUpdatedAt, newer);
+    const invalid = mergeLiveQuoteEvidence(previous,
+      { spreadAvailable: false, liveQuoteUpdatedAt: newer }, { price: 100.01, quoteUpdatedAt: newer });
+    assert.equal(invalid.spreadAvailable, false, 'a current explicit invalid pair must still revoke readiness');
+  }
+});
+
 test("a newer two-sided quote replaces and refreshes spread evidence", () => {
   const quoteTime = "2026-08-31T14:00:04.000Z";
   const merged = mergeLiveQuoteEvidence(

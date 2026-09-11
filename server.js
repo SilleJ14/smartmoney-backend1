@@ -14422,6 +14422,7 @@ const refreshStockExecutionQuotes = createStockExecutionQuoteRefresher({
   getLatestQuotes: getLatestStockMarketQuotes,
   normalizeSymbol,
   updateQuoteCache,
+  getCachedQuote: getAuthoritativeLiveQuote,
   onError: (error) => {
     console.warn("Alpaca stock execution quote refresh failed:", error.message);
   },
@@ -17839,6 +17840,7 @@ const refreshCryptoExecutionQuotes = createCryptoExecutionQuoteRefresher({
   getLatestQuotes: (symbols) => alpacaCryptoMarketData.getLatestQuotes(symbols),
   normalizeSymbol,
   updateQuoteCache,
+  getCachedQuote: getAuthoritativeLiveQuote,
   onError: (error) => {
     console.warn("Alpaca crypto execution quote refresh failed:", error.message);
   },
@@ -28199,6 +28201,11 @@ function buildLiveSignalPushPayload() {
   return {
     type: "LIVE_SIGNAL_UPDATE",
     generatedAt: new Date().toISOString(),
+    engineState: {
+      marketOpen: engineState.marketOpen === true,
+      marketClockAvailable: engineState.marketClockAvailable ?? false,
+      cachedClock: engineState.cachedClock || null,
+    },
     liveQuoteStreamState:
       engineState.liveQuoteStreamState || null,
     polygonLiveStreamState:

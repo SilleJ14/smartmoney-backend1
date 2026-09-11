@@ -4,7 +4,8 @@ import assert from "node:assert/strict";
 import fs from "node:fs";
 import { installCentralDecision } from "../scoring/installCentralDecision.js";
 import { buildCryptoDecisionScore, evaluateCryptoTradeCandidate } from "../scoring/componentScore.js";
-import { calculateEntryQualityScore, evaluateStockTradeCandidate } from "../scoring/decisionScores.js";
+import { calculateEntryQualityScore, calculateEarlyDiscoveryScore, buildStockDecisionScore, evaluateStockTradeCandidate } from "../scoring/decisionScores.js";
+import { calculateDynamicTradeAmount } from '../risk/positionSizing.js';
 import { getCanonicalFinalScore } from "../scoring/canonicalSignalRank.js";
 import { normalizeSignalScoreCollection } from "../scoring/signalScoreCompleteness.js";
 import { createCryptoExecutionQuoteRefresher } from "../market-data/cryptoExecutionQuoteRefresh.js";
@@ -101,6 +102,38 @@ const stock = () => {
   installCentralDecision(signal, { action: "ALLOW", finalDecisionScore: 85, stockDecisionEvidence: { coreEvidencePass: true } }, { now });
   return signal;
 };
+
+test('calculated stock and crypto scores can pass the approval boundary with risk-bounded sizing', async t => {
+  // Synthetic evidence, not current market opportunities. This test starts at
+  // the scoring boundary with a central risk authorization, not raw discovery.
+  const s = stock();
+  s.discoveryScorecard = calculateEarlyDiscoveryScore({ historyDays: 30,
+    multiHorizonExtension: { coverage: 1, alreadyExtended: false, extensionPenalty: 0 },
+    percentChange: 0.4, preMoveScore: 90, accumulationIntelligence: { accumulationScore: 85 }, catalystScore: 80 });
+  const stockDecision = buildStockDecisionScore(s);
+  installCentralDecision(s, { action: 'ALLOW', updatedAt: iso(), finalDecisionScore: stockDecision.score,
+    stockDecisionEvidence: stockDecision }, { now });
+  const c = { ...crypto(), scoringModelVersion: 'SMARTMONEY_CRYPTO_DECISION_V4' };
+  installCentralDecision(c, decisionFor(c), { crypto: true, now });
+  for (const signal of [s, c]) {
+    const isCrypto = signal.symbol.includes('/');
+    const f = getCanonicalFinalScore(signal);
+    const amount = calculateDynamicTradeAmount({ signal, signalScore: f,
+      account: { equity: 10000, cash: 10000, buying_power: 10000 }, positions: [],
+      config: { maxBotExposurePercent: 10, minAutonomousTradeAmount: 25 }, getExposure: () => 0 });
+    assert.ok(amount > 0, JSON.stringify({ symbol: signal.symbol, plan: signal.cryptoTradePlan }));
+    signal.recommendedTradeAmount = amount;
+    signal.finalApprovedTradeAmount = amount;
+    const gate = isCrypto ? evaluateCryptoTradeCandidate(signal, { now }) : evaluateStockTradeCandidate(signal,
+      { now, requireCentralDecision: true, requireFreshDecision: true, requireExplicitApproval: true });
+    assert.equal(gate.approved, true, JSON.stringify(gate.reasons));
+    t.diagnostic(JSON.stringify({ fixture: true, symbol: signal.symbol, F: f, sizing: amount, approved: gate.approved }));
+    const stale = { ...signal, liveQuoteUpdatedAt: iso(now - 60000), spreadUpdatedAt: iso(now - 60000) };
+    const failed = isCrypto ? evaluateCryptoTradeCandidate(stale, { now }) : evaluateStockTradeCandidate(stale,
+      { now, requireCentralDecision: true, requireFreshDecision: true, requireExplicitApproval: true });
+    assert.equal(failed.approved, false, 'qualifying scores must not bypass stale evidence');
+  }
+});
 
 test("fresh 0.9% spread cannot reuse E90 approval when current E falls below 75", async () => {
   const signal = stock();
@@ -215,7 +248,9 @@ test("return-time checks do not label an expired provider quote live", async () 
     fallback: async () => { clock += 6000; return []; } });
   const [row] = await batch(["AAPL", "MISSING"]);
   assert.equal(row.priceIsLive, false);
-  assert.equal(row.spreadAvailable, false);
+  assert.equal(row.spreadAvailable, true, 'measured pair remains available, not execution-fresh');
+  assert.equal(row.spreadFresh, false);
+  assert.equal(getStockExecutionEvidenceFreshness(row, { now: clock }).spreadFresh, false);
 });
 
 test("real Alpaca client charges padded body bytes across pages", async () => {

@@ -34,7 +34,9 @@ export function createStockQuoteBatch({ primary, fallback, normalizeSymbol, now 
     return [...bySymbol.values()].map((q) => {
       const e = getStockExecutionEvidenceFreshness(q, { now: now() });
       return { ...q, priceIsLive: e.quoteFresh, priceStale: !e.quoteFresh,
-        spreadAvailable: e.spreadFresh };
+        // Measurement availability and freshness are different facts. Marking
+        // an old observation "unavailable" can erase a newer stream BBO.
+        spreadAvailable: q.spreadAvailable === true, spreadFresh: e.spreadFresh };
     });
   };
 }
