@@ -8,7 +8,7 @@ import { fileURLToPath } from 'node:url';
 
 const soakMs = Math.max(0, Math.min(600000, Number(process.env.SMARTMONEY_SOAK_MS) || 0));
 const scenarios = process.env.SMARTMONEY_FIXTURE_POLYGON ? [process.env.SMARTMONEY_FIXTURE_POLYGON]
-  : ['', 'healthy', 'stream-burst', 'oversized', 'stalled', 'unavailable', 'malformed', 'early-analysis', 'afterhours-analysis', 'crypto-setup', 'autopilot'];
+  : ['', 'healthy', 'stream-burst', 'oversized', 'stalled', 'unavailable', 'malformed', 'early-analysis', 'afterhours-analysis', 'crypto-setup', 'autopilot', 'candidate-recovery'];
 for (const polygonFault of scenarios) {
 test(`actual server boots, serves stocks and crypto, and completes a scan without trading (Polygon: ${polygonFault || 'disabled'})`, { timeout: 80000 + soakMs }, async t => {
   const fullLoad = process.env.SMARTMONEY_FIXTURE_LOAD === 'full' || polygonFault === 'healthy';
@@ -34,7 +34,7 @@ test(`actual server boots, serves stocks and crypto, and completes a scan withou
     SMARTMONEY_FIXTURE_STREAM: streamBurst ? 'finnhub' : '',
     SMARTMONEY_FIXTURE_LOAD: fullLoad ? 'full' : 'small',
     SMARTMONEY_FIXTURE_POPULATION: process.env.SMARTMONEY_FIXTURE_POPULATION || '',
-    SMARTMONEY_FIXTURE_MARKET_OPEN: earlyProbe && !afterhoursProbe ? 'true' : 'false',
+    SMARTMONEY_FIXTURE_MARKET_OPEN: (earlyProbe && !afterhoursProbe) || polygonFault === 'candidate-recovery' ? 'true' : 'false',
     SMARTMONEY_FIXTURE_PROFILE: process.env.SMARTMONEY_FIXTURE_PROFILE || 'false',
     MAX_SYMBOLS_TO_SCAN: fullLoad ? '60' : '3',
     MIN_SYMBOLS_NEEDED: '3', MAX_ASSETS_FALLBACK: '60',
@@ -121,6 +121,20 @@ test(`actual server boots, serves stocks and crypto, and completes a scan withou
     assert.equal(metrics.writes || 0, 0);
     if (polygonFault) assert.ok(metrics.polygonReads > 0, 'fixture did not exercise Polygon snapshot path');
     const snapshot = await read('/frontend/snapshot');
+    if (polygonFault === 'candidate-recovery') {
+      const scores = await read('/frontend/signals');
+      const signal = scores.signals.find(s => s.symbol === 'AAPL');
+      assert.ok(signal?.historyEvidence?.completedDailyBars >= 21, JSON.stringify(signal?.historyEvidence));
+      assert.equal(signal.discoveryScoreAvailable, true, JSON.stringify(signal.currentDecision));
+      assert.equal(signal.confirmations.newsRiskAvailable, true, JSON.stringify(signal.confirmations));
+      assert.equal(signal.confirmations.newsProvider, 'alpaca');
+      assert.equal(signal.currentDecision.version, 1);
+      assert.equal(signal.approved, false);
+      const state = (await read('/status')).engineState;
+      assert.equal(state.marketClockAvailable, true);
+      assert.equal(state.marketOpen, true);
+      t.diagnostic('Current candidate history reaches D; failed Finnhub review falls back to Alpaca; transient clock failure recovers; no orders sent.');
+    }
     if (polygonFault === 'crypto-setup') {
       const scores = await read('/frontend/signals');
       const signal = scores.signals.find(s => s.symbol === 'BTC/USD');
@@ -243,6 +257,16 @@ test(`actual server boots, serves stocks and crypto, and completes a scan withou
       await new Promise(resolve => setTimeout(resolve, 500));
     }
     if (soakMs >= 360000) assert.notEqual(latestCycleAt, firstCycleAt, 'soak never completed the second scheduled scan');
+    if (polygonFault === 'candidate-recovery' && soakMs >= 15000) {
+      const recoveryHealth = await read('/health');
+      for (const asset of ['stocks', 'crypto']) {
+        const worker = recoveryHealth.candidateReassessment[asset];
+        assert.ok(worker.lastScheduledAt > 0, `${asset} fast review was never scheduled`);
+        assert.equal(worker.failures, 0, `${asset} fast research failed silently`);
+        assert.ok(worker.pending <= (asset === 'stocks' ? 120 : 80));
+      }
+      t.diagnostic(JSON.stringify({ candidateReassessment: recoveryHealth.candidateReassessment }));
+    }
     t.diagnostic(JSON.stringify({ soakMs, requests, peakRssMB: Math.round(peakRss / 1048576),
       providerReads: metrics.reads, polygonReads: metrics.polygonReads, providerWrites: metrics.writes || 0,
       maxEventLoopDelayMs: metrics.maxEventLoopDelayMs,

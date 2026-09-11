@@ -60,7 +60,8 @@ export function evaluatePreTradeRisk({ order = {}, context = {}, options = {} } 
     }
     if (context.dailyLossLocked) reasons.push("Daily loss lock is active");
     if (context.profitLocked) reasons.push("Profit lock is active");
-    if (!context.isCrypto && !context.marketOpen) reasons.push("Stock market is closed");
+    if (!context.isCrypto && context.marketClockAvailable === false) reasons.push('Broker market clock is unavailable or stale');
+    else if (!context.isCrypto && !context.marketOpen) reasons.push("Stock market is closed");
     if (price <= 0) reasons.push("Missing valid live price");
     if (!context.isCrypto && price > 0 && price < Math.max(0.5, finiteNumber(context.minStockPrice, 0.5))) {
       reasons.push("Stock price is below the configured minimum ($0.50 floor)");

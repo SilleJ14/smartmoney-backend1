@@ -35,11 +35,28 @@ test('fresh evidence restores a lost F but not approval or sizing', () => {
   const stale = revalidateCandidate(signal, { ...signal, bid: undefined, ask: undefined,
     spreadAvailable: false, spreadUpdatedAt: null, bidAskUpdatedAt: null, spreadPercent: null });
   assert.equal(stale.stockDecisionScore, null);
+  assert.equal(stale.lastMeasuredAssessment.final, signal.stockDecisionScore);
+  assert.equal(stale.lastMeasuredAssessment.at, signal.decisionUpdatedAt);
   const restored = revalidateCandidate(stale, { ...stale, bid: signal.bid, ask: signal.ask,
     spreadAvailable: true, spreadUpdatedAt: signal.spreadUpdatedAt, spreadSource: signal.spreadSource });
   assert.equal(typeof restored.stockDecisionScore, 'number');
   assert.equal(restored.approved, false); assert.equal(restored.finalApprovedTradeAmount, 0);
   assert.ok(restored.executionEligibility.reasons.includes('RECOVERED_SCORE_REQUIRES_CENTRAL_REVIEW'));
+});
+
+test('current decision view ignores contradictory raw/old gate warnings and does not grant permission', () => {
+  const signal = fixture(); signal.entryQualityScorecard = calculateEntryQualityScore(signal);
+  const evidence = buildStockDecisionScore(signal);
+  installCentralDecision(signal, { stockDecisionEvidence: evidence, finalDecisionScore: evidence.score, action: 'WATCH' });
+  signal.missingEvidenceReasons = ['FINAL_SCORE_INVALID', 'SPREAD_UNAVAILABLE'];
+  signal.finalStockExecutionGate = { approved: false, reasons: ['SPREAD_UNAVAILABLE'] };
+  signal.raw = { missingEvidenceReasons: ['FINAL_SCORE_INVALID'] };
+  const result = normalizeSignalScoreCompleteness(signal);
+  assert.equal(typeof result.stockDecisionScore, 'number');
+  assert.ok(!result.currentDecision.reasons.includes('FINAL_SCORE_INVALID'));
+  assert.ok(!result.currentDecision.reasons.includes('SPREAD_UNAVAILABLE'));
+  assert.equal(result.approved, false);
+  assert.ok(result.currentDecision.reasons.includes('EXPLICIT_APPROVAL_MISSING'));
 });
 test('missing history cannot become F and large price drift still requires reassessment', () => {
   const signal = fixture(); signal.discoveryScorecard.canonicalExtensionEvidencePass = false;

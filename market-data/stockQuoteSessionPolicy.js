@@ -3,7 +3,7 @@ export function canRefreshStockQuotes({ marketOpen = false, marketSession = "clo
   // polling, Tradier subscriptions and early reassessment alive; order paths
   // still require the broker's regular-market-open clock independently.
   const session = String(marketSession).toLowerCase();
-  return marketOpen === true || session === "premarket" || session === "afterhours";
+  return marketOpen === true || session === "premarket" || session === "afterhours" || session === "regular_research";
 }
 
 export function getStockMoverQuotePolicy({

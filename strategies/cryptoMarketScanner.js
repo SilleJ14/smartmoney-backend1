@@ -7,6 +7,7 @@ import {
 } from "../scoring/cryptoScoring.js";
 import { calculateCryptoEarlyDiscoveryScore } from "../scoring/earlyDiscovery.js";
 import { assessCryptoSetup, assessBtcContext, cryptoSetupGate } from '../scoring/cryptoSetup.js';
+import { recentBarVolumeEvidence } from '../market-data/volumeEvidence.js';
 
 export async function mapWithConcurrency(items = [], concurrency = 4, worker) {
   const values = Array.isArray(items) ? items : [];
@@ -270,11 +271,8 @@ export function createCryptoMarketScanner(dependencies) {
         baselineVolumes.length
       : 0;
     const latestVolume = Number(latest.v || 0);
-    const volumeRatio = avgVolume > 0 && latestVolume > 0
-      ? latestVolume / avgVolume
-      : avgVolume > 0
-        ? 0
-        : 1;
+    const recentVolume = recentBarVolumeEvidence(bars);
+    const volumeRatio = recentVolume.ratio;
 
     // Long, short, last-bar, candle direction, and price location are correlated
     // views of the same price path. Blend them into one bounded trend family so
@@ -308,7 +306,7 @@ export function createCryptoMarketScanner(dependencies) {
             : volumeRatio >= 0.5
               ? 42
               : 32;
-    const participationConfidence = Math.min(1, baselineVolumes.length / 10);
+    const participationConfidence = recentVolume.available ? Math.min(1, baselineVolumes.length / 10) : 0;
     const confidenceAdjustedParticipation =
       50 + (participationScore - 50) * participationConfidence;
     const score =
@@ -379,9 +377,7 @@ export function createCryptoMarketScanner(dependencies) {
     spreadAvailable = false,
   }) {
     const barsFound = Array.isArray(bars) ? bars.length : 0;
-    const volumeSpikeRatio = Number(
-      liquidityMetrics.volumeSpikeRatio || 0
-    );
+    const volumeSpikeRatio = liquidityMetrics.volumeSpikeRatio == null ? null : Number(liquidityMetrics.volumeSpikeRatio);
     const dollarVolume = Number(
       liquidityMetrics.dollarVolume || 0
     );
@@ -432,7 +428,7 @@ export function createCryptoMarketScanner(dependencies) {
       25 +
       (!spreadAvailable ? 20 : cleanSpreadPercent > 0.85 ? 25 : 0) +
       (volumeConfidenceScore < 35 ? 18 : 0) +
-      (volumeSpikeRatio < 0.15 ? 12 : 0) +
+      (volumeSpikeRatio !== null && volumeSpikeRatio < 0.15 ? 12 : 0) +
       (barsFound < 10 ? 30 : 0) -
       (volumeConfidenceScore >= 65 ? 12 : 0)
     );
@@ -525,16 +521,26 @@ export function createCryptoMarketScanner(dependencies) {
   }
   
   let cryptoScanInFlight = null;
+  let cryptoAnalysisInFlight = null;
   function scanCryptoMarket() {
-    if (!cryptoScanInFlight) cryptoScanInFlight = Promise.resolve().then(runCryptoMarketScan).finally(() => { cryptoScanInFlight = null; });
+    if (!cryptoScanInFlight) cryptoScanInFlight = Promise.resolve(cryptoAnalysisInFlight)
+      .then(() => runCryptoMarketScan()).finally(() => { cryptoScanInFlight = null; });
     return cryptoScanInFlight;
   }
-  async function runCryptoMarketScan() {
+  function analyzeCryptoCandidates(symbols = []) {
+    if (cryptoAnalysisInFlight) return cryptoAnalysisInFlight;
+    if (cryptoScanInFlight) return Promise.resolve([]);
+    cryptoAnalysisInFlight = runCryptoMarketScan({ targetSymbols: symbols.slice(0, 2), analysisOnly: true })
+      .finally(() => { cryptoAnalysisInFlight = null; });
+    return cryptoAnalysisInFlight;
+  }
+  async function runCryptoMarketScan({ targetSymbols = [], analysisOnly = false } = {}) {
     const {
       LIVE_ORDER_MAX_QUOTE_AGE_SECONDS,
       CRYPTO_SCAN_CONCURRENCY = 4,
     } = getRuntime();
-    const symbols = await getCryptoAssets();
+    const tradableSymbols = await getCryptoAssets();
+    const symbols = analysisOnly ? [...new Set(targetSymbols)].filter(symbol => tradableSymbols.includes(symbol)) : tradableSymbols;
     const btcBars = await getBestCryptoBars('BTC/USD').catch(() => []);
     const cryptoSkipped = [];
     const results = [];
@@ -543,8 +549,10 @@ export function createCryptoMarketScanner(dependencies) {
       sampleAssets: symbols.slice(0, 10),
       usdPairs: symbols.filter((s) => String(s || "").endsWith("/USD")).length,
     });
-    engineState.skippedSymbols = [];
-    engineState.lastCryptoScanStartedAt = new Date().toISOString();
+    if (!analysisOnly) {
+      engineState.skippedSymbols = [];
+      engineState.lastCryptoScanStartedAt = new Date().toISOString();
+    }
     // Preserve the last published snapshot until this generation completes.
     const scanSymbols = symbols.filter((symbol) =>
       String(symbol || "").endsWith("/USD")
@@ -569,7 +577,7 @@ export function createCryptoMarketScanner(dependencies) {
       async (symbol) => {
       processedSymbols += 1;
       engineState.lastHeartbeatAt = new Date().toISOString();
-      engineState.engineCycleStage = {
+      if (!analysisOnly) engineState.engineCycleStage = {
         stage: "SCANNING_CRYPTO",
         symbol,
         processedSymbols,
@@ -916,6 +924,7 @@ export function createCryptoMarketScanner(dependencies) {
           volume: liquidityMetrics.volume,
           averageVolume: liquidityMetrics.averageVolume,
           volumeSpikeRatio: liquidityMetrics.volumeSpikeRatio,
+          recentVolume: liquidityMetrics.recentVolume,
           dollarVolume: liquidityMetrics.dollarVolume,
           dollarVolume24h: liquidityMetrics.dollarVolume24h,
           windowDollarVolume: liquidityMetrics.windowDollarVolume,
@@ -1198,7 +1207,7 @@ export function createCryptoMarketScanner(dependencies) {
         }
         : null,
     }));
-    engineState.cryptoQuietDiscoveryState = {
+    if (!analysisOnly) engineState.cryptoQuietDiscoveryState = {
       phase: "CRYPTO_QUIET_PRE_MOVE_DISCOVERY",
       updatedAt: new Date().toISOString(),
       reviewedCount: results.length,
@@ -1208,8 +1217,14 @@ export function createCryptoMarketScanner(dependencies) {
         ? "Quiet crypto candidates selected before extension."
         : "No quiet crypto candidate met the current discovery floor.",
     };
+    if (analysisOnly) for (const signal of results) Object.assign(signal, {
+      analysisUpdatedAt: new Date().toISOString(),
+      approved: false, backendApproved: false, autoTradeApproved: false, qualifiedToBuy: false,
+      buyableNow: false, recommendedTradeAmount: 0, finalApprovedTradeAmount: 0, finalTradeAmount: 0,
+      executionEligibility: { approved: false, reasons: ['CENTRAL_RISK_AND_SIZING_REVIEW_REQUIRED'] },
+    });
     return results.sort((a, b) => b.score - a.score);
   }
 
-  return { scoreCrypto, calculateCryptoInstitutionalQualification, scanCryptoMarket };
+  return { scoreCrypto, calculateCryptoInstitutionalQualification, scanCryptoMarket, analyzeCryptoCandidates };
 }

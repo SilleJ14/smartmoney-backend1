@@ -65,13 +65,14 @@ export function calculateInstitutionalBlend(input = {}, { clampScore }) {
   const marketEvidenceScore = clampScore(
     momentumScore * 0.4 + Number(input.technicalScore || 0) * 0.35 + Number(input.statisticalScore || 0) * 0.25
   );
-  const contextScore = clampScore(Number(input.macroScore || 0) * 0.7 + Number(input.sectorScore || 0) * 0.3);
+  const contextAvailable = input.macroScore != null && Number.isFinite(Number(input.macroScore));
+  const contextScore = contextAvailable ? clampScore(Number(input.macroScore) * 0.7 + Number(input.sectorScore || 0) * 0.3) : null;
   const riskPortfolioScore = clampScore(Number(input.blendedRiskScore || 0) * 0.7 + Number(input.portfolioScore || 0) * 0.3);
   const fundamentalDataValid = input.fundamentalDataValid === true;
   const groups = [
     { name: "marketEvidence", score: marketEvidenceScore, weight: effectiveGroupWeights.marketEvidence, available: true },
     { name: "fundamentals", score: fundamentalBlendScore, weight: effectiveGroupWeights.fundamentals, available: fundamentalDataValid },
-    { name: "marketContext", score: contextScore, weight: effectiveGroupWeights.marketContext, available: true },
+    { name: "marketContext", score: contextScore, weight: effectiveGroupWeights.marketContext, available: contextAvailable },
     { name: "riskAndPortfolio", score: riskPortfolioScore, weight: effectiveGroupWeights.riskAndPortfolio, available: true },
   ];
   const availableWeight = groups.filter((group) => group.available).reduce((sum, group) => sum + group.weight, 0);

@@ -184,6 +184,7 @@ export function evaluateStockTradeCandidate(
   const entryScore = Number(signal.entryQualityScore ?? signal.entryQualityScorecard?.score ?? 0);
   const entryCoverage = Number(signal.entryQualityScorecard?.coverage || 0);
   const decisionCoverage = Number(
+    signal.stockDecisionEvidence?.coverage ??
     signal.decisionScoreCoverage ??
     signal.decisionScoreTelemetry?.stages?.decision?.coverage ??
     0
@@ -495,7 +496,9 @@ export function calculateEarlyDiscoveryScore(signal = {}) {
     signal.preMoverAccumulationScore,
     signal.multiDayAccumulation?.preBreakoutScore
   );
-  const relativeVolume = firstFinite(
+  const relativeVolume = signal.recentVolume || confirmations.recentVolume
+    ? firstFinite((confirmations.recentVolume || signal.recentVolume).ratio)
+    : firstFinite(
     signal.relativeVolume,
     signal.volumeRatio,
     signal.volumeSpikeRatio,
@@ -527,7 +530,8 @@ export function calculateEarlyDiscoveryScore(signal = {}) {
     ]
     : [
       component("preMoveStructure", structure, 0.6, "accumulationScore", structure !== undefined),
-      component("unusualParticipation", participation, 0.25, "relativeVolume", relativeVolume !== undefined),
+      component("unusualParticipation", participation, 0.25,
+        signal.recentVolume || confirmations.recentVolume ? 'recentCompletedBarVolume' : 'relativeVolume', relativeVolume !== undefined),
       component("catalystNovelty", catalyst, 0.15, "catalystScore", catalystAvailable),
     ];
   const rawCard = scorecard("EARLY_DISCOVERY", components);
@@ -818,7 +822,7 @@ export function buildStockDecisionScore(signal = {}) {
   const continuationSetup = assessContinuationSetup(signal);
   const useContinuation = signal.discoveryLane === 'MEASURED_CONTINUATION' && continuationSetup.eligible;
   const entry = signal.entryQualityScorecard || calculateEntryQualityScore(signal);
-  const contextScore = firstFinite(
+  const contextScore = signal.marketContextAvailable === false ? undefined : firstFinite(
     signal.contextScore,
     signal.phase12MacroCorrelation?.macroCorrelationScore,
     signal.macroScore

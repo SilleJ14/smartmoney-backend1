@@ -2,6 +2,7 @@ import express from "express";
 import { BoundedTtlCache } from "./utils/boundedTtlCache.js";
 import { getApprovedTradeAmount } from "./scoring/approvedSizing.js";
 import { revalidateCandidate } from './scoring/revalidateCandidate.js';
+import { installCentralDecision } from './scoring/installCentralDecision.js';
 import { createSafetyJournal, readSafetyJournal } from './state/safetyJournal.js';
 import { createOrderRiskReservations, outstandingOrderNotional } from './risk/orderRiskReservations.js';
 import { createManagedExecution } from './execution/managedExecution.js';
@@ -15,6 +16,11 @@ import { installProcessDiagnostics } from "./bootstrap/processDiagnostics.js";
 import { ingestMixedAssetDiscoveryOutcomes } from "./scoring/mixedAssetDiscoveryOutcomes.js";
 import { takeExplorationWindow, createFairReviewQueue } from "./discovery/fairExploration.js";
 import { createStockQuoteBatch } from "./market-data/stockQuoteBatch.js";
+import { createBrokerClock } from "./market-data/brokerClock.js";
+import { createStockHistory } from "./market-data/stockHistory.js";
+import { recentBarVolumeEvidence } from './market-data/volumeEvidence.js';
+import { independentMarketRegime } from './market-data/independentMarketRegime.js';
+import { createStockNewsReview } from "./market-data/stockNewsReview.js";
 import { providerDailyBar } from "./discovery/providerDailyBar.js";
 import { quietDiscoverySessionDay } from './discovery/quietDiscoverySession.js';
 import { createEarlyCandidateReassessment, freshEarlyAssessments } from './discovery/earlyCandidateReassessment.js';
@@ -3046,6 +3052,10 @@ function getMarketSession(clock = {}) {
   if (minutes >= premarketStart && minutes < regularStart) {
     return "premarket";
   }
+  // Research continues during a clock outage, but this grants no order permission.
+  if (minutes >= regularStart && minutes < regularEnd && engineState.marketClockAvailable === false) {
+    return "regular_research";
+  }
   if (minutes >= regularEnd && minutes < afterhoursEnd) {
     return "afterhours";
   }
@@ -3115,6 +3125,10 @@ function buildBackendHealthPayload(clock = {}) {
       serviceStartupErrors: engineState.serviceStartupErrors || {},
     },
     liveScheduler: engineState.liveSchedulerState || null,
+    candidateReassessment: {
+      stocks: { ...earlyCandidateReassessment.getStatus(), lastScheduledAt: liveTaskScheduler.lastRunAt('reassessEarlyCandidates') },
+      crypto: { ...cryptoCandidateReassessment.getStatus(), lastScheduledAt: liveTaskScheduler.lastRunAt('reassessCryptoCandidates') },
+    },
     outcomeStorage: discoveryOutcomeStore.getStatus(),
     positionProtection: engineState.positionProtection || { ok: false, reason: 'Awaiting broker reconciliation' },
     fastRunnerRefreshError: engineState.fastRunnerRefreshError || null,
@@ -13652,6 +13666,14 @@ const alpacaClient = createAlpacaClient({
 });
 const alpacaTradingRequest = alpacaClient.tradingRequest;
 const alpacaDataRequest = alpacaClient.dataRequest;
+const brokerClock = createBrokerClock({ request: alpacaTradingRequest,
+  onUpdate: (clock, error) => {
+    engineState.cachedClock = clock;
+    engineState.marketOpen = clock.is_open === true;
+    engineState.marketClockAvailable = clock.available === true;
+    updateApiHealth('alpacaClock', !error, error?.message || '');
+  },
+});
 const alpacaCryptoMarketData = createAlpacaCryptoMarketData({
   dataRequest: alpacaDataRequest,
   normalizeSymbol,
@@ -13803,7 +13825,8 @@ const preTradeRiskGuard = {
       context: {
         emergencyStopActive,
         safetyReconciliationRequired: engineState.safetyReconciliationRequired === true,
-        brokerEvidenceStale: account?.stale === true || positions?.stale === true || (!cryptoAsset && clock?.stale === true),
+        brokerEvidenceStale: account?.stale === true || positions?.stale === true,
+        marketClockAvailable: cryptoAsset || clock?.available === true,
         pendingOrderNotional,
         lossBudgetSizing: options.automated !== false ? calculateLossBudgetSizing({
           account, positions: managedPositions, config: CONFIG, signal: sizingSignal,
@@ -14707,9 +14730,9 @@ async function getStockQuote(symbol) {
     avgBarVolume: Math.round(
       Number(barStats.avgVolume || 0)
     ),
-    volumeRatio: Number(
-      barStats.volumeSpikeRatio || 0
-    ),
+    volumeRatio: barStats.volumeSpikeRatio,
+    recentVolume: barStats.recentVolume,
+    sessionRelativeVolume: null,
     quoteFetchedAt: providerQuoteUpdatedAt,
     liveQuoteUpdatedAt: providerQuoteUpdatedAt,
     spreadUpdatedAt,
@@ -14762,122 +14785,41 @@ async function getStockQuote(symbol) {
   cacheStockQuote(cleanSymbol, combinedQuote);
   return combinedQuote;
 }
-const recentStockBarsCache = new Map();
-const RECENT_STOCK_BARS_CACHE_TTL_MS = 45_000;
-const RECENT_STOCK_DAILY_BARS_CACHE_TTL_MS = 30 * 60_000;
-const RECENT_STOCK_BARS_CACHE_MAX_ENTRIES = 240;
-
-async function getRecentBars(symbol, timeframe = "5Min", limit = 30, { maxResponseBytes = 512 * 1024 } = {}) {
-  const intervalMs = timeframe === '1Day' ? 86400000 : Number(String(timeframe).match(/^([0-9]+)Min$/)?.[1] || 5) * 60000;
-  const validateBars = rows => {
-    const seen = new Set();
-    const valid = rows.filter(bar => {
-      const t = typeof bar.t === 'number' ? bar.t : Date.parse(bar.t);
-      if (!Number.isFinite(t) || t < Date.now() - (timeframe === '1Day' ? 120 : 7) * 86400000 || t + intervalMs > Date.now() || seen.has(t) ||
-        ![bar.o, bar.h, bar.l, bar.c, bar.v].every(Number.isFinite) ||
-        Math.min(bar.o, bar.h, bar.l, bar.c) <= 0 || bar.v < 0 ||
-        bar.h < Math.max(bar.o, bar.c, bar.l) || bar.l > Math.min(bar.o, bar.c)) return false;
-      seen.add(t);
-      return true;
-    }).sort((a, b) => (typeof a.t === 'number' ? a.t : Date.parse(a.t)) - (typeof b.t === 'number' ? b.t : Date.parse(b.t)));
-    return valid.slice(-Math.max(1, Number(limit)));
-  };
+const stockHistory = createStockHistory({
+  polygon: ENABLE_POLYGON && POLYGON_API_KEY ? async (symbol, timeframe, spec, options) => {
+    const to = new Date().toISOString().slice(0, 10);
+    const from = new Date(Date.now() - (spec.daily ? 120 : 7) * 86400000).toISOString().slice(0, 10);
+    const response = await fetchWithTimeout(
+      `https://api.polygon.io/v2/aggs/ticker/${encodeURIComponent(symbol)}/range/${spec.multiplier}/${spec.timespan}/${from}/${to}?adjusted=true&sort=desc&limit=${spec.providerLimit}&apiKey=${POLYGON_API_KEY}`,
+      {}, options.timeoutMs);
+    if (!response.ok) { const error = new Error('Polygon history unavailable'); error.status = response.status; throw error; }
+    const data = await readBoundedResponseJson(response, { maxBytes: options.maxResponseBytes || 512 * 1024, timeoutMs: options.timeoutMs });
+    if (!Array.isArray(data.results) && data.resultsCount !== 0) throw new Error('Malformed Polygon bars');
+    return data.results || [];
+  } : null,
+  alpaca: async (symbol, timeframe, spec, options) => {
+    const from = new Date(Date.now() - (spec.daily ? 120 : 7) * 86400000).toISOString().slice(0, 10);
+    const params = new URLSearchParams({ timeframe, start: from, end: new Date().toISOString(),
+      limit: String(spec.outputLimit), adjustment: 'all', feed: 'iex', sort: 'desc' });
+    const data = await alpacaDataRequest(`/v2/stocks/${encodeURIComponent(symbol)}/bars?${params}`, options);
+    if (!Array.isArray(data.bars)) throw new Error('Malformed Alpaca bars');
+    return data.bars;
+  },
+  onEvidence: evidence => {
+    engineState.stockHistoryEvidence ||= {};
+    const key = `${evidence.symbol}:${evidence.timeframe}`;
+    delete engineState.stockHistoryEvidence[key];
+    engineState.stockHistoryEvidence[key] = evidence;
+    const keys = Object.keys(engineState.stockHistoryEvidence);
+    for (const old of keys.slice(0, Math.max(0, keys.length - 240))) delete engineState.stockHistoryEvidence[old];
+  },
+});
+async function getRecentBars(symbol, timeframe = "5Min", limit = 30, options = {}) {
   const cleanSymbol = normalizeSymbol(symbol);
-  if (!cleanSymbol) return [];
-  const cacheKey = `${cleanSymbol}:${timeframe}:${Number(limit || 30)}`;
-  const cached = recentStockBarsCache.get(cacheKey);
-  const cacheTtlMs = timeframe === "1Day"
-    ? RECENT_STOCK_DAILY_BARS_CACHE_TTL_MS
-    : RECENT_STOCK_BARS_CACHE_TTL_MS;
-  if (
-    cached &&
-    Date.now() - Number(cached.at || 0) < cacheTtlMs &&
-    Array.isArray(cached.bars)
-  ) {
-    return validateBars(cached.bars);
-  }
-  const cacheBars = (bars) => {
-    if (!Array.isArray(bars) || bars.length === 0) return bars;
-    if (!recentStockBarsCache.has(cacheKey) && recentStockBarsCache.size >= RECENT_STOCK_BARS_CACHE_MAX_ENTRIES) {
-      const oldestKey = recentStockBarsCache.keys().next().value;
-      if (oldestKey) recentStockBarsCache.delete(oldestKey);
-    }
-    recentStockBarsCache.set(cacheKey, { at: Date.now(), bars });
-    return bars;
-  };
-  const now = new Date();
-  const lookbackDays = timeframe === "1Day" ? 120 : 7;
-  const to = now.toISOString().slice(0, 10);
-  const from = new Date(
-    now.getTime() - lookbackDays * 24 * 60 * 60 * 1000
-  ).toISOString().slice(0, 10);
-
-  if (ENABLE_POLYGON && POLYGON_API_KEY) {
-    try {
-      const multiplier = timeframe === "1Day" ? 1 : 5;
-      const timespan = timeframe === "1Day" ? "day" : "minute";
-      const url =
-        `https://api.polygon.io/v2/aggs/ticker/${encodeURIComponent(cleanSymbol)}` +
-        `/range/${multiplier}/${timespan}/${from}/${to}` +
-        `?adjusted=true&sort=desc&limit=${Number(limit || 30)}` +
-        `&apiKey=${POLYGON_API_KEY}`;
-
-      const data = await fetchWithTimeout(url);
-
-      if (!data?.ok) {
-        throw new Error(`HTTP ${data?.status || "unknown"}`);
-      }
-
-      const json = JSON.parse(await readBoundedResponseText(data, { maxBytes: maxResponseBytes }));
-
-      const polygonBars = Array.isArray(json?.results)
-        ? json.results
-          .reverse()
-          .map((bar) => ({
-            o: Number(bar.o || 0),
-            h: Number(bar.h || 0),
-            l: Number(bar.l || 0),
-            c: Number(bar.c || 0),
-            v: Number(bar.v ?? NaN),
-            t: bar.t || null,
-          }))
-        : [];
-      const valid = validateBars(polygonBars);
-      if (valid.length >= Math.min(Number(limit), timeframe === '1Day' ? 20 : 34)) return cacheBars(valid);
-    } catch (err) {
-      console.warn("Polygon bars error, using Alpaca fallback:", cleanSymbol, err?.message);
-    }
-  }
-
-  try {
-    const alpacaPath =
-      `/v2/stocks/${encodeURIComponent(cleanSymbol)}/bars` +
-      `?timeframe=${encodeURIComponent(timeframe)}` +
-      `&start=${encodeURIComponent(from)}` +
-      `&end=${encodeURIComponent(now.toISOString())}` +
-      `&limit=${Math.max(1, Number(limit || 30))}` +
-      `&adjustment=all&feed=iex&sort=desc`;
-    const data = await alpacaDataRequest(alpacaPath, { maxResponseBytes });
-    const alpacaBars = Array.isArray(data?.bars)
-      ? data.bars
-        .slice()
-        .reverse()
-        .map((bar) => ({
-          o: Number(bar.o || 0),
-          h: Number(bar.h || 0),
-          l: Number(bar.l || 0),
-          c: Number(bar.c || 0),
-          v: Number(bar.v ?? NaN),
-          t: bar.t || null,
-        }))
-      : [];
-    return cacheBars(validateBars(alpacaBars));
-  } catch (err) {
-    console.warn("Alpaca stock bars fallback failed:", cleanSymbol, err?.message);
-    return [];
-  }
+  return cleanSymbol ? stockHistory.get(cleanSymbol, timeframe, limit, options) : [];
 }
 function computeBarStats(bars = []) {
+  const recentVolume = recentBarVolumeEvidence(bars);
   const cleanBars = (bars || [])
     .map((bar) => ({
       open: Number(bar.o || bar.open || 0),
@@ -14892,7 +14834,8 @@ function computeBarStats(bars = []) {
     return {
       avgVolume: 0,
       lastVolume: 0,
-      volumeSpikeRatio: 0,
+      volumeSpikeRatio: null,
+      recentVolume,
       vwap: 0,
       previousVwap: 0,
       latestClose: 0,
@@ -14941,7 +14884,8 @@ function computeBarStats(bars = []) {
   return {
     avgVolume,
     lastVolume: latest.volume,
-    volumeSpikeRatio: avgVolume > 0 ? latest.volume / avgVolume : 0,
+    volumeSpikeRatio: recentVolume.ratio,
+    recentVolume,
     vwap,
     previousVwap,
     latestClose: latest.close,
@@ -15090,11 +15034,8 @@ function calculateEarlyMoverProfile({
     hasRelativeStrength: relativeStrength.hasRelativeStrength,
   };
 }
-const STOCK_NEWS_CACHE_TTL_MS = 15 * 60 * 1000;
-const STOCK_NEWS_CACHE_STALE_MS = 60 * 60 * 1000;
 const MARKET_NEWS_CACHE_TTL_MS = 10 * 60 * 1000;
 const MARKET_NEWS_CACHE_STALE_MS = 6 * 60 * 60 * 1000;
-const stockNewsCache = new Map();
 let cryptoMarketNewsCache = { at: 0, articles: [], available: false };
 let marketNewsFeedCache = {
   at: 0,
@@ -15103,15 +15044,6 @@ let marketNewsFeedCache = {
   fetchedAt: null,
   reason: "News feed has not loaded yet",
 };
-
-function pruneStockNewsCache(maxEntries = 250) {
-  if (stockNewsCache.size <= maxEntries) return;
-  const retained = [...stockNewsCache.entries()]
-    .sort((a, b) => Number(b[1]?.at || 0) - Number(a[1]?.at || 0))
-    .slice(0, maxEntries);
-  stockNewsCache.clear();
-  for (const [symbol, value] of retained) stockNewsCache.set(symbol, value);
-}
 
 function unavailableNewsResult(reason) {
   return {
@@ -15239,88 +15171,35 @@ async function getMarketNewsFeed() {
   }
 }
 
+const stockNewsReview = createStockNewsReview({
+  providers: {
+    finnhub: FINNHUB_API_KEY ? async symbol => {
+      const to = new Date().toISOString().slice(0, 10);
+      const from = new Date(Date.now() - Number(CONFIG.newsLookbackDays || 3) * 86400000).toISOString().slice(0, 10);
+      const response = await fetchWithTimeout(`https://finnhub.io/api/v1/company-news?symbol=${encodeURIComponent(symbol)}&from=${from}&to=${to}&token=${FINNHUB_API_KEY}`, {}, 3000);
+      if (!response.ok) { const error = new Error('Finnhub news unavailable'); error.status = response.status; throw error; }
+      return readBoundedResponseJson(response, { maxBytes: 512 * 1024, timeoutMs: 3000 });
+    } : null,
+    alpaca: async symbol => {
+      const params = new URLSearchParams({ symbols: symbol, sort: 'desc', limit: '50',
+        start: new Date(Date.now() - Number(CONFIG.newsLookbackDays || 3) * 86400000).toISOString(),
+        end: new Date().toISOString(), include_content: 'false' });
+      const data = await alpacaDataRequest(`/v1beta1/news?${params}`, { timeoutMs: 3000, maxResponseBytes: 512 * 1024 });
+      return data.news;
+    },
+  },
+  onEvidence: evidence => {
+    engineState.stockNewsEvidence ||= {};
+    delete engineState.stockNewsEvidence[evidence.symbol];
+    engineState.stockNewsEvidence[evidence.symbol] = evidence;
+    const keys = Object.keys(engineState.stockNewsEvidence);
+    for (const old of keys.slice(0, Math.max(0, keys.length - 250))) delete engineState.stockNewsEvidence[old];
+    updateApiHealth('stockNewsReview', evidence.available, evidence.available ? '' : evidence.errors.join('; '));
+  },
+});
 async function getNewsRisk(symbol) {
-  if (!CONFIG.enableNewsRiskFilter) {
-    return unavailableNewsResult("News risk filter disabled");
-  }
-  if (!FINNHUB_API_KEY) {
-    return unavailableNewsResult("Finnhub API key missing");
-  }
-  const cleanSymbol = normalizeSymbol(symbol);
-  const cached = stockNewsCache.get(cleanSymbol);
-  if (cached && Date.now() - cached.at <= STOCK_NEWS_CACHE_TTL_MS) {
-    return { ...cached.value, cacheStatus: "fresh" };
-  }
-  const today = new Date();
-  const from = new Date();
-  from.setDate(today.getDate() - CONFIG.newsLookbackDays);
-  const toDate = today.toISOString().slice(0, 10);
-  const fromDate = from.toISOString().slice(0, 10);
-  if (
-    engineState.apiCooldowns.finnhubNews &&
-    Date.now() < engineState.apiCooldowns.finnhubNews
-  ) {
-    if (cached && Date.now() - cached.at <= STOCK_NEWS_CACHE_STALE_MS) {
-      return {
-        ...cached.value,
-        available: false,
-        cacheStatus: "stale_fallback",
-        stale: true,
-        reason: "News provider unavailable; cached result is too old for a new entry",
-      };
-    }
-    return unavailableNewsResult("News API cooling down");
-  }
-  const url = `https://finnhub.io/api/v1/company-news?symbol=${encodeURIComponent(
-    cleanSymbol
-  )}&from=${fromDate}&to=${toDate}&token=${FINNHUB_API_KEY}`;
-  try {
-    const res = await fetchWithTimeout(url);
-    const data = await readBoundedResponseJson(res);
-    if (!res.ok || !Array.isArray(data)) {
-      throw new Error(`Finnhub company news HTTP ${res.status}`);
-    }
-    updateApiHealth("finnhubNews", true);
-    const articles = data
-      .filter((item) => item?.headline)
-      .sort((a, b) => Number(b.datetime || 0) - Number(a.datetime || 0))
-      .slice(0, 50);
-    const catalyst = calculateNewsCatalyst({
-      articles,
-      dataAvailable: true,
-      source: "finnhub_company_news",
-    });
-    const result = {
-      available: true,
-      risk: catalyst.riskDetected,
-      reason: catalyst.riskDetected
-        ? "Risky news detected"
-        : "News checked; no major risk detected",
-      headlines: catalyst.riskDetected ? catalyst.headlines.slice(0, 3) : [],
-      allHeadlines: catalyst.headlines,
-      articles,
-      catalyst,
-      fetchedAt: new Date().toISOString(),
-    };
-    stockNewsCache.set(cleanSymbol, { at: Date.now(), value: result });
-    pruneStockNewsCache();
-    return { ...result, cacheStatus: "refreshed" };
-  } catch (error) {
-    engineState.apiFailureCounts.finnhubNews =
-      (engineState.apiFailureCounts.finnhubNews || 0) + 1;
-    engineState.apiCooldowns.finnhubNews = Date.now() + 60 * 1000;
-    updateApiHealth("finnhubNews", false, error.message);
-    if (cached && Date.now() - cached.at <= STOCK_NEWS_CACHE_STALE_MS) {
-      return {
-        ...cached.value,
-        available: false,
-        cacheStatus: "stale_fallback",
-        stale: true,
-        reason: "News provider unavailable; cached result is too old for a new entry",
-      };
-    }
-    return unavailableNewsResult("News check error");
-  }
+  if (!CONFIG.enableNewsRiskFilter) return unavailableNewsResult("News risk filter disabled");
+  return stockNewsReview.get(normalizeSymbol(symbol));
 }
 
 function cryptoNewsAliases(symbol) {
@@ -15462,6 +15341,9 @@ function mergeNewsConfirmationFields(confirmations, newsRisk) {
     newsArticles: newsRisk?.articles || [],
     newsCatalyst: newsRisk?.catalyst || calculateNewsCatalyst({ dataAvailable: false }),
     newsCacheStatus: newsRisk?.cacheStatus || "unavailable",
+    newsReviewedAt: newsRisk?.fetchedAt || null,
+    newsProvider: newsRisk?.source || null,
+    newsProviderErrors: newsRisk?.errors || [],
   };
 }
 
@@ -15484,22 +15366,30 @@ async function getAdvancedConfirmations(
       };
     return mergeNewsConfirmationFields(baseConfirmations, newsRisk);
   }
-  const bars = await getRecentBars(q.symbol, "5Min", 60);
+  const [bars, dailyBars, benchmarkDailyBars] = await Promise.all([
+    getRecentBars(q.symbol, "5Min", 60),
+    getRecentBars(q.symbol, "1Day", 25),
+    getBenchmarkBars(CONFIG.earlyMoverBenchmarkSymbol || "SPY"),
+  ]);
   const stats = computeBarStats(bars);
-  let dailyBars = [];
-  let benchmarkDailyBars = [];
-  try {
-    dailyBars = await getRecentBars(q.symbol, "1Day", 25);
-  } catch {
-    dailyBars = [];
+  // Score every analyzed candidate from its own fetched history, not membership
+  // in the separate pre-mover shortlist. No extra provider calls are required.
+  if (bars.length >= 20) {
+    q.technicals = computeTechnicals(bars);
+    q.technicalBarsFound = bars.length;
   }
-  try {
-    benchmarkDailyBars = await getBenchmarkBars(
-      CONFIG.earlyMoverBenchmarkSymbol || "SPY"
-    );
-  } catch {
-    benchmarkDailyBars = [];
+  const currentDiscovery = calculateCanonicalPreMoverScore({ symbol: q.symbol, dailyBars, intradayBars: bars });
+  if (dailyBars.length >= 21 && currentDiscovery.extension) {
+    q.preMoverDiscovery = currentDiscovery;
+    q.preMoveScore = currentDiscovery.preMoveScore;
+    q.historyDays = dailyBars.length;
+    q.multiHorizonExtension = currentDiscovery.extension;
+    q.extensionAdjusted = currentDiscovery.extensionAdjusted === true;
   }
+  q.historyEvidence = {
+    intradayBars: bars.length, completedDailyBars: dailyBars.length,
+    ...(engineState.stockHistoryEvidence?.[`${q.symbol}:1Day`] || {}),
+  };
   const rawDailyStats = computeBarStats(dailyBars);
   const liveDailyAtrExpansionRatio =
     calculateDailyAtrExpansion(q, dailyBars);
@@ -15580,7 +15470,8 @@ async function getAdvancedConfirmations(
     barsFound: bars.length,
     avgVolume: Math.round(stats.avgVolume),
     lastVolume: Math.round(stats.lastVolume),
-    volumeSpikeRatio: Number(stats.volumeSpikeRatio.toFixed(2)),
+    volumeSpikeRatio: stats.volumeSpikeRatio === null ? null : Number(stats.volumeSpikeRatio.toFixed(2)),
+    recentVolume: stats.recentVolume,
     vwap: Number(stats.vwap.toFixed(4)),
     closeNearHighPercent: Number(closeNearHighPercent.toFixed(2)),
     gapUpPercent: Number(gapUpPercent.toFixed(2)),
@@ -17427,69 +17318,50 @@ function calculateGlobalRiskDefense(stockSignals = [], cryptoSignals = []) {
       `crypto exposure multiplier ${exposureMultiplier}`,
   };
 }
-function detectMarketRegime(stockSignals = []) {
-  if (!CONFIG.enableMarketRegimeEngine) {
-    return {
-      state: "cautious bullish",
-      label: "Cautious Bullish",
-      exposureMultiplier: 0.75,
-      riskMessage: "Market regime engine disabled. Using cautious default.",
-    };
+function detectMarketRegime() {
+  return independentMarketRegime(engineState.benchmarkRegimeEvidence || [], {
+    config: CONFIG, enabled: CONFIG.enableMarketRegimeEngine, now: Date.now(),
+  });
+}
+const independentRegimeFlight = createSingleFlight();
+async function refreshIndependentMarketRegime() {
+  return independentRegimeFlight(() => loadIndependentMarketRegime()).catch(() => {
+    engineState.benchmarkRegimeEvidence = [];
+    engineState.marketRegime = detectMarketRegime();
+    return engineState.marketRegime;
+  });
+}
+async function loadIndependentMarketRegime() {
+  if (!canRefreshStockQuotes({ marketOpen: engineState.marketOpen === true,
+    marketSession: getMarketSession({ is_open: engineState.marketOpen === true }) })) {
+    engineState.marketRegime = detectMarketRegime();
+    return engineState.marketRegime;
   }
-  const signals = Array.isArray(stockSignals) ? stockSignals : [];
-  if (!signals.length) {
-    return {
-      state: "defensive",
-      label: "Defensive",
-      exposureMultiplier: CONFIG.defensiveExposureMultiplier,
-      riskMessage: "No strong market signal. Reducing exposure.",
-    };
-  }
-  const avgScore =
-    signals.reduce((sum, s) => sum + Number(s.institutionalScore || s.score || 0), 0) /
-    signals.length;
-  const positiveCount = signals.filter((s) => Number(s.percentChange || 0) > 0).length;
-  const positiveRatio = positiveCount / signals.length;
-  const fakeBreakoutCount = signals.filter(
-    (s) => s.confirmations?.fakeBreakout === true
-  ).length;
-  const riskCount = signals.filter(
-    (s) =>
-      s.confirmations?.newsRisk === true ||
-      Number(s.riskScore || 100) < 50
-  ).length;
-  const riskRatio = riskCount / signals.length;
-  const fakeBreakoutRatio = fakeBreakoutCount / signals.length;
-  if (riskRatio >= 0.35 || fakeBreakoutRatio >= 0.25) {
-    return {
-      state: "panic/high volatility",
-      label: "Panic / High Volatility",
-      exposureMultiplier: CONFIG.panicExposureMultiplier,
-      riskMessage: "High risk detected. New auto-buys should be blocked or heavily reduced.",
-    };
-  }
-  if (avgScore >= 80 && positiveRatio >= 0.65) {
-    return {
-      state: "aggressive bullish",
-      label: "Aggressive Bullish",
-      exposureMultiplier: CONFIG.aggressiveBullishExposureMultiplier,
-      riskMessage: "Strong opportunity environment. Normal exposure allowed.",
-    };
-  }
-  if (avgScore >= 65 && positiveRatio >= 0.5) {
-    return {
-      state: "cautious bullish",
-      label: "Cautious Bullish",
-      exposureMultiplier: CONFIG.cautiousBullishExposureMultiplier,
-      riskMessage: "Good but not perfect conditions. Reduced exposure.",
-    };
-  }
-  return {
-    state: "defensive",
-    label: "Defensive",
-    exposureMultiplier: CONFIG.defensiveExposureMultiplier,
-    riskMessage: "Weak or choppy conditions. Exposure reduced.",
-  };
+  const symbols = ['SPY', 'QQQ'];
+  const [histories, dailyHistories] = await Promise.all([
+    Promise.all(symbols.map(symbol => getRecentBars(symbol, '5Min', 20))),
+    Promise.all(symbols.map(symbol => getRecentBars(symbol, '1Day', 25))),
+  ]);
+  // Fetch prices AFTER history so their timestamp reflects the current review.
+  const quotes = await getLatestStockMarketQuotes(symbols);
+  engineState.benchmarkRegimeEvidence = symbols.map((symbol, index) => {
+    const quote = quotes.find(row => normalizeSymbol(row.symbol) === symbol) || {};
+    const bars = histories[index];
+    const closes = bars.map(bar => Number(bar.c));
+    const average = closes.length >= 5 ? closes.reduce((sum, c) => sum + c, 0) / closes.length : 0;
+    const price = Number(quote.price || quote.current || 0);
+    const daily = dailyHistories[index].at(-1);
+    const previousClose = daily && Date.now() - Number(daily.t) <= 7 * 86400000 ? Number(daily.c) : 0;
+    const change = quote.percentChange ?? quote.changePercent ?? quote.dayChangePercent ??
+      (previousClose > 0 && price > 0 ? (price / previousClose - 1) * 100 : null);
+    return { symbol, changePercent: change == null ? null : Number(change),
+      trendPercent: average > 0 && price > 0 ? (price / average - 1) * 100 : null,
+      quoteAt: getQuoteTimestampMs(quote),
+      barAt: bars.length ? Number(bars.at(-1).t) : null,
+      source: quote.liveQuoteSource || quote.source || null };
+  });
+  engineState.marketRegime = detectMarketRegime();
+  return engineState.marketRegime;
 }
 function calculateMarketPhase(stockSignals = [], cryptoSignals = []) {
   const allSignals = [...stockSignals, ...cryptoSignals];
@@ -17976,7 +17848,7 @@ async function getCryptoRecentBars(symbol, timeframe = "5Min", limit = 30) {
     return [];
   }
 }
-const { scoreCrypto, calculateCryptoInstitutionalQualification, scanCryptoMarket } = createCryptoMarketScanner({
+const { scoreCrypto, calculateCryptoInstitutionalQualification, scanCryptoMarket, analyzeCryptoCandidates } = createCryptoMarketScanner({
   CONFIG,
   calculateCryptoLiquidityFromBars,
   calculateRunnerHoldQuality,
@@ -18078,29 +17950,7 @@ async function placeCryptoMarketSell(symbol, qty, reason = "CRYPTO_EXIT") {
   return orderService.cryptoMarketSell({ symbol, qty, reason });
 }
 async function getClock() {
-  try {
-    const clock = await alpacaTradingRequest("/v2/clock");
-    engineState.cachedClock = clock;
-    updateApiHealth("alpacaClock", true);
-    return clock;
-  } catch (err) {
-    updateApiHealth("alpacaClock", false, err.message);
-    if (engineState.cachedClock) {
-      return {
-        ...engineState.cachedClock,
-        stale: true,
-        staleReason: err.message,
-      };
-    }
-    return {
-      is_open: false,
-      next_open: null,
-      next_close: null,
-      timestamp: new Date().toISOString(),
-      stale: true,
-      staleReason: err.message,
-    };
-  }
+  return brokerClock.get();
 }
 const polygonMoversFlight = createSingleFlight();
 async function getPolygonMoverSymbols(limit = POLYGON_MOVERS_LIMIT, forceRefresh = false) {
@@ -18241,7 +18091,8 @@ async function loadPolygonMoverSymbols(limit, forceRefresh) {
         candidates: quoteReviewCandidates,
         quotes: executionQuotes,
         normalizeSymbol,
-        now,
+        // Provider stamps can legitimately be newer than the scan start.
+        now: Date.now(),
         maxQuoteAgeSeconds: quotePolicy.maxQuoteAgeSeconds,
         maxSpreadPercent: quotePolicy.maxSpreadPercent,
         minDollarVolume: quotePolicy.minDollarVolume,
@@ -23564,6 +23415,10 @@ function hydrateCryptoExecutionCandidate(candidate = {}) {
   const finalized = finalizedSources.find(
     (signal) => normalizeSymbol(signal?.symbol) === symbol
   ) || {};
+  const candidateAssessmentAt = Date.parse(candidate.analysisUpdatedAt || candidate.cryptoDiscoveryScorecard?.calculatedAt || '');
+  const finalizedAssessmentAt = Date.parse(finalized.analysisUpdatedAt || finalized.cryptoDiscoveryScorecard?.calculatedAt || '');
+  const candidateIsNewer = Number.isFinite(candidateAssessmentAt) &&
+    (!Number.isFinite(finalizedAssessmentAt) || candidateAssessmentAt >= finalizedAssessmentAt);
   const compactSymbol = symbol.replaceAll("/", "");
   const slashSymbol = symbol.includes("/")
     ? symbol
@@ -23612,9 +23467,7 @@ function hydrateCryptoExecutionCandidate(candidate = {}) {
   return {
     ...candidate,
     ...finalized,
-    ...(Date.parse(candidate.cryptoDiscoveryScorecard?.calculatedAt || '') >= Date.parse(finalized.cryptoDiscoveryScorecard?.calculatedAt || '')
-      ? { chartBars: candidate.chartBars, cryptoSetup: candidate.cryptoSetup, btcMarketContext: candidate.btcMarketContext,
-        cryptoOrderbook: candidate.cryptoOrderbook, scoringModelVersion: candidate.scoringModelVersion } : {}),
+    ...(candidateIsNewer ? candidate : {}),
     symbol,
     assetClass: "crypto",
     asset_class: "crypto",
@@ -24028,6 +23881,7 @@ async function runEngineCycle() {
   return engineCycleRunner.run(executeEngineCycleBody);
 }
 const { executeEngineCycleBody } = createEngineCycle({
+  refreshIndependentMarketRegime,
   CONFIG,
   applyCrossMarketCorrelationToSignals,
   applyCryptoCapitalRotationToSignals,
@@ -28257,8 +28111,9 @@ function mergeLiveQuoteIntoSignal(signal = {}) {
     liveQuote,
     { price: liveQuote.price }
   );
-  return normalizeSignalScoreCompleteness({
+  const refreshed = {
     ...signal,
+    liveQuote: { ...liveQuote, updatedAt: liveQuote.liveQuoteUpdatedAt || null },
     livePrice: liveQuote.price,
     displayPrice: liveQuote.price,
     price: liveQuote.price,
@@ -28318,7 +28173,8 @@ function mergeLiveQuoteIntoSignal(signal = {}) {
       liveQuote.liquidityPressure ?? signal.liquidityPressure,
     priceStale:
       liveQuote.priceIsLive !== true,
-  });
+  };
+  return normalizeSignalScoreCompleteness(revalidateCandidate(signal, refreshed));
 }
 function buildLiveSignalPushPayload() {
   const stockSignals = getTopSignals(
@@ -31297,28 +31153,65 @@ function requestFastRunnerRefresh() {
     console.error("FAST_RUNNER_REFRESH_FAILED", engineState.fastRunnerRefreshError.message);
   });
 }
+async function reviewCandidateScores(rows, crypto = false) {
+  const fresh = await (crypto ? refreshCryptoExecutionQuotes(rows) : refreshStockExecutionQuotes(rows));
+  const central = calculateCentralAutonomousDecisionCore(crypto ? [] : fresh, crypto ? fresh : []);
+  return fresh.map(row => {
+    const decision = central.rankedDecisions.find(item => normalizeSymbol(item.symbol) === normalizeSymbol(row.symbol));
+    if (decision) installCentralDecision(row, decision, { crypto });
+    // Research cannot grant an order or inherit an old sizing approval.
+    Object.assign(row, { approved: false, backendApproved: false, autoTradeApproved: false, qualifiedToBuy: false,
+      buyableNow: false, recommendedTradeAmount: 0, finalApprovedTradeAmount: 0, finalTradeAmount: 0,
+      analysisUpdatedAt: new Date().toISOString(),
+      executionEligibility: { approved: false, reasons: ['CENTRAL_RISK_AND_SIZING_REVIEW_REQUIRED'] } });
+    return normalizeSignalScoreCompleteness(row);
+  });
+}
 const earlyCandidateReassessment = createEarlyCandidateReassessment({
-  analyze: symbols => analyzeCandidates(symbols),
+  retryMs: 60000,
+  analyze: async symbols => reviewCandidateScores(await analyzeCandidates(symbols)),
   canRun: () => !engineState.running && !activeScanLocks.scanMarket &&
     !buildMemoryGuardSnapshot().shouldPauseHeavyWork &&
     canRefreshStockQuotes({ marketOpen: engineState.marketOpen === true,
       marketSession: getMarketSession({ is_open: engineState.marketOpen === true }) }),
   trace: event => candidateTraceStore.record(event),
   publish: rows => {
+    if (engineState.running) return false;
     const completed = new Map(freshEarlyAssessments(engineState.earlyAssessedStockSignals)
       .map(row => [row.symbol, row]));
     for (const row of rows) completed.set(row.symbol, row);
     engineState.earlyAssessedStockSignals = [...completed.values()].slice(-60);
+    pushLiveSignalUpdate(buildLiveSignalPushPayload());
+  },
+});
+const cryptoCandidateReassessment = createEarlyCandidateReassessment({
+  capacity: 80, batchSize: 2, retryMs: 60000,
+  acceptsSymbol: symbol => /^[A-Z0-9]{1,15}\/USD$/.test(symbol),
+  canRun: () => !engineState.running && !buildMemoryGuardSnapshot().shouldPauseHeavyWork,
+  analyze: async symbols => reviewCandidateScores(await analyzeCryptoCandidates(symbols), true),
+  trace: event => candidateTraceStore.record({ ...event, assetClass: 'crypto' }),
+  publish: rows => {
+    if (engineState.running) return false;
+    const completed = new Map((engineState.lastCryptoSignals || []).map(row => [row.symbol, row]));
+    for (const row of rows) completed.set(row.symbol, row);
+    engineState.lastCryptoSignals = [...completed.values()].sort(compareCanonicalSignals).slice(0, Number(CONFIG.maxSignalsToReturn || 75));
+    pushLiveSignalUpdate(buildLiveSignalPushPayload());
   },
 });
 function startLiveScheduler() {
   if (liveSchedulerTimer) return engineState.liveSchedulerState;
   liveSchedulerTimer = setInterval(() => {
-    void runLiveScheduledTask('reassessEarlyCandidates', 15000, () => earlyCandidateReassessment.run([
+    void runLiveScheduledTask('refreshBrokerClock', 5000, () => getClock());
+    void runLiveScheduledTask('refreshIndependentMarketRegime', 30000, () => refreshIndependentMarketRegime());
+    void runLiveScheduledTask('reassessEarlyCandidates', 5000, () => earlyCandidateReassessment.run([
       ...(engineState.boundedQuietDiscoveryState?.liveSymbols || []),
       ...(engineState.liveEarlyMoverSymbols || []),
       ...(engineState.lastStockSignals || []).filter(row => getCanonicalFinalScore(row) === null || row.setupRevalidationRequired),
     ]));
+    void runLiveScheduledTask('reassessCryptoCandidates', 5000, () => cryptoCandidateReassessment.run(
+      (engineState.lastCryptoSignals || []).map(mergeLiveQuoteIntoSignal)
+        .filter(row => getCanonicalFinalScore(row) === null || row.setupRevalidationRequired)
+    ));
     void runLiveScheduledTask('refreshTradierQuoteStream', 5000,
       () => tradierQuoteStream.refresh(getActiveCandidateQuoteRefreshSymbols(ACTIVE_CANDIDATE_QUOTE_REFRESH_LIMIT, false).filter(s => !isCrypto(s))));
     void runLiveScheduledTask('reconcileManagedExecution', 5000, () => managedExecution.reconcile());
@@ -31412,6 +31305,10 @@ function startLiveScheduler() {
     ok: true,
     startedAt: new Date().toISOString(),
     tasks: [
+      "refreshBrokerClock",
+      "refreshIndependentMarketRegime",
+      "reassessEarlyCandidates",
+      "reassessCryptoCandidates",
       "cleanupLiveQuoteCache",
       "cleanupLiveOrderDedupMap",
       "refreshFinnhubLiveSubscriptions",
@@ -31586,17 +31483,18 @@ async function refreshCryptoExecutionEvidence(symbols) {
   const candidates = dedupeSignalsByCanonicalAuthority([...(engineState.lastCryptoSignals || []), ...(engineState.topCryptoSignals || [])]);
   const depthSymbols = candidates.filter(s => symbols.includes(s.symbol) && s.cryptoSetup?.eligible)
     .sort((a, b) => (getCanonicalFinalScore(b) ?? 0) - (getCanonicalFinalScore(a) ?? 0)).slice(0, 20).map(s => s.symbol);
-  const [quotes, books] = await Promise.all([
-    alpacaCryptoMarketData.getLatestQuotes(symbols),
-    depthSymbols.length ? alpacaCryptoMarketData.getLatestOrderbooks(depthSymbols).catch(() => []) : [],
-  ]);
+  // Depth is slower research/execution evidence. Do not hold fresh prices behind
+  // an orderbook request. The scheduler coalesces this independent job.
+  void runLiveScheduledTask('refreshCryptoOrderbooks', 5000, async () => {
+    const books = depthSymbols.length ? await alpacaCryptoMarketData.getLatestOrderbooks(depthSymbols) : [];
   for (const collection of [engineState.lastCryptoSignals, engineState.topCryptoSignals, engineState.lastSignals, engineState.topSignals]) {
     for (const candidate of collection || []) {
       const book = books.find(b => b.symbol === candidate.symbol);
       if (book) candidate.cryptoOrderbook = book;
     }
   }
-  return quotes;
+  });
+  return alpacaCryptoMarketData.getLatestQuotes(symbols);
 }
 async function refreshActiveCandidateQuotes(symbols = []) {
   const marketSession = getMarketSession({ is_open: engineState.marketOpen === true });

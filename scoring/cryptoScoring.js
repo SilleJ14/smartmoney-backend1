@@ -1,3 +1,4 @@
+import { recentBarVolumeEvidence } from '../market-data/volumeEvidence.js';
 const clampScore = (value) => Math.max(0, Math.min(100, Number(value) || 0));
 
 export const CRYPTO_MIN_WINDOW_DOLLAR_VOLUME = 25_000;
@@ -508,11 +509,9 @@ export function calculateCryptoLiquidityFromBars(
   const latestVolume = Number(latestBar.volume || 0);
   const maxVolume = baseVolumes.length ? Math.max(...baseVolumes) : 0;
   const effectiveVolume = latestVolume || averageVolume || maxVolume;
-  const volumeSpikeRatio = averageVolume > 0 && latestVolume > 0
-    ? latestVolume / averageVolume
-    : averageVolume > 0
-      ? 1
-      : 0;
+  const recentVolume = recentBarVolumeEvidence(bars.map(bar => ({ ...bar,
+    v: bar.v ?? bar.volume ?? bar.volume_crypto ?? bar.baseVolume })));
+  const volumeSpikeRatio = recentVolume.ratio;
 
   const windowDollarVolume = cleanBars.reduce((sum, bar) => {
     const barDollarVolume = Number.isFinite(bar.quoteVolume)
@@ -591,7 +590,8 @@ export function calculateCryptoLiquidityFromBars(
     effectiveVolume: Number(effectiveVolume.toFixed(2)),
     maxVolume: Number(maxVolume.toFixed(2)),
     nonZeroVolumeBars: baseVolumes.length,
-    volumeSpikeRatio: Number(volumeSpikeRatio.toFixed(3)),
+    volumeSpikeRatio: volumeSpikeRatio === null ? null : Number(volumeSpikeRatio.toFixed(3)),
+    recentVolume,
     latestBarDollarVolume: Number(Math.max(0, latestBarDollarVolume || 0).toFixed(2)),
     averageBarDollarVolume: Number(averageBarDollarVolume.toFixed(2)),
     windowDollarVolume: Number(windowDollarVolume.toFixed(2)),

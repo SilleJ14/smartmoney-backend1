@@ -1,10 +1,11 @@
+import { resolveRecentVolumeRatio } from '../market-data/volumeEvidence.js';
 export function calculateInstitutionalRiskScore(q = {}, { clampScore, premarketContinuationRelief = false }) {
   const price = Number(q.current || q.price || 0);
   const volume = Number(q.volume || 0);
   const percentChange = Number(q.percentChange || 0);
   const confirmations = q.confirmations || {};
   const rsi = Number(q.technicals?.rsi || 50);
-  const volumeRatio = Number(confirmations.volumeSpikeRatio || q.volumeRatio || 0);
+  const volumeRatio = resolveRecentVolumeRatio(q);
   const drawdownRiskScore = clampScore(80 - (percentChange > 20 ? (premarketContinuationRelief ? 8 : 25) : 0) - (percentChange > 40 ? (premarketContinuationRelief ? 8 : 20) : 0) - (confirmations.fakeBreakout ? (premarketContinuationRelief ? 10 : 30) : 0) - (confirmations.gapTooHigh ? (premarketContinuationRelief ? 6 : 20) : 0));
   const volatilityShockScore = clampScore(75 - (Math.abs(percentChange) > 15 ? (premarketContinuationRelief ? 5 : 15) : 0) - (Math.abs(percentChange) > 30 ? (premarketContinuationRelief ? 7 : 20) : 0) - (rsi > 80 ? (premarketContinuationRelief ? 5 : 15) : 0) - (volumeRatio > 5 ? 10 : 0));
   const liquidityStressScore = clampScore(40 + (volume >= 1000000 ? 35 : volume >= 250000 ? 25 : volume >= 25000 ? 15 : -15) + (price >= 5 ? 10 : -10));
@@ -24,7 +25,7 @@ export function calculatePortfolioFitScore(q = {}, { clampScore, premarketContin
   const percentChange = Number(q.percentChange || 0);
   const confirmations = q.confirmations || {};
   const rsi = Number(q.technicals?.rsi || 50);
-  const volumeRatio = Number(confirmations.volumeSpikeRatio || q.volumeRatio || 0);
+  const volumeRatio = resolveRecentVolumeRatio(q);
   const liquidityFitScore = clampScore(45 + (volume >= 1000000 ? 25 : volume >= 250000 ? 18 : volume >= 25000 ? 10 : -20) + (price >= 5 ? 10 : -10));
   const volatilityBalanceScore = clampScore(75 - (Math.abs(percentChange) > 20 ? (premarketContinuationRelief ? 8 : 25) : 0) - (Math.abs(percentChange) > 12 ? (premarketContinuationRelief ? 4 : 12) : 0) - (confirmations.gapTooHigh ? (premarketContinuationRelief ? 5 : 15) : 0) - (rsi > 80 ? (premarketContinuationRelief ? 5 : 15) : 0));
   const diversificationFitScore = clampScore(55 + (price >= 5 ? 8 : -8) + (volumeRatio >= 1 && volumeRatio <= 3 ? 10 : 0) - (confirmations.fakeBreakout ? (premarketContinuationRelief ? 8 : 25) : 0));

@@ -29,6 +29,17 @@ try {
   api = vm.createContext({ Date, LIVE_FRESH_SECONDS: 5, LIVE_STALE_SECONDS: 180,
     QUOTE_ONLY_SIGNAL_MARKER: "__smartmoneyQuoteOnly", LIVE_SCORE_SIGNAL_MARKER: "__smartmoneyLiveScore" });
   vm.runInContext(js, api);
+  // Exercise the actual normalizer's reason selection without rendering or auth.
+  let reasonExpression;
+  const visitReasons = node => {
+    if (ts.isVariableDeclaration(node) && node.name.getText(ast) === 'suppliedMissingEvidence') reasonExpression = node.initializer.getText(ast);
+    ts.forEachChild(node, visitReasons);
+  };
+  visitReasons(ast);
+  assert.ok(reasonExpression);
+  vm.runInContext(ts.transpileModule(`function currentReasons(item) { const normalizeMissingReasonValues = x => Array.isArray(x) ? x : []; return ${reasonExpression}; }`, {
+    compilerOptions: { target: ts.ScriptTarget.ES2022 },
+  }).outputText, api);
   let preserve;
   const visit = (node) => {
     if (ts.isVariableDeclaration(node) && node.name.getText(ast) === "preserveSignals") preserve = node.initializer.getText(ast);
@@ -45,6 +56,14 @@ try {
   if (error.code !== "MODULE_NOT_FOUND" && error.code !== "ENOENT") throw error;
 }
 const options = { skip: !api && "sibling Expo source/dependencies unavailable" };
+
+test('phone uses current decision reasons without mixing old raw warning snapshots', options, () => {
+  const reasons = api.currentReasons({ currentDecision: { version: 1, reasons: ['ENTRY_SCORE_BELOW_75'] },
+    missingEvidenceReasons: ['FINAL_SCORE_INVALID'], raw: { missingEvidenceReasons: ['SPREAD_UNAVAILABLE'] } });
+  assert.deepEqual(Array.from(reasons), ['ENTRY_SCORE_BELOW_75']);
+  assert.deepEqual(Array.from(api.currentReasons({ currentDecision: { version: 1, reasons: [] }, raw: { missingEvidenceReasons: ['OLD'] } })), []);
+  assert.ok(api.currentReasons({ raw: { missingEvidenceReasons: ['LEGACY_UNAVAILABLE'] } }).includes('LEGACY_UNAVAILABLE'));
+});
 
 test("phone freshness expires at 5.001 seconds with one state change", options, () => {
   const now = Date.now();

@@ -38,6 +38,16 @@ test("approves a healthy automated buy", () => {
   assert.equal(result.approved, true);
 });
 
+test('unavailable clock blocks stocks with an accurate reason but does not close crypto', () => {
+  const order = { symbol: 'AAPL', side: 'buy', notional: 25 };
+  const stock = evaluatePreTradeRisk({ order, context: safeContext({ marketOpen: false, marketClockAvailable: false }) });
+  assert.equal(stock.approved, false);
+  assert.ok(stock.reasons.includes('Broker market clock is unavailable or stale'));
+  assert.ok(!stock.reasons.includes('Stock market is closed'));
+  const crypto = evaluatePreTradeRisk({ order: { ...order, symbol: 'BTC/USD' }, context: safeContext({ isCrypto: true, marketOpen: false, marketClockAvailable: false }) });
+  assert.equal(crypto.approved, true);
+});
+
 test("combines operational lock reasons", () => {
   const result = evaluatePreTradeRisk({
     order: { symbol: "AAPL", side: "buy", notional: 25 },

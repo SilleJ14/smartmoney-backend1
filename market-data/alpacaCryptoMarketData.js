@@ -95,14 +95,15 @@ export function createAlpacaCryptoMarketData({ dataRequest, normalizeSymbol, now
     if (cleanSymbols.length === 0) return [];
     try {
       const symbolsParam = encodeURIComponent(cleanSymbols.join(","));
-      const quoteData = await dataRequest(`/v1beta3/crypto/us/latest/quotes?symbols=${symbolsParam}`);
+      const quoteData = await dataRequest(`/v1beta3/crypto/us/latest/quotes?symbols=${symbolsParam}`, { timeoutMs: 2500, maxResponseBytes: 512 * 1024 });
       const missingTradeSymbols = cleanSymbols.filter((symbol) => {
         const quote = findMarketEvent(quoteData?.quotes, symbol);
         return !normalizeLatestQuote(symbol, quote);
       });
       const tradeData = missingTradeSymbols.length > 0
         ? await dataRequest(
-          `/v1beta3/crypto/us/latest/trades?symbols=${encodeURIComponent(missingTradeSymbols.join(","))}`
+          `/v1beta3/crypto/us/latest/trades?symbols=${encodeURIComponent(missingTradeSymbols.join(","))}`,
+          { timeoutMs: 1500, maxResponseBytes: 512 * 1024 }
         ).catch(() => ({ trades: {} }))
         : { trades: {} };
       return cleanSymbols
@@ -130,7 +131,7 @@ export function createAlpacaCryptoMarketData({ dataRequest, normalizeSymbol, now
     for (let i = 0; i < clean.length; i += 20) {
       const batch = clean.slice(i, i + 20);
       const data = await dataRequest(`/v1beta3/crypto/us/latest/orderbooks?symbols=${encodeURIComponent(batch.join(','))}`,
-        { maxResponseBytes: 512 * 1024 });
+        { maxResponseBytes: 512 * 1024, timeoutMs: 2500 });
       for (const symbol of batch) {
         const book = findMarketEvent(data?.orderbooks, symbol);
         if (!book) continue;

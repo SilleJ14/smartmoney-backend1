@@ -105,6 +105,8 @@ export function registerStatusRoutes(app, dependencies) {
         institutionalDashboard: latestStatus.institutionalDashboard || {},
         engineState: {
           marketOpen: state.marketOpen === true,
+          marketClockAvailable: state.marketClockAvailable ?? null,
+          cachedClock: state.cachedClock || null,
           marketRegime: state.marketRegime || null,
           marketStressLevel: state.marketStressLevel ?? null,
           marketMomentumScore: state.marketMomentumScore ?? null,

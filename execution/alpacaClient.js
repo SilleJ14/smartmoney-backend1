@@ -33,6 +33,7 @@ export function createAlpacaClient({
   }
 
   async function tradingRequest(path, options = {}) {
+    const healthName = path === '/v2/clock' ? 'alpacaClock' : 'alpacaTrading';
     assertOrderAllowed({
       path,
       options,
@@ -51,8 +52,9 @@ export function createAlpacaClient({
 
     if (!response.ok) {
       const message = errorMessage(data, `HTTP ${response.status}`);
-      onTradingFailure(message);
-      onApiHealth("alpacaTrading", false, message);
+      // Clock failure must not cool down working account/order endpoints.
+      if (healthName === 'alpacaTrading') onTradingFailure(message);
+      onApiHealth(healthName, false, message);
       const error = new Error(
         errorMessage(
           data,
@@ -63,7 +65,7 @@ export function createAlpacaClient({
       throw error;
     }
 
-    onApiHealth("alpacaTrading", true);
+    onApiHealth(healthName, true);
     return data;
   }
 
@@ -80,12 +82,14 @@ export function createAlpacaClient({
     const data = text ? JSON.parse(text) : {};
 
     if (!response.ok) {
-      throw new Error(
+      const error = new Error(
         errorMessage(
           data,
           `Alpaca data error ${response.status}: ${JSON.stringify(data)}`
         )
       );
+      error.status = response.status;
+      throw error;
     }
 
     return data;

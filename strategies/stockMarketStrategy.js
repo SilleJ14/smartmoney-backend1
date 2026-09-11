@@ -111,7 +111,10 @@ export function createStockMarketStrategy(dependencies) {
     const confirmations = q.confirmations || {};
     const technicals = q.technicals || {};
     const momentum = Number(q.percentChange || 0);
-    const volumeRatio = Number(confirmations.volumeSpikeRatio || q.volumeRatio || 0);
+    const volumeEvidence = confirmations.recentVolume || q.recentVolume;
+    const rawVolumeRatio = confirmations.volumeSpikeRatio ?? q.volumeRatio;
+    const volumeRatio = volumeEvidence ? volumeEvidence.ratio
+      : rawVolumeRatio == null ? null : Number(rawVolumeRatio);
     const premarketContinuationRelief =
       !engineState.marketOpen &&
       (
@@ -150,15 +153,15 @@ export function createStockMarketStrategy(dependencies) {
       (confirmations.gapTooHigh ? (premarketContinuationRelief ? 6 : 20) : 0) -
       (confirmations.newsRisk ? 30 : 0) -
       (momentum > 25 ? (premarketContinuationRelief ? 5 : 15) : 0) -
-      (volumeRatio < 0.8 ? 10 : 0)
+      (volumeRatio !== null && volumeRatio < 0.8 ? 10 : 0)
     );
     const blendedRiskScore = clampScore(
       riskScore * 0.55 +
       advancedRisk.institutionalRiskScore * 0.45
     );
     const statisticalScore = edge.statisticalEdgeScore;
-    const regime = engineState.marketRegime || detectMarketRegime([]);
-    const macroScore = clampScore(
+    const regime = detectMarketRegime();
+    const macroScore = regime.available === false ? null : clampScore(
       regime.state === "aggressive bullish"
         ? 85
         : regime.state === "cautious bullish"
@@ -227,6 +230,9 @@ export function createStockMarketStrategy(dependencies) {
       momentumScore,
       fundamentalBlendScore,
       reinforcementWeights: blend.reinforcementWeights,
+      contextScore: blend.contextScore,
+      marketContextAvailable: regime.available !== false,
+      marketContextEvidence: regime,
       reinforcementLearningActive:
         engineState.reinforcementWeightState?.active === true,
       technicalIntelligence: citadelTechnical,
@@ -1428,7 +1434,7 @@ export function createStockMarketStrategy(dependencies) {
   
         // Attach Early Discovery as its own score family. It must not mutate
         // the legacy/Entry score or it would be counted again by Decision.
-        const preMoverMemory = engineState.preMoverDiscoveryMemory?.[sym];
+        const preMoverMemory = signal.preMoverDiscovery || engineState.preMoverDiscoveryMemory?.[sym];
         if (preMoverMemory) {
           signal.preMoverDiscovery = preMoverMemory;
           signal.preMoveScore = Number(preMoverMemory.preMoveScore || 0);

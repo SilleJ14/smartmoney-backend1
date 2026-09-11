@@ -67,7 +67,7 @@ export function createTradierMarketData({ apiKey = process.env.TRADIER_API_KEY,
     requests += 1;
     const request = (async () => {
       const controller = new AbortController();
-      const timer = setTimeout(() => controller.abort(), 4000);
+      const timer = setTimeout(() => controller.abort(), 2000);
       try {
         const base = sandbox ? "https://sandbox.tradier.com/v1" : LIVE_BASE;
         const response = await fetchImpl(`${base}/markets/quotes?symbols=${encodeURIComponent(key)}`, {

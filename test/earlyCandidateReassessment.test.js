@@ -20,6 +20,20 @@ test('early research contains failures instead of crashing the scheduler', async
   const worker = createEarlyCandidateReassessment({ analyze: async () => { throw new Error('provider failure'); }, publish: () => {} });
   assert.equal((await worker.run(['AAPL'])).failed, true);
 });
+
+test('crypto research admits USD pairs, stays bounded and independent of stock market hours', async () => {
+  let clock = 100000; const batches = [];
+  const worker = createEarlyCandidateReassessment({ capacity: 3, batchSize: 2, retryMs: 60000, now: () => clock,
+    acceptsSymbol: symbol => /^[A-Z0-9]{1,15}\/USD$/.test(symbol),
+    analyze: async symbols => { batches.push(symbols); return symbols.map(symbol => ({ symbol })); }, publish: () => {} });
+  await worker.run(['BTC/USD', 'AAPL', 'ETH/USD', 'SOL/USD']);
+  assert.deepEqual(batches[0], ['BTC/USD', 'ETH/USD']);
+  await worker.run(['BTC/USD', 'ETH/USD']);
+  assert.deepEqual(batches[1], ['SOL/USD']);
+  assert.equal((await worker.run(['BTC/USD'])).skipped, true);
+  clock += 60000;
+  await worker.run(['BTC/USD']); assert.deepEqual(batches[2], ['BTC/USD']);
+});
 test('analysis-only branch returns before pyramid and capital allocation stages', () => {
   const source = fs.readFileSync(new URL('../strategies/stockMarketStrategy.js', import.meta.url), 'utf8');
   const branch = source.indexOf('if (analysisOnly) {');

@@ -75,6 +75,7 @@ process.on('message', message => {
   process.send?.({ type: 'burst-delivered', count, stock, crypto, subscriptions: providerSymbols.length });
 });
 let reads = 0, writes = 0, polygonReads = 0;
+let clockReads = 0;
 const stocks = ['AAPL', 'MSFT', 'NVDA'];
 const crypto = ['BTC/USD', 'ETH/USD', 'SOL/USD'];
 if (process.env.SMARTMONEY_FIXTURE_LOAD === 'full') {
@@ -113,6 +114,7 @@ globalThis.fetch = async (input, options = {}) => {
   }
   const asset = symbol => ({ symbol, tradable: true, fractionable: true, status: 'active',
     class: symbol.includes('/') ? 'crypto' : 'us_equity', exchange: 'NASDAQ', marginable: true });
+  if (p === '/v2/clock' && process.env.SMARTMONEY_FIXTURE_POLYGON === 'candidate-recovery' && clockReads++ === 0) return json({ message: 'Internal Server Error' }, 500);
   if (p === '/v2/clock') return json({ is_open: process.env.SMARTMONEY_FIXTURE_MARKET_OPEN === 'true', timestamp: stamp,
     next_open: '2026-09-09T09:30:00-04:00', next_close: '2026-09-09T16:00:00-04:00' });
   if (p === '/v2/account') return json({ equity: '10000', cash: '10000', buying_power: '10000', last_equity: '10000', status: 'ACTIVE' });
@@ -143,6 +145,8 @@ globalThis.fetch = async (input, options = {}) => {
     prevDailyBar: { c: 98, t: new Date(now - 86400000).toISOString() },
   }])) });
   if (p.includes('/screener/stocks/movers')) return json({ gainers: stocks.map(symbol => ({ symbol, price: 100, percent_change: 2 })), losers: [] });
+  if (p === '/v1beta1/news') return json({ news: [], next_page_token: null });
+  if (p.includes('news') && process.env.SMARTMONEY_FIXTURE_POLYGON === 'candidate-recovery') return json({ message: 'news unavailable' }, 503);
   if (p.includes('news')) return json([]);
   if (p.endsWith('/quote')) return json({ c: 100, pc: 98, o: 98, h: 101, l: 97, t: Math.floor(now / 1000) });
   return json({ error: `No fixture for ${p}` }, 404);

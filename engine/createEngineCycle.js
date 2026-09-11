@@ -92,6 +92,7 @@ export function createEngineCycle(dependencies) {
     checkDailyLossAndProfitLock,
     clampScore,
     detectMarketRegime,
+    refreshIndependentMarketRegime,
     emitSignalTapeTransitions,
     emitSystemRiskTapeState,
     engineState,
@@ -181,6 +182,7 @@ export function createEngineCycle(dependencies) {
       engineState.cachedAccount = account;
       engineState.cachedPositions = positions;
       const clock = await getClock();
+      if (typeof refreshIndependentMarketRegime === 'function') await refreshIndependentMarketRegime();
       const marketOpen = Boolean(clock.is_open);
       let effectiveMode = getEffectiveTradingMode(marketOpen);
       const todayKey = new Date().toISOString().slice(0, 10);

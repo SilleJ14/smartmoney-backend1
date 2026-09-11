@@ -1,3 +1,4 @@
+import { clockSnapshot } from '../market-data/brokerClock.js';
 const BACKEND_RELEASE_ID = "discovery-scoring-safety-2026-08-26";
 
 function getBackendRelease() {
@@ -23,11 +24,7 @@ export function registerSystemRoutes(app, dependencies) {
   app.get("/health", (_req, res) => {
     try {
       const cached = getCachedClock();
-      const age = now().getTime() - Date.parse(cached?.timestamp || '');
-      const fresh = cached?.stale !== true && Number.isFinite(age) && age >= -5000 && age <= 60000;
-      const clock = { ...(cached || {}), is_open: fresh && cached?.is_open === true,
-        stale: !fresh, available: Boolean(cached),
-        ...(!fresh ? { staleReason: 'Broker clock unavailable or older than 60 seconds' } : {}) };
+      const clock = clockSnapshot(cached, now().getTime());
       res.json({ ...getHealthPayload(clock), release: getBackendRelease() });
     } catch (error) {
       const engine = getEngineRuntime();

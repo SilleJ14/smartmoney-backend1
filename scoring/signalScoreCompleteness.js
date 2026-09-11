@@ -1,4 +1,5 @@
 import { hasDecisionAnalysis } from './decisionAnalysis.js';
+import { buildCurrentDecisionView } from './currentDecisionView.js';
 function finiteNumber(...values) {
   for (const value of values) {
     if (value === null || value === undefined || value === "") continue;
@@ -45,6 +46,13 @@ function resolveContinuation(signal = {}) {
 }
 
 export function normalizeSignalScoreCompleteness(signal = {}) {
+  const result = normalizeScores(signal);
+  if (!result || typeof result !== 'object') return result;
+  const currentDecision = buildCurrentDecisionView(result);
+  return { ...result, currentDecision };
+}
+
+function normalizeScores(signal = {}) {
   if (!signal || typeof signal !== "object") return signal;
 
   const crypto = isCryptoSignal(signal);
