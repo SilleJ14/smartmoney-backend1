@@ -916,6 +916,7 @@ export function createCryptoMarketScanner(dependencies) {
           dailyBarsFound: Array.isArray(dailyBars) ? dailyBars.length : 0,
           barsFound: bars.length,
           chartBars: cryptoChartBars,
+          researchEvidenceAt: new Date().toISOString(),
           sparkline: cryptoSparkline,
           chartSource: "alpaca_crypto_bars",
           chartTimeframe: "best_available_live_crypto",

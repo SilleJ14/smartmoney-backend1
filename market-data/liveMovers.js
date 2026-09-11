@@ -3,6 +3,7 @@ import { revalidateCandidate } from "../scoring/revalidateCandidate.js";
 import { hasDecisionAnalysis } from '../scoring/decisionAnalysis.js';
 import { candidateFeedDecision } from "../discovery/candidateFeedPolicy.js";
 import { freshEarlyAssessments } from '../discovery/earlyCandidateReassessment.js';
+import { incrementalResearchForState } from '../discovery/incrementalResearch.js';
 import {
   buildStockDecisionScore,
   calculateEarlyDiscoveryScore,
@@ -157,6 +158,7 @@ export function buildLiveMovers({
   // live score refresh.  In particular, a raw early-mover placeholder must not
   // be scored and then compete with an already-complete canonical scan result.
   const sourceSignals = dedupeSignalsByCanonicalAuthority([
+    ...incrementalResearchForState(state, now().getTime()),
     ...freshEarlyAssessments(state.earlyAssessedStockSignals, now().getTime()),
     ...buildRawEarlyMoverCandidates({ state, normalizeSymbol }),
     ...asArray(state.quickInstitutionalCandidates),

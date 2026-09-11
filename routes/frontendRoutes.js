@@ -8,6 +8,7 @@ import {
 import { buildRawEarlyMoverCandidates } from "../market-data/liveMovers.js";
 import { candidateFeedDecision } from "../discovery/candidateFeedPolicy.js";
 import { freshEarlyAssessments } from '../discovery/earlyCandidateReassessment.js';
+import { incrementalResearchForState } from '../discovery/incrementalResearch.js';
 
 function uniqueSignals(signals, normalizeSymbol) {
   return dedupeSignalsByCanonicalAuthority(signals, { normalizeSymbol });
@@ -17,6 +18,7 @@ function collectSignals(state, latestStatus, normalizeSymbol, includeFastRunners
   const orchestration = latestStatus?.phase20AutonomousOrchestration || {};
   return uniqueSignals(
     [
+      ...incrementalResearchForState(state),
       ...(includeFastRunners ? buildRawEarlyMoverCandidates({ state, normalizeSymbol }) : []),
       ...freshEarlyAssessments(state.earlyAssessedStockSignals),
       ...(Array.isArray(state.topStockSignals) ? state.topStockSignals : []),

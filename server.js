@@ -24,6 +24,7 @@ import { createStockNewsReview } from "./market-data/stockNewsReview.js";
 import { providerDailyBar } from "./discovery/providerDailyBar.js";
 import { quietDiscoverySessionDay } from './discovery/quietDiscoverySession.js';
 import { createEarlyCandidateReassessment, freshEarlyAssessments } from './discovery/earlyCandidateReassessment.js';
+import { createIncrementalResearch, incrementalResearchForState, needsCandidateResearch } from './discovery/incrementalResearch.js';
 import { createTradierMarketData } from "./providers/tradierMarketData.js";
 import { createTradierQuoteStream } from "./providers/tradierQuoteStream.js";
 import TradierWebSocket from 'ws';
@@ -3126,6 +3127,7 @@ function buildBackendHealthPayload(clock = {}) {
     },
     liveScheduler: engineState.liveSchedulerState || null,
     candidateReassessment: {
+      incremental: incrementalResearch.getStatus(),
       stocks: { ...earlyCandidateReassessment.getStatus(), lastScheduledAt: liveTaskScheduler.lastRunAt('reassessEarlyCandidates') },
       crypto: { ...cryptoCandidateReassessment.getStatus(), lastScheduledAt: liveTaskScheduler.lastRunAt('reassessCryptoCandidates') },
     },
@@ -14718,6 +14720,7 @@ async function getStockQuote(symbol) {
     spreadPercent,
     spreadAvailable: bid > 0 && ask > 0,
     chartBars: stockChartBars,
+    researchEvidenceAt: new Date().toISOString(),
     sparkline: stockSparkline,
     chartSource: "alpaca_stock_bars",
     chartTimeframe: "5Min",
@@ -27949,6 +27952,7 @@ function collectFrontendSignalSnapshot() {
   const orchestration =
     latestStatus?.phase20AutonomousOrchestration || {};
   return dedupeSignalsByCanonicalAuthority([
+    ...incrementalResearchForState(engineState),
     ...freshEarlyAssessments(engineState.earlyAssessedStockSignals),
     ...buildRawEarlyMoverCandidates({ state: engineState, normalizeSymbol }),
     ...(Array.isArray(engineState.topStockSignals) ? engineState.topStockSignals : []),
@@ -28179,6 +28183,7 @@ function mergeLiveQuoteIntoSignal(signal = {}) {
 function buildLiveSignalPushPayload() {
   const stockSignals = getTopSignals(
     [
+      ...incrementalResearchForState(engineState).filter(row => !isCrypto(row.symbol)),
       ...freshEarlyAssessments(engineState.earlyAssessedStockSignals),
       ...buildRawEarlyMoverCandidates({ state: engineState, normalizeSymbol }),
       ...(engineState.lastStockSignals || []),
@@ -28188,7 +28193,7 @@ function buildLiveSignalPushPayload() {
     25
   ).map(mergeLiveQuoteIntoSignal);
   const cryptoSignals = getTopSignals(
-    engineState.lastCryptoSignals || [],
+    [...incrementalResearchForState(engineState).filter(row => isCrypto(row.symbol)), ...(engineState.lastCryptoSignals || [])],
     25
   ).map(mergeLiveQuoteIntoSignal);
   return {
@@ -31169,6 +31174,7 @@ async function reviewCandidateScores(rows, crypto = false) {
 }
 const earlyCandidateReassessment = createEarlyCandidateReassessment({
   retryMs: 60000,
+  minStartIntervalMs: 2500,
   analyze: async symbols => reviewCandidateScores(await analyzeCandidates(symbols)),
   canRun: () => !engineState.running && !activeScanLocks.scanMarket &&
     !buildMemoryGuardSnapshot().shouldPauseHeavyWork &&
@@ -31186,6 +31192,7 @@ const earlyCandidateReassessment = createEarlyCandidateReassessment({
 });
 const cryptoCandidateReassessment = createEarlyCandidateReassessment({
   capacity: 80, batchSize: 2, retryMs: 60000,
+  minStartIntervalMs: 2500,
   acceptsSymbol: symbol => /^[A-Z0-9]{1,15}\/USD$/.test(symbol),
   canRun: () => !engineState.running && !buildMemoryGuardSnapshot().shouldPauseHeavyWork,
   analyze: async symbols => reviewCandidateScores(await analyzeCryptoCandidates(symbols), true),
@@ -31198,19 +31205,48 @@ const cryptoCandidateReassessment = createEarlyCandidateReassessment({
     pushLiveSignalUpdate(buildLiveSignalPushPayload());
   },
 });
+const incrementalResearch = createIncrementalResearch({
+  canRun: () => !buildMemoryGuardSnapshot().shouldPauseHeavyWork,
+  accepts: row => isCrypto(row.symbol) || canRefreshStockQuotes({ marketOpen: engineState.marketOpen === true,
+    marketSession: getMarketSession({ is_open: engineState.marketOpen === true }) }),
+  review: row => {
+    const crypto = isCrypto(row.symbol);
+    const current = mergeLiveQuoteIntoSignal(row);
+    // A price move that invalidates the setup needs the full evidence pipeline.
+    if (current.setupRevalidationRequired) return current;
+    const central = calculateCentralAutonomousDecisionCore(crypto ? [] : [current], crypto ? [current] : []);
+    const decision = central.rankedDecisions.find(item => normalizeSymbol(item.symbol) === normalizeSymbol(current.symbol));
+    if (decision) installCentralDecision(current, decision, { crypto });
+    return current;
+  },
+  publish: rows => {
+    const completed = new Map(incrementalResearchForState(engineState).map(row => [row.symbol, row]));
+    for (const row of rows) completed.set(row.symbol, normalizeSignalScoreCompleteness(row));
+    engineState.incrementalResearchSignals = [...completed.values()].slice(-120);
+    pushLiveSignalUpdate(buildLiveSignalPushPayload());
+  },
+});
 function startLiveScheduler() {
   if (liveSchedulerTimer) return engineState.liveSchedulerState;
   liveSchedulerTimer = setInterval(() => {
     void runLiveScheduledTask('refreshBrokerClock', 5000, () => getClock());
     void runLiveScheduledTask('refreshIndependentMarketRegime', 30000, () => refreshIndependentMarketRegime());
-    void runLiveScheduledTask('reassessEarlyCandidates', 5000, () => earlyCandidateReassessment.run([
+    void runLiveScheduledTask('refreshIncrementalResearch', 1000, () => incrementalResearch.run([
+      ...(engineState.lastStockSignals || []), ...(engineState.lastCryptoSignals || []),
+      ...(engineState.topStockSignals || []), ...(engineState.topCryptoSignals || []),
+      ...freshEarlyAssessments(engineState.earlyAssessedStockSignals),
+      ...(engineState.topSignals || []), ...(engineState.lastSignals || []),
+    ]));
+    void runLiveScheduledTask('reassessEarlyCandidates', 1000, () => earlyCandidateReassessment.run([
       ...(engineState.boundedQuietDiscoveryState?.liveSymbols || []),
       ...(engineState.liveEarlyMoverSymbols || []),
-      ...(engineState.lastStockSignals || []).filter(row => getCanonicalFinalScore(row) === null || row.setupRevalidationRequired),
+      ...(engineState.incrementalResearchSignals || []).filter(row => !isCrypto(row.symbol) && row.setupRevalidationRequired),
+      ...(engineState.lastStockSignals || []).filter(row => needsCandidateResearch(row)),
     ]));
-    void runLiveScheduledTask('reassessCryptoCandidates', 5000, () => cryptoCandidateReassessment.run(
-      (engineState.lastCryptoSignals || []).map(mergeLiveQuoteIntoSignal)
-        .filter(row => getCanonicalFinalScore(row) === null || row.setupRevalidationRequired)
+    void runLiveScheduledTask('reassessCryptoCandidates', 1000, () => cryptoCandidateReassessment.run(
+      [...(engineState.incrementalResearchSignals || []).filter(row => isCrypto(row.symbol) && row.setupRevalidationRequired),
+        ...(engineState.lastCryptoSignals || [])].map(mergeLiveQuoteIntoSignal)
+        .filter(row => needsCandidateResearch(row))
     ));
     void runLiveScheduledTask('refreshTradierQuoteStream', 5000,
       () => tradierQuoteStream.refresh(getActiveCandidateQuoteRefreshSymbols(ACTIVE_CANDIDATE_QUOTE_REFRESH_LIMIT, false).filter(s => !isCrypto(s))));
@@ -31309,6 +31345,7 @@ function startLiveScheduler() {
       "refreshIndependentMarketRegime",
       "reassessEarlyCandidates",
       "reassessCryptoCandidates",
+      "refreshIncrementalResearch",
       "cleanupLiveQuoteCache",
       "cleanupLiveOrderDedupMap",
       "refreshFinnhubLiveSubscriptions",

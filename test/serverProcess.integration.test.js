@@ -121,6 +121,24 @@ test(`actual server boots, serves stocks and crypto, and completes a scan withou
     assert.equal(metrics.writes || 0, 0);
     if (polygonFault) assert.ok(metrics.polygonReads > 0, 'fixture did not exercise Polygon snapshot path');
     const snapshot = await read('/frontend/snapshot');
+    if (process.env.SMARTMONEY_INCREMENTAL_PROBE === 'true') {
+      const warmDeadline = Date.now() + 15000;
+      let warm;
+      do {
+        warm = await read('/health');
+        if (warm.candidateReassessment?.incremental?.reviewed > 0) break;
+        await new Promise(resolve => setTimeout(resolve, 500));
+      } while (Date.now() < warmDeadline);
+      assert.ok(warm.candidateReassessment?.incremental?.reviewed > 0,
+        `No incremental progress: ${JSON.stringify(warm.candidateReassessment)} ${log}`);
+      assert.equal(warm.candidateReassessment.incremental.failures, 0);
+      const rows = (await read('/frontend/signals')).signals.filter(row => row.researchOnly === true);
+      assert.ok(rows.length > 0, 'recalculated research must reach the frontend feed');
+      assert.ok(rows.every(row => row.approved === false && row.executionEligibility?.approved === false));
+      assert.ok(rows.every(row => Date.parse(row.researchEvidenceAt) <= Date.parse(row.analysisUpdatedAt)));
+      assert.equal(unsafe, false); assert.equal(metrics.writes || 0, 0);
+      t.diagnostic(`Actual one-second scheduler recalculated ${warm.candidateReassessment.incremental.reviewed} cached candidates; no provider order writes.`);
+    }
     if (polygonFault === 'candidate-recovery') {
       const scores = await read('/frontend/signals');
       const signal = scores.signals.find(s => s.symbol === 'AAPL');
@@ -176,13 +194,17 @@ test(`actual server boots, serves stocks and crypto, and completes a scan withou
     assert.ok(snapshot.cryptoSignals.length > 0, `scan lost all crypto candidates: ${log}`);
     if (earlyProbe) {
       const deadline = Date.now() + 35000;
-      let early;
+      let early, cachedResearch = false;
       do {
         early = await read('/discovery/trace?symbol=AAPL');
+        const feed = await read('/frontend/signals');
+        cachedResearch = feed.signals.some(row => row.symbol === 'AAPL' && row.researchOnly === true &&
+          Number.isFinite(Date.parse(row.researchEvidenceAt)) && row.stockDecisionScoreAvailable === true);
+        if (cachedResearch) break;
         if (early.events.some(event => event.stage === 'EARLY_ANALYSIS_COMPLETED')) break;
         await new Promise(resolve => setTimeout(resolve, 500));
       } while (Date.now() < deadline);
-      assert.ok(early.events.some(event => event.stage === 'EARLY_ANALYSIS_COMPLETED'), `Early analysis did not finish: ${log}`);
+      assert.ok(cachedResearch || early.events.some(event => event.stage === 'EARLY_ANALYSIS_COMPLETED'), `Early analysis did not finish: ${log}`);
       if (afterhoursProbe) {
         let afterhours;
         const quoteDeadline = Date.now() + 10000;
@@ -198,7 +220,7 @@ test(`actual server boots, serves stocks and crypto, and completes a scan withou
         assert.equal(afterhours.autoTradingEnabled, false);
       }
       assert.equal(unsafe, false); assert.equal(metrics.writes || 0, 0);
-      t.diagnostic('Real scheduler completed early-candidate research with no provider order writes.');
+      t.diagnostic(`Real scheduler completed ${cachedResearch ? 'cached' : 'full'} early-candidate research with no provider order writes.`);
     }
     if (streamBurst) {
       for (let burstIndex = 0; burstIndex < 3; burstIndex++) {
