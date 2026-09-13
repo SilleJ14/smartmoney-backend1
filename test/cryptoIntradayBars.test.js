@@ -1,18 +1,33 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { createCryptoIntradayBars } from '../market-data/cryptoIntradayBars.js';
+import { createCryptoIntradayBars as createStore } from '../market-data/cryptoIntradayBars.js';
 
-const bars = Array.from({ length: 30 }, (_, i) => ({ t: 1000 + i * 300000, c: 100 + i, v: 10 }));
+const now = Date.parse('2026-09-13T01:30:01Z');
+const createCryptoIntradayBars = options => createStore({ now: () => now, ...options });
+const bars = Array.from({ length: 30 }, (_, i) => ({ t: now - (30-i)*300000, o: 100+i, h: 101+i, l: 99+i, c: 100+i, v: 10, intervalMs: 300000, source: undefined }));
 const normalizeSymbol = symbol => symbol.trim().toUpperCase();
+test('a large unusable history does not prevent trying another timeframe', async () => {
+  const calls = [];
+  const store = createCryptoIntradayBars({ normalizeSymbol, getRecentBars: async (_, tf) => {
+    calls.push(tf);
+    return tf === '5Min' ? bars.filter((_, i) => i !== 27) : bars;
+  }});
+  assert.equal((await store.get('LINK/USD')).length, 30);
+  assert.deepEqual(calls, ['5Min', '1Min']);
+});
+test('old gaps retain a valid contiguous tail without inventing candles', async () => {
+  const store = createCryptoIntradayBars({ normalizeSymbol, getRecentBars: async () => bars.filter((_, i) => i !== 2) });
+  assert.deepEqual(await store.get('BTC/USD'), bars.slice(3));
+});
 test('EMA history is configurable and bounded to 220 bars without changing provider data', async () => {
   let requested;
-  const supplied = Array.from({ length: 300 }, (_, i) => ({ ...bars[0], t: i }));
+  const supplied = Array.from({ length: 300 }, (_, i) => ({ ...bars[0], t: now - (300-i)*300000 }));
   const store = createCryptoIntradayBars({ normalizeSymbol, historyLimit: 10000,
     getRecentBars: async (_, __, limit) => { requested = limit; return supplied; } });
   const result = await store.get('BTC/USD');
   assert.equal(requested, 220);
   assert.equal(result.length, 220);
-  assert.equal(result[0].t, 80);
+  assert.equal(result[0].t, supplied[80].t);
 });
 
 test('crypto bars try the next timeframe after a failed request, without changing timestamps', async () => {
@@ -29,7 +44,7 @@ test('crypto bars try the next timeframe after a failed request, without changin
 });
 
 test('empty crypto history retries after five seconds instead of hiding recovery for two minutes', async () => {
-  let time = 1000, calls = 0, recovered = false;
+  let time = now, calls = 0, recovered = false;
   const store = createCryptoIntradayBars({ normalizeSymbol, now: () => time, getRecentBars: async () => { calls++; return recovered ? bars : []; } });
   assert.deepEqual(await store.get('BTC/USD'), []);
   assert.equal(calls, 3, 'no duplicate fourth request');
@@ -42,8 +57,8 @@ test('empty crypto history retries after five seconds instead of hiding recovery
 });
 
 test('partial crypto history retains the best actual window and bounds failure caches too', async () => {
-  const store = createCryptoIntradayBars({ normalizeSymbol, maxSymbols: 2, getRecentBars: async (_, timeframe) => timeframe === '5Min' ? bars.slice(0, 8) : [] });
-  for (const symbol of ['BTC/USD', 'ETH/USD', 'SOL/USD']) assert.deepEqual(await store.get(symbol), bars.slice(0, 8));
+  const store = createCryptoIntradayBars({ normalizeSymbol, maxSymbols: 2, getRecentBars: async (_, timeframe) => timeframe === '5Min' ? bars.slice(-8) : [] });
+  for (const symbol of ['BTC/USD', 'ETH/USD', 'SOL/USD']) assert.deepEqual(await store.get(symbol), bars.slice(-8));
   assert.deepEqual(store.getStatus(), { cachedSymbols: 2, pendingSymbols: 0, capacity: 2 });
 });
 

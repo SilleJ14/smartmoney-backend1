@@ -19,6 +19,21 @@ function fixture() {
     approved: false, backendApproved: false, autoTradeApproved: false, qualifiedToBuy: false,
   };
 }
+
+test('repeated stale reviews preserve the actual last measured assessment', () => {
+  const signal = fixture();
+  signal.entryQualityScorecard = calculateEntryQualityScore(signal);
+  const evidence = buildStockDecisionScore(signal);
+  installCentralDecision(signal, { stockDecisionEvidence: evidence, finalDecisionScore: evidence.score, action: 'WATCH' });
+  signal.entryQualityScoreAvailable = true;
+  signal.entryQualityScore = signal.entryQualityScorecard.score;
+  const stale = revalidateCandidate(signal, { ...signal, liveQuoteUpdatedAt: '2026-01-01T00:00:00Z', spreadUpdatedAt: '2026-01-01T00:00:00Z' });
+  assert.equal(stale.entryQualityScoreAvailable, false);
+  assert.equal(stale.lastMeasuredAssessment.entry, signal.entryQualityScore);
+  const again = revalidateCandidate(stale, { ...stale });
+  assert.deepEqual(again.lastMeasuredAssessment, stale.lastMeasuredAssessment);
+  assert.equal(again.approved, false);
+});
 test('measured rejected entry keeps a numeric F without changing execution gates', () => {
   const signal = fixture(); signal.phase5SignalQuality.antiChaseRisk = 90;
   signal.entryQualityScorecard = calculateEntryQualityScore(signal);

@@ -1,6 +1,7 @@
 import { evaluateStockTradeCandidate } from './decisionScores.js';
 import { evaluateCryptoTradeCandidate } from './componentScore.js';
 import { isCryptoSignal } from './canonicalSignalRank.js';
+import { candidateDiagnostics } from './candidateDiagnostics.js';
 
 const list = value => Array.isArray(value) ? value : [];
 // Presentation only: one current evidence set, never a union with old raw,
@@ -27,5 +28,6 @@ export function buildCurrentDecisionView(signal, { now = Date.now() } = {}) {
   const reasons = [...new Set([...researchReasons, ...gate.reasons])];
   return { version: 1, evaluatedAt: new Date(now).toISOString(),
     assessmentAt: signal.scoreAssessmentUpdatedAt || signal.decisionUpdatedAt || null,
-    researchReasons, executionReasons: gate.reasons, reasons };
+    researchReasons, executionReasons: gate.reasons, reasons,
+    diagnostics: candidateDiagnostics(signal, gate.evidence || evidence, gate) };
 }

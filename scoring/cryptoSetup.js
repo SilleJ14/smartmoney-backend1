@@ -16,6 +16,8 @@ export function completedCryptoBars(input, now = Date.now()) {
     high: Number(b?.high ?? b?.h), low: Number(b?.low ?? b?.l),
     close: Number(b?.close ?? b?.c), volume: Number(b?.volume ?? b?.v),
     intervalMs: Number(b?.intervalMs),
+    marketVolume: b?.marketVolume == null ? null : Number(b.marketVolume),
+    marketVolumeSource: b?.marketVolumeSource,
   }));
   if (rows.length < 2 || rows.some((b, i) =>
     ![b.time, b.open, b.high, b.low, b.close, b.volume].every(Number.isFinite) ||
@@ -24,8 +26,14 @@ export function completedCryptoBars(input, now = Date.now()) {
   const gaps = rows.slice(1).map((b, i) => b.time - rows[i].time).sort((a, b) => a - b);
   const interval = finite(rows.at(-1).intervalMs) && rows.at(-1).intervalMs > 0
     ? rows.at(-1).intervalMs : gaps[Math.floor(gaps.length / 2)];
-  if (interval < 60000 || interval > 900000 || gaps.some(g => g !== interval)) return [];
-  const done = rows.filter(b => b.time + interval <= now).map(b => ({ ...b, intervalMs: interval }));
+  if (interval < 60000 || interval > 900000) return [];
+  // Retain only the contiguous recent window. An old gap must not erase newer
+  // evidence, but never bridge a gap or manufacture zero-volume candles.
+  let start = 0;
+  for (let i = 1; i < rows.length; i++) {
+    if (rows[i].time - rows[i - 1].time !== interval) start = i;
+  }
+  const done = rows.slice(start).filter(b => b.time + interval <= now).map(b => ({ ...b, intervalMs: interval }));
   return !done.length || now - (done.at(-1).time + interval) > interval * 2 ? [] : done;
 }
 function ema(values, period) {
@@ -74,9 +82,12 @@ export function assessCryptoSetup(signal = {}, { now = Date.now() } = {}) {
   }
   const higherHighs = highs.length >= 2 && highs.at(-1) > highs.at(-2);
   const higherLows = lows.length >= 2 && lows.at(-1) > lows.at(-2);
-  const baselineDollars = mean(prior.map(b => b.volume * b.close));
-  const volumeRatio = baselineDollars > 0 ? mean(recent.map(b => b.volume * b.close)) / baselineDollars : 0;
-  const volumeConfirmed = volumeRatio >= 1.3 && last.volume > 0;
+  const marketVolumeAvailable = [...prior, ...recent].every(b => b.marketVolumeSource === 'alpaca_kraken_research_bars' &&
+    Number.isFinite(b.marketVolume) && b.marketVolume >= 0);
+  const participation = b => marketVolumeAvailable ? b.marketVolume : b.volume;
+  const baselineDollars = mean(prior.map(b => participation(b) * b.close));
+  const volumeRatio = baselineDollars > 0 ? mean(recent.map(b => participation(b) * b.close)) / baselineDollars : 0;
+  const volumeConfirmed = volumeRatio >= 1.3 && participation(last) > 0;
   const roc = (last.close / rows.at(-4).close - 1) * 100;
   const priorRoc = (rows.at(-4).close / rows.at(-7).close - 1) * 100;
   const stopPrice = Math.min(...rows.slice(-5).map(b => b.low)) - atr * .1;
@@ -102,6 +113,7 @@ export function assessCryptoSetup(signal = {}, { now = Date.now() } = {}) {
     assessedAt: new Date(now).toISOString(), barUpdatedAt: new Date(last.time + last.intervalMs).toISOString(),
     timeframeMinutes: last.intervalMs / 60000, barsFound: rows.length, price, resistance, stopPrice, targetPrice,
     targetBasis: 'MEASURED_RANGE_PROJECTION_NOT_GUARANTEED', riskPercent, volumeRatio, volumeConfirmed,
+    volumeSource: marketVolumeAvailable ? 'alpaca_kraken_research_bars' : 'execution_venue_bars',
     higherHighs, higherLows, breakout, retest, momentum: { roc, priorRoc, accelerating: roc > priorRoc, extensionAtr, overheated },
     ema: { ema20, ema50, ema200, fullAlignment: ema200 !== null && price > ema20 && ema20 > ema50 && ema50 > ema200, required: false } };
 }

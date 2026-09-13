@@ -567,6 +567,14 @@ test("crypto execution gate uses a 65 minimum Final Decision score", () => {
   });
   assert.equal(belowThreshold.approved, false);
   assert.ok(belowThreshold.reasons.includes("DECISION_SCORE_BELOW_THRESHOLD"));
+  for (const final of [65, 65.01, 66, 70]) {
+    const result = evaluateCryptoTradeCandidate({ ...candidate, masterFinalScore: final });
+    assert.equal(result.approved, true, `F ${final} must pass with complete evidence`);
+  }
+  assert.equal(evaluateCryptoTradeCandidate({ ...candidate, masterFinalScore: 64.99 }).approved, false);
+  const stale = evaluateCryptoTradeCandidate({ ...candidate, masterFinalScore: 70,
+    spreadUpdatedAt: new Date(now - 30000).toISOString() }, { now });
+  assert.equal(stale.approved, false, 'F above 65 must not bypass stale execution evidence');
 });
 
 test("crypto immediate-entry F can finalize without MD, but never bypasses execution evidence", () => {

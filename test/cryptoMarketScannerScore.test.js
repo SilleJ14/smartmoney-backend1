@@ -9,6 +9,15 @@ import {
 import { calculateCryptoLiquidityFromBars } from "../scoring/cryptoScoring.js";
 
 const clampScore = (value) => Math.max(0, Math.min(100, Number(value) || 0));
+test('new Alpaca stream bid/ask survives an older REST snapshot', () => {
+  const now = Date.now(), fresh = new Date(now - 500).toISOString(), stale = new Date(now - 30000).toISOString();
+  const ws = {price:100,bid:99.99,ask:100.01,spreadSource:'alpaca_crypto_ws',spreadUpdatedAt:fresh,liveQuoteUpdatedAt:fresh};
+  const rest = {price:99,bid:98,ask:100,spreadSource:'alpaca_crypto_latest',spreadUpdatedAt:stale,liveQuoteUpdatedAt:stale};
+  const result = mergeLatestCryptoPriceWithAlpacaSpread(ws,rest,{now});
+  assert.equal(result.spreadAvailable,true); assert.equal(result.bid,99.99); assert.equal(result.spreadSource,'alpaca_crypto_ws');
+  const trade = mergeLatestCryptoPriceWithAlpacaSpread({...ws,spreadSource:'finnhub_ws_trade'},rest,{now});
+  assert.equal(trade.spreadAvailable,false);
+});
 
 function createScanner() {
   return createCryptoMarketScanner({

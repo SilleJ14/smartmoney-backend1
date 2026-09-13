@@ -110,10 +110,19 @@ export function mergeLatestCryptoPriceWithAlpacaSpread(
         : priceQuote;
   if (!latestPriceQuote) return null;
 
-  const bid = Number(alpacaQuote?.bid || 0);
-  const ask = Number(alpacaQuote?.ask || 0);
+  // A current execution-venue stream quote must not be discarded in favour
+  // of an older REST pair. A Finnhub trade is never eligible as bid/ask.
+  const streamAge = Number(now) - Date.parse(priceQuote?.spreadUpdatedAt || priceQuote?.bidAskUpdatedAt || '');
+  const streamPair = ['alpaca_crypto_ws', 'alpaca_crypto_latest', 'alpaca_crypto_orderbook'].includes(priceQuote?.spreadSource) &&
+    streamAge >= -5000 && streamAge <= Math.max(1, Number(maxSpreadAgeSeconds) || 5) * 1000 &&
+    Number(priceQuote?.bid) > 0 && Number(priceQuote?.ask) >= Number(priceQuote?.bid)
+    ? priceQuote : null;
+  const pairTime = q => Date.parse(q?.spreadUpdatedAt || q?.bidAskUpdatedAt || '') || 0;
+  const spreadQuote = streamPair && pairTime(streamPair) > pairTime(alpacaQuote) ? streamPair : alpacaQuote;
+  const bid = Number(spreadQuote?.bid || 0);
+  const ask = Number(spreadQuote?.ask || 0);
   const spreadTimestamp = Date.parse(String(
-    alpacaQuote?.spreadUpdatedAt || alpacaQuote?.bidAskUpdatedAt || ""
+    spreadQuote?.spreadUpdatedAt || spreadQuote?.bidAskUpdatedAt || ""
   ));
   const spreadAgeSeconds = Number.isFinite(spreadTimestamp)
     ? (Number(now) - spreadTimestamp) / 1000
@@ -132,15 +141,15 @@ export function mergeLatestCryptoPriceWithAlpacaSpread(
     ask: spreadAvailable ? ask : null,
     spreadAvailable,
     spreadUpdatedAt: spreadAvailable
-      ? alpacaQuote.spreadUpdatedAt || alpacaQuote.bidAskUpdatedAt
+      ? spreadQuote.spreadUpdatedAt || spreadQuote.bidAskUpdatedAt
       : null,
     bidAskUpdatedAt: spreadAvailable
-      ? alpacaQuote.bidAskUpdatedAt || alpacaQuote.spreadUpdatedAt
+      ? spreadQuote.bidAskUpdatedAt || spreadQuote.spreadUpdatedAt
       : null,
     spreadSource: spreadAvailable
-      ? alpacaQuote.spreadSource ||
-        alpacaQuote.liveQuoteSource ||
-        alpacaQuote.source ||
+      ? spreadQuote.spreadSource ||
+        spreadQuote.liveQuoteSource ||
+        spreadQuote.source ||
         "alpaca_crypto_latest"
       : null,
   };
@@ -785,6 +794,8 @@ export function createCryptoMarketScanner(dependencies) {
                 price: close,
                 volume,
                 intervalMs: bar.intervalMs,
+                marketVolume: bar.marketVolume,
+                marketVolumeSource: bar.marketVolumeSource,
               };
             })
             .filter((bar) => Number.isFinite(bar.close) && bar.close > 0)

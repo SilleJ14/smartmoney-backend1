@@ -1,3 +1,4 @@
+import { completedCryptoBars } from '../scoring/cryptoSetup.js';
 // Cache evidence, never manufacture candles or refresh provider timestamps.
 export function createCryptoIntradayBars({ getRecentBars, normalizeSymbol, maxSymbols = 250, historyLimit = 30, now = Date.now }) {
   const cache = new Map();
@@ -17,10 +18,15 @@ export function createCryptoIntradayBars({ getRecentBars, normalizeSymbol, maxSy
       try { bars = await getRecentBars(symbol, timeframe, limit); }
       catch { continue; }
       if (!Array.isArray(bars)) continue;
+      bars = completedCryptoBars(bars, now()).map(b => ({
+        t: b.time, o: b.open, h: b.high, l: b.low, c: b.close,
+        v: b.volume, intervalMs: b.intervalMs,
+        source: bars.at(-1)?.source,
+      }));
       // A short real window is preferable to losing all evidence. It still
-      // cannot pass the scorer's ten-bar requirement.
+      // cannot pass the setup's 24-completed-bar requirement.
       if (bars.length > best.length) best = bars.slice(-limit);
-      if (bars.length >= 10) return retain(symbol, bars, 120_000);
+      if (bars.length >= 24 && bars.slice(-20).some(b => b.v > 0)) return retain(symbol, bars, 120_000);
     }
     // A temporary outage must not hide a recovered provider for two minutes.
     return retain(symbol, best, 5_000);

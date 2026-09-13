@@ -108,13 +108,29 @@ export function createAlpacaCryptoMarketData({ dataRequest, normalizeSymbol, now
           { timeoutMs: 1500, maxResponseBytes: 512 * 1024 }
         ).catch(() => ({ trades: {} }))
         : { trades: {} };
-      return cleanSymbols
+      const quotes = cleanSymbols
         .map((symbol) => normalizeLatestQuote(
           symbol,
           findMarketEvent(quoteData?.quotes, symbol),
           findMarketEvent(tradeData?.trades, symbol)
         ))
         .filter(Boolean);
+      const stale = cleanSymbols.filter(s => !quotes.some(q => q.symbol === s && q.priceIsLive && q.spreadAvailable));
+      // Same execution venue only. A newer book can supply a measured BBO,
+      // but receipt time and unrelated trade ticks never refresh its timestamp.
+      const books = stale.length ? await getLatestOrderbooks(stale).catch(() => []) : [];
+      for (const book of books) {
+        const bid = book.bids.find(x => Number.isFinite(x.p) && x.p > 0 && x.s > 0);
+        const ask = book.asks.find(x => Number.isFinite(x.p) && x.p > 0 && x.s > 0);
+        if (!bid || !ask || ask.p < bid.p) continue;
+        const replacement = normalizeLatestQuote(book.symbol, { bp: bid.p, ap: ask.p, t: book.updatedAt });
+        const index = quotes.findIndex(q => q.symbol === book.symbol);
+        if (!replacement?.priceIsLive || (index >= 0 && Date.parse(quotes[index].bidAskUpdatedAt) >= Date.parse(book.updatedAt))) continue;
+        Object.assign(replacement, { source: 'alpaca_crypto_orderbook', liveQuoteSource: 'alpaca_crypto_orderbook', spreadSource: 'alpaca_crypto_orderbook' });
+        if (index >= 0) quotes[index] = replacement;
+        else quotes.push(replacement);
+      }
+      return quotes;
     } catch (error) {
       throw new Error(`Alpaca crypto quote batch failed: ${error.message}`);
     }
@@ -146,10 +162,10 @@ export function createAlpacaCryptoMarketData({ dataRequest, normalizeSymbol, now
     return results;
   }
 
-  async function getRecentBars(symbol, timeframe = "5Min", limit = 30) {
+  async function readBars(symbol, timeframe = "5Min", limit = 30, location = 'us') {
     const cleanSymbol = normalizeSymbol(symbol);
     const data = await dataRequest(
-      historicalBarsPath(cleanSymbol, timeframe, limit, now())
+      historicalBarsPath(cleanSymbol, timeframe, limit, now()).replace('/crypto/us/', `/crypto/${location}/`)
     );
     const bars = data?.bars?.[cleanSymbol] || data?.bars?.[cleanSymbol.replace("/", "")] || [];
     return normalizeDiscoveryBars(Array.isArray(bars) ? bars : [])
@@ -160,9 +176,11 @@ export function createAlpacaCryptoMarketData({ dataRequest, normalizeSymbol, now
         l: bar.low,
         c: bar.close,
         v: bar.volume,
-        source: "alpaca_crypto_bars",
+        source: location === 'us' ? "alpaca_crypto_bars" : 'alpaca_kraken_research_bars',
         intervalMs: timeframeMilliseconds(timeframe),
       }));
   }
-  return { getLatestQuote, getLatestQuotes, getRecentBars, getLatestOrderbooks };
+  const getRecentBars = (symbol, timeframe, limit) => readBars(symbol, timeframe, limit, 'us');
+  const getResearchBars = (symbol, timeframe, limit) => readBars(symbol, timeframe, limit, 'us-1');
+  return { getLatestQuote, getLatestQuotes, getRecentBars, getResearchBars, getLatestOrderbooks };
 }

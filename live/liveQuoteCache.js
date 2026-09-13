@@ -9,6 +9,8 @@ const LIVE_QUOTE_SOURCE_REGISTRY = Object.freeze({
   finnhub_rest_quote: { provider: "finnhub", assets: ["stock"] },
   alpaca_latest_stock_quote: { provider: "alpaca", assets: ["stock"] },
   alpaca_crypto_latest: { provider: "alpaca", assets: ["crypto"] },
+  alpaca_crypto_orderbook: { provider: "alpaca", assets: ["crypto"] },
+  alpaca_crypto_ws: { provider: "alpaca", assets: ["crypto"] },
 });
 
 export function getLiveQuoteProvider(source = "") {

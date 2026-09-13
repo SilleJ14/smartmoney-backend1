@@ -42,10 +42,11 @@ export function revalidateCandidate(previous, incoming, { now = Date.now() } = {
   // never copied into current E/F or used to approve a trade during an outage.
   const priorAssessmentAt = previous.scoreAssessmentUpdatedAt || version;
   const priorAssessmentAge = now - Date.parse(priorAssessmentAt || '');
-  if (priorFinal !== null && Number.isFinite(priorAssessmentAge) && priorAssessmentAge >= -5000 && priorAssessmentAge <= 300000) {
+  const priorEntryAvailable = crypto ? previous.cryptoEntryScoreAvailable === true : previous.entryQualityScoreAvailable === true;
+  if ((priorEntryAvailable || !previous.lastMeasuredAssessment) && priorFinal !== null && Number.isFinite(priorAssessmentAge) && priorAssessmentAge >= -5000 && priorAssessmentAge <= 300000) {
     next.lastMeasuredAssessment = { at: priorAssessmentAt,
       discovery: crypto ? previous.cryptoDiscoveryScore : previous.discoveryScore,
-      entry: crypto ? previous.cryptoEntryScore : previous.entryQualityScore,
+      entry: priorEntryAvailable ? (crypto ? previous.cryptoEntryScore : previous.entryQualityScore) : null,
       final: priorFinal, continuation: previous.multiDayScoreAvailable === true ? previous.multiDayContinuationScore : null };
   } else next.lastMeasuredAssessment = previous.lastMeasuredAssessment || null;
   const basis = previous.quoteRevalidationBasis && previous.quoteRevalidationBasis.version === version

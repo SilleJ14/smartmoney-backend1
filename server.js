@@ -9,6 +9,8 @@ import { createManagedExecution } from './execution/managedExecution.js';
 import { createQuoteRefreshCoordinator } from './market-data/quoteRefreshCoordinator.js';
 import { evaluateCryptoTradePlan } from './scoring/cryptoTradePlan.js';
 import { createCryptoIntradayBars } from './market-data/cryptoIntradayBars.js';
+import { createAlpacaCryptoStream } from './live/alpacaCryptoStream.js';
+import { createCryptoResearchVolume } from './market-data/cryptoResearchVolume.js';
 import { isUsStockMarketSessionDayKey } from "./utils/usMarketCalendar.js";
 import { readBoundedResponseText, readBoundedResponseJson, cancelResponseBody } from "./utils/boundedResponse.js";
 import { createSingleFlight } from "./utils/singleFlight.js";
@@ -3149,6 +3151,7 @@ function buildBackendHealthPayload(clock = {}) {
       liveQuoteCount,
       lastQuoteUpdateAt: latestLiveQuoteUpdateAt,
       liveQuoteStreamState: engineState.liveQuoteStreamState || null,
+      alpacaCryptoStreamState: engineState.alpacaCryptoStreamState || null,
       polygonLiveStreamState: engineState.polygonLiveStreamState || null,
       liveEarlyMoverSymbols: engineState.liveEarlyMoverSymbols || [],
       liveEarlyMoverRefreshState: engineState.liveEarlyMoverRefreshState || null,
@@ -17920,8 +17923,9 @@ async function getCryptoDailyBarsForDiscovery(symbol) {
   }
   return cryptoDailyDiscoveryBarsCache.get(clean)?.bars || [];
 }
+const enrichCryptoResearchVolume = createCryptoResearchVolume({ getBars: (...args) => alpacaCryptoMarketData.getResearchBars(...args) });
 async function getBestCryptoBars(symbol) {
-  return cryptoIntradayBars.get(symbol);
+  return enrichCryptoResearchVolume(symbol, await cryptoIntradayBars.get(symbol));
 }
 async function placeCryptoMarketBuy(symbol, dollars, options = {}) {
   if (CONFIG.realCashTradingUnlocked !== true) {
@@ -32618,7 +32622,8 @@ registerBrokerDiagnosticRoutes(app, {
   isBotOrder,
 });
 
-registerCandidateTraceRoutes(app, { requireAdmin, store: candidateTraceStore });
+registerCandidateTraceRoutes(app, { requireAdmin, store: candidateTraceStore,
+  getCandidates: () => [...(engineState.lastStockSignals || []), ...(engineState.lastCryptoSignals || [])] });
 registerQuoteDiagnosticRoutes(app, {
   requireAdmin,
   normalizeSymbol,
@@ -32823,6 +32828,15 @@ registerMorningStrikeRoutes(app, {
   }),
 });
 
+const alpacaCryptoStream = createAlpacaCryptoStream({
+  WebSocket: TradierWebSocket,
+  key: process.env.ALPACA_LIVE_KEY,
+  secret: process.env.ALPACA_LIVE_SECRET,
+  getSymbols: () => (engineState.lastCryptoSignals || []).map(s => normalizeSymbol(s.symbol)),
+  onQuote: (symbol, quote) => updateQuoteCache(symbol, quote),
+  onStatus: status => { engineState.alpacaCryptoStreamState = status; },
+});
+
 startServerLifecycle({
   app,
   diagnostics: processDiagnostics,
@@ -32833,10 +32847,11 @@ startServerLifecycle({
   runStartupEngineScan: RUN_STARTUP_ENGINE_SCAN,
   runStartupScan: runEngineCycle,
   saveState: saveEngineState,
-    flushState: async () => { tradierQuoteStream.stop(); await candidateTraceStore.flush(); await flushStateToFile(); },
+    flushState: async () => { alpacaCryptoStream.stop(); tradierQuoteStream.stop(); await candidateTraceStore.flush(); await flushStateToFile(); },
   saveRenderMemory,
   checkRunnerResults: checkRunnerPredictionResults,
   startServices: [
+    () => { if (process.env.ENABLE_ALPACA_CRYPTO_WEBSOCKET !== 'false') alpacaCryptoStream.start(); },
     startFinnhubStream,
     startLiveScheduler,
     startPolygonStockStream,

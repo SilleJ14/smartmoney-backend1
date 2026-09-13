@@ -1,5 +1,6 @@
 import fs from 'node:fs/promises';
 import path from 'node:path';
+import { candidateDiagnostics } from '../scoring/candidateDiagnostics.js';
 
 const text = (value, max = 120) => typeof value === 'string' ? value.slice(0, max) : null;
 const number = value => typeof value === 'number' && Number.isFinite(value) ? value : null;
@@ -13,13 +14,19 @@ const timestamp = value => {
 export function compactCandidateTrace(event = {}) {
   const symbol = text(event.symbol, 32)?.toUpperCase();
   if (!symbol || !/^[A-Z0-9][A-Z0-9._-]{0,15}(?:\/[A-Z0-9]{1,10})?$/.test(symbol)) return null;
+  const crypto = symbol.includes('/') || event.assetClass === 'crypto';
+  const evidence = crypto ? event.cryptoScoreTelemetry?.decision : event.stockDecisionEvidence;
+  const diagnosis = evidence ? candidateDiagnostics(event, evidence, event.executionEligibility || { reasons: event.reasons || [] }) : null;
   return {
     symbol, assetClass: symbol.includes('/') || event.assetClass === 'crypto' ? 'crypto' : 'stock',
     observedAt: new Date().toISOString(), providerAt: timestamp(event.liveQuoteUpdatedAt),
     stage: text(event.stage, 40), cycle: text(event.cycle, 64), source: text(event.source, 80),
     price: number(event.price ?? event.current), changePercent: number(event.percentChange ?? event.changePercent),
-    discovery: event.discoveryScoreAvailable === false ? null : number(event.discoveryScore),
-    entry: event.entryQualityScoreAvailable === false ? null : number(event.entryQualityScore),
+    discovery: (crypto ? event.cryptoDiscoveryScoreAvailable : event.discoveryScoreAvailable) === false ? null : number(crypto ? event.cryptoDiscoveryScore : event.discoveryScore),
+    entry: (crypto ? event.cryptoEntryScoreAvailable : event.entryQualityScoreAvailable) === false ? null : number(crypto ? event.cryptoEntryScore : event.entryQualityScore),
+    diagnostics: diagnosis ? { status: diagnosis.status, missingEvidencePoints: diagnosis.missingEvidencePoints,
+      measuredShortfallPoints: diagnosis.measuredShortfallPoints, components: diagnosis.components,
+      blockingReasons: diagnosis.blockingReasons.slice(0,32).map(x => text(x)).filter(Boolean) } : null,
     final: event.stockDecisionScoreAvailable === true ? number(event.stockDecisionScore)
       : event.cryptoDecisionScoreAvailable === true ? number(event.cryptoDecisionScore) : null,
     newsAvailable: event.confirmations?.newsRiskAvailable === true,
@@ -33,6 +40,7 @@ export function createCandidateTraceStore(directory, options = {}) {
   const queueLimit = 512;
   let queue = [], worker = null, initialized = false, slot = 0, size = 0;
   let written = 0, dropped = 0, lastError = null, querying = false;
+  const observedStates = new Map();
   const file = index => path.join(directory, `candidate-trace-${index}.jsonl`);
   async function initialize() {
     if (initialized) return;
@@ -69,6 +77,15 @@ export function createCandidateTraceStore(directory, options = {}) {
   function record(event) {
     const compact = compactCandidateTrace(event);
     if (!compact) return false;
+    if (compact.diagnostics) {
+      const previous = observedStates.get(compact.symbol);
+      const since = previous?.status === compact.diagnostics.status ? previous.since : compact.observedAt;
+      compact.diagnostics.statusSince = since;
+      compact.diagnostics.observedWaitingSeconds = Math.max(0, (Date.parse(compact.observedAt) - Date.parse(since)) / 1000);
+      observedStates.delete(compact.symbol);
+      observedStates.set(compact.symbol, { status: compact.diagnostics.status, since });
+      if (observedStates.size > 500) observedStates.delete(observedStates.keys().next().value);
+    }
     const line = JSON.stringify(compact) + '\n';
     if (queue.length >= queueLimit || Buffer.byteLength(line) > fileBytes) { dropped++; return false; }
     queue.push(line);

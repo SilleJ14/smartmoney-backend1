@@ -70,10 +70,21 @@ test('candidate trace route requires admin middleware and does not expose intern
   const admin = () => {}, calls = [];
   registerCandidateTraceRoutes({ get: (...args) => calls.push(args) }, { requireAdmin: admin,
     store: { read: async () => { throw new Error('secret path'); } } });
-  const [route, middleware, handler] = calls[0];
+  const [route, middleware, handler] = calls.find(call => call[0] === '/discovery/trace');
   assert.equal(route, '/discovery/trace'); assert.equal(middleware, admin);
   const res = { status(n) { this.code = n; return this; }, json(body) { this.body = body; return this; } };
   await handler({ query: { symbol: '../private' } }, res); assert.equal(res.code, 400);
   await handler({ query: { symbol: 'aapl' } }, res); assert.equal(res.code, 503);
   assert.ok(!JSON.stringify(res.body).includes('secret'));
+});
+
+test('diagnostics route is admin-only and filters crypto without exposing raw candidate secrets', () => {
+  const calls=[],admin=()=>{};
+  registerCandidateTraceRoutes({get:(...args)=>calls.push(args)}, {requireAdmin:admin,store:{},
+    getCandidates:()=>[{symbol:'BTC/USD',secret:'never-return'}, {symbol:'AAPL'}]});
+  const [,middleware,handler]=calls.find(c=>c[0]==='/discovery/diagnostics');
+  assert.equal(middleware,admin);
+  let result;handler({query:{asset:'crypto'}},{json:x=>{result=x;}});
+  assert.equal(result.candidates.length,1);assert.equal(result.candidates[0].symbol,'BTC/USD');
+  assert.ok(!JSON.stringify(result).includes('never-return'));
 });

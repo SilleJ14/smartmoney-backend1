@@ -30,7 +30,7 @@ test(`actual server boots, serves stocks and crypto, and completes a scan withou
     REAL_CASH_TRADING_UNLOCKED: 'false', TRADING_MODE: 'smart', RUN_STARTUP_ENGINE_SCAN: 'true',
     ALPACA_LIVE_KEY: 'fixture', ALPACA_LIVE_SECRET: 'fixture', FINNHUB_API_KEY: 'fixture',
     ENABLE_POLYGON: polygonFault ? 'true' : 'false', POLYGON_API_KEY: 'fixture', SMARTMONEY_FIXTURE_POLYGON: polygonFault,
-    ENABLE_POLYGON_WEBSOCKET: 'false', ENABLE_FINNHUB_WEBSOCKET: streamBurst ? 'true' : 'false',
+    ENABLE_POLYGON_WEBSOCKET: 'false', ENABLE_FINNHUB_WEBSOCKET: streamBurst ? 'true' : 'false', ENABLE_ALPACA_CRYPTO_WEBSOCKET: 'false',
     SMARTMONEY_FIXTURE_STREAM: streamBurst ? 'finnhub' : '',
     SMARTMONEY_FIXTURE_LOAD: fullLoad ? 'full' : 'small',
     SMARTMONEY_FIXTURE_POPULATION: process.env.SMARTMONEY_FIXTURE_POPULATION || '',
@@ -121,6 +121,11 @@ test(`actual server boots, serves stocks and crypto, and completes a scan withou
     assert.equal(metrics.writes || 0, 0);
     if (polygonFault) assert.ok(metrics.polygonReads > 0, 'fixture did not exercise Polygon snapshot path');
     const snapshot = await read('/frontend/snapshot');
+    const diagnostic = await read('/discovery/diagnostics?asset=crypto');
+    assert.equal(diagnostic.ok, true);
+    assert.ok(diagnostic.candidates.length > 0);
+    assert.ok(diagnostic.candidates.every(row => row.symbol.includes('/') && row.threshold === 65));
+    assert.ok(diagnostic.candidates.every(row => Array.isArray(row.components) && typeof row.status === 'string'));
     if (process.env.SMARTMONEY_INCREMENTAL_PROBE === 'true') {
       const warmDeadline = Date.now() + 15000;
       let warm;
