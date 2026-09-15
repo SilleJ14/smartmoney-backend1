@@ -2,9 +2,10 @@
 export function createAlpacaCryptoStream({ WebSocket, key, secret, getSymbols, onQuote, onStatus = () => {},
   now = Date.now, setTimer = setTimeout, clearTimer = clearTimeout }) {
   let socket, timer, stopped = true, authenticated = false, lastMessage = 0, retryAt = 0;
-  let subscribed = new Set();
+  let subscribed = new Set(), symbolLimit = 120;
   const state = { connected: false, authenticated: false, quotes: 0, lastQuoteAt: null, errorCode: null };
-  const desired = () => [...new Set(getSymbols())].filter(s => /^[A-Z0-9]+\/USD$/.test(s)).slice(0, 120);
+  const allSymbols = () => [...new Set(getSymbols())].filter(s => /^[A-Z0-9]+\/USD$/.test(s));
+  const desired = () => allSymbols().slice(0, symbolLimit);
   function subscribe() {
     if (!authenticated || !socket) return;
     const next = new Set(desired());
@@ -33,7 +34,17 @@ export function createAlpacaCryptoStream({ WebSocket, key, secret, getSymbols, o
           if (q.T === 'success' && q.msg === 'authenticated') {
             authenticated = true; state.authenticated = true; state.errorCode = null; subscribe();
           }
-          if (q.T === 'error') { state.errorCode = q.code; retryAt = now() + 60000; disconnect(); return; }
+          if (q.T === 'error') {
+            state.errorCode = q.code;
+            // 405 is a symbol entitlement limit, not an authentication failure.
+            // Never reconnect with the same rejected batch forever. REST polling
+            // remains responsible for symbols outside the learned stream budget.
+            if (Number(q.code) === 405 && subscribed.size > 1) {
+              symbolLimit = Math.max(1, Math.floor(subscribed.size / 2));
+              retryAt = now() + 5000;
+            } else retryAt = now() + 60000;
+            disconnect(); return;
+          }
           if (!authenticated || q.T !== 'q' || !subscribed.has(q.S)) continue;
           const at = Date.parse(q.t), bid = Number(q.bp), ask = Number(q.ap);
           if (!Number.isFinite(at) || at > now() + 5000 || !Number.isFinite(bid) || !Number.isFinite(ask) || bid <= 0 || ask < bid) continue;
@@ -56,12 +67,16 @@ export function createAlpacaCryptoStream({ WebSocket, key, secret, getSymbols, o
       if (!socket && now() >= retryAt) connect();
       else subscribe();
     } catch { retryAt = now() + 15000; disconnect(); }
-    try { onStatus({ ...state, subscribedCount: subscribed.size }); } catch { /* telemetry cannot stop feed */ }
+    try { onStatus(status()); } catch { /* telemetry cannot stop feed */ }
     timer = setTimer(tick, 5000); timer?.unref?.();
+  }
+  function status() {
+    return { ...state, subscribedCount: subscribed.size, symbolLimit,
+      restOnlySymbolCount: Math.max(0, allSymbols().length - subscribed.size) };
   }
   return {
     start() { if (!stopped || !key || !secret) return; stopped = false; tick(); },
     stop() { stopped = true; clearTimer(timer); disconnect(); },
-    getStatus: () => ({ ...state, subscribedCount: subscribed.size }),
+    getStatus: status,
   };
 }

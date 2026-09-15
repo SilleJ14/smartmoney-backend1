@@ -22,3 +22,29 @@ test('crypto quote stream authenticates, resubscribes and preserves quote timest
 test('crypto stream without credentials never opens a socket', () => {
   createAlpacaCryptoStream({WebSocket:class {constructor(){throw Error('must not connect');}},getSymbols:()=>[]}).start();
 });
+
+test('symbol limit rejection reduces the next batch without dropping REST coverage', () => {
+  let ws, tick, now = 100000; let opened = 0;
+  class Socket extends EventEmitter {
+    constructor() { super(); ws = this; this.sent = []; opened++; }
+    send(x) { this.sent.push(JSON.parse(x)); }
+    close() {}
+  }
+  const stream = createAlpacaCryptoStream({ WebSocket: Socket, key: 'fixture', secret: 'fixture',
+    getSymbols: () => ['BTC/USD', 'ETH/USD', 'SOL/USD', 'LINK/USD'], onQuote: () => {},
+    now: () => now, setTimer: f => { tick = f; return 1; }, clearTimer: () => {} });
+  const auth = () => { ws.emit('open'); ws.emit('message', JSON.stringify([{ T: 'success', msg: 'authenticated' }])); };
+  stream.start(); auth();
+  assert.equal(ws.sent[1].quotes.length, 4);
+  ws.emit('message', JSON.stringify([{ T: 'error', code: 405 }]));
+  assert.equal(stream.getStatus().symbolLimit, 2);
+  tick(); assert.equal(opened, 1);
+  now += 5000; tick(); auth();
+  assert.equal(ws.sent[1].quotes.length, 2);
+  assert.equal(stream.getStatus().restOnlySymbolCount, 2);
+  assert.equal(stream.getStatus().errorCode, null);
+  // A later transport reconnect retains the learned limit.
+  ws.emit('close'); now += 15000; tick(); auth();
+  assert.equal(ws.sent[1].quotes.length, 2);
+  stream.stop();
+});
