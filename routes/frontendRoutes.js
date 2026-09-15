@@ -9,13 +9,14 @@ import { buildRawEarlyMoverCandidates } from "../market-data/liveMovers.js";
 import { candidateFeedDecision } from "../discovery/candidateFeedPolicy.js";
 import { freshEarlyAssessments } from '../discovery/earlyCandidateReassessment.js';
 import { incrementalResearchForState } from '../discovery/incrementalResearch.js';
+import { sendChunkedJson } from './chunkedJson.js';
 
 function uniqueSignals(signals, normalizeSymbol) {
   return dedupeSignalsByCanonicalAuthority(signals, { normalizeSymbol });
 }
 
 function collectSignals(state, latestStatus, normalizeSymbol, includeFastRunners = false) {
-  const orchestration = latestStatus?.phase20AutonomousOrchestration || {};
+  const orchestration = latestStatus?.phase20AutonomousOrchestration || state.phase20AutonomousOrchestrationState || {};
   return uniqueSignals(
     [
       ...incrementalResearchForState(state),
@@ -30,7 +31,6 @@ function collectSignals(state, latestStatus, normalizeSymbol, includeFastRunners
         ? state.quickInstitutionalCandidates
         : []),
       ...(Array.isArray(state.topCryptoSignals) ? state.topCryptoSignals : []),
-      ...(Array.isArray(state.lastCryptoSignals) ? state.lastCryptoSignals : []),
       ...(Array.isArray(state.lastCryptoSignals) ? state.lastCryptoSignals : []),
       ...(Array.isArray(orchestration.topSignals) ? orchestration.topSignals : []),
     ],
@@ -111,7 +111,7 @@ export function registerFrontendRoutes(app, dependencies) {
     try {
       const signals = collectSignals(
         getState(),
-        getLatestStatus(),
+        null,
         normalizeSymbol,
         true
       ).map(mergeLiveQuote).filter(signal => candidateFeedDecision(signal, getConfig()).visible);
@@ -126,7 +126,7 @@ export function registerFrontendRoutes(app, dependencies) {
       const watchSignals = displaySignals.filter(
         (signal) => !hasExplicitTradeApproval(signal)
       );
-      res.json({
+      await sendChunkedJson(res, {
         success: true,
         count: displaySignals.length,
         approvedCount: approvedSignals.length,
@@ -138,6 +138,7 @@ export function registerFrontendRoutes(app, dependencies) {
       });
     } catch (err) {
       console.error("frontend signals error", err);
+      if (res.headersSent) { res.destroy(); return; }
       res.status(500).json({ success: false, error: err.message });
     }
   });

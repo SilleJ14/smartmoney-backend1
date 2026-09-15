@@ -111,6 +111,7 @@ function summarize(rows, { feePercent, slippagePercent, breakoutPercent }) {
     averageNetReturnPercent: average(net) === null ? null : round(average(net)),
     averageNetReturnConfidence95Percent: meanConfidence95(cohortNet),
     confidenceUnit: 'INDEPENDENT_DATE_COHORT',
+    drawdownBasis: 'close-to-close candidate cohort returns; not intraday portfolio drawdown',
     averageProfitPercent: average(wins) === null ? null : round(average(wins)),
     averageLossPercent: average(losses) === null ? null : round(average(losses)),
     maximumCandidateCohortDrawdownPercent: rows.length

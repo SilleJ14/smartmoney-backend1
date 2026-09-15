@@ -234,14 +234,14 @@ test("frontend demotes stale buyable rows even while the SSE connection stays op
   assert.doesNotMatch(streamBlock, /liveQuoteStateVersionRef\.current =/);
 });
 
-test("frontend uses the backend live-source and four-approval contract", frontendTestOptions, () => {
+test("frontend uses authoritative backend decisions without legacy approval reconstruction", frontendTestOptions, () => {
   assert.match(frontendSource, /RECOGNIZED_LIVE_QUOTE_SOURCES/);
-  assert.match(frontendSource, /item\?\.priceIsLive === true/);
-  assert.match(frontendSource, /item\.approved === true/);
-  assert.match(frontendSource, /const aggregateExecutionApproved = typeof executionEligibility\?\.approved === "boolean"/);
-  assert.match(frontendSource, /aggregateExecutionApproved/);
-  assert.match(frontendSource, /const hasAggregateExecutionDecision =/);
-  assert.match(frontendSource, /legacyFourWay && item\.raw\?\.executionEligibility\?\.approved !== false/);
+  for (const name of ['isStockBuyableNow', 'isCryptoBuyableNow']) {
+    const body = frontendSource.match(new RegExp(`function ${name}\\([^]*?\\n}`))?.[0];
+    assert.ok(body, `${name} missing`);
+    assert.match(body, /backendDecisionBuyable\(item\.raw\?\.currentDecision\?\.authorization, item\.symbol\)/);
+    assert.doesNotMatch(body, /legacyFourWay|aggregateExecutionApproved|item\.approved/);
+  }
   assert.doesNotMatch(frontendSource, /item\?\.backendApproved === true \|\| item\?\.approved === true/);
 });
 

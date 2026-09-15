@@ -21,6 +21,21 @@ test('early research contains failures instead of crashing the scheduler', async
   assert.equal((await worker.run(['AAPL'])).failed, true);
 });
 
+test('queue latency and capacity deferrals are visible without moving old candidates to the back', async () => {
+  let time = 1000, allowed = false;
+  const seen = [], events = [];
+  const worker = createEarlyCandidateReassessment({ capacity: 2, batchSize: 1, now: () => time,
+    canRun: () => allowed, analyze: async symbols => { seen.push(...symbols); return symbols.map(symbol => ({ symbol })); },
+    publish: () => {}, trace: event => events.push(event) });
+  await worker.run(['A', 'B', 'C']); time += 500;
+  assert.equal(worker.getStatus().oldestPendingWaitMs, 500);
+  assert.equal(worker.getStatus().deferredByCapacity, 1);
+  allowed = true; await worker.run(['B', 'A']); await worker.run(['C']);
+  assert.deepEqual(seen, ['A', 'B']);
+  assert.equal(worker.getStatus().maxObservedQueueWaitMs, 500);
+  assert.equal(events.find(e => e.stage === 'EARLY_ANALYSIS_STARTED').queueWaitMs, 500);
+});
+
 test('crypto research admits USD pairs, stays bounded and independent of stock market hours', async () => {
   let clock = 100000; const batches = [];
   const worker = createEarlyCandidateReassessment({ capacity: 3, batchSize: 2, retryMs: 60000, now: () => clock,

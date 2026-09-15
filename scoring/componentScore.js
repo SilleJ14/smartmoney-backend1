@@ -172,10 +172,7 @@ export function buildCryptoDecisionScore(
   const discoveryFresh = discoveryAgeMinutes !== null &&
     discoveryAgeMinutes >= -1 &&
     discoveryAgeMinutes <= Math.max(1, Number(maxDiscoveryAgeMinutes || 15));
-  const quoteTimestampRaw =
-    signal.liveQuote?.updatedAt ??
-    signal.liveQuoteUpdatedAt ??
-    signal.quoteFetchedAt;
+  const quoteTimestampRaw = signal.liveQuoteUpdatedAt;
   const quoteTimestamp = quoteTimestampRaw ? Date.parse(quoteTimestampRaw) : NaN;
   const quoteAgeSeconds = Number.isFinite(quoteTimestamp)
     ? (Number(now) - quoteTimestamp) / 1000

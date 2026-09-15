@@ -1,4 +1,6 @@
 .env
+.env.*
+!.env.example
 node_modules
 discovery-features/
 engine-state.json

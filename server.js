@@ -1,4 +1,6 @@
 import express from "express";
+import { riskPolicyVersion, assertRiskPolicyVersion } from './risk/authorizationVersion.js';
+import { assertVerifiedQuote } from './live/quoteAuthorization.js';
 import { BoundedTtlCache } from "./utils/boundedTtlCache.js";
 import { getApprovedTradeAmount } from "./scoring/approvedSizing.js";
 import { revalidateCandidate } from './scoring/revalidateCandidate.js';
@@ -1237,6 +1239,7 @@ const {
 } = createEngineStateSaver({
   ENGINE_STATE_FILE,
   writeSafetyState: persistSafetyState,
+  deferSnapshot: true,
   engineState,
   getEffectiveTradingMode,
 });
@@ -2833,6 +2836,13 @@ function markSwingSafeRotationUsed(symbol, replacementSymbol) {
   saveEngineState("SWING_SAFE_ROTATION_USED");
 }
 function recordOrder(type, symbol, extra = {}) {
+  if (/BUY|SELL|FILL|EXIT|ORDER|PROTECTION/i.test(String(type || ''))) {
+    candidateTraceStore.record({ symbol, stage: 'ORDER_EVENT', source: String(type),
+      orderId: extra.orderId || extra.order_id || extra.id,
+      clientOrderId: extra.clientOrderId || extra.client_order_id,
+      orderStatus: extra.status, filledQty: extra.filledQty ?? extra.filled_qty,
+      price: extra.fillPrice ?? extra.filled_avg_price ?? extra.price });
+  }
   engineState.recentOrders.unshift({
     type,
     symbol,
@@ -13755,7 +13765,7 @@ const preTradeRiskGuard = {
       isAiManagedOpenPosition(position, botOwnedSymbols)
     );
     const quoteResolution = await resolveVerifiedPreTradeQuote(symbol, cryptoAsset);
-    const quote = quoteResolution.quote;
+    const quote = assertVerifiedQuote(quoteResolution, symbol);
     const referencePrice = Number(quote.price || quote.current || 0);
     const notional = Number(order.notional || Number(order.qty || 0) * referencePrice);
     let sizingSignal = { symbol, price: referencePrice };
@@ -13772,6 +13782,7 @@ const preTradeRiskGuard = {
       const previous = candidates.find((candidate) => normalizeSymbol(candidate.symbol) === symbol);
       if (!previous) throw new Error(`No current canonical decision for ${symbol}`);
       const candidate = revalidateCandidate(previous, { ...previous, ...quote });
+      assertRiskPolicyVersion(candidate.riskPolicyVersion, currentRiskPolicyVersion());
       sizingSignal = { ...candidate, symbol, price: referencePrice };
       const gate = cryptoAsset ? evaluateCryptoTradeCandidate(candidate, { requireCentralDecision: true, requireFreshDecision: true, requireExplicitApproval: true })
         : evaluateStockTradeCandidate(candidate, { requireCentralDecision: true, requireFreshDecision: true, requireExplicitApproval: true });
@@ -13878,6 +13889,9 @@ const preTradeRiskGuard = {
     };
     const result = assertPreTradeRisk(riskInput);
     return { ...result, assertCurrent() {
+      if (!isPreTradeQuoteReady(quote, cryptoAsset)) {
+        throw new Error(`QUOTE_VERIFICATION_EXPIRED: ${symbol} price or spread is no longer verified`);
+      }
       if (cryptoAsset) {
         const plan = evaluateCryptoTradePlan(sizingSignal, { notional });
         if (!plan.approved) throw new Error(`Crypto evidence expired before submission: ${plan.reasons.join('; ')}`);
@@ -13899,6 +13913,7 @@ const preTradeRiskGuard = {
         const current = dedupeSignalsByCanonicalAuthority([...(engineState.lastStockSignals || []), ...(engineState.lastCryptoSignals || [])])
           .find(c => normalizeSymbol(c.symbol) === symbol);
         if (!current || current.decisionUpdatedAt !== options.riskDecisionVersion) throw new Error('Canonical decision changed before submission');
+        assertRiskPolicyVersion(current.riskPolicyVersion, currentRiskPolicyVersion());
         const candidate = revalidateCandidate(current, { ...current, ...quote });
         const gate = cryptoAsset ? evaluateCryptoTradeCandidate(candidate) : evaluateStockTradeCandidate(candidate,
           { requireCentralDecision: true, requireFreshDecision: true, requireExplicitApproval: true });
@@ -17857,6 +17872,8 @@ async function getCryptoRecentBars(symbol, timeframe = "5Min", limit = 30) {
   }
 }
 const { scoreCrypto, calculateCryptoInstitutionalQualification, scanCryptoMarket, analyzeCryptoCandidates } = createCryptoMarketScanner({
+  recordCandidateEvent: event => candidateTraceStore.record(event),
+  recordScanEvent: event => candidateTraceStore.recordScan(event),
   CONFIG,
   calculateCryptoLiquidityFromBars,
   calculateRunnerHoldQuality,
@@ -19195,6 +19212,7 @@ function getBotEntryScores() {
 }
 const { calculateInstitutionalScores, passesFilters, scoreStock, scanMarket, analyzeCandidates } = createStockMarketStrategy({
   recordCandidateEvent: event => candidateTraceStore.record(event),
+  recordScanEvent: event => candidateTraceStore.recordScan(event),
   CONFIG,
   activeScanLocks,
   applyAutonomousCapitalRotation,
@@ -23881,6 +23899,7 @@ function calculateAdaptiveCryptoPositionSize(signal = {}, account = {}) {
 const engineCycleRunner = createCycleRunner({
   state: engineState,
   saveState: saveEngineState,
+  onScanEvent: event => candidateTraceStore.recordScan(event),
   onError: (err) => console.error("ENGINE_ERROR_FULL", {
     message: err?.message,
     stack: err?.stack,
@@ -26968,7 +26987,13 @@ function resolveDecisionScoreComponent(candidates = []) {
   }
   return { value: 0, available: false, source: "unavailable" };
 }
+function currentRiskPolicyVersion() {
+  return riskPolicyVersion(CONFIG, { emergencyStopActive,
+    dailyLossLocked: engineState.dailyLossLocked, profitLocked: engineState.profitLocked,
+    safetyReconciliationRequired: engineState.safetyReconciliationRequired });
+}
 function calculateCentralAutonomousDecisionCore(stockSignals = [], cryptoSignals = []) {
+  const policyVersion = currentRiskPolicyVersion();
   const allSignals = [...stockSignals, ...cryptoSignals].filter(Boolean);
   const marketRegime = engineState.marketRegime?.state || "unknown";
   const marketStress = Number(engineState.marketStressLevel || 0);
@@ -27277,6 +27302,7 @@ function calculateCentralAutonomousDecisionCore(stockSignals = [], cryptoSignals
           String(signal.symbol || "").endsWith("USD")
           ? "crypto"
           : "stock"),
+      riskPolicyVersion: policyVersion,
       tradeArchetype: archetypeDecision.tradeArchetype,
       dynamicEngineWeights: archetypeDecision.dynamicEngineWeights,
       archetypeAdjustedScore: archetypeDecision.archetypeAdjustedScore,
@@ -27954,9 +27980,9 @@ function getLatestFrontendStatusSnapshot() {
   };
 }
 function collectFrontendSignalSnapshot() {
-  const latestStatus = getLatestFrontendStatusSnapshot();
-  const orchestration =
-    latestStatus?.phase20AutonomousOrchestration || {};
+  // Do not build the account/dashboard snapshot just to retrieve this field.
+  // That snapshot already merges/scorers dozens of the same candidates.
+  const orchestration = engineState.phase20AutonomousOrchestrationState || {};
   return dedupeSignalsByCanonicalAuthority([
     ...incrementalResearchForState(engineState),
     ...freshEarlyAssessments(engineState.earlyAssessedStockSignals),
@@ -28057,23 +28083,36 @@ function pushLiveSignalUpdate(payload = {}) {
   }
   flushLiveSignalUpdates();
 }
-function flushLiveSignalUpdates() {
+let liveSignalFlushRunning = false;
+async function flushLiveSignalUpdates() {
+  if (liveSignalFlushRunning) return;
+  liveSignalFlushRunning = true;
   lastLiveSignalPushAt = Date.now();
+  try {
   for (const finalPayload of pendingLiveSignalPushes.drain()) {
-  const message = `data: ${JSON.stringify({
+  // Full decision payloads can be expensive to serialize. Let health checks,
+  // quote delivery and position protection run between candidates.
+  await new Promise(resolve => setImmediate(resolve));
+  const message = liveSignalClients.size ? `data: ${JSON.stringify({
     ...finalPayload,
     pushedAt: new Date().toISOString(),
-  })}\n\n`;
+  })}\n\n` : null;
   pushBackendStreamEvent("SIGNAL_EVENT", {
     ...finalPayload,
   });
   for (const client of liveSignalClients) {
     try {
+      if (message === null) continue;
       if (!writeBoundedStream(client, message)) liveSignalClients.delete(client);
     } catch {
       liveSignalClients.delete(client);
     }
   }
+  }
+  } catch (error) {
+    console.error('LIVE_SIGNAL_FLUSH_FAILED', { errorType: error?.name || 'Error' });
+  } finally {
+    liveSignalFlushRunning = false;
   }
 }
 function pushBackendStreamEvent(type, payload = {}) {
@@ -28111,6 +28150,7 @@ function replayBackendStreamEvents(res, since = "") {
   }
 }
 function mergeLiveQuoteIntoSignal(signal = {}) {
+  signal = { ...signal, currentRiskPolicyVersion: currentRiskPolicyVersion() };
   const symbol = normalizeSymbol(signal.symbol);
   const liveQuote = engineState.liveQuoteCache?.[symbol];
   if (!symbol || !liveQuote?.price || !isFreshLiveQuote(liveQuote)) {

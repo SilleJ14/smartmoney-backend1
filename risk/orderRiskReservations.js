@@ -53,6 +53,9 @@ export function createOrderRiskReservations({ state, persist, lookupOrder, getOp
         try {
           const order = await lookupOrder(entry.id);
           if (!order?.status || normalizeSymbol(order.symbol) !== entry.symbol) return;
+          // Missing fill quantity is unresolved exposure, not proof of no fill.
+          if (order.filled_qty == null || order.filled_qty === '' ||
+            !Number.isFinite(Number(order.filled_qty)) || Number(order.filled_qty) < 0) return;
           entry.status = order.status;
           entry.filledQty = Number(order.filled_qty || 0);
           entry.filledAt = Date.parse(order.filled_at) || entry.filledAt || null;

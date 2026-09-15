@@ -76,15 +76,8 @@ function parsedTimestamp(value) {
 }
 
 export function getLiveQuoteTimestampMs(quote = {}) {
-  for (const value of [
-    quote.liveQuoteUpdatedAt,
-    quote.quoteFetchedAt,
-    quote.updatedAt,
-  ]) {
-    const timestamp = parsedTimestamp(value);
-    if (timestamp !== null) return timestamp;
-  }
-  return null;
+  // Ordering evidence is subject to the same provider-time rule as freshness.
+  return parsedTimestamp(quote.liveQuoteUpdatedAt);
 }
 
 export function hasNonRegressiveProviderTimestamp(previous = {}, incoming = {}) {
@@ -382,9 +375,6 @@ export function isFreshLiveQuote(quote = {}, {
 } = {}) {
   const updatedAt =
     quote.liveQuoteUpdatedAt ||
-    quote.quoteFetchedAt ||
-    quote.updatedAt ||
-    quote.timestamp ||
     null;
 
   if (!updatedAt) return false;

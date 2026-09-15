@@ -10,13 +10,14 @@ export function createEarlyCandidateReassessment({ analyze, publish, trace = () 
   acceptsSymbol = symbol => /^[A-Z][A-Z0-9.-]{0,9}$/.test(symbol) }) {
   const queue = new Map(), reviewed = new Map();
   let running = null, lastStartedAt = -Infinity;
-  const status = { completedBatches: 0, failures: 0, lastScored: 0, lastCompletedAt: null, lastDurationMs: null };
+  const status = { completedBatches: 0, failures: 0, lastScored: 0, lastCompletedAt: null, lastDurationMs: null,
+    deferredByCapacity: 0, maxObservedQueueWaitMs: 0, lastQueueWaitMs: null };
   function enqueue(candidates) {
     for (const candidate of candidates.slice(0, capacity * 2)) {
       const symbol = String(candidate?.symbol || candidate || '').toUpperCase();
       if (!acceptsSymbol(symbol) || queue.has(symbol)) continue;
       if (reviewed.has(symbol) && now() - reviewed.get(symbol) < retryMs) continue;
-      if (queue.size >= capacity) break;
+      if (queue.size >= capacity) { status.deferredByCapacity++; continue; }
       queue.set(symbol, now()); trace({ symbol, stage: 'EARLY_ANALYSIS_QUEUED' });
     }
   }
@@ -27,7 +28,13 @@ export function createEarlyCandidateReassessment({ analyze, publish, trace = () 
     const selected = [...queue.keys()].slice(0, batchSize);
     const startedAt = now();
     lastStartedAt = startedAt;
-    for (const symbol of selected) { queue.delete(symbol); reviewed.set(symbol, now()); trace({ symbol, stage: 'EARLY_ANALYSIS_STARTED' }); }
+    for (const symbol of selected) {
+      const queueWaitMs = Math.max(0, startedAt - queue.get(symbol));
+      status.lastQueueWaitMs = queueWaitMs;
+      status.maxObservedQueueWaitMs = Math.max(status.maxObservedQueueWaitMs, queueWaitMs);
+      queue.delete(symbol); reviewed.set(symbol, now());
+      trace({ symbol, stage: 'EARLY_ANALYSIS_STARTED', queueWaitMs });
+    }
     while (reviewed.size > capacity) reviewed.delete(reviewed.keys().next().value);
     running = Promise.resolve().then(() => analyze(selected)).then(async rows => {
       const published = await publish(rows);
@@ -53,5 +60,6 @@ export function createEarlyCandidateReassessment({ analyze, publish, trace = () 
     }).finally(() => { running = null; });
     return running;
   }
-  return { run, getStatus: () => ({ ...status, pending: queue.size, running: running !== null }) };
+  return { run, getStatus: () => ({ ...status, pending: queue.size, running: running !== null,
+    oldestPendingWaitMs: queue.size ? Math.max(0, now() - queue.values().next().value) : 0 }) };
 }

@@ -233,10 +233,7 @@ export function evaluateStockTradeCandidate(
   const riskQualityPass =
     riskQualityAvailable &&
     riskQualityEvidence.score >= STOCK_EXECUTION_THRESHOLDS.riskQualityScore;
-  const quoteTimestampRaw =
-    signal.liveQuote?.updatedAt ??
-    signal.liveQuoteUpdatedAt ??
-    signal.quoteFetchedAt;
+  const quoteTimestampRaw = signal.liveQuoteUpdatedAt;
   const quoteTimestamp = Number.isFinite(Number(quoteTimestampRaw))
     ? Number(quoteTimestampRaw)
     : quoteTimestampRaw

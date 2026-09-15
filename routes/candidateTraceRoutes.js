@@ -1,6 +1,10 @@
 import { buildCurrentDecisionView } from '../scoring/currentDecisionView.js';
 import { summarizeCandidateDiagnostics } from '../scoring/candidateDiagnostics.js';
 export function registerCandidateTraceRoutes(app, { requireAdmin, store, getCandidates = () => [] }) {
+  app.get('/discovery/scans', requireAdmin, async (req, res) => {
+    try { return res.json({ ok: true, ...(await store.read(null, req.query.limit)) }); }
+    catch { return res.status(503).json({ ok: false, error: 'Scan history temporarily unavailable' }); }
+  });
   app.get('/discovery/diagnostics', requireAdmin, (req, res) => {
     try {
     const rows = [...new Map(getCandidates().map(s => [s.symbol, s])).values()].slice(0, 250)

@@ -35,7 +35,7 @@ test("canonical stock auto-buy requires explicit approvals and preserves safety 
     centralAutonomousAction: "ALLOW",
     riskScore: 70,
     spreadPercent: 0.2,
-    quoteFetchedAt: now,
+    liveQuoteUpdatedAt: now,
     spreadUpdatedAt: now,
     liveQuoteSource: "alpaca_latest_stock_quote",
     spreadSource: "alpaca_latest_stock_quote",

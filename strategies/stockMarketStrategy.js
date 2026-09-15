@@ -85,6 +85,7 @@ export function createStockMarketStrategy(dependencies) {
     recordOrder,
     recordSkippedSymbol,
     recordCandidateEvent = () => {},
+    recordScanEvent = () => {},
     updateAdaptiveRunnerLearningState,
     updateAutonomousCapitalRotationState,
     updateAutonomousMarketIntelligenceState,
@@ -908,7 +909,11 @@ export function createStockMarketStrategy(dependencies) {
       const symbols = analysisOnly ? [...new Set(targetSymbols.map(normalizeSymbol).filter(Boolean))].slice(0, 4) : await getTopMovers();
       const limitedSymbols = analysisOnly ? symbols : narrowScanUniverse(symbols);
       const selectedSymbols = new Set(limitedSymbols);
-      for (const symbol of symbols.slice(0, 300)) recordCandidateEvent({
+      const tracedSymbols = [...new Set([...limitedSymbols, ...symbols.slice(0, 300)])];
+      recordScanEvent({ stage: 'SCAN_COVERAGE', cycle: scanCycleId, assetClass: 'stock',
+        eligibleCount: symbols.length, selectedCount: limitedSymbols.length,
+        individuallyRecordedCount: tracedSymbols.length });
+      for (const symbol of tracedSymbols) recordCandidateEvent({
         symbol, cycle: scanCycleId, stage: selectedSymbols.has(symbol) ? 'SCAN_SELECTED' : 'SCAN_NOT_SELECTED',
         reasons: selectedSymbols.has(symbol) ? [] : ['BOUNDED_SCAN_UNIVERSE'],
       });
@@ -2138,6 +2143,10 @@ export function createStockMarketStrategy(dependencies) {
         }
       }
       const finalResults = normalizeSignalScoreCollection(results);
+      const scoredSymbols = new Set(finalResults.map(signal => signal.symbol));
+      for (const symbol of limitedSymbols) if (!scoredSymbols.has(symbol)) recordCandidateEvent({
+        symbol, cycle: scanCycleId, stage: 'SCAN_NO_RESULT', reasons: ['STOCK_SCAN_NO_USABLE_RESULT'],
+      });
       for (const signal of finalResults) recordCandidateEvent({ ...signal,
         cycle: scanCycleId, stage: 'SCAN_SCORED',
         reasons: [...(signal.entryQualityScorecard?.gates || []), ...(signal.stockTradeEvidence?.reasons || [])],

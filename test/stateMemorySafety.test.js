@@ -186,6 +186,27 @@ test("state saver persists bounded stock and quiet-candidate learning history", 
   await saver.flushEngineStateSave();
 });
 
+test("deferred snapshots coalesce construction but journal safety immediately", async () => {
+  let safetyWrites = 0, builds = 0;
+  const written = [];
+  const state = { highWaterMarks: {} };
+  const saver = createEngineStateSaver({
+    ENGINE_STATE_FILE: 'unused.json', engineState: state, deferSnapshot: true,
+    getEffectiveTradingMode: () => { builds++; return 'smart'; },
+    writeSafetyState: () => { safetyWrites++; },
+    writeState: async (_file, snapshot) => written.push(snapshot), saveDelayMs: 60000,
+  });
+  for (let i = 0; i < 100; i++) saver.saveEngineState(`UPDATE_${i}`);
+  assert.equal(safetyWrites, 100);
+  assert.equal(builds, 0);
+  state.dailyLossLocked = true;
+  await saver.flushEngineStateSave();
+  assert.equal(builds, 1);
+  assert.equal(written.length, 1);
+  assert.equal(written[0].reason, 'UPDATE_99');
+  assert.equal(written[0].dailyLossLocked, true);
+});
+
 test("state saver coalesces updates and never overlaps writes", async () => {
   const releases = [];
   const reasons = [];

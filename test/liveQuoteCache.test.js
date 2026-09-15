@@ -261,6 +261,13 @@ test("provider time takes precedence over a newer local receipt timestamp", () =
   ), false);
 });
 
+test('receipt-only quotes cannot replace provider-dated cache evidence', () => {
+  const previous = { liveQuoteUpdatedAt: '2026-08-31T14:00:00.000Z' };
+  const incoming = { updatedAt: '2026-08-31T14:05:00.000Z', quoteFetchedAt: '2026-08-31T14:05:00.000Z' };
+  assert.equal(getLiveQuoteTimestampMs(incoming), null);
+  assert.equal(hasNonRegressiveProviderTimestamp(previous, incoming), false);
+});
+
 test("spread freshness requires its own bid-ask timestamp", () => {
   const now = Date.parse("2026-08-31T14:00:05.000Z");
   const quote = {

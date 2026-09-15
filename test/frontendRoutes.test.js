@@ -48,6 +48,18 @@ test('frontend signals include discovery-only early movers before full scoring',
   assert.equal(response.body.approvedCount, 0);
 });
 
+test('signal polling reads orchestration candidates without constructing the dashboard', async () => {
+  const api = createHarness({
+    getState: () => ({ phase20AutonomousOrchestrationState: { topSignals: [
+      { symbol: 'AAPL', price: 100, percentChange: 2, masterFinalScore: 70 }
+    ] } }),
+    getLatestStatus: () => { throw new Error('Unnecessary dashboard allocation'); },
+  });
+  const response = await api.invoke('/frontend/signals');
+  assert.equal(response.statusCode, 200);
+  assert.deepEqual(response.body.signals.map(row => row.symbol), ['AAPL']);
+});
+
 test('completed early evidence replaces raw placeholders through the real frontend route', async () => {
   const scored = { symbol: 'EARLY', price: 10, percentChange: 2, analysisUpdatedAt: new Date().toISOString(),
     rawEarlyMover: false, stockDecisionScore: 72, stockDecisionScoreAvailable: true,

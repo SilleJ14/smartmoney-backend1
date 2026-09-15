@@ -26,6 +26,8 @@ export function candidateDiagnostics(signal, evidence = {}, gate = {}) {
     : missing.length || currentFinal === null ? 'INSUFFICIENT_EVIDENCE'
     : currentFinal < threshold ? 'BELOW_SCORE_THRESHOLD' : 'WAITING_FOR_ENTRY_OR_RISK_APPROVAL';
   return { status, threshold, currentFinal,
+    componentAssessmentAt: signal.scoreAssessmentUpdatedAt || signal.decisionUpdatedAt || null,
+    componentScope: 'Component model measurements; not current executable E or permission to buy',
     lastMeasuredFinal: num(signal.lastMeasuredAssessment?.final),
     lastMeasuredAt: signal.lastMeasuredAssessment?.at || null,
     freshnessReasons: freshness, missingEvidenceReasons: missing,

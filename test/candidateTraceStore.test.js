@@ -12,6 +12,34 @@ async function temp(t) {
   return dir;
 }
 
+test('scan failure records survive restart in the same bounded trace journal', async t => {
+  const dir = await temp(t), store = createCandidateTraceStore(dir);
+  assert.equal(store.recordScan({ stage: 'SCAN_FAILED', cycle: '42', reason: 'ENGINE_ERROR', secret: 'never stored' }), true);
+  assert.equal(store.recordScan({ stage: 'arbitrary' }), false);
+  await store.flush();
+  const result = await createCandidateTraceStore(dir).read(null);
+  assert.equal(result.events.length, 1);
+  assert.equal(result.events[0].stage, 'SCAN_FAILED');
+  assert.ok(!JSON.stringify(result).includes('never stored'));
+});
+
+test('selected candidates without a usable score have a disposition and explicit unknown outcome', async t => {
+  const store = createCandidateTraceStore(await temp(t));
+  for (const symbol of ['AAPL', 'BTC/USD']) {
+    store.record({ symbol, stage: 'SCAN_SELECTED' });
+    store.record({ symbol, stage: 'SCAN_NO_RESULT', reasons: ['NO_USABLE_RESULT'] });
+  }
+  await store.flush();
+  for (const symbol of ['AAPL', 'BTC/USD']) {
+    const result = await store.read(symbol);
+    assert.equal(result.events.length, 2);
+    assert.ok(result.events.some(row => row.stage === 'SCAN_NO_RESULT'));
+    assert.equal(result.outcome.status, 'UNKNOWN');
+    assert.equal(result.stageTimeline[0].secondsSincePreviousObservedEvent, null);
+    assert.ok(result.stageTimeline[1].secondsSincePreviousObservedEvent >= 0);
+  }
+});
+
 test('trace stores only bounded evidence, never receipt time as provider time or unavailable F', () => {
   const row = compactCandidateTrace({ symbol: 'aapl', stockDecisionScore: 90, stockDecisionScoreAvailable: false,
     masterFinalScore: 90, liveQuoteUpdatedAt: null, secret: 'not-persisted', chartBars: Array(10000).fill(1),
@@ -33,8 +61,13 @@ test('trace survives reopen; query caps results, preserves provider timestamp an
   store.record({ symbol: 'AAPL', stage: 'SCAN_SELECTED' });
   await store.flush();
   const reopened = createCandidateTraceStore(dir);
+  reopened.record({ symbol: 'AAPL', stage: 'RECHECK', price: 99 });
+  await reopened.flush();
   const result = await reopened.read('AAPL', 9999);
-  assert.equal(result.events.length, 2);
+  assert.equal(result.events.length, 3);
+  assert.equal(result.events.find(e => e.stage === 'RECHECK').journey.firstObservedPrice, 10);
+  assert.equal(result.events.find(e => e.stage === 'RECHECK').journey.firstObservedAt,
+    result.events.find(e => e.stage === 'EARLY_MOVER_RECEIVED').journey.firstObservedAt);
   assert.equal(result.limit, 200);
   assert.equal(result.events.find(e => e.stage === 'EARLY_MOVER_RECEIVED').providerAt, providerTime);
   await assert.rejects(() => reopened.read('../private'), /INVALID_SYMBOL/);

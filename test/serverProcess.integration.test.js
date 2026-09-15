@@ -7,6 +7,8 @@ import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 
 const soakMs = Math.max(0, Math.min(600000, Number(process.env.SMARTMONEY_SOAK_MS) || 0));
+const heapMb = Number(process.env.SMARTMONEY_FIXTURE_HEAP_MB) || 192;
+const rssLimitMb = Number(process.env.SMARTMONEY_FIXTURE_RSS_LIMIT_MB) || 1024;
 const scenarios = process.env.SMARTMONEY_FIXTURE_POLYGON ? [process.env.SMARTMONEY_FIXTURE_POLYGON]
   : ['', 'healthy', 'stream-burst', 'oversized', 'stalled', 'unavailable', 'malformed', 'early-analysis', 'afterhours-analysis', 'crypto-setup', 'autopilot', 'candidate-recovery'];
 for (const polygonFault of scenarios) {
@@ -36,6 +38,7 @@ test(`actual server boots, serves stocks and crypto, and completes a scan withou
     SMARTMONEY_FIXTURE_POPULATION: process.env.SMARTMONEY_FIXTURE_POPULATION || '',
     SMARTMONEY_FIXTURE_MARKET_OPEN: (earlyProbe && !afterhoursProbe) || polygonFault === 'candidate-recovery' ? 'true' : 'false',
     SMARTMONEY_FIXTURE_PROFILE: process.env.SMARTMONEY_FIXTURE_PROFILE || 'false',
+    SMARTMONEY_FIXTURE_HEAP_PROFILE: process.env.SMARTMONEY_FIXTURE_HEAP_PROFILE || 'false',
     MAX_SYMBOLS_TO_SCAN: fullLoad ? '60' : '3',
     MIN_SYMBOLS_NEEDED: '3', MAX_ASSETS_FALLBACK: '60',
     ENABLE_LIVE_STARTER_BUY: 'false', ENABLE_LIVE_SCALE_IN: 'false', ENABLE_LIVE_POSITION_MANAGEMENT: 'false' };
@@ -43,11 +46,12 @@ test(`actual server boots, serves stocks and crypto, and completes a scan withou
   let maxRequestMs = 0, deliveredBurstTrades = 0;
   const profileTotals = new Map();
   const child = fork(fileURLToPath(new URL('../scripts/isolated-server-fixture.mjs', import.meta.url)), [], {
-    cwd: directory, env, execArgv: ['--max-old-space-size=768'], silent: true,
+    cwd: directory, env, execArgv: [`--max-old-space-size=${heapMb}`], silent: true,
   });
   child.stdout.on('data', d => { log = (log + d).slice(-16000); });
   child.stderr.on('data', d => { log = (log + d).slice(-16000); });
   child.on('message', m => {
+    if (m.type === 'heap-profile') console.log('HEAP_PROFILE', JSON.stringify(m));
     if (m.type === 'metrics') { metrics = m; peakRss = Math.max(peakRss, m.rss || 0); }
     if (m.type === 'unsafe-write') unsafe = true;
     if (m.type === 'profile') {
@@ -72,6 +76,11 @@ test(`actual server boots, serves stocks and crypto, and completes a scan withou
         response = await fetch(`http://127.0.0.1:${port}${route}`, { headers: { Authorization: `Bearer ${token}` }, signal: AbortSignal.timeout(3000) });
         assert.equal(response.status, 200, `${route}: ${log}`);
         const body = await response.json();
+        if (process.env.SMARTMONEY_PAYLOAD_PROFILE === 'true' && route === '/frontend/signals') {
+          const rows = (body.signals || []).map(row => ({ symbol: row.symbol, bytes: JSON.stringify(row).length,
+            fields: Object.entries(row).map(([key, value]) => [key, JSON.stringify(value)?.length || 0]).sort((a,b) => b[1]-a[1]).slice(0, 8) }));
+          console.log('PAYLOAD_PROFILE', JSON.stringify({ bytes: JSON.stringify(body).length, largest: rows.sort((a,b) => b.bytes-a.bytes).slice(0, 3) }));
+        }
         maxRequestMs = Math.max(maxRequestMs, performance.now() - requestStarted);
         return body;
       } catch (error) {
@@ -269,7 +278,8 @@ test(`actual server boots, serves stocks and crypto, and completes a scan withou
       assert.equal(outcomeStorage?.rejected, 0, 'soak overflowed durable outcome queue');
       assert.ok(outcomeStorage?.peakPending <= outcomeStorage?.queueLimit);
       peakRss = Math.max(peakRss, metrics.rss || 0);
-      assert.ok(peakRss < 1024 * 1024 * 1024, 'soak exceeded 1GB RSS');
+      assert.ok(peakRss < rssLimitMb * 1024 * 1024,
+        `soak exceeded ${rssLimitMb} MB RSS: observed ${Math.round(peakRss / 1048576)} MB`);
       await read('/frontend/signals');
       if (streamBurst && requests % 10 === 0) child.send({ type: 'finnhub-burst', count: 200, separateFrames: requests % 20 === 0 });
       requests++;
@@ -297,7 +307,7 @@ test(`actual server boots, serves stocks and crypto, and completes a scan withou
     t.diagnostic(JSON.stringify({ soakMs, requests, peakRssMB: Math.round(peakRss / 1048576),
       providerReads: metrics.reads, polygonReads: metrics.polygonReads, providerWrites: metrics.writes || 0,
       maxEventLoopDelayMs: metrics.maxEventLoopDelayMs,
-      maxRequestMs: Math.round(maxRequestMs), deliveredBurstTrades, nodeVersion: process.version,
+      maxRequestMs: Math.round(maxRequestMs), deliveredBurstTrades, nodeVersion: process.version, heapMb, rssLimitMb,
       firstCycleAt, latestCycleAt, marketPopulation: env.SMARTMONEY_FIXTURE_POPULATION || (fullLoad ? '60' : '3'),
       outcomeStorage,
       stocks: health.candidates?.stocks, crypto: health.candidates?.crypto,

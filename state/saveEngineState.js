@@ -14,6 +14,7 @@ export function createEngineStateSaver({
   setTimeoutFn = setTimeout,
   clearTimeoutFn = clearTimeout,
   writeSafetyState = () => {},
+  deferSnapshot = false,
 }) {
   let engineStateSaveTimer = null;
   let pendingEngineStateSnapshot = null;
@@ -35,7 +36,9 @@ export function createEngineStateSaver({
         const snapshot = pendingEngineStateSnapshot;
         pendingEngineStateSnapshot = null;
         try {
-          await writeState(ENGINE_STATE_FILE, snapshot);
+          const materialized = typeof snapshot === 'function' ? snapshot() : snapshot;
+          if (!materialized) throw new Error('Engine-state snapshot construction failed');
+          await writeState(ENGINE_STATE_FILE, materialized);
           completedWriteCount += 1;
           lastWriteError = null;
         } catch (err) {
@@ -56,9 +59,8 @@ export function createEngineStateSaver({
     return stateWritePromise;
   }
 
-  function saveEngineState(reason = "STATE_UPDATE") {
+  function buildSnapshot(reason) {
     try {
-      writeSafetyState();
       compactLiveEngineStateHistories(engineState);
       const safeState = {
         reason,
@@ -739,7 +741,20 @@ export function createEngineStateSaver({
         compactPersistedEngineStateSnapshot(safeState)
       );
 
-      pendingEngineStateSnapshot = compactSafeState;
+      return compactSafeState;
+    } catch (err) {
+      console.error("Could not build engine-state.json:", err.message);
+      return null;
+    }
+  }
+
+  function saveEngineState(reason = "STATE_UPDATE") {
+    try {
+      // Safety journal remains synchronous; only the larger coalesced snapshot
+      // is deferred. Repeated requests retain a closure, not discarded copies.
+      writeSafetyState();
+      const snapshot = deferSnapshot ? () => buildSnapshot(reason) : buildSnapshot(reason);
+      pendingEngineStateSnapshot = snapshot;
       pendingEngineStateReason = reason;
 
       if (!engineStateSaveTimer) {
@@ -749,7 +764,7 @@ export function createEngineStateSaver({
         }, saveDelayMs);
       }
 
-      return compactSafeState;
+      return snapshot;
     } catch (err) {
       console.error("Could not save engine-state.json:", err.message);
       return null;

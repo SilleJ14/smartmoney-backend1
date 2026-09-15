@@ -11,6 +11,15 @@ const canonicalDiscoveryEvidence = {
   },
 };
 
+test('receipt timestamps never establish executable stock quote freshness', () => {
+  const now = Date.now();
+  const gate = evaluateStockTradeCandidate({ symbol: 'AAPL', priceIsLive: true,
+    liveQuoteSource: 'alpaca_latest_stock_quote', quoteFetchedAt: new Date(now).toISOString(),
+    liveQuote: { updatedAt: new Date(now).toISOString() } }, { now, requireFreshDecision: true, requireCentralDecision: true });
+  assert.equal(gate.approved, false);
+  assert.ok(gate.reasons.some(r => /QUOTE/.test(r)));
+});
+
 test("early discovery is independent from unsafe entry timing", () => {
   const signal = { ...canonicalDiscoveryEvidence, percentChange: 7, volumeRatio: 3, preMoveScore: 88, accumulationIntelligence: { accumulationScore: 82 }, catalystScore: 75, lateChaseRisk: true };
   const discovery = calculateEarlyDiscoveryScore(signal);
@@ -424,7 +433,7 @@ test("stock execution enforces final, entry, coverage, and acceleration threshol
     centralAutonomousAction: "ALLOW",
     riskScore: 70,
     spreadPercent: 0.2,
-    quoteFetchedAt: now,
+    liveQuoteUpdatedAt: now,
     spreadUpdatedAt: now,
     liveQuoteSource: "alpaca_latest_stock_quote",
     spreadSource: "alpaca_latest_stock_quote",
@@ -443,7 +452,7 @@ test("stock execution enforces final, entry, coverage, and acceleration threshol
     centralAutonomousAction: "ACCELERATE_CAPITAL",
     riskScore: 70,
     spreadPercent: 0.2,
-    quoteFetchedAt: now,
+    liveQuoteUpdatedAt: now,
     spreadUpdatedAt: now,
     liveQuoteSource: "alpaca_latest_stock_quote",
     spreadSource: "alpaca_latest_stock_quote",
@@ -458,7 +467,7 @@ test("stock execution enforces final, entry, coverage, and acceleration threshol
     decisionScoreCoverage: 0.8,
     centralAutonomousAction: "ALLOW",
     riskScore: 70,
-    quoteFetchedAt: now,
+    liveQuoteUpdatedAt: now,
     spreadUpdatedAt: now,
   }, { requireCentralDecision: true });
   assert.equal(incomplete.approved, false);
@@ -485,7 +494,7 @@ test("server execution rejects stale and future stock decisions even with a fres
     centralAutonomousAction: "ALLOW",
     riskScore: 70,
     spreadPercent: 0.2,
-    quoteFetchedAt: new Date(now).toISOString(),
+    liveQuoteUpdatedAt: new Date(now).toISOString(),
     spreadUpdatedAt: new Date(now).toISOString(),
     liveQuoteSource: "alpaca_latest_stock_quote",
     spreadSource: "alpaca_latest_stock_quote",
@@ -514,7 +523,7 @@ test("final stock gate cannot approve incomplete core evidence or a central bloc
     decisionScoreCoverage: 1,
     centralAutonomousAction: "ALLOW",
     riskScore: 70,
-    quoteFetchedAt: new Date().toISOString(),
+    liveQuoteUpdatedAt: new Date().toISOString(),
   };
   const incomplete = evaluateStockTradeCandidate(base, { requireCentralDecision: true });
   assert.equal(incomplete.approved, false);
@@ -537,7 +546,7 @@ test("final stock gate enforces explicit buy blocks and the execution spread lim
     decisionScoreCoverage: 1,
     centralAutonomousAction: "ALLOW",
     riskScore: 70,
-    quoteFetchedAt: new Date().toISOString(),
+    liveQuoteUpdatedAt: new Date().toISOString(),
   };
   const displayOnly = evaluateStockTradeCandidate({
     ...base,
@@ -584,7 +593,7 @@ test("final stock gate requires minimum measured risk quality", () => {
     discoveryScorecard: { coverage: 1 },
     decisionScoreCoverage: 1,
     centralAutonomousAction: "ALLOW",
-    quoteFetchedAt: now,
+    liveQuoteUpdatedAt: now,
     spreadUpdatedAt: now,
     spreadPercent: 0.2,
     liveQuoteSource: "alpaca_latest_stock_quote",
@@ -634,7 +643,7 @@ test("final stock gate requires a fresh quote for executable approval", () => {
   assert.ok(genericSignalTimestamp.reasons.includes("QUOTE_FRESHNESS_UNAVAILABLE"));
   const stale = evaluateStockTradeCandidate({
     ...base,
-    quoteFetchedAt: "2026-08-25T13:59:00Z",
+    liveQuoteUpdatedAt: "2026-08-25T13:59:00Z",
   }, {
     requireCentralDecision: true,
     maxQuoteAgeSeconds: 15,
@@ -644,7 +653,7 @@ test("final stock gate requires a fresh quote for executable approval", () => {
   assert.ok(stale.reasons.includes("QUOTE_STALE"));
   const fresh = evaluateStockTradeCandidate({
     ...base,
-    quoteFetchedAt: "2026-08-25T13:59:55Z",
+    liveQuoteUpdatedAt: "2026-08-25T13:59:55Z",
     spreadUpdatedAt: "2026-08-25T13:59:55Z",
   }, {
     requireCentralDecision: true,
@@ -654,7 +663,7 @@ test("final stock gate requires a fresh quote for executable approval", () => {
   assert.equal(fresh.approved, true);
   const overFiveSecondsDespiteRelaxedCaller = evaluateStockTradeCandidate({
     ...base,
-    quoteFetchedAt: "2026-08-25T13:59:54.999Z",
+    liveQuoteUpdatedAt: "2026-08-25T13:59:54.999Z",
     spreadUpdatedAt: "2026-08-25T13:59:54.999Z",
   }, {
     requireCentralDecision: true,
@@ -667,7 +676,7 @@ test("final stock gate requires a fresh quote for executable approval", () => {
   assert.ok(overFiveSecondsDespiteRelaxedCaller.reasons.includes("SPREAD_STALE"));
   const staleSpread = evaluateStockTradeCandidate({
     ...base,
-    quoteFetchedAt: "2026-08-25T13:59:59Z",
+    liveQuoteUpdatedAt: "2026-08-25T13:59:59Z",
     spreadUpdatedAt: "2026-08-25T13:59:00Z",
   }, {
     requireCentralDecision: true,
@@ -714,7 +723,7 @@ test("stock execution fails closed on invalid final score and missing spread", (
     decisionScoreCoverage: 1,
     centralAutonomousAction: "ALLOW",
     riskScore: 70,
-    quoteFetchedAt: new Date().toISOString(),
+    liveQuoteUpdatedAt: new Date().toISOString(),
   };
   const missingSpread = evaluateStockTradeCandidate(base, { requireCentralDecision: true });
   assert.equal(missingSpread.approved, false);
@@ -739,7 +748,7 @@ test("legacy generic stock score cannot substitute for canonical F", () => {
     centralAutonomousAction: "ALLOW",
     riskScore: 70,
     spreadPercent: 0.2,
-    quoteFetchedAt: new Date().toISOString(),
+    liveQuoteUpdatedAt: new Date().toISOString(),
   }, { requireCentralDecision: true });
 
   assert.equal(result.finalScoreAvailable, false);
@@ -758,7 +767,7 @@ test("execution-time stock gate fails closed without every explicit approval", (
     centralAutonomousAction: "ALLOW",
     riskScore: 70,
     spreadPercent: 0.2,
-    quoteFetchedAt: now,
+    liveQuoteUpdatedAt: now,
     spreadUpdatedAt: now,
     decisionUpdatedAt: now,
     liveQuoteSource: "alpaca_latest_stock_quote",
@@ -800,7 +809,7 @@ test("stock execution rejects fresh-looking timestamps from an unapproved source
     centralAutonomousAction: "ALLOW",
     riskScore: 70,
     spreadPercent: 0.2,
-    quoteFetchedAt: now,
+    liveQuoteUpdatedAt: now,
     spreadUpdatedAt: now,
     decisionUpdatedAt: now,
     priceIsLive: true,

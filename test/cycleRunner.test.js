@@ -32,3 +32,22 @@ test("cycle runner rejects overlapping ticks", async () => {
   const runner = createCycleRunner({ state, saveState: () => {} });
   assert.deepEqual(await runner.run(async () => {}), { ran: false, reason: "already_running" });
 });
+
+test('scan dispositions include skipped, failed and completed cycles without leaking errors', async () => {
+  const events = [], state = { running: true };
+  const runner = createCycleRunner({ state, saveState: () => {}, onError: () => {}, onScanEvent: e => events.push(e) });
+  await runner.run(async () => {});
+  state.running = false;
+  await runner.run(async () => { throw new Error('sensitive provider error'); });
+  await runner.run(async () => {});
+  assert.deepEqual(events.map(e => e.stage), ['SCAN_SKIPPED', 'SCAN_STARTED', 'SCAN_FAILED', 'SCAN_STARTED', 'SCAN_COMPLETED']);
+  assert.ok(!JSON.stringify(events).includes('sensitive'));
+});
+
+test('failed persistence releases the cycle lock and records failure, never completion', async () => {
+  const state = {}, events = [];
+  const runner = createCycleRunner({ state, saveState: async () => { throw new Error('disk unavailable'); }, onScanEvent: e => events.push(e) });
+  await assert.rejects(runner.run(async () => {}), /disk unavailable/);
+  assert.equal(state.running, false);
+  assert.deepEqual(events.map(e => e.stage), ['SCAN_STARTED', 'SCAN_PERSISTENCE_FAILED']);
+});

@@ -2,6 +2,23 @@
 // Never contact a provider or submit an order from this fixture.
 import http from 'node:http';
 import { Session } from 'node:inspector';
+if (process.env.SMARTMONEY_FIXTURE_HEAP_PROFILE === 'true') {
+  const session = new Session(); session.connect();
+  session.post('HeapProfiler.startSampling', { samplingInterval: 65536 });
+  setInterval(() => session.post('HeapProfiler.getSamplingProfile', (error, result) => {
+    if (error) return;
+    const totals = new Map();
+    const visit = node => {
+      const f = node.callFrame;
+      const key = `${f.functionName} ${f.url.split('/').at(-1)}:${f.lineNumber}`;
+      totals.set(key, (totals.get(key) || 0) + node.selfSize);
+      for (const child of node.children || []) visit(child);
+    };
+    visit(result.profile.head);
+    process.send?.({ type: 'heap-profile', memory: process.memoryUsage(),
+      top: [...totals].sort((a,b) => b[1]-a[1]).slice(0, 15) });
+  }), 10000).unref();
+}
 // Keep the after-hours regression independent of when CI runs; clock advances
 // normally so quote freshness and scheduler deadlines remain exercised.
 if (process.env.SMARTMONEY_FIXTURE_POLYGON === 'afterhours-analysis') {

@@ -1,5 +1,6 @@
 // Versioned research rules, not calibrated probabilities. Price/volume trend
 // families are scored once; EMAs and derivatives are supporting telemetry only.
+import { normalizeCryptoVolume } from '../market-data/normalizeCryptoVolume.js';
 export const CRYPTO_SETUP_MODEL = 'CRYPTO_SETUP_V1';
 const finite = x => x !== null && x !== '' && Number.isFinite(Number(x));
 const clamp = x => Math.max(0, Math.min(100, x));
@@ -11,10 +12,11 @@ function stamp(value) {
 }
 export function completedCryptoBars(input, now = Date.now()) {
   if (!Array.isArray(input)) return [];
+  if (input.some(bar => !normalizeCryptoVolume(bar))) return [];
   const rows = input.slice(-240).map(b => ({
     time: stamp(b?.time ?? b?.t), open: Number(b?.open ?? b?.o),
     high: Number(b?.high ?? b?.h), low: Number(b?.low ?? b?.l),
-    close: Number(b?.close ?? b?.c), volume: Number(b?.volume ?? b?.v),
+    close: Number(b?.close ?? b?.c), volume: normalizeCryptoVolume(b).volume,
     intervalMs: Number(b?.intervalMs),
     marketVolume: b?.marketVolume == null ? null : Number(b.marketVolume),
     marketVolumeSource: b?.marketVolumeSource,

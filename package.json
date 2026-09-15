@@ -4,7 +4,7 @@
   "main": "server.js",
   "type": "module",
   "scripts": {
-    "start": "node server.js",
+    "start": "node --max-old-space-size=192 server.js",
     "dev": "node server.js",
     "test": "node --test",
     "test:2gb": "node --max-old-space-size=1536 --test"

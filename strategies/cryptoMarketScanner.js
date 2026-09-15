@@ -24,6 +24,7 @@ export async function mapWithConcurrency(items = [], concurrency = 4, worker) {
 }
 
 function cryptoBarTimestamp(bar = {}) {
+  if (!bar || typeof bar !== 'object' || Array.isArray(bar)) return null;
   const raw = bar.t ?? bar.timestamp ?? bar.time ?? bar.datetime ?? bar.date;
   if (raw === null || raw === undefined || raw === "") return null;
   const numeric = Number(raw);
@@ -32,7 +33,7 @@ function cryptoBarTimestamp(bar = {}) {
       ? numeric * 1000
       : numeric
     : Date.parse(String(raw));
-  return Number.isFinite(parsed) ? parsed : null;
+  return Number.isFinite(parsed) && Math.abs(parsed) <= 8640000000000000 ? parsed : null;
 }
 
 export function resolveCryptoDailyChangeReference(
@@ -157,6 +158,7 @@ export function mergeLatestCryptoPriceWithAlpacaSpread(
 
 export function createCryptoMarketScanner(dependencies) {
   const {
+    recordCandidateEvent = () => {}, recordScanEvent = () => {},
     CONFIG,
     calculateCryptoLiquidityFromBars,
     calculateRunnerHoldQuality,
@@ -566,6 +568,11 @@ export function createCryptoMarketScanner(dependencies) {
     const scanSymbols = symbols.filter((symbol) =>
       String(symbol || "").endsWith("/USD")
     );
+    const traceCycle = `crypto-${Date.now()}`;
+    recordScanEvent({ stage: 'SCAN_COVERAGE', cycle: traceCycle, assetClass: 'crypto',
+      eligibleCount: tradableSymbols.length, selectedCount: scanSymbols.length,
+      individuallyRecordedCount: scanSymbols.length });
+    for (const symbol of scanSymbols) recordCandidateEvent({ symbol, assetClass: 'crypto', cycle: traceCycle, stage: 'SCAN_SELECTED' });
     let initialAlpacaQuotesBySymbol = new Map();
     if (typeof getCryptoLatestQuotes === "function" && scanSymbols.length > 0) {
       try {
@@ -1235,6 +1242,13 @@ export function createCryptoMarketScanner(dependencies) {
       buyableNow: false, recommendedTradeAmount: 0, finalApprovedTradeAmount: 0, finalTradeAmount: 0,
       executionEligibility: { approved: false, reasons: ['CENTRAL_RISK_AND_SIZING_REVIEW_REQUIRED'] },
     });
+    const bySymbol = new Map(results.map(row => [row.symbol, row]));
+    for (const symbol of scanSymbols) {
+      const row = bySymbol.get(symbol);
+      recordCandidateEvent({ ...(row || {}), symbol, assetClass: 'crypto', cycle: traceCycle,
+        stage: row ? 'SCAN_SCORED' : 'SCAN_NO_RESULT',
+        reasons: row ? row.missingEvidenceReasons || [] : ['CRYPTO_SCAN_NO_USABLE_RESULT'] });
+    }
     return results.sort((a, b) => b.score - a.score);
   }
 

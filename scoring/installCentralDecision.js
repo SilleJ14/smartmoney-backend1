@@ -8,6 +8,7 @@ export function installCentralDecision(signal, decision, { crypto = false, now =
   const available = hasDecisionAnalysis(evidence) && Number.isFinite(score) && score >= 0 && score <= 100;
   Object.assign(signal, {
     centralAutonomousDecisionCore: decision,
+    riskPolicyVersion: decision.riskPolicyVersion || null,
     decisionUpdatedAt: new Date(now).toISOString(),
     decisionReferencePrice: Number(signal.price || signal.current || 0),
     setupRevalidationRequired: false,

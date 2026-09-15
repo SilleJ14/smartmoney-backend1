@@ -230,7 +230,10 @@ export function createManagedExecution({ state, persist, request, getManagedSymb
         trackedOrders: activeRows().length, reason: 'Broker orders and actual fills reconciled' };
       save();
     } catch (error) {
-      state.positionProtection = { ok: false, checkedAt: new Date(now()).toISOString(), reason: String(error.message).slice(0, 240) };
+      state.positionProtection = { ok: false, checkedAt: new Date(now()).toISOString(), reason: String(error.message).slice(0, 240),
+        requiresAttention: true, newBuysPaused: true,
+        recoveryPolicy: 'RECONCILE_EXISTING_ORDER_IDS_BEFORE_RETRY; KEEP_AVAILABLE_EXIT_HANDLING',
+        automaticEmergencyLiquidation: false };
       throw error;
     }
   }
