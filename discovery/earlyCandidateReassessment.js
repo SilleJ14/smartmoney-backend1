@@ -8,28 +8,44 @@ export function freshEarlyAssessments(rows = [], now = Date.now()) {
 export function createEarlyCandidateReassessment({ analyze, publish, trace = () => {},
   canRun = () => true, now = Date.now, capacity = 120, batchSize = 2, retryMs = 120000, minStartIntervalMs = 0,
   acceptsSymbol = symbol => /^[A-Z][A-Z0-9.-]{0,9}$/.test(symbol) }) {
-  const queue = new Map(), reviewed = new Map();
+  const queue = new Map(), reviewed = new Map(), events = new Map();
   let running = null, lastStartedAt = -Infinity;
   const status = { completedBatches: 0, failures: 0, lastScored: 0, lastCompletedAt: null, lastDurationMs: null,
     deferredByCapacity: 0, maxObservedQueueWaitMs: 0, lastQueueWaitMs: null };
   function enqueue(candidates) {
     for (const candidate of candidates.slice(0, capacity * 2)) {
       const symbol = String(candidate?.symbol || candidate || '').toUpperCase();
-      if (!acceptsSymbol(symbol) || queue.has(symbol)) continue;
-      if (reviewed.has(symbol) && now() - reviewed.get(symbol) < retryMs) continue;
+      if (!acceptsSymbol(symbol)) continue;
+      const event = typeof candidate?.reassessmentEvent === 'string' ? candidate.reassessmentEvent.slice(0, 160) : null;
+      const changed = event && event !== events.get(symbol);
+      const priority = Math.max(0, Math.min(3, Number(candidate?.reassessmentPriority) || 0));
+      if (queue.has(symbol)) {
+        const pending = queue.get(symbol);
+        pending.priority = Math.max(pending.priority, priority);
+        continue;
+      }
+      // New material evidence may bypass the normal cooldown, but not a burst
+      // bound of five seconds. Identical events never bypass it.
+      if (reviewed.has(symbol) && now() - reviewed.get(symbol) < (changed ? 5000 : retryMs)) continue;
       if (queue.size >= capacity) { status.deferredByCapacity++; continue; }
-      queue.set(symbol, now()); trace({ symbol, stage: 'EARLY_ANALYSIS_QUEUED' });
+      if (event) events.set(symbol, event);
+      while (events.size > capacity) events.delete(events.keys().next().value);
+      queue.set(symbol, { at: now(), priority }); trace({ symbol, stage: 'EARLY_ANALYSIS_QUEUED', trigger: event });
     }
   }
   function run(candidates = []) {
     enqueue(candidates);
     if (running) return running;
     if (!canRun() || !queue.size || now() - lastStartedAt < minStartIntervalMs) return Promise.resolve({ skipped: true, pending: queue.size });
-    const selected = [...queue.keys()].slice(0, batchSize);
+    // Age lifts ordinary candidates above priority work after a bounded wait.
+    const selected = [...queue.keys()].sort((a, b) => {
+      const rank = s => queue.get(s).priority + Math.floor((now() - queue.get(s).at) / 15000);
+      return rank(b) - rank(a) || queue.get(a).at - queue.get(b).at;
+    }).slice(0, batchSize);
     const startedAt = now();
     lastStartedAt = startedAt;
     for (const symbol of selected) {
-      const queueWaitMs = Math.max(0, startedAt - queue.get(symbol));
+      const queueWaitMs = Math.max(0, startedAt - queue.get(symbol).at);
       status.lastQueueWaitMs = queueWaitMs;
       status.maxObservedQueueWaitMs = Math.max(status.maxObservedQueueWaitMs, queueWaitMs);
       queue.delete(symbol); reviewed.set(symbol, now());
@@ -61,5 +77,5 @@ export function createEarlyCandidateReassessment({ analyze, publish, trace = () 
     return running;
   }
   return { run, getStatus: () => ({ ...status, pending: queue.size, running: running !== null,
-    oldestPendingWaitMs: queue.size ? Math.max(0, now() - queue.values().next().value) : 0 }) };
+    oldestPendingWaitMs: queue.size ? Math.max(0, now() - queue.values().next().value.at) : 0 }) };
 }

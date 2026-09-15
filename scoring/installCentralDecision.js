@@ -1,7 +1,9 @@
 import { hasDecisionAnalysis } from './decisionAnalysis.js';
+import { retainMeasuredStockScores } from './measuredScoreHistory.js';
 // Only a new central calculation may replace score availability. A quote merge
 // must not revive a rejected decision or restore revoked risk/sizing approvals.
 export function installCentralDecision(signal, decision, { crypto = false, now = Date.now() } = {}) {
+  if (!crypto) retainMeasuredStockScores(signal, {}, now);
   const evidence = crypto ? decision.cryptoDecisionEvidence : decision.stockDecisionEvidence;
   const rawScore = crypto ? decision.cryptoDecisionScore ?? (hasDecisionAnalysis(evidence) ? decision.finalDecisionScore : null) : decision.finalDecisionScore;
   const score = rawScore == null || rawScore === "" ? NaN : Number(rawScore);
@@ -10,6 +12,7 @@ export function installCentralDecision(signal, decision, { crypto = false, now =
     centralAutonomousDecisionCore: decision,
     riskPolicyVersion: decision.riskPolicyVersion || null,
     decisionUpdatedAt: new Date(now).toISOString(),
+    scoreAssessmentUpdatedAt: new Date(now).toISOString(),
     decisionReferencePrice: Number(signal.price || signal.current || 0),
     setupRevalidationRequired: false,
     quoteRevalidationBasis: null,
@@ -27,5 +30,5 @@ export function installCentralDecision(signal, decision, { crypto = false, now =
       stockDecisionEvidence: evidence,
     }),
   });
-  return signal;
+  return crypto ? signal : retainMeasuredStockScores(signal, {}, now);
 }

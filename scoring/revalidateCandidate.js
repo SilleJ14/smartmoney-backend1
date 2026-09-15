@@ -4,11 +4,16 @@ import { getCanonicalFinalScore, isCryptoSignal } from './canonicalSignalRank.js
 import { getStockExecutionEvidenceFreshness } from '../market-data/stockQuoteEvidence.js';
 import { normalizeCandidateQuote } from '../market-data/normalizeCandidateQuote.js';
 import { hasDecisionAnalysis } from './decisionAnalysis.js';
+import { retainMeasuredStockScores } from './measuredScoreHistory.js';
 
 // Shared by display and execution: quote changes cannot issue new permission.
 export function revalidateCandidate(previous, incoming, { now = Date.now() } = {}) {
   const next = { ...normalizeCandidateQuote(incoming) };
   const crypto = isCryptoSignal(previous);
+  if (!crypto) {
+    const measured = retainMeasuredStockScores({ ...previous }, {}, now);
+    next.measuredScoreHistory = measured.measuredScoreHistory;
+  }
   const version = previous.decisionUpdatedAt;
   const price = Number(next.price ?? next.current);
   const reference = Number(previous.decisionReferencePrice || previous.price || previous.current);

@@ -2,6 +2,22 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import { createEarlyCandidateReassessment } from '../discovery/earlyCandidateReassessment.js';
+
+test('new evidence bypasses cooldown with burst protection; old work cannot starve', async () => {
+  let time = 100000, allowed = true; const seen = [];
+  const worker = createEarlyCandidateReassessment({ now: () => time, batchSize: 1, canRun: () => allowed,
+    analyze: async symbols => { seen.push(symbols[0]); return symbols.map(symbol => ({symbol})); }, publish: () => {} });
+  await worker.run([{symbol:'A', reassessmentEvent:'news:1', reassessmentPriority:3}]);
+  time += 1000; await worker.run([{symbol:'A', reassessmentEvent:'news:2'}]);
+  assert.equal(seen.length, 1);
+  time += 5000; await worker.run([{symbol:'A', reassessmentEvent:'news:2'}]);
+  assert.equal(seen.length, 2);
+  time += 5000; await worker.run([{symbol:'A', reassessmentEvent:'news:2'}]);
+  assert.equal(seen.length, 2);
+  allowed = false; await worker.run(['B']); time += 60000; allowed = true;
+  await worker.run([{symbol:'C', reassessmentPriority:3}]);
+  assert.equal(seen.at(-1), 'B');
+});
 test('early research is bounded, fair, single-flight, retry-limited and traced', async () => {
   let now = Date.now(), allowed = false; const seen = [], events = [];
   const worker = createEarlyCandidateReassessment({ capacity: 4, batchSize: 2, now: () => now,

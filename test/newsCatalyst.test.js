@@ -2,6 +2,14 @@ import test from "node:test";
 import assert from "node:assert/strict";
 import { calculateNewsCatalyst } from "../scoring/newsCatalyst.js";
 
+test('rumored or terminated deals are not positive merger evidence', () => {
+  const now = Date.now();
+  for (const headline of ['Merger agreement terminated', 'Unconfirmed buyout rumors', 'Acquisition called off']) {
+    const result = calculateNewsCatalyst({articles:[{headline, datetime: now / 1000}], dataAvailable:true, now});
+    assert.equal(result.positivePoints, 0);
+  }
+});
+
 test("fresh positive news creates catalyst evidence and duplicate headlines count once", () => {
   const now = Date.parse("2026-08-25T16:00:00Z");
   const article = {

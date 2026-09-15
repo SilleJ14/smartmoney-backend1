@@ -1,6 +1,7 @@
 import { calculateNewsCatalyst } from '../scoring/newsCatalyst.js';
+import { createHash } from 'node:crypto';
 
-export function createStockNewsReview({ providers, now = Date.now, onEvidence = () => {}, maxEntries = 250 }) {
+export function createStockNewsReview({ providers, now = Date.now, onEvidence = () => {}, maxEntries = 250, cacheMs = 60000 }) {
   const cache = new Map(), pending = new Map(), cooldowns = new Map();
   const unavailable = (reason, extra = {}) => ({ available: false, risk: false, reason,
     headlines: [], allHeadlines: [], articles: [], catalyst: calculateNewsCatalyst({ dataAvailable: false }), ...extra });
@@ -31,8 +32,13 @@ export function createStockNewsReview({ providers, now = Date.now, onEvidence = 
             headlines: catalyst.riskDetected ? catalyst.headlines.slice(0, 3) : [],
             allHeadlines: catalyst.headlines, articles, catalyst, source: name,
             fetchedAt: new Date(now()).toISOString(), cacheStatus: 'fresh', errors };
-          remember(symbol, value, 15 * 60000);
-          onEvidence({ symbol, available: true, source: name, count: articles.length, errors, checkedAt: value.fetchedAt });
+          remember(symbol, value, cacheMs);
+          const material = articles.filter(article => {
+            const assessment = calculateNewsCatalyst({ articles: [article], dataAvailable: true, source: name, now: now() });
+            return assessment.catalystAvailable && now() - article.datetime * 1000 <= 86400000;
+          });
+          onEvidence({ symbol, available: true, source: name, count: articles.length, errors, checkedAt: value.fetchedAt,
+            materialVersion: material.length ? createHash('sha256').update([...new Set(material.map(a => `${a.datetime}:${a.headline.toLowerCase().replace(/\W/g, '')}`))].sort().join('|')).digest('hex') : null });
           return value;
         } catch (error) {
           errors.push(`${name}:${error?.status || 'UNAVAILABLE'}`);

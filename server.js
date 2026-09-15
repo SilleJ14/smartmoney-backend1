@@ -28,6 +28,8 @@ import { createStockNewsReview } from "./market-data/stockNewsReview.js";
 import { providerDailyBar } from "./discovery/providerDailyBar.js";
 import { quietDiscoverySessionDay } from './discovery/quietDiscoverySession.js';
 import { createEarlyCandidateReassessment, freshEarlyAssessments } from './discovery/earlyCandidateReassessment.js';
+import { reassessmentTrigger } from './discovery/reassessmentTrigger.js';
+import { retainMeasuredStockScores } from './scoring/measuredScoreHistory.js';
 import { createIncrementalResearch, incrementalResearchForState, needsCandidateResearch } from './discovery/incrementalResearch.js';
 import { createTradierMarketData } from "./providers/tradierMarketData.js";
 import { createTradierQuoteStream } from "./providers/tradierQuoteStream.js";
@@ -15212,6 +15214,16 @@ const stockNewsReview = createStockNewsReview({
   },
   onEvidence: evidence => {
     engineState.stockNewsEvidence ||= {};
+    const previousEvidence = engineState.stockNewsEvidence[evidence.symbol];
+    if (evidence.materialVersion && evidence.materialVersion !== previousEvidence?.materialVersion) {
+      engineState.pendingNewsReassessment ||= {};
+      engineState.pendingNewsReassessment[evidence.symbol] = {
+        symbol: evidence.symbol, reassessmentPriority: 3,
+        reassessmentEvent: `news:${evidence.checkedAt}`,
+      };
+      const pendingKeys = Object.keys(engineState.pendingNewsReassessment);
+      for (const old of pendingKeys.slice(0, Math.max(0, pendingKeys.length - 120))) delete engineState.pendingNewsReassessment[old];
+    }
     delete engineState.stockNewsEvidence[evidence.symbol];
     engineState.stockNewsEvidence[evidence.symbol] = evidence;
     const keys = Object.keys(engineState.stockNewsEvidence);
@@ -28152,6 +28164,14 @@ function replayBackendStreamEvents(res, since = "") {
 function mergeLiveQuoteIntoSignal(signal = {}) {
   signal = { ...signal, currentRiskPolicyVersion: currentRiskPolicyVersion() };
   const symbol = normalizeSymbol(signal.symbol);
+  if (symbol && !isCrypto(symbol)) {
+    engineState.measuredStockScoreHistory ||= {};
+    signal = retainMeasuredStockScores(signal, { measuredScoreHistory: engineState.measuredStockScoreHistory[symbol] });
+    delete engineState.measuredStockScoreHistory[symbol];
+    engineState.measuredStockScoreHistory[symbol] = signal.measuredScoreHistory;
+    const keys = Object.keys(engineState.measuredStockScoreHistory);
+    for (const old of keys.slice(0, Math.max(0, keys.length - 500))) delete engineState.measuredStockScoreHistory[old];
+  }
   const liveQuote = engineState.liveQuoteCache?.[symbol];
   if (!symbol || !liveQuote?.price || !isFreshLiveQuote(liveQuote)) {
     return normalizeSignalScoreCompleteness(signal);
@@ -31226,7 +31246,14 @@ async function reviewCandidateScores(rows, crypto = false) {
 const earlyCandidateReassessment = createEarlyCandidateReassessment({
   retryMs: 60000,
   minStartIntervalMs: 2500,
-  analyze: async symbols => reviewCandidateScores(await analyzeCandidates(symbols)),
+  analyze: async symbols => {
+    const events = new Map(symbols.map(symbol => [symbol, engineState.pendingNewsReassessment?.[symbol]]));
+    const rows = await reviewCandidateScores(await analyzeCandidates(symbols));
+    for (const row of rows) {
+      if (events.get(row.symbol) && engineState.pendingNewsReassessment?.[row.symbol] === events.get(row.symbol)) delete engineState.pendingNewsReassessment[row.symbol];
+    }
+    return rows;
+  },
   canRun: () => !engineState.running && !activeScanLocks.scanMarket &&
     !buildMemoryGuardSnapshot().shouldPauseHeavyWork &&
     canRefreshStockQuotes({ marketOpen: engineState.marketOpen === true,
@@ -31282,6 +31309,16 @@ function startLiveScheduler() {
   liveSchedulerTimer = setInterval(() => {
     void runLiveScheduledTask('refreshBrokerClock', 5000, () => getClock());
     void runLiveScheduledTask('refreshIndependentMarketRegime', 30000, () => refreshIndependentMarketRegime());
+    void runLiveScheduledTask('refreshCandidateNews', 5000, async () => {
+      if (engineState.running || buildMemoryGuardSnapshot().shouldPauseHeavyWork) return;
+      const symbols = [...new Set([...(engineState.lastStockSignals || []).map(row => row.symbol),
+        ...(engineState.liveEarlyMoverSymbols || [])])].filter(symbol => symbol && !isCrypto(symbol) &&
+          Date.now() - Date.parse(engineState.stockNewsEvidence?.[symbol]?.checkedAt || '1970-01-01') >= 60000).slice(0, 120);
+      // Oldest review first; two requests at a time, provider cooldowns intact.
+      symbols.sort((a, b) => Date.parse(engineState.stockNewsEvidence?.[a]?.checkedAt || '1970-01-01') -
+        Date.parse(engineState.stockNewsEvidence?.[b]?.checkedAt || '1970-01-01'));
+      await Promise.all(symbols.slice(0, 2).map(symbol => getNewsRisk(symbol)));
+    });
     void runLiveScheduledTask('refreshIncrementalResearch', 1000, () => incrementalResearch.run([
       ...(engineState.lastStockSignals || []), ...(engineState.lastCryptoSignals || []),
       ...(engineState.topStockSignals || []), ...(engineState.topCryptoSignals || []),
@@ -31289,15 +31326,16 @@ function startLiveScheduler() {
       ...(engineState.topSignals || []), ...(engineState.lastSignals || []),
     ]));
     void runLiveScheduledTask('reassessEarlyCandidates', 1000, () => earlyCandidateReassessment.run([
+      ...Object.values(engineState.pendingNewsReassessment || {}),
       ...(engineState.boundedQuietDiscoveryState?.liveSymbols || []),
       ...(engineState.liveEarlyMoverSymbols || []),
       ...(engineState.incrementalResearchSignals || []).filter(row => !isCrypto(row.symbol) && row.setupRevalidationRequired),
       ...(engineState.lastStockSignals || []).filter(row => needsCandidateResearch(row)),
-    ]));
+    ].map(reassessmentTrigger)));
     void runLiveScheduledTask('reassessCryptoCandidates', 1000, () => cryptoCandidateReassessment.run(
       [...(engineState.incrementalResearchSignals || []).filter(row => isCrypto(row.symbol) && row.setupRevalidationRequired),
         ...(engineState.lastCryptoSignals || [])].map(mergeLiveQuoteIntoSignal)
-        .filter(row => needsCandidateResearch(row))
+        .filter(row => needsCandidateResearch(row)).map(reassessmentTrigger)
     ));
     void runLiveScheduledTask('refreshTradierQuoteStream', 5000,
       () => tradierQuoteStream.refresh(getActiveCandidateQuoteRefreshSymbols(ACTIVE_CANDIDATE_QUOTE_REFRESH_LIMIT, false).filter(s => !isCrypto(s))));

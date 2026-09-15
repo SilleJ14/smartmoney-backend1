@@ -54,12 +54,15 @@ function containsPhrase(text, phrase) {
 function positiveTermApplies(text, term) {
   if (!containsPhrase(text, term)) return false;
   const normalized = normalizeHeadline(text);
+  if (['merger', 'acquisition', 'buyout'].includes(term) &&
+      /\b(rumor|rumors|rumored|rumoured|speculation|unconfirmed|terminated|termination|cancelled|canceled|called off)\b/.test(normalized)) return false;
   const negated = [
     `not ${term}`,
     `no ${term}`,
     `${term} denied`,
     `${term} rejected`,
     `${term} fails`,
+    `${term} failed`,
     `without ${term}`,
   ].some((phrase) => containsPhrase(normalized, phrase));
   return !negated;
