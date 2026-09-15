@@ -2,12 +2,38 @@ import test from "node:test";
 import assert from "node:assert/strict";
 import { calculateNewsCatalyst } from "../scoring/newsCatalyst.js";
 
-test('rumored or terminated deals are not positive merger evidence', () => {
+test('terminated deals are not positive merger evidence', () => {
   const now = Date.now();
-  for (const headline of ['Merger agreement terminated', 'Unconfirmed buyout rumors', 'Acquisition called off']) {
+  for (const headline of ['Merger agreement terminated', 'Acquisition called off']) {
     const result = calculateNewsCatalyst({articles:[{headline, datetime: now / 1000}], dataAvailable:true, now});
     assert.equal(result.positivePoints, 0);
   }
+});
+
+test('favorable business impact is recognized outside the original named catalysts', () => {
+  const now = Date.now();
+  for (const headline of ['Company reports record customer demand', 'Company reduces debt by $100 million',
+    'Board authorizes share repurchase', 'Company reports successful clinical trial results',
+    'Operating margins improve', 'Exports exceed expectations']) {
+    const result = calculateNewsCatalyst({articles:[{headline, datetime:now / 1000}], dataAvailable:true, now});
+    assert.ok(result.positivePoints > 0, headline);
+    assert.ok(result.catalystScore > 50, headline);
+  }
+});
+
+test('favorable wording alone and rising costs do not imply positive business impact', () => {
+  const now = Date.now();
+  for (const headline of ['Company celebrates a wonderful day', 'Company reports record costs',
+    'Customer demand did not improve']) {
+    const result = calculateNewsCatalyst({articles:[{headline, datetime:now / 1000}], dataAvailable:true, now});
+    assert.equal(result.positivePoints, 0, headline);
+  }
+});
+
+test('announcement is not excluded because surrounding text mentions prior rumors', () => {
+  const now = Date.now();
+  const result = calculateNewsCatalyst({articles:[{headline:'Company announces merger agreement after prior rumors', datetime:now / 1000}], dataAvailable:true, now});
+  assert.ok(result.positivePoints > 0);
 });
 
 test("fresh positive news creates catalyst evidence and duplicate headlines count once", () => {

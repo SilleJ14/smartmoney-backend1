@@ -1,3 +1,4 @@
+import { positiveBusinessImpact } from './positiveBusinessImpact.js';
 const clamp = (value) => Math.max(0, Math.min(100, Number(value) || 0));
 
 const POSITIVE_TERMS = Object.freeze({
@@ -55,7 +56,7 @@ function positiveTermApplies(text, term) {
   if (!containsPhrase(text, term)) return false;
   const normalized = normalizeHeadline(text);
   if (['merger', 'acquisition', 'buyout'].includes(term) &&
-      /\b(rumor|rumors|rumored|rumoured|speculation|unconfirmed|terminated|termination|cancelled|canceled|called off)\b/.test(normalized)) return false;
+      /\b(terminated|termination|cancelled|canceled|called off)\b/.test(normalized)) return false;
   const negated = [
     `not ${term}`,
     `no ${term}`,
@@ -176,6 +177,9 @@ export function calculateNewsCatalyst({
     const positiveHits = Object.entries(POSITIVE_TERMS)
       .filter(([term]) => positiveTermApplies(text, term))
       .map(([term, points]) => ({ term, points }));
+    // No double award for wording describing the same named catalyst.
+    const broaderImpact = positiveBusinessImpact(`${article.headline}. ${article.summary}`);
+    if (positiveHits.length === 0 && broaderImpact) positiveHits.push(broaderImpact);
     const dangerHits = Object.entries(DANGER_TERMS)
       .filter(([term]) => dangerTermApplies(text, term))
       .map(([term, points]) => ({ term, points }));
