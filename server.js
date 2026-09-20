@@ -13872,7 +13872,7 @@ const preTradeRiskGuard = {
         brokerEvidenceStale: account?.stale === true || positions?.stale === true,
         marketClockAvailable: cryptoAsset || clock?.available === true,
         pendingOrderNotional,
-        lossBudgetSizing: options.automated !== false ? calculateLossBudgetSizing({
+        lossBudgetSizing: purchase.requireStrategy ? calculateLossBudgetSizing({
           account, positions: managedPositions, config: CONFIG, signal: sizingSignal,
           dailyStartEquity: engineState.dailyStartEquity || account.last_equity, pendingNotional: pendingOrderNotional,
         }) : null,
@@ -13934,7 +13934,7 @@ const preTradeRiskGuard = {
         maxExposurePercent: CONFIG.maxBotExposurePercent, maxOpenTrades: CONFIG.maxOpenTrades,
         maxAccountExposurePercent: CONFIG.maxAccountExposurePercent ?? 100,
         minStockPrice: CONFIG.minStockPrice,
-        lossBudgetSizing: options.automated !== false ? calculateLossBudgetSizing({
+        lossBudgetSizing: purchase.requireStrategy ? calculateLossBudgetSizing({
           account, positions: managedPositions, config: CONFIG, signal: sizingSignal,
           dailyStartEquity: engineState.dailyStartEquity || account.last_equity, pendingNotional: pendingOrderNotional,
         }) : null,
@@ -31334,7 +31334,7 @@ const cryptoCandidateReassessment = createEarlyCandidateReassessment({
   capacity: 80, batchSize: 2, retryMs: 60000,
   minStartIntervalMs: 2500,
   acceptsSymbol: symbol => /^[A-Z0-9]{1,15}\/USD$/.test(symbol),
-  canRun: () => !engineState.running && !buildMemoryGuardSnapshot().shouldPauseHeavyWork,
+  canRun: () => !engineState.running && !activeScanLocks.scanMarket && !buildMemoryGuardSnapshot().shouldPauseHeavyWork,
   analyze: async symbols => reviewCandidateScores(await analyzeCryptoCandidates(symbols), true),
   trace: event => candidateTraceStore.record({ ...event, assetClass: 'crypto' }),
   publish: rows => {
@@ -31346,7 +31346,12 @@ const cryptoCandidateReassessment = createEarlyCandidateReassessment({
   },
 });
 const incrementalResearch = createIncrementalResearch({
-  canRun: () => !buildMemoryGuardSnapshot().shouldPauseHeavyWork,
+  // Keep quote-only research from allocating another decision batch while a
+  // full scan or asynchronous enrichment already owns the research budget.
+  // Quote streams, broker reconciliation and position protection remain live.
+  canRun: () => !engineState.running && !activeScanLocks.scanMarket &&
+    !earlyCandidateReassessment.getStatus().running && !cryptoCandidateReassessment.getStatus().running &&
+    !buildMemoryGuardSnapshot().shouldPauseHeavyWork,
   accepts: row => isCrypto(row.symbol) || canRefreshStockQuotes({ marketOpen: engineState.marketOpen === true,
     marketSession: getMarketSession({ is_open: engineState.marketOpen === true }) }),
   review: row => {
@@ -32756,6 +32761,7 @@ registerBrokerDiagnosticRoutes(app, {
 });
 
 registerCandidateTraceRoutes(app, { requireAdmin, store: candidateTraceStore,
+  getOutcomes: () => engineState.tradeJournalHistory || [],
   getCandidates: () => [...(engineState.lastStockSignals || []), ...(engineState.lastCryptoSignals || [])] });
 registerQuoteDiagnosticRoutes(app, {
   requireAdmin,

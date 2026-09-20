@@ -1,20 +1,29 @@
+import { createGzip } from 'node:zlib';
 // Preserve the JSON contract while bounding serialization to one array item.
 // Await slow clients instead of accumulating a second in-memory response.
-export async function sendChunkedJson(res, payload) {
+export async function sendChunkedJson(res, payload, { gzip = false } = {}) {
   if (typeof res.write !== 'function') return res.json(payload);
   res.setHeader('Content-Type', 'application/json; charset=utf-8');
+  const output = gzip ? createGzip({ level: 1 }) : res;
+  if (gzip) {
+    res.setHeader('Content-Encoding', 'gzip');
+    res.setHeader('Vary', 'Accept-Encoding');
+    output.on('error', () => res.destroy());
+    res.once('close', () => output.destroy());
+    output.pipe(res);
+  }
   async function write(chunk) {
-    if (res.destroyed) throw new Error('Response closed');
-    if (res.write(chunk)) return;
+    if (res.destroyed || output.destroyed) throw new Error('Response closed');
+    if (output.write(chunk)) return;
     await new Promise((resolve, reject) => {
       const cleanup = () => {
-        res.removeListener('drain', drain); res.removeListener('close', close); res.removeListener('error', error);
+        output.removeListener('drain', drain); output.removeListener('close', close); output.removeListener('error', error);
       };
       const drain = () => { cleanup(); resolve(); };
       const close = () => { cleanup(); reject(new Error('Response closed')); };
       const error = err => { cleanup(); reject(err); };
-      res.once('drain', drain); res.once('close', close); res.once('error', error);
-      if (res.destroyed) close();
+      output.once('drain', drain); output.once('close', close); output.once('error', error);
+      if (res.destroyed || output.destroyed) close();
     });
   }
   await write('{');
@@ -30,5 +39,5 @@ export async function sendChunkedJson(res, payload) {
     }
     await write(']');
   }
-  await write('}'); res.end();
+  await write('}'); output.end();
 }

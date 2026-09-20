@@ -90,9 +90,14 @@ test('research superseded by a full scan is requeued, not locked out for a minut
 const tree = parse(source, { ecmaVersion: 'latest', sourceType: 'module' });
 const declaration = tree.body.find(n => n.type === 'VariableDeclaration' && n.declarations.some(d => d.id.name === 'incrementalResearch'));
 function actualWorker({ invalidSetup = false } = {}) {
-  const engineState = { running: true, marketOpen: true };
+  const engineState = { running: false, marketOpen: true };
+  const activeScanLocks = { scanMarket: false };
+  const research = { stock: false, crypto: false };
   let centralCalls = 0, pushes = 0;
-  const context = vm.createContext({ engineState, createIncrementalResearch: options => createIncrementalResearch({ ...options, now: () => start }),
+  const context = vm.createContext({ engineState, activeScanLocks,
+    earlyCandidateReassessment: { getStatus: () => ({ running: research.stock }) },
+    cryptoCandidateReassessment: { getStatus: () => ({ running: research.crypto }) },
+    createIncrementalResearch: options => createIncrementalResearch({ ...options, now: () => start }),
     incrementalResearchForState: state => incrementalResearchForState(state, start), canPublishDecision,
     buildMemoryGuardSnapshot: () => ({ shouldPauseHeavyWork: false }), isCrypto: s => s.includes('/'),
     canRefreshStockQuotes: () => true, getMarketSession: () => 'regular', normalizeSymbol: s => s,
@@ -101,16 +106,31 @@ function actualWorker({ invalidSetup = false } = {}) {
     installCentralDecision: row => { row.masterFinalScore = 65; }, normalizeSignalScoreCompleteness: row => row,
     pushLiveSignalUpdate: () => { pushes++; }, buildLiveSignalPushPayload: () => ({}) });
   vm.runInContext(source.slice(declaration.start, declaration.end) + '; globalThis.worker = incrementalResearch;', context);
-  return { context, engineState, calls: () => centralCalls, pushes: () => pushes };
+  return { context, engineState, activeScanLocks, research, calls: () => centralCalls, pushes: () => pushes };
 }
 
-test('actual server warm path runs during full scan, publishes both classes, and never touches full-scan arrays', () => {
+test('actual server warm path defers during full scan then publishes both classes without losing candidates', () => {
   const { context, engineState, calls, pushes } = actualWorker();
+  engineState.running = true;
+  assert.equal(context.worker.run([candidate('AAPL'), candidate('BTC/USD')]).skipped, true);
+  assert.equal(calls(), 0);
+  engineState.running = false;
   assert.equal(context.worker.run([candidate('AAPL'), candidate('BTC/USD')]).reviewed, 2);
   assert.equal(calls(), 2); assert.equal(pushes(), 1);
   assert.equal(engineState.incrementalResearchSignals.length, 2);
   assert.equal(engineState.lastStockSignals, undefined); assert.equal(engineState.lastCryptoSignals, undefined);
   assert.ok(engineState.incrementalResearchSignals.every(r => r.masterFinalScore === 65 && r.approved === false));
+});
+
+test('actual warm path waits for enrichment or a scan lock without consuming candidates', () => {
+  const { context, activeScanLocks, research, calls } = actualWorker();
+  for (const [owner, key] of [[activeScanLocks, 'scanMarket'], [research, 'stock'], [research, 'crypto']]) {
+    owner[key] = true;
+    assert.equal(context.worker.run([candidate('BTC/USD')]).skipped, true);
+    assert.equal(calls(), 0);
+    owner[key] = false;
+  }
+  assert.equal(context.worker.run([candidate('BTC/USD')]).reviewed, 1);
 });
 
 test('actual quick path does not reset an invalidated entry setup through central install', () => {

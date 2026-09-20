@@ -8,7 +8,7 @@ import { fileURLToPath } from 'node:url';
 
 const soakMs = Math.max(0, Math.min(600000, Number(process.env.SMARTMONEY_SOAK_MS) || 0));
 const heapMb = Number(process.env.SMARTMONEY_FIXTURE_HEAP_MB) || 192;
-const rssLimitMb = Number(process.env.SMARTMONEY_FIXTURE_RSS_LIMIT_MB) || 1024;
+const rssLimitMb = Number(process.env.SMARTMONEY_FIXTURE_RSS_LIMIT_MB) || 400;
 const scenarios = process.env.SMARTMONEY_FIXTURE_POLYGON ? [process.env.SMARTMONEY_FIXTURE_POLYGON]
   : ['', 'healthy', 'stream-burst', 'oversized', 'stalled', 'unavailable', 'malformed', 'early-analysis', 'afterhours-analysis', 'crypto-setup', 'autopilot', 'candidate-recovery'];
 for (const polygonFault of scenarios) {
@@ -28,7 +28,7 @@ test(`actual server boots, serves stocks and crypto, and completes a scan withou
   }));
   // No inherited provider credentials, .env or production persistence directory.
   const env = { PATH: process.env.PATH, SystemRoot: process.env.SystemRoot, TEMP: directory, TMP: directory,
-    PORT: '0', DATA_DIR: directory, ADMIN_API_TOKEN: token, AUTO_TRADING_ENABLED: 'false',
+    PORT: '0', DATA_DIR: directory, ADMIN_API_TOKEN: token, AUTO_TRADING_ENABLED: 'false', RENDER_MEMORY_LIMIT_MB: '512',
     REAL_CASH_TRADING_UNLOCKED: 'false', TRADING_MODE: 'smart', RUN_STARTUP_ENGINE_SCAN: 'true',
     ALPACA_LIVE_KEY: 'fixture', ALPACA_LIVE_SECRET: 'fixture', FINNHUB_API_KEY: 'fixture',
     ENABLE_POLYGON: polygonFault ? 'true' : 'false', POLYGON_API_KEY: 'fixture', SMARTMONEY_FIXTURE_POLYGON: polygonFault,
@@ -46,7 +46,7 @@ test(`actual server boots, serves stocks and crypto, and completes a scan withou
   let maxRequestMs = 0, deliveredBurstTrades = 0;
   const profileTotals = new Map();
   const child = fork(fileURLToPath(new URL('../scripts/isolated-server-fixture.mjs', import.meta.url)), [], {
-    cwd: directory, env, execArgv: [`--max-old-space-size=${heapMb}`], silent: true,
+    cwd: directory, env, execArgv: [`--max-old-space-size=${heapMb}`, '--max-semi-space-size=16'], silent: true,
   });
   child.stdout.on('data', d => { log = (log + d).slice(-16000); });
   child.stderr.on('data', d => { log = (log + d).slice(-16000); });
@@ -126,7 +126,7 @@ test(`actual server boots, serves stocks and crypto, and completes a scan withou
     while ((!metrics.rss || (polygonFault && !metrics.polygonReads)) && Date.now() < metricsDeadline) {
       await new Promise(resolve => setTimeout(resolve, 50));
     }
-    assert.ok(peakRss < 1024 * 1024 * 1024, 'isolated server exceeded 1GB RSS');
+    assert.ok(peakRss < rssLimitMb * 1024 * 1024, `isolated server exceeded ${rssLimitMb} MB RSS`);
     assert.equal(metrics.writes || 0, 0);
     if (polygonFault) assert.ok(metrics.polygonReads > 0, 'fixture did not exercise Polygon snapshot path');
     const snapshot = await read('/frontend/snapshot');
@@ -269,6 +269,7 @@ test(`actual server boots, serves stocks and crypto, and completes a scan withou
     let lastProgressAt = Date.now();
     while (Date.now() < soakDeadline) {
       const sample = await read('/health');
+      assert.ok(sample.server.memory.limitMb <= 512, 'fixture guard must respect the real 512 MB budget');
       latestCycleAt = sample.engine.lastSuccessfulCycleAt;
       outcomeStorage = sample.outcomeStorage;
       assert.equal(sample.engine.lastError, null, log);

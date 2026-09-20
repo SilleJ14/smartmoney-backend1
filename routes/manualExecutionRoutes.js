@@ -53,7 +53,13 @@ export function registerManualExecutionRoutes(app, dependencies) {
         throw new Error("Invalid share amount");
       }
       let referencePrice;
-      if (mode !== "shares" && !fractionable) referencePrice = Number((await getStockQuote(cleanSymbol)).current || 0);
+      if (mode !== "shares" && (!fractionable || holdCategory === "multi_day")) {
+        // Whole-share conversion needs a verified reference even when the asset
+        // supports fractional intraday orders. The final guard verifies again.
+        const resolution = await getVerifiedStockQuote?.(cleanSymbol);
+        if (resolution?.quoteReady !== true) throw new Error('A verified live stock quote is not available');
+        referencePrice = Number(resolution.quote?.current || resolution.quote?.price || 0);
+      }
       const order = await manualStockBuy({ symbol: cleanSymbol, dollars: amount, shares: shareAmount,
         buyMode: mode, fractionable, referencePrice,
         holdCategory: holdCategory === "multi_day" ? "multi_day" : "intraday",

@@ -1,4 +1,5 @@
 import { normalizeDiscoveryBars } from "../scoring/earlyDiscovery.js";
+import { createRequestCoordinator } from './requestCoordinator.js';
 
 function providerTimestamp(value) {
   if (value === null || value === undefined || value === "") return null;
@@ -46,6 +47,7 @@ function historicalBarsPath(symbol, timeframe, limit, now) {
 }
 
 export function createAlpacaCryptoMarketData({ dataRequest, normalizeSymbol, now = () => new Date() }) {
+  dataRequest = createRequestCoordinator(dataRequest, { now: () => now().getTime() });
   function findMarketEvent(collection = {}, symbol = "") {
     const cleanSymbol = normalizeSymbol(symbol);
     return collection?.[cleanSymbol] || collection?.[cleanSymbol.replace("/", "")] || null;
@@ -93,7 +95,7 @@ export function createAlpacaCryptoMarketData({ dataRequest, normalizeSymbol, now
       (Array.isArray(symbols) ? symbols : [symbols])
         .map(normalizeSymbol)
         .filter(Boolean)
-    )];
+    )].sort();
     if (cleanSymbols.length === 0) return [];
     try {
       const symbolsParam = encodeURIComponent(cleanSymbols.join(","));
@@ -132,7 +134,8 @@ export function createAlpacaCryptoMarketData({ dataRequest, normalizeSymbol, now
       }
       return quotes;
     } catch (error) {
-      throw new Error(`Alpaca crypto quote batch failed: ${error.message}`);
+      throw Object.assign(new Error(`Alpaca crypto quote batch failed: ${error.message}`, { cause: error }),
+        { status: error.status, retryAfterMs: error.retryAfterMs });
     }
   }
 
@@ -144,7 +147,7 @@ export function createAlpacaCryptoMarketData({ dataRequest, normalizeSymbol, now
   }
 
   async function getLatestOrderbooks(symbols = []) {
-    const clean = [...new Set(symbols.map(normalizeSymbol).filter(s => /^[A-Z0-9]+\/USD$/.test(s)))].slice(0, 120);
+    const clean = [...new Set(symbols.map(normalizeSymbol).filter(s => /^[A-Z0-9]+\/USD$/.test(s)))].sort().slice(0, 120);
     const results = [];
     for (let i = 0; i < clean.length; i += 20) {
       const batch = clean.slice(i, i + 20);

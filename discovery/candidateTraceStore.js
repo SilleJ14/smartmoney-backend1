@@ -31,6 +31,7 @@ export function compactCandidateTrace(event = {}) {
     strategyVersion: text(event.decisionProvenance?.strategyVersion,64),
     evidencePolicyVersion: text(event.decisionProvenance?.evidencePolicyVersion,64),
     policyBundleId: text(event.decisionProvenance?.policyBundleId,64),
+    releaseCommit: text(event.decisionProvenance?.releaseCommit,40),
     configurationSnapshotId: text(event.decisionProvenance?.configurationSnapshot?.id,64),
     // Config was allowlisted at snapshot creation; bound and re-filter on this boundary too.
     configurationValues: Object.fromEntries(Object.entries(event.decisionProvenance?.configurationSnapshot?.values || {})

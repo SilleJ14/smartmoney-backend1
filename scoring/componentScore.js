@@ -6,7 +6,7 @@ import {
 } from "./cryptoScoring.js";
 import { isLiveQuoteSource } from "../live/liveQuoteCache.js";
 import { normalizeCandidateQuote } from '../market-data/normalizeCandidateQuote.js';
-import { assessCryptoSetup, cryptoSetupGate } from './cryptoSetup.js';
+import { cryptoSetupGate } from './cryptoSetup.js';
 import { evaluateCryptoTradePlan } from './cryptoTradePlan.js';
 import { getApprovedTradeAmount } from './approvedSizing.js';
 import { evidencePolicy, researchExecutionIssues } from '../risk/evidencePolicy.js';
@@ -158,8 +158,10 @@ export function buildCryptoDecisionScore(
   const earlyDiscovery = resolveComponent([
     { value: signal.cryptoDiscoveryScorecard?.score, source: "cryptoDiscoveryScorecard.score" },
   ]);
-  const setup = assessCryptoSetup(signal, { now });
   const setupGate = cryptoSetupGate(signal, { now });
+  // The gate already measured this exact setup at this exact timestamp. Reuse
+  // it rather than normalizing/hashing the same bar history twice per score.
+  const setup = setupGate.setup;
   const continuationEntry = signal.scoringModelVersion === 'SMARTMONEY_CRYPTO_DECISION_V4' && setup.available && setup.eligible;
   const discovery = continuationEntry
     ? { value: setup.score, available: true, source: 'measured_crypto_continuation_setup' } : earlyDiscovery;
@@ -419,8 +421,8 @@ export function evaluateCryptoTradeCandidate(
     Number(now) - decisionTime <= 15 * 60000;
   const centralAction = String(signal.centralAutonomousAction || signal.centralAutonomousDecisionCore?.action || "").toUpperCase();
   const reasons = [
-    ...researchExecutionIssues(signal,evidencePolicy('crypto','order','automatic')),
-    ...cryptoSetupGate(signal, { now }).reasons,
+    ...researchExecutionIssues(signal,evidencePolicy('crypto','order','automatic'), now),
+    ...evidence.setupGate.reasons,
     ...(signal.scoringModelVersion === 'SMARTMONEY_CRYPTO_DECISION_V4' && getApprovedTradeAmount(signal) > 0
       ? evaluateCryptoTradePlan(signal, { now, notional: getApprovedTradeAmount(signal) }).reasons : []),
     ...(signal.blockBuying === true ? ['BUYING_BLOCKED'] : []),

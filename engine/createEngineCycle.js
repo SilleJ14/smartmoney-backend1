@@ -12,6 +12,15 @@ import { outstandingOrderNotional } from '../risk/orderRiskReservations.js';
 import { availableBuyingPower } from '../risk/brokerEvidence.js';
 import { refreshCycleSubscriptions } from './refreshCycleSubscriptions.js';
 import { refreshCandidateQuotes } from '../market-data/refreshCandidateQuotes.js';
+const yieldToIO = () => new Promise(resolve => setImmediate(resolve));
+async function normalizeCollectionCooperatively(signals) {
+  const result = [];
+  for (let index = 0; index < signals.length; index += 4) {
+    result.push(...normalizeSignalScoreCollection(signals.slice(index, index + 4)));
+    await yieldToIO();
+  }
+  return result;
+}
 
 export function createEngineCycle(dependencies) {
   const {
@@ -2599,7 +2608,7 @@ export function createEngineCycle(dependencies) {
           signal.backendApproved = true;
         }
       }
-      stockSignals = normalizeSignalScoreCollection(stockSignals);
+      stockSignals = await normalizeCollectionCooperatively(stockSignals);
       for (const signal of cryptoSignals) {
         const finalEligibility = evaluateCryptoTradeCandidate(signal);
         signal.executionEligibility = finalEligibility;
@@ -2633,7 +2642,7 @@ export function createEngineCycle(dependencies) {
         if (amount <= 0) Object.assign(signal, { approved: false, backendApproved: false,
           autoTradeApproved: false, qualifiedToBuy: false, buyableNow: false });
       }
-      cryptoSignals = normalizeSignalScoreCollection(cryptoSignals);
+      cryptoSignals = await normalizeCollectionCooperatively(cryptoSignals);
       signals = [...stockSignals, ...cryptoSignals];
       const finalFullInstitutionalAiBrain =
         calculateFullInstitutionalAiBrain(signals);

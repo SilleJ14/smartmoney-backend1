@@ -9,6 +9,7 @@ import { calculateCryptoEarlyDiscoveryScore } from "../scoring/earlyDiscovery.js
 import { assessCryptoSetup, assessBtcContext, cryptoSetupGate } from '../scoring/cryptoSetup.js';
 import { recentBarVolumeEvidence } from '../market-data/volumeEvidence.js';
 import { normalizeCryptoVolume } from '../market-data/normalizeCryptoVolume.js';
+import { immutableBarHistory } from '../market-data/barSnapshot.js';
 
 export async function mapWithConcurrency(items = [], concurrency = 4, worker) {
   const values = Array.isArray(items) ? items : [];
@@ -936,7 +937,7 @@ export function createCryptoMarketScanner(dependencies) {
           newsRisk: newsCatalyst?.riskDetected === true,
           dailyBarsFound: Array.isArray(dailyBars) ? dailyBars.length : 0,
           barsFound: bars.length,
-          chartBars: cryptoChartBars,
+          chartBars: immutableBarHistory(cryptoChartBars),
           researchEvidenceAt: new Date().toISOString(),
           sparkline: cryptoSparkline,
           chartSource: "alpaca_crypto_bars",

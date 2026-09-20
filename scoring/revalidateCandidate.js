@@ -5,10 +5,12 @@ import { getStockExecutionEvidenceFreshness } from '../market-data/stockQuoteEvi
 import { normalizeCandidateQuote } from '../market-data/normalizeCandidateQuote.js';
 import { hasDecisionAnalysis } from './decisionAnalysis.js';
 import { retainMeasuredStockScores } from './measuredScoreHistory.js';
+import { immutableBarHistory } from '../market-data/barSnapshot.js';
 
 // Shared by display and execution: quote changes cannot issue new permission.
 export function revalidateCandidate(previous, incoming, { now = Date.now() } = {}) {
   const next = { ...normalizeCandidateQuote(incoming) };
+  if (Array.isArray(next.chartBars) && !Object.isFrozen(next.chartBars)) next.chartBars = immutableBarHistory(next.chartBars);
   const crypto = isCryptoSignal(previous);
   if (!crypto) {
     const measured = retainMeasuredStockScores({ ...previous }, {}, now);
@@ -32,7 +34,13 @@ export function revalidateCandidate(previous, incoming, { now = Date.now() } = {
   }
   if (!previous.centralAutonomousDecisionCore) return next;
   const build = crypto ? s => buildCryptoDecisionScore(s, { now }) : buildStockDecisionScore;
-  const before = build(previous), evidence = build(next);
+  const existingBasis = previous.quoteRevalidationBasis?.version === version
+    ? previous.quoteRevalidationBasis : null;
+  // A pinned basis belongs to this decision version. Rebuilding the previous
+  // score here was discarded whenever that basis existed, allocating another
+  // complete set of bars/setup evidence on every quote and screen refresh.
+  const before = existingBasis ? null : build(previous);
+  const evidence = build(next);
   if (crypto) {
     const entry = evidence.componentsByName?.execution;
     const entryAvailable = entry?.available === true && evidence.quoteFreshness?.fresh === true && evidence.spreadFreshness?.fresh === true;
@@ -54,8 +62,8 @@ export function revalidateCandidate(previous, incoming, { now = Date.now() } = {
       entry: priorEntryAvailable ? (crypto ? previous.cryptoEntryScore : previous.entryQualityScore) : null,
       final: priorFinal, continuation: previous.multiDayScoreAvailable === true ? previous.multiDayContinuationScore : null };
   } else next.lastMeasuredAssessment = previous.lastMeasuredAssessment || null;
-  const basis = previous.quoteRevalidationBasis && previous.quoteRevalidationBasis.version === version
-    ? previous.quoteRevalidationBasis
+  const basis = existingBasis
+    ? existingBasis
     : { version, final: priorFinal, component: before.score };
   next.quoteRevalidationBasis = basis;
   // A temporary outage must not permanently latch F to null. Rebuild measured

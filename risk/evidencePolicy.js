@@ -1,4 +1,5 @@
 // Policy declarations are shared by authorization and diagnostic consumers.
+import { assessSnapshotTimes, SNAPSHOT_TIME_POLICY_VERSION, SNAPSHOT_TIME_RULES } from './snapshotTimePolicy.js';
 // Research thresholds remain owned by the existing scorers (no new denominator).
 export const EVIDENCE_POLICY_VERSION = 'EVIDENCE_V1';
 const roles = Object.freeze({ REQUIRED: 'REQUIRED', OPTIONAL: 'OPTIONAL', AUTHORIZATION: 'AUTHORIZATION_ONLY', NONE: 'NOT_APPLICABLE' });
@@ -33,6 +34,7 @@ export const EVIDENCE_POLICIES = freeze(Object.fromEntries(assets.flatMap(asset 
     // generic technical/history skew is silently added to the scoring baseline.
     executionTime: { maxAgeMs: 5000, maxFutureMs: 5000, maxPriceSpreadSkewMs: 10000 },
     researchTime: { maxCompletedBarIntervalsBehindPrice: 2, allowedIntervalsMs: [60000,300000,900000] },
+    temporalEvidence: SNAPSHOT_TIME_RULES,
     dependencies: { technicals: ['validatedBarSnapshotId'] },
   }];
 })))));
@@ -60,17 +62,19 @@ export function executionEvidenceIssues({ priceAt, spreadAt, now = Date.now(), p
   return reasons;
 }
 
-export function researchExecutionIssues(signal, policy) {
+export function researchExecutionIssues(signal, policy, now = Date.now()) {
   if(!policy.requireStrategy)return [];
   // Rollout compatibility: historical decisions retain their existing gates.
   // All new central decisions carry EVIDENCE_V1 and must provide this provenance.
   if(signal.decisionProvenance?.evidencePolicyVersion!==EVIDENCE_POLICY_VERSION)return [];
   const crypto=policy.assetClass==='crypto';
+  const temporal = signal.decisionProvenance?.temporalPolicyVersion === SNAPSHOT_TIME_POLICY_VERSION
+    ? assessSnapshotTimes(signal, { crypto, now }).blockers : [];
   const priceAt=Date.parse(signal.liveQuoteUpdatedAt || '');
   const interval=crypto ? Number(signal.cryptoSetup?.timeframeMinutes)*60000 : Number(signal.technicals?.intervalMs);
   const last=Date.parse(crypto ? signal.cryptoSetup?.barUpdatedAt || '' : signal.technicals?.lastBarAt || '');
-  if(!Number.isFinite(priceAt)||!Number.isFinite(last)||!policy.researchTime.allowedIntervalsMs.includes(interval))return ['TECHNICAL_EXECUTION_TIME_UNAVAILABLE'];
+  if(!Number.isFinite(priceAt)||!Number.isFinite(last)||!policy.researchTime.allowedIntervalsMs.includes(interval))return [...temporal, 'TECHNICAL_EXECUTION_TIME_UNAVAILABLE'];
   const completedAt=crypto ? last : last+interval;
-  if(completedAt>priceAt+policy.executionTime.maxFutureMs)return ['TECHNICAL_EVIDENCE_AFTER_PRICE'];
-  return priceAt-completedAt>interval*policy.researchTime.maxCompletedBarIntervalsBehindPrice ? ['PRICE_TECHNICAL_SKEW_EXCEEDED'] : [];
+  if(completedAt>priceAt+policy.executionTime.maxFutureMs)return [...temporal, 'TECHNICAL_EVIDENCE_AFTER_PRICE'];
+  return priceAt-completedAt>interval*policy.researchTime.maxCompletedBarIntervalsBehindPrice ? [...temporal, 'PRICE_TECHNICAL_SKEW_EXCEEDED'] : temporal;
 }

@@ -2,6 +2,8 @@ import { createHash } from 'node:crypto';
 import { EVIDENCE_POLICY_VERSION } from '../risk/evidencePolicy.js';
 import { policyManifest } from './policyBundle.js';
 import { barSnapshot } from '../market-data/barSnapshot.js';
+import { assessSnapshotTimes, SNAPSHOT_TIME_POLICY_VERSION } from '../risk/snapshotTimePolicy.js';
+import { isCryptoSignal } from './canonicalSignalRank.js';
 
 export const SCORING_POLICY_VERSION = 'BASELINE_2026_09_19_V1';
 export const STRATEGY_VERSION = 'EXISTING_STRATEGY_2026_09_19_V1';
@@ -45,6 +47,8 @@ export function createDecisionSnapshot(signal, config = {}, now = Date.now()) {
     }
   }
   copy.evidenceCoherence = { issues, status: issues.length ? 'INCOHERENT' : 'NO_KNOWN_DEPENDENCY_CONFLICT' };
+  copy.snapshotTemporalEvidence = assessSnapshotTimes(copy, { now,
+    crypto: isCryptoSignal(copy) });
   const input = freeze(copy);
   const configuration = configurationSnapshot(config);
   // Hash exact inputs, retaining the input only for the duration of evaluation.
@@ -53,7 +57,9 @@ export function createDecisionSnapshot(signal, config = {}, now = Date.now()) {
   return { input, provenance: freeze({ evidenceSnapshotId, configurationSnapshot: configuration,
     scoringPolicyVersion: SCORING_POLICY_VERSION, strategyVersion: STRATEGY_VERSION,
     evidencePolicyVersion: EVIDENCE_POLICY_VERSION, assessmentStartedAt: new Date(now).toISOString(),
-    policyBundleId: policyManifest.id,
+    policyBundleId: policyManifest.id, releaseCommit: policyManifest.releaseCommit,
+    temporalPolicyVersion: SNAPSHOT_TIME_POLICY_VERSION,
+    temporalEvidence: input.snapshotTemporalEvidence,
     evidenceTimes: { price: signal.liveQuoteUpdatedAt ?? null, spread: signal.spreadUpdatedAt ?? null,
       news: signal.confirmations?.newsReviewedAt ?? signal.newsCatalyst?.reviewedAt ?? signal.newsRiskCheckedAt ?? null,
       fundamentals: signal.fundamentalValidation?.asOf ?? null },

@@ -62,6 +62,9 @@ export function createAlpacaClient({
         )
       );
       error.status = response.status;
+      const retryAfter = response.headers?.get?.('retry-after');
+      if (retryAfter) error.retryAfterMs = /^\d+(\.\d+)?$/.test(retryAfter)
+        ? Number(retryAfter) * 1000 : Math.max(0, Date.parse(retryAfter) - Date.now());
       throw error;
     }
 
@@ -89,6 +92,9 @@ export function createAlpacaClient({
         )
       );
       error.status = response.status;
+      const retryAfter = response.headers?.get?.('retry-after');
+      if (retryAfter) error.retryAfterMs = /^\d+(\.\d+)?$/.test(retryAfter)
+        ? Number(retryAfter) * 1000 : Math.max(0, Date.parse(retryAfter) - Date.now());
       throw error;
     }
 

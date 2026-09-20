@@ -4,7 +4,7 @@
   "main": "server.js",
   "type": "module",
   "scripts": {
-    "start": "node --max-old-space-size=192 server.js",
+    "start": "node --max-old-space-size=192 --max-semi-space-size=16 server.js",
     "dev": "node server.js",
     "test": "node --test",
     "test:release": "node --test --test-concurrency=1",

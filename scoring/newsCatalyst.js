@@ -230,6 +230,12 @@ export function calculateNewsCatalyst({
     recentArticleCount: recent.length,
     undatedArticleCount: deduplicated.filter((article) => article.datetime === null).length,
     relevantArticleCount: relevantEvidence.length,
+    // Retain the actual publication window used by this assessment. Never use
+    // the assessment/receipt clock as a substitute for article publication.
+    publicationWindow: {
+      oldestAt: relevantEvidence.length ? new Date(Math.min(...relevantEvidence.map(item => item.datetime))).toISOString() : null,
+      newestAt: relevantEvidence.length ? new Date(Math.max(...relevantEvidence.map(item => item.datetime))).toISOString() : null,
+    },
     newestAgeHours: evidence.length > 0
       ? Math.min(...evidence.map((item) => item.ageHours ?? maxAgeHours))
       : null,

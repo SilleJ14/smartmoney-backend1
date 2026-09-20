@@ -358,7 +358,7 @@ export function evaluateStockTradeCandidate(
     signal.globalRiskOffDefense?.shouldBlock === true ||
     signal.shouldWaitForPullback === true;
   const reasons = [
-    ...(requireCentralDecision ? researchExecutionIssues(signal,evidencePolicy('stock','order','automatic')) : []),
+    ...(requireCentralDecision ? researchExecutionIssues(signal,evidencePolicy('stock','order','automatic'), now) : []),
     ...(!entryApproved ? ["ENTRY_NOT_APPROVED"] : []),
     ...(entryScore < STOCK_EXECUTION_THRESHOLDS.entryScore ? ["ENTRY_SCORE_BELOW_75"] : []),
     ...(entryCoverage < STOCK_EXECUTION_THRESHOLDS.entryCoverage ? ["ENTRY_COVERAGE_BELOW_80_PERCENT"] : []),

@@ -109,12 +109,18 @@ export function registerFrontendRoutes(app, dependencies) {
 
   app.get("/frontend/signals", requireAdmin, async (req, res) => {
     try {
-      const signals = collectSignals(
+      const candidates = collectSignals(
         getState(),
         null,
         normalizeSymbol,
         true
-      ).map(mergeLiveQuote).filter(signal => candidateFeedDecision(signal, getConfig()).visible);
+      );
+      const signals = [];
+      for (let index = 0; index < candidates.length; index++) {
+        const signal = mergeLiveQuote(candidates[index]);
+        if (candidateFeedDecision(signal, getConfig()).visible) signals.push(signal);
+        if (index % 4 === 3) await new Promise(resolve => setImmediate(resolve));
+      }
       const approvedSignals = signals
         .filter(hasExplicitTradeApproval)
         .sort(compareCanonicalSignals);
@@ -135,7 +141,7 @@ export function registerFrontendRoutes(app, dependencies) {
         signals: displaySignals,
         approvedSignals: approvedSignals.slice(0, displayLimit),
         watchSignals,
-      });
+      }, { gzip: req.acceptsEncodings?.('gzip') === 'gzip' });
     } catch (err) {
       console.error("frontend signals error", err);
       if (res.headersSent) { res.destroy(); return; }
