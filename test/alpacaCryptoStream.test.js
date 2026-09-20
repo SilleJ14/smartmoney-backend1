@@ -41,6 +41,7 @@ test('symbol limit rejection reduces the next batch without dropping REST covera
   tick(); assert.equal(opened, 1);
   now += 5000; tick(); auth();
   assert.equal(ws.sent[1].quotes.length, 2);
+  assert.deepEqual(stream.getStatus().subscribedSymbols, ['BTC/USD', 'ETH/USD']);
   assert.equal(stream.getStatus().restOnlySymbolCount, 2);
   assert.equal(stream.getStatus().errorCode, null);
   // A later transport reconnect retains the learned limit.

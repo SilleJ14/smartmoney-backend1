@@ -119,12 +119,17 @@ export function mergeLiveQuoteEvidence(
   incoming = {},
   { price = 0, quoteUpdatedAt = null, quoteSource = "live_stream" } = {}
 ) {
+  const incomingSource = String(incoming.liveQuoteSource || incoming.source || quoteSource || "").toLowerCase();
+  const incomingIsTradeOnly = incoming.eventType === "trade" || /(?:ws_trade|latest_trade)$/.test(incomingSource);
   const incomingBid = Number(incoming.bid || incoming.bp || 0);
   const incomingAsk = Number(incoming.ask || incoming.ap || 0);
-  const incomingHasSpread = incoming.spreadAvailable !== false && incomingBid > 0 && incomingAsk >= incomingBid;
+  const incomingHasSpread = !incomingIsTradeOnly
+    && incoming.spreadAvailable !== false
+    && incomingBid > 0
+    && incomingAsk >= incomingBid;
   const previousSpreadAt = parsedTimestamp(getSpreadTimestamp(previous));
   const incomingEvidenceAt = parsedTimestamp(getSpreadTimestamp(incoming)) ?? getLiveQuoteTimestampMs(incoming);
-  const rejectsCurrentSpread = incoming.spreadAvailable === false &&
+  const rejectsCurrentSpread = !incomingIsTradeOnly && incoming.spreadAvailable === false &&
     (incomingEvidenceAt === null || previousSpreadAt === null || incomingEvidenceAt >= previousSpreadAt);
   const previousBid = Number(previous.bid || previous.bp || 0);
   const previousAsk = Number(previous.ask || previous.ap || 0);

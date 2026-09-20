@@ -16,6 +16,12 @@ import { createQuoteRefreshCoordinator } from './market-data/quoteRefreshCoordin
 import { evaluateCryptoTradePlan } from './scoring/cryptoTradePlan.js';
 import { createCryptoIntradayBars } from './market-data/cryptoIntradayBars.js';
 import { createAlpacaCryptoStream } from './live/alpacaCryptoStream.js';
+import {
+  applyTradeTickWithoutClearingAlpacaBook,
+  isAlpacaCryptoExecutionSource,
+  selectAlpacaCryptoStreamSymbols,
+  selectCryptoRestQuoteBatch,
+} from "./live/cryptoExecutionQuotes.js";
 import { createCryptoResearchVolume } from './market-data/cryptoResearchVolume.js';
 import { isUsStockMarketSessionDayKey } from "./utils/usMarketCalendar.js";
 import { readBoundedResponseText, readBoundedResponseJson, cancelResponseBody } from "./utils/boundedResponse.js";
@@ -1284,6 +1290,7 @@ let polygonSocketReconnectAttempts = 0;
 let polygonAuthenticated = false;
 let activeCandidateQuoteCoordinator = null;
 let activeCandidateQuoteRefreshCursor = 0;
+let cryptoRestQuoteRefreshCursor = 0;
 let activeCandidateQuoteRefreshState = {
   ok: true,
   refreshedAt: null,
@@ -28431,6 +28438,15 @@ function updateQuoteCache(symbol, quote = {}) {
     engineState.liveMarketMemory = {};
   }
   const previous = engineState.liveQuoteCache[cleanSymbol] || {};
+  quote = applyTradeTickWithoutClearingAlpacaBook(previous, quote);
+  price = Number(
+    quote.price ||
+    quote.current ||
+    quote.c ||
+    quote.last ||
+    quote.p ||
+    price
+  );
   const previousPrice = Number(previous.price || 0);
   let quoteUpdatedAt =
     quote.liveQuoteUpdatedAt ||
@@ -28625,6 +28641,9 @@ function updateQuoteCache(symbol, quote = {}) {
       quote?.source ||
       "live_cache",
     liveQuoteUpdatedAt: quoteUpdatedAt,
+    lastTradePrice: Number(quote.lastTradePrice || previous.lastTradePrice || 0) || null,
+    lastTradeUpdatedAt: quote.lastTradeUpdatedAt || previous.lastTradeUpdatedAt || null,
+    lastTradeSource: quote.lastTradeSource || previous.lastTradeSource || null,
     priceIsLive: quoteIsActuallyLive,
     updatedAt: quoteUpdatedAt,
     previousPrice: previousPrice || null,
@@ -31584,7 +31603,13 @@ function isPreTradeQuoteReady(quote = {}, cryptoAsset = false) {
     spreadSource,
     cryptoAsset
   );
+  const cryptoExecutionReady = cryptoAsset !== true
+    || (
+      isAlpacaCryptoExecutionSource(quoteSource)
+      && isAlpacaCryptoExecutionSource(spreadSource)
+    );
   return (
+    cryptoExecutionReady &&
     quote.priceIsLive === true &&
     isFreshLiveQuote(quote) &&
     isFreshMeasuredSpread(quote, {
@@ -31750,9 +31775,14 @@ async function refreshActiveCandidateQuotes(symbols = []) {
       intervalMs: ACTIVE_CANDIDATE_QUOTE_REFRESH_INTERVAL_MS,
       maxSymbols: ACTIVE_CANDIDATE_QUOTE_REFRESH_LIMIT,
       isFresh: symbol => {
+        const quote = engineState.liveQuoteCache?.[symbol] || {};
         const age = getLiveQuoteAgeSeconds(symbol);
-        return age !== null && age >= -5 && age <= LIVE_ORDER_MAX_QUOTE_AGE_SECONDS &&
-          isFreshMeasuredSpread(engineState.liveQuoteCache?.[symbol] || {}, { maxAgeSeconds: LIVE_ORDER_MAX_QUOTE_AGE_SECONDS });
+        const fresh = age !== null && age >= -5 && age <= LIVE_ORDER_MAX_QUOTE_AGE_SECONDS &&
+          isFreshMeasuredSpread(quote, { maxAgeSeconds: LIVE_ORDER_MAX_QUOTE_AGE_SECONDS });
+        if (!fresh) return false;
+        if (!isCrypto(symbol)) return true;
+        return isAlpacaCryptoExecutionSource(quote.liveQuoteSource)
+          && isAlpacaCryptoExecutionSource(quote.spreadSource || quote.liveQuoteSource);
       },
       onState: state => { activeCandidateQuoteRefreshState = state; },
       publish: (receivedQuotes = []) => {
@@ -31795,9 +31825,19 @@ async function refreshActiveCandidateQuotes(symbols = []) {
       },
     });
   }
+  const staleCrypto = staleSymbols.filter(isCrypto);
+  const streamStatus = engineState.alpacaCryptoStreamState || {};
+  const restBatch = selectCryptoRestQuoteBatch({
+    symbols: staleCrypto,
+    streamSymbols: streamStatus.subscribedSymbols || [],
+    quotes: engineState.liveQuoteCache || {},
+    cursor: cryptoRestQuoteRefreshCursor,
+    streamConnected: streamStatus.connected === true && streamStatus.authenticated === true,
+  });
+  cryptoRestQuoteRefreshCursor = restBatch.nextCursor;
   return activeCandidateQuoteCoordinator.refresh({
     stock: staleSymbols.filter(symbol => !isCrypto(symbol)),
-    crypto: staleSymbols.filter(isCrypto),
+    crypto: restBatch.symbols,
   });
 }
 function buildLiveOrderDedupKey(symbol, side, action = "LIVE_ORDER") {
@@ -32138,6 +32178,8 @@ function startFinnhubStream() {
             liveQuoteSource: "finnhub_ws_trade",
             liveQuoteUpdatedAt: providerTimestamp,
             priceIsLive: true,
+            spreadAvailable: false,
+            eventType: "trade",
             providerSymbol,
             assetClass: isCrypto(symbol) ? "crypto" : "stock",
             raw: trade,
@@ -32999,7 +33041,21 @@ const alpacaCryptoStream = createAlpacaCryptoStream({
   WebSocket: TradierWebSocket,
   key: process.env.ALPACA_LIVE_KEY,
   secret: process.env.ALPACA_LIVE_SECRET,
-  getSymbols: () => (engineState.lastCryptoSignals || []).map(s => normalizeSymbol(s.symbol)),
+  getSymbols: () => selectAlpacaCryptoStreamSymbols({
+    symbols: [
+      ...(engineState.cachedPositions || []).map((item) => item.symbol),
+      ...(engineState.lastCryptoSignals || []).map((item) => item.symbol),
+      ...(engineState.topCryptoSignals || []).map((item) => item.symbol),
+    ].map((symbol) => normalizeSymbol(symbol)),
+    quotes: engineState.liveQuoteCache || {},
+    scores: Object.fromEntries(
+      [...(engineState.lastCryptoSignals || []), ...(engineState.topCryptoSignals || [])]
+        .map((item) => [normalizeSymbol(item.symbol), Number(getCanonicalFinalScore(item) || 0)])
+    ),
+    heldSymbols: (engineState.cachedPositions || [])
+      .map((item) => normalizeSymbol(item.symbol))
+      .filter((symbol) => isCrypto(symbol)),
+  }),
   onQuote: (symbol, quote) => updateQuoteCache(symbol, quote),
   onStatus: status => { engineState.alpacaCryptoStreamState = status; },
 });

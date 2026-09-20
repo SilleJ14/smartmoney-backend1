@@ -71,15 +71,33 @@ test("fresh trade ticks cannot starve independent bid-ask refreshes", () => {
   );
   assert.match(refreshBlock, /getSpreadAgeSeconds/);
   assert.match(refreshBlock, /isFreshMeasuredSpread/);
+  assert.match(refreshBlock, /selectCryptoRestQuoteBatch/);
+  assert.match(refreshBlock, /isAlpacaCryptoExecutionSource/);
   assert.doesNotMatch(refreshBlock, /incomingTimestamp < currentTimestamp/);
 
   const cacheBlock = serverSource.slice(
     serverSource.indexOf("function updateQuoteCache"),
     serverSource.indexOf("function getSymbolsForPolygonLiveStream")
   );
+  assert.match(cacheBlock, /applyTradeTickWithoutClearingAlpacaBook/);
   assert.match(cacheBlock, /hasNewerMeasuredSpread/);
   assert.match(cacheBlock, /spreadSource: incomingSpreadSource/);
   assert.match(cacheBlock, /liveQuoteSource: previous\.liveQuoteSource/);
+  assert.match(cacheBlock, /lastTradePrice/);
+
+  const readyBlock = serverSource.slice(
+    serverSource.indexOf("function isPreTradeQuoteReady"),
+    serverSource.indexOf("async function resolveVerifiedPreTradeQuote")
+  );
+  assert.match(readyBlock, /isAlpacaCryptoExecutionSource\(quoteSource\)/);
+  assert.match(readyBlock, /isAlpacaCryptoExecutionSource\(spreadSource\)/);
+
+  const finnhubBlock = serverSource.slice(
+    serverSource.indexOf("finnhubLiveSocket.onmessage"),
+    serverSource.indexOf("finnhubLiveSocket.onerror")
+  );
+  assert.match(finnhubBlock, /eventType: "trade"/);
+  assert.match(finnhubBlock, /spreadAvailable: false/);
 
   const cryptoCacheCall = cryptoScannerSource.slice(
     cryptoScannerSource.indexOf("const cachedCryptoQuote = updateQuoteCache"),
@@ -88,6 +106,13 @@ test("fresh trade ticks cannot starve independent bid-ask refreshes", () => {
   assert.match(cryptoCacheCall, /spreadUpdatedAt:/);
   assert.match(cryptoCacheCall, /bidAskUpdatedAt:/);
   assert.match(cryptoCacheCall, /spreadSource:/);
+
+  const streamBlock = serverSource.slice(
+    serverSource.indexOf("const alpacaCryptoStream = createAlpacaCryptoStream"),
+    serverSource.indexOf("startServerLifecycle({")
+  );
+  assert.match(streamBlock, /selectAlpacaCryptoStreamSymbols/);
+  assert.match(streamBlock, /heldSymbols:/);
 });
 
 test("frontend live-score merge updates canonical approval and sizing only when explicitly supplied", frontendTestOptions, () => {

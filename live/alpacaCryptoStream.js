@@ -72,6 +72,7 @@ export function createAlpacaCryptoStream({ WebSocket, key, secret, getSymbols, o
   }
   function status() {
     return { ...state, subscribedCount: subscribed.size, symbolLimit,
+      subscribedSymbols: [...subscribed],
       restOnlySymbolCount: Math.max(0, allSymbols().length - subscribed.size) };
   }
   return {
