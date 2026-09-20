@@ -1,14 +1,16 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import fs from 'node:fs';
+import { barSnapshot } from '../market-data/barSnapshot.js';
 
 // Execute only these pure functions from production source, never boot the server.
 const source = fs.readFileSync(new URL('../server.js', import.meta.url), 'utf8');
 const start = source.indexOf('function computeEma('), end = source.indexOf('async function getCryptoAssets()', start);
 assert.ok(start > 0 && end > start);
 const { computeRsi, computeMacd, computeTechnicals } = new Function(
+  'barSnapshot',
   source.slice(start, end) + '; return { computeRsi, computeMacd, computeTechnicals };'
-)();
+)(barSnapshot);
 
 test('RSI uses latest candles, not only the first fourteen changes', () => {
   const initial = Array.from({ length: 15 }, (_, i) => 100 + i);
@@ -31,9 +33,10 @@ test('MACD requires real signal history, and actual quote paths request enough c
 
 test('technical evidence supports provider and normalized candles without dropping malformed closes', () => {
   const values = Array.from({ length: 60 }, (_, i) => 100 + i * 0.1);
-  assert.deepEqual(computeTechnicals(values.map(c => ({ c }))), computeTechnicals(values.map(close => ({ close }))));
+  const numbers = ({barSnapshotId,lastBarAt,missingReason,...indicators}) => indicators;
+  assert.deepEqual(numbers(computeTechnicals(values.map(c => ({ c })))), numbers(computeTechnicals(values.map(close => ({ close })))));
   for (const invalid of [null, {}, { c: 0 }, { c: NaN }, { c: -1 }]) {
     const bars = values.map(c => ({ c })); bars[40] = invalid;
-    assert.deepEqual(computeTechnicals(bars), { ema9: null, ema20: null, rsi: null, macd: null, macdSignal: null });
+    assert.deepEqual(numbers(computeTechnicals(bars)), { ema9: null, ema20: null, rsi: null, macd: null, macdSignal: null });
   }
 });

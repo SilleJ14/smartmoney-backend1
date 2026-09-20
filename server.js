@@ -5,6 +5,10 @@ import { BoundedTtlCache } from "./utils/boundedTtlCache.js";
 import { getApprovedTradeAmount } from "./scoring/approvedSizing.js";
 import { revalidateCandidate } from './scoring/revalidateCandidate.js';
 import { installCentralDecision } from './scoring/installCentralDecision.js';
+import { createDecisionSnapshot, canPublishDecision } from './scoring/decisionProvenance.js';
+import { barSnapshot } from './market-data/barSnapshot.js';
+import { evaluateScaleInEvidence } from './risk/scaleInEvidence.js';
+import { purchasePolicy, executionEvidenceIssues, researchExecutionIssues } from './risk/evidencePolicy.js';
 import { createSafetyJournal, readSafetyJournal } from './state/safetyJournal.js';
 import { createOrderRiskReservations, outstandingOrderNotional } from './risk/orderRiskReservations.js';
 import { createManagedExecution } from './execution/managedExecution.js';
@@ -89,6 +93,7 @@ import {
   calculateLiveMovePercent,
   buildMeasuredPercentChangePatch,
   getSpreadAgeSeconds,
+  getLiveQuoteTimestampMs,
   hasNonRegressiveProviderTimestamp,
   isFreshMeasuredSpread,
   mergeMeasuredPercentChange,
@@ -13755,6 +13760,7 @@ const preTradeRiskGuard = {
     const symbol = normalizeSymbol(order.symbol);
     const cryptoAsset = isCrypto(symbol);
     managedExecution.assertReady();
+    let purchase = purchasePolicy(options, cryptoAsset);
     const [account, positions, botOwnedSymbols, clock] = await Promise.all([
       getAccount(),
       getPositions(),
@@ -13772,12 +13778,23 @@ const preTradeRiskGuard = {
     const notional = Number(order.notional || Number(order.qty || 0) * referencePrice);
     let sizingSignal = { symbol, price: referencePrice };
     options.riskNotional = notional;
+    if (options.maximumConfirmedAmount != null && notional > options.maximumConfirmedAmount + 0.005) {
+      throw new Error('Price changed: order exceeds the confirmed amount; review again');
+    }
     options.riskReferencePrice = referencePrice;
     options.riskBaseQty = Number(positions.find((p) => normalizeSymbol(p.symbol) === symbol)?.qty || 0);
+    const scaleInEvidence = evaluateScaleInEvidence({ symbol, positions, price: referencePrice, notional,
+      reservations: engineState.orderRiskReservations, protection: engineState.positionProtection, normalizeSymbol });
+    if (!scaleInEvidence.approved) throw new Error(scaleInEvidence.reasons.join('; '));
+    if (scaleInEvidence.required && purchase.requireStrategy) {
+      options.purchaseType = 'scale_in'; purchase = purchasePolicy(options, cryptoAsset);
+    }
+    options.purchasePolicyVersion = purchase.version;
+    options.scaleInEvidence = scaleInEvidence;
     if (!cryptoAsset && options.holdCategory === 'multi_day' && !Number.isInteger(options.riskBaseQty)) {
       throw new Error('Multi-day additions require a whole-share position for persistent protection');
     }
-    if (options.automated !== false || options.requireCandidateDecision) {
+    if (purchase.requireStrategy) {
       const candidates = dedupeSignalsByCanonicalAuthority([
         ...(engineState.lastStockSignals || []), ...(engineState.lastCryptoSignals || [])
       ]);
@@ -13786,27 +13803,32 @@ const preTradeRiskGuard = {
       const candidate = revalidateCandidate(previous, { ...previous, ...quote });
       assertRiskPolicyVersion(candidate.riskPolicyVersion, currentRiskPolicyVersion());
       sizingSignal = { ...candidate, symbol, price: referencePrice };
+      const coherenceIssues = researchExecutionIssues(sizingSignal, purchase);
+      if (coherenceIssues.length) throw new Error(coherenceIssues.join('; '));
       const gate = cryptoAsset ? evaluateCryptoTradeCandidate(candidate, { requireCentralDecision: true, requireFreshDecision: true, requireExplicitApproval: true })
         : evaluateStockTradeCandidate(candidate, { requireCentralDecision: true, requireFreshDecision: true, requireExplicitApproval: true });
       if (!gate.approved) throw new Error(`Current candidate rejected: ${(gate.reasons || []).join('; ')}`);
       const availableApproval = getApprovedTradeAmount(candidate) - orderRiskReservations.consumed(symbol, candidate.decisionUpdatedAt);
       if (!(notional > 0) || notional > availableApproval + 0.005) throw new Error(`Order exceeds remaining approved AI size ($${Math.max(0, availableApproval).toFixed(2)})`);
       options.riskDecisionVersion = candidate.decisionUpdatedAt;
+      options.riskDecisionRevision = candidate.decisionRevision ?? null;
+      options.decisionProvenance = candidate.decisionProvenance ?? null;
     }
     if (cryptoAsset) {
       // Every crypto buy path (starter, manual, rotation and scale-in) reaches
       // this final guard. Never trust a cached depth/sizing approval.
       const books = await alpacaCryptoMarketData.getLatestOrderbooks([symbol]);
       sizingSignal.cryptoOrderbook = books.find(b => b.symbol === symbol) || null;
-      const plan = evaluateCryptoTradePlan(sizingSignal, { notional });
+      const manual = options.automated === false && options.requireCandidateDecision !== true;
+      const plan = evaluateCryptoTradePlan(sizingSignal, { notional, manual });
       if (!plan.approved) throw new Error(`Crypto trade plan rejected: ${plan.reasons.join('; ')}`);
       const existing = positions.find(p => normalizeSymbol(p.symbol) === symbol);
-      if (existing && !(referencePrice > Number(existing.avg_entry_price) * 1.005)) {
+      if (!manual && existing && !(referencePrice > Number(existing.avg_entry_price) * 1.005)) {
         throw new Error('Crypto scale-in requires price confirmation above the existing entry');
       }
-      options.cryptoTradePlan = { stopPrice: plan.economics.stopPrice, targetPrice: plan.economics.targetPrice,
+      if (!manual) options.cryptoTradePlan = { stopPrice: plan.economics.stopPrice, targetPrice: plan.economics.targetPrice,
         targetBasis: plan.economics.targetBasis, checkedAt: new Date().toISOString(), source: 'CRYPTO_SETUP_V1' };
-      sizingSignal.stopPrice = plan.economics.stopPrice;
+      if (!manual) sizingSignal.stopPrice = plan.economics.stopPrice;
     }
     const dateKey = getTodayKeyET();
     engineState.liveTradeLimitState = ensureLiveTradeLimitDay(engineState.liveTradeLimitState, dateKey);
@@ -13837,6 +13859,10 @@ const preTradeRiskGuard = {
     const priceTimestamp = getProviderQuoteTimestampMs(quote);
     const priceAgeSeconds = priceTimestamp === null ? Infinity : (Date.now() - priceTimestamp) / 1000;
     const spreadAgeSeconds = getSpreadAgeSeconds(quote);
+    const temporalIssues = executionEvidenceIssues({ priceAt: priceTimestamp,
+      spreadAt: spreadAgeSeconds === null ? null : Date.now() - spreadAgeSeconds * 1000,
+      policy: purchase });
+    if (temporalIssues.length) throw new Error(temporalIssues.join('; '));
     const riskInput = {
       order,
       options,
@@ -13882,6 +13908,8 @@ const preTradeRiskGuard = {
           ? Math.min(LIVE_ORDER_MAX_SPREAD_PERCENT, CRYPTO_MAX_ENTRY_SPREAD_PERCENT)
           : LIVE_ORDER_MAX_SPREAD_PERCENT,
         maxExposurePercent: CONFIG.maxBotExposurePercent,
+        maxAccountExposurePercent: CONFIG.maxAccountExposurePercent ?? 100,
+        accountExposurePositions: positions,
         minStockPrice: CONFIG.minStockPrice,
         maxOpenTrades: CONFIG.maxOpenTrades,
         account,
@@ -13895,7 +13923,8 @@ const preTradeRiskGuard = {
         throw new Error(`QUOTE_VERIFICATION_EXPIRED: ${symbol} price or spread is no longer verified`);
       }
       if (cryptoAsset) {
-        const plan = evaluateCryptoTradePlan(sizingSignal, { notional });
+        const plan = evaluateCryptoTradePlan(sizingSignal, { notional,
+          manual: options.automated === false && options.requireCandidateDecision !== true });
         if (!plan.approved) throw new Error(`Crypto evidence expired before submission: ${plan.reasons.join('; ')}`);
       }
       const elapsed = (Date.now() - Date.parse(result.checkedAt)) / 1000;
@@ -13903,6 +13932,7 @@ const preTradeRiskGuard = {
         quoteAgeSeconds: riskInput.context.quoteAgeSeconds + elapsed,
         emergencyStopActive, autoTradingEnabled,
         maxExposurePercent: CONFIG.maxBotExposurePercent, maxOpenTrades: CONFIG.maxOpenTrades,
+        maxAccountExposurePercent: CONFIG.maxAccountExposurePercent ?? 100,
         minStockPrice: CONFIG.minStockPrice,
         lossBudgetSizing: options.automated !== false ? calculateLossBudgetSizing({
           account, positions: managedPositions, config: CONFIG, signal: sizingSignal,
@@ -13911,10 +13941,11 @@ const preTradeRiskGuard = {
         realCashTradingUnlocked: CONFIG.realCashTradingUnlocked === true,
         safetyReconciliationRequired: engineState.safetyReconciliationRequired === true,
         dailyLossLocked: engineState.dailyLossLocked === true, profitLocked: engineState.profitLocked === true } });
-      if (options.automated !== false || options.requireCandidateDecision) {
+      if (purchase.requireStrategy) {
         const current = dedupeSignalsByCanonicalAuthority([...(engineState.lastStockSignals || []), ...(engineState.lastCryptoSignals || [])])
           .find(c => normalizeSymbol(c.symbol) === symbol);
         if (!current || current.decisionUpdatedAt !== options.riskDecisionVersion) throw new Error('Canonical decision changed before submission');
+        if ((current.decisionRevision ?? null) !== options.riskDecisionRevision) throw new Error('Canonical decision revision changed before submission');
         assertRiskPolicyVersion(current.riskPolicyVersion, currentRiskPolicyVersion());
         const candidate = revalidateCandidate(current, { ...current, ...quote });
         const gate = cryptoAsset ? evaluateCryptoTradeCandidate(candidate) : evaluateStockTradeCandidate(candidate,
@@ -15376,6 +15407,7 @@ function mergeNewsConfirmationFields(confirmations, newsRisk) {
     newsCatalyst: newsRisk?.catalyst || calculateNewsCatalyst({ dataAvailable: false }),
     newsCacheStatus: newsRisk?.cacheStatus || "unavailable",
     newsReviewedAt: newsRisk?.fetchedAt || null,
+    newsReviewCoverage: newsRisk?.reviewCoverage || { status: 'UNAVAILABLE' },
     newsProvider: newsRisk?.source || null,
     newsProviderErrors: newsRisk?.errors || [],
   };
@@ -15408,10 +15440,9 @@ async function getAdvancedConfirmations(
   const stats = computeBarStats(bars);
   // Score every analyzed candidate from its own fetched history, not membership
   // in the separate pre-mover shortlist. No extra provider calls are required.
-  if (bars.length >= 20) {
-    q.technicals = computeTechnicals(bars);
-    q.technicalBarsFound = bars.length;
-  }
+  q.technicals = computeTechnicals(bars);
+  q.barSnapshotId = q.technicals.barSnapshotId;
+  q.technicalBarsFound = bars.length;
   const currentDiscovery = calculateCanonicalPreMoverScore({ symbol: q.symbol, dailyBars, intradayBars: bars });
   if (dailyBars.length >= 21 && currentDiscovery.extension) {
     q.preMoverDiscovery = currentDiscovery;
@@ -17806,6 +17837,9 @@ function computeMacd(closes = []) {
   };
 }
 function computeTechnicals(bars = []) {
+  const snapshot = barSnapshot(bars);
+  if (!snapshot.available || bars.length < 20) return { ema9: null, ema20: null, rsi: null, macd: null, macdSignal: null,
+    barSnapshotId: snapshot.id, missingReason: snapshot.reason || 'TECHNICAL_HISTORY_INCOMPLETE' };
   const closes = bars.map((b) => Number(b?.c ?? b?.close));
   if (closes.some(value => !Number.isFinite(value) || value <= 0)) {
     return { ema9: null, ema20: null, rsi: null, macd: null, macdSignal: null };
@@ -17820,6 +17854,9 @@ function computeTechnicals(bars = []) {
     rsi,
     macd: macdData.macd,
     macdSignal: macdData.signal,
+    barSnapshotId: snapshot.id,
+    lastBarAt: snapshot.lastProviderAt,
+    intervalMs: snapshot.intervalMs,
   };
 }
 async function getCryptoAssets() {
@@ -17973,6 +18010,8 @@ async function placeCryptoMarketBuy(symbol, dollars, options = {}) {
     symbol,
     dollars,
     allowExistingOpenOrder: options.allowExistingOpenOrder === true,
+    manual: options.manual === true,
+    confirmationId: options.confirmationId,
   });
 }
 async function placeCryptoMarketSell(symbol, qty, reason = "CRYPTO_EXIT") {
@@ -27040,7 +27079,8 @@ function calculateCentralAutonomousDecisionCore(stockSignals = [], cryptoSignals
       governorThrottle
     ).toFixed(2)
   );
-  const decisions = allSignals.map((signal) => {
+  const decisions = allSignals.map((sourceSignal) => {
+    let signal = sourceSignal;
     const isCryptoSignal =
       signal.assetClass === "crypto" ||
       signal.asset_class === "crypto" ||
@@ -27048,6 +27088,11 @@ function calculateCentralAutonomousDecisionCore(stockSignals = [], cryptoSignals
     if (isCryptoSignal) {
       Object.assign(signal, hydrateCryptoExecutionCandidate(signal));
     }
+    const scoringStarted = performance.now();
+    const snapshot = createDecisionSnapshot(signal, CONFIG);
+    signal = snapshot.input;
+    engineState.decisionRevision = Math.max(Number(engineState.decisionRevision || 0) + 1, Date.now() * 1000);
+    const decisionRevision = engineState.decisionRevision;
     const cryptoDecisionEvidence = isCryptoSignal
       ? buildCryptoDecisionScore(signal)
       : null;
@@ -27315,6 +27360,9 @@ function calculateCentralAutonomousDecisionCore(stockSignals = [], cryptoSignals
           ? "crypto"
           : "stock"),
       riskPolicyVersion: policyVersion,
+      decisionRevision,
+      provenance: snapshot.provenance,
+      decisionLatency: { calculationMs: performance.now() - scoringStarted },
       tradeArchetype: archetypeDecision.tradeArchetype,
       dynamicEngineWeights: archetypeDecision.dynamicEngineWeights,
       archetypeAdjustedScore: archetypeDecision.archetypeAdjustedScore,
@@ -27346,6 +27394,15 @@ function calculateCentralAutonomousDecisionCore(stockSignals = [], cryptoSignals
       stockDecisionEvidence: isCryptoSignal
         ? null
         : {
+          score: stockDecisionEvidence.score,
+          coverage: stockDecisionEvidence.coverage,
+          availableScoringWeight: stockDecisionEvidence.availableScoringWeight,
+          totalConfiguredWeight: stockDecisionEvidence.totalConfiguredWeight,
+          coverageAlgorithm: stockDecisionEvidence.coverageAlgorithm,
+          components: stockDecisionEvidence.components,
+          calculation: stockDecisionEvidence.calculation,
+          scoreAdjustments: stockDecisionEvidence.scoreAdjustments,
+          missingComponents: stockDecisionEvidence.missingComponents,
           coreEvidencePass: stockDecisionEvidence.coreEvidencePass,
           analysisEvidencePass: stockDecisionEvidence.analysisEvidencePass,
           missingCriticalEvidence: stockDecisionEvidence.missingCriticalEvidence,
@@ -27359,6 +27416,11 @@ function calculateCentralAutonomousDecisionCore(stockSignals = [], cryptoSignals
         ? {
           score: cryptoDecisionEvidence.score,
           coverage: cryptoDecisionEvidence.coverage,
+          availableScoringWeight: cryptoDecisionEvidence.availableScoringWeight,
+          totalConfiguredWeight: cryptoDecisionEvidence.totalConfiguredWeight,
+          coverageAlgorithm: cryptoDecisionEvidence.coverageAlgorithm,
+          components: cryptoDecisionEvidence.components,
+          missingComponents: cryptoDecisionEvidence.missingComponents,
           scoreStatus: cryptoDecisionEvidence.scoreStatus,
           coreEvidencePass: cryptoDecisionEvidence.coreEvidencePass,
           analysisEvidencePass: cryptoDecisionEvidence.analysisEvidencePass,
@@ -31263,7 +31325,7 @@ const earlyCandidateReassessment = createEarlyCandidateReassessment({
     if (engineState.running) return false;
     const completed = new Map(freshEarlyAssessments(engineState.earlyAssessedStockSignals)
       .map(row => [row.symbol, row]));
-    for (const row of rows) completed.set(row.symbol, row);
+    for (const row of rows) if (canPublishDecision(completed.get(row.symbol), row)) completed.set(row.symbol, row);
     engineState.earlyAssessedStockSignals = [...completed.values()].slice(-60);
     pushLiveSignalUpdate(buildLiveSignalPushPayload());
   },
@@ -31278,7 +31340,7 @@ const cryptoCandidateReassessment = createEarlyCandidateReassessment({
   publish: rows => {
     if (engineState.running) return false;
     const completed = new Map((engineState.lastCryptoSignals || []).map(row => [row.symbol, row]));
-    for (const row of rows) completed.set(row.symbol, row);
+    for (const row of rows) if (canPublishDecision(completed.get(row.symbol), row)) completed.set(row.symbol, row);
     engineState.lastCryptoSignals = [...completed.values()].sort(compareCanonicalSignals).slice(0, Number(CONFIG.maxSignalsToReturn || 75));
     pushLiveSignalUpdate(buildLiveSignalPushPayload());
   },
@@ -31299,7 +31361,7 @@ const incrementalResearch = createIncrementalResearch({
   },
   publish: rows => {
     const completed = new Map(incrementalResearchForState(engineState).map(row => [row.symbol, row]));
-    for (const row of rows) completed.set(row.symbol, normalizeSignalScoreCompleteness(row));
+    for (const row of rows) if (canPublishDecision(completed.get(row.symbol), row)) completed.set(row.symbol, normalizeSignalScoreCompleteness(row));
     engineState.incrementalResearchSignals = [...completed.values()].slice(-120);
     pushLiveSignalUpdate(buildLiveSignalPushPayload());
   },
@@ -31522,14 +31584,7 @@ async function resolveVerifiedPreTradeQuote(symbol, cryptoAsset = false) {
 }
 
 function getProviderQuoteTimestampMs(quote = {}) {
-  const timestamps = [
-    quote.liveQuoteUpdatedAt,
-    quote.quoteFetchedAt,
-    quote.updatedAt,
-  ]
-    .map((value) => value ? Date.parse(value) : NaN)
-    .filter(Number.isFinite);
-  return timestamps.length > 0 ? Math.max(...timestamps) : null;
+  return getLiveQuoteTimestampMs(quote);
 }
 
 function getActiveCandidateQuoteRefreshSymbols(
@@ -32819,6 +32874,8 @@ registerManualExecutionRoutes(app, {
   manualStockBuy: (input) => orderService.manualStockBuy(input),
   manualCryptoBuy: (input) => placeCryptoMarketBuy(input.symbol, input.dollars, {
     source: "MANUAL_VERIFIED_CRYPTO_ROUTE",
+    manual: input.manual === true,
+    confirmationId: input.confirmationId,
   }),
   evaluateCryptoCandidate: (candidate) => evaluateCryptoTradeCandidate(candidate, {
     minimumScore: CRYPTO_MIN_FINAL_SCORE_TO_BUY,

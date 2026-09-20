@@ -46,7 +46,7 @@ function validSafetyState(state) {
       !nonnegative(entry.notional) || entry.notional === 0 || !nonnegative(entry.createdAt) ||
       entry.createdAt > Date.now() + 5000 || !nonnegative(entry.filledQty) ||
       !['intraday', 'multi_day', 'crypto'].includes(entry.category) ||
-      !['pending', 'uncertain', 'accepted', 'new', 'pending_new', 'accepted_for_bidding', 'partially_filled',
+      !['submitting', 'pending', 'uncertain', 'accepted', 'new', 'pending_new', 'accepted_for_bidding', 'partially_filled',
         'filled', 'canceled', 'expired', 'rejected', 'done_for_day', 'pending_cancel', 'pending_replace', 'replaced', 'stopped', 'suspended', 'calculated'].includes(entry.status)) return false;
   }
   return true;

@@ -1,4 +1,5 @@
 import { validBrokerAccount, validBrokerPositions, availableBuyingPower } from './brokerEvidence.js';
+import { purchasePolicy } from './evidencePolicy.js';
 function finiteNumber(value, fallback = 0) {
   const number = Number(value);
   return Number.isFinite(number) ? number : fallback;
@@ -33,6 +34,7 @@ export function evaluatePreTradeRisk({ order = {}, context = {}, options = {} } 
   }
 
   if (isBuy) {
+    const policy = purchasePolicy(options, context.isCrypto === true);
     if (!validBrokerAccount(context.account) || !validBrokerPositions(context.positions)) reasons.push('Broker risk evidence is malformed or incomplete');
     if (context.safetyReconciliationRequired) reasons.push('Safety state requires reconciliation before new entries');
     if (context.account?.stale === true || context.positions?.stale === true || context.brokerEvidenceStale === true) reasons.push('Broker account/positions evidence is stale');
@@ -55,7 +57,7 @@ export function evaluatePreTradeRisk({ order = {}, context = {}, options = {} } 
 
     if (context.emergencyStopActive) reasons.push("Emergency stop is active");
     if (!context.realCashTradingUnlocked) reasons.push("Real cash trading is locked");
-    if (options.automated !== false && !context.autoTradingEnabled) {
+    if (policy.requireAutopilot && options.automated !== false && !context.autoTradingEnabled) {
       reasons.push("Auto trading is disabled");
     }
     if (context.dailyLossLocked) reasons.push("Daily loss lock is active");
@@ -96,11 +98,17 @@ export function evaluatePreTradeRisk({ order = {}, context = {}, options = {} } 
       !Number.isFinite(context.lossBudgetSizing.maxNotional) || value > context.lossBudgetSizing.maxNotional + 0.005)) {
       reasons.push(`Stop-distance/daily loss budget exceeded: ${context.lossBudgetSizing.reason || 'RISK_LIMIT'}`);
     }
-    if (exposure + value > maxExposure) {
+    // Discretionary orders use broker funds, not the bot cap. AI buttons retain it.
+    if (policy.requireBotCap && exposure + value > maxExposure) {
       reasons.push(
         `Maximum bot exposure exceeded: ${Number((exposure + value).toFixed(2))} > ` +
         `${Number(maxExposure.toFixed(2))}`
       );
+    }
+    if (context.accountExposurePositions) {
+      const accountExposure = context.accountExposurePositions.reduce((sum, p) => sum + Math.abs(finiteNumber(p.market_value)), finiteNumber(context.pendingOrderNotional));
+      const accountLimit = equity * Math.min(100, Math.max(0, finiteNumber(context.maxAccountExposurePercent, 100))) / 100;
+      if (accountExposure + value > accountLimit) reasons.push('Maximum account exposure exceeded');
     }
     const openSymbols = new Set([...(context.positions || []).map(position => String(position.symbol || '').toUpperCase()), ...(context.pendingPositionSymbols || [])]);
     if (

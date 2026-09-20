@@ -2,6 +2,7 @@
 export function createCryptoResearchVolume({ getBars, now = Date.now }) {
   const cache = new Map(), pending = new Map();
   return async (symbol, bars) => {
+    if (!Array.isArray(bars) || bars.some(b => !b || typeof b !== 'object' || Array.isArray(b))) return [];
     const interval = bars.at(-1)?.intervalMs;
     if (![60000, 300000, 900000].includes(interval)) return bars;
     const key = `${symbol}:${interval}`;

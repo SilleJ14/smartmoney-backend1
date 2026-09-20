@@ -112,7 +112,8 @@ test("manual dollar buys use notional only for fractionable assets", async () =>
     marketOpen: true,
     holdCategory: "intraday",
   });
-  assert.equal(requests[0].body.notional, 50.13);
+  // EXPECTED_CHANGE: never round above the user's confirmed dollar amount.
+  assert.equal(requests[0].body.notional, 50.12);
 });
 
 test("stock buys fail closed when holding category is missing", () => {

@@ -9,6 +9,7 @@ import { normalizeCandidateQuote } from '../market-data/normalizeCandidateQuote.
 import { assessCryptoSetup, cryptoSetupGate } from './cryptoSetup.js';
 import { evaluateCryptoTradePlan } from './cryptoTradePlan.js';
 import { getApprovedTradeAmount } from './approvedSizing.js';
+import { evidencePolicy, researchExecutionIssues } from '../risk/evidencePolicy.js';
 
 // Immediate-entry F uses independent discovery, execution and context evidence.
 // Multi-day continuation remains separate telemetry (and an acceleration gate),
@@ -291,6 +292,7 @@ export function buildCryptoDecisionScore(
       component.name,
   }));
   const missingCriticalEvidence = [
+    ...(signal.evidenceCoherence?.issues || []),
     ...(discovery.available ? [] : ["discovery"]),
     ...(Number(signal.cryptoDiscoveryScorecard?.coverage ?? 0) >= 0.65 &&
       Number(signal.cryptoDiscoveryScorecard?.coverage) <= 1
@@ -326,6 +328,9 @@ export function buildCryptoDecisionScore(
     model: CRYPTO_DECISION_MODEL,
     score: weighted.score,
     coverage: weighted.coverage,
+    availableScoringWeight: weighted.availableScoringWeight,
+    totalConfiguredWeight: weighted.totalConfiguredWeight,
+    coverageAlgorithm: weighted.coverageAlgorithm,
     components: componentsWithSemantics,
     componentsByName: Object.fromEntries(
       componentsWithSemantics.map((component) => [component.name, component])
@@ -414,6 +419,7 @@ export function evaluateCryptoTradeCandidate(
     Number(now) - decisionTime <= 15 * 60000;
   const centralAction = String(signal.centralAutonomousAction || signal.centralAutonomousDecisionCore?.action || "").toUpperCase();
   const reasons = [
+    ...researchExecutionIssues(signal,evidencePolicy('crypto','order','automatic')),
     ...cryptoSetupGate(signal, { now }).reasons,
     ...(signal.scoringModelVersion === 'SMARTMONEY_CRYPTO_DECISION_V4' && getApprovedTradeAmount(signal) > 0
       ? evaluateCryptoTradePlan(signal, { now, notional: getApprovedTradeAmount(signal) }).reasons : []),
@@ -503,6 +509,9 @@ export function calculateAvailableWeightedScore(
       : 0,
     includedWeight: Number(includedWeight.toFixed(4)),
     configuredWeight: Number(configuredWeight.toFixed(4)),
+    availableScoringWeight: availableWeight,
+    totalConfiguredWeight: configuredWeight,
+    coverageAlgorithm: 'AVAILABLE_CONFIGURED_WEIGHT_RATIO_ROUNDED_2DP_V1',
     missingComponents: componentsWithContributions
       .filter((component) => !component.available)
       .map((component) => component.name),

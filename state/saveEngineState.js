@@ -89,6 +89,7 @@ export function createEngineStateSaver({
         dailyLossLocked: engineState.dailyLossLocked,
         safetyReconciliationRequired: engineState.safetyReconciliationRequired === true,
         orderRiskReservations: engineState.orderRiskReservations || {},
+        decisionRevision: engineState.decisionRevision || 0,
         profitLocked: engineState.profitLocked,
 
         highWaterMarks: engineState.highWaterMarks || {},

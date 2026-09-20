@@ -3,7 +3,7 @@ import { createHash } from 'node:crypto';
 // Only risk-policy inputs: never credentials, account identifiers or UI settings.
 export function riskPolicyVersion(config = {}, safety = {}) {
   const policy = Object.fromEntries([
-    'maxBotExposurePercent', 'maxOpenTrades', 'minStockPrice',
+    'maxBotExposurePercent', 'maxAccountExposurePercent', 'maxOpenTrades', 'minStockPrice',
     'dailyLossLimitPercent', 'realCashTradingUnlocked', 'minAutonomousTradeAmount',
   ].map(key => [key, config[key] ?? null]));
   const locks = Object.fromEntries(['emergencyStopActive', 'dailyLossLocked',

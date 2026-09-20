@@ -1,3 +1,8 @@
+import { randomUUID } from 'node:crypto';
+function confirmationIdentity(value) {
+  if (value != null && !/^[a-f0-9-]{36}$/i.test(value)) throw new Error('Invalid confirmation identity');
+  return value || randomUUID();
+}
 function positiveNumber(value, label) {
   const number = Number(value);
   if (!Number.isFinite(number) || number <= 0) {
@@ -28,6 +33,9 @@ export function createOrderService({
 }) {
   let buyQueue = Promise.resolve();
   function submit(payload, options = {}) {
+    // Capture terms when queued; callers cannot alter an awaiting purchase.
+    payload = structuredClone(payload);
+    options = structuredClone(options);
     if (executionLifecycle) return executionLifecycle.exclusive(() => submitNow(payload, options));
     if (payload.side !== 'buy') return submitNow(payload, options);
     const work = buyQueue.then(() => submitNow(payload, options));
@@ -67,17 +75,18 @@ export function createOrderService({
     }
   }
 
-  function cryptoMarketBuy({ symbol, dollars, allowExistingOpenOrder = false }) {
+  function cryptoMarketBuy({ symbol, dollars, allowExistingOpenOrder = false, manual = false, confirmationId }) {
     const cleanSymbol = normalizeSymbol(symbol);
     const amount = positiveNumber(dollars, "crypto buy amount");
     return submit({
       symbol: cleanSymbol,
-      notional: Number(amount.toFixed(2)),
+      notional: Math.floor(amount * 100 + 1e-8) / 100,
       side: "buy",
       type: "market",
       time_in_force: "gtc",
-      client_order_id: `${clientOrderPrefix}_CRYPTO_BUY_${cleanSymbol}_${now()}`,
-    }, { allowExistingOpenOrder, holdCategory: "crypto" });
+      client_order_id: manual || confirmationId ? `${clientOrderPrefix}_C_${confirmationIdentity(confirmationId)}` : `${clientOrderPrefix}_CRYPTO_BUY_${cleanSymbol}_${now()}`,
+    }, { allowExistingOpenOrder, holdCategory: "crypto", automated: !manual,
+      maximumConfirmedAmount: confirmationId || manual ? amount : undefined });
   }
 
   function cryptoMarketSell({ symbol, qty, reason = "CRYPTO_EXIT" }) {
@@ -182,6 +191,7 @@ export function createOrderService({
     holdCategory,
     marketOpen,
     requireCandidateDecision = false,
+    confirmationId,
   }) {
     const cleanSymbol = normalizeSymbol(symbol);
     if (!cleanSymbol) throw new Error("Missing symbol");
@@ -196,7 +206,7 @@ export function createOrderService({
       side: "buy",
       type: "market",
       time_in_force: "day",
-      client_order_id: `${clientOrderPrefix}_MANUAL_BUY_${cleanSymbol}_${now()}`,
+      client_order_id: `${clientOrderPrefix}_C_${confirmationIdentity(confirmationId)}`,
     };
 
     if (buyMode === "shares") {
@@ -217,8 +227,8 @@ export function createOrderService({
     if (amount < 1) throw new Error("Invalid dollar amount");
     if (fractionable && cleanHoldCategory !== 'multi_day') {
       return submit(
-        { ...payload, notional: Number(amount.toFixed(2)) },
-        { automated: false, requireCandidateDecision, holdCategory: cleanHoldCategory }
+        { ...payload, notional: Math.floor(amount * 100 + 1e-8) / 100 },
+        { automated: false, requireCandidateDecision, holdCategory: cleanHoldCategory, maximumConfirmedAmount: amount }
       );
     }
 
@@ -231,8 +241,8 @@ export function createOrderService({
       );
     }
     return submit(
-      { ...payload, qty: String(estimatedShares) },
-      { automated: false, requireCandidateDecision, holdCategory: cleanHoldCategory }
+      { ...payload, qty: String(estimatedShares), type: 'limit', limit_price: String(Math.floor(price * 100) / 100) },
+      { automated: false, requireCandidateDecision, holdCategory: cleanHoldCategory, maximumConfirmedAmount: amount }
     );
   }
 

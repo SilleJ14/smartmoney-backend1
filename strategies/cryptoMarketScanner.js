@@ -8,6 +8,7 @@ import {
 import { calculateCryptoEarlyDiscoveryScore } from "../scoring/earlyDiscovery.js";
 import { assessCryptoSetup, assessBtcContext, cryptoSetupGate } from '../scoring/cryptoSetup.js';
 import { recentBarVolumeEvidence } from '../market-data/volumeEvidence.js';
+import { normalizeCryptoVolume } from '../market-data/normalizeCryptoVolume.js';
 
 export async function mapWithConcurrency(items = [], concurrency = 4, worker) {
   const values = Array.isArray(items) ? items : [];
@@ -197,6 +198,7 @@ export function createCryptoMarketScanner(dependencies) {
   }
 
   function scoreCrypto(quote, bars = []) {
+    if (!Array.isArray(bars) || bars.some(b => !b || typeof b !== 'object' || Array.isArray(b))) bars = [];
     const cleanBars = Array.isArray(bars)
       ? bars.map((bar) => {
         const close = firstPositiveNumber(bar.c, bar.close, bar.price);
@@ -213,7 +215,7 @@ export function createCryptoMarketScanner(dependencies) {
           h: high,
           l: low,
           c: close,
-          v: firstPositiveNumber(bar.v, bar.volume),
+          v: normalizeCryptoVolume(bar)?.volume ?? null,
         };
       })
         .filter((bar) => bar.c > 0)
@@ -620,11 +622,12 @@ export function createCryptoMarketScanner(dependencies) {
         if (!quote) {
           throw new Error("No live crypto quote available from the batch providers");
         }
-        const [bars, dailyBars, newsCatalyst] = await Promise.all([
+        const [receivedBars, dailyBars, newsCatalyst] = await Promise.all([
           getBestCryptoBars(symbol),
           getCryptoDailyBarsForDiscovery(symbol),
           getCryptoNewsIntelligence(symbol),
         ]);
+        const bars = Array.isArray(receivedBars) && receivedBars.every(b => b && typeof b === 'object' && !Array.isArray(b)) ? receivedBars : [];
         engineState.multiTimeframeCryptoMemory ||= {};
         const cryptoContinuationMemory =
           hydrateCryptoContinuationMemoryFromDailyBars(
@@ -791,7 +794,7 @@ export function createCryptoMarketScanner(dependencies) {
               const open = Number(bar.o || bar.open || close || 0);
               const high = Number(bar.h || bar.high || close || 0);
               const low = Number(bar.l || bar.low || close || 0);
-              const volume = Number(bar.v || bar.volume || 0);
+              const volume = normalizeCryptoVolume(bar)?.volume ?? null;
               return {
                 time: bar.t || bar.timestamp || bar.time || null,
                 open,

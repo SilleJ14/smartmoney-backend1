@@ -593,6 +593,7 @@ export function createEngineCycle(dependencies) {
         );
         if (!matchingSignal) continue;
         installCentralDecision(matchingSignal, decision, { crypto: cryptoSignals.includes(matchingSignal) });
+        if (matchingSignal.centralAutonomousDecisionCore !== decision) continue;
         matchingSignal.finalAutonomousDecisionScore =
           decision.finalDecisionScore;
         if (cryptoSignals.includes(matchingSignal)) {
@@ -1282,6 +1283,7 @@ export function createEngineCycle(dependencies) {
         );
         if (!matchingSignal) continue;
         installCentralDecision(matchingSignal, decision, { crypto: cryptoSignals.includes(matchingSignal) });
+        if (matchingSignal.centralAutonomousDecisionCore !== decision) continue;
         matchingSignal.tradeArchetype = decision.tradeArchetype;
         matchingSignal.dynamicEngineWeights = decision.dynamicEngineWeights;
         matchingSignal.archetypeAdjustedScore = decision.archetypeAdjustedScore;

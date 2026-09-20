@@ -2,6 +2,8 @@ import fs from 'node:fs/promises';
 import path from 'node:path';
 import { candidateDiagnostics } from '../scoring/candidateDiagnostics.js';
 import { getApprovedTradeAmount } from '../scoring/approvedSizing.js';
+import { createPipelineLatency } from '../analytics/pipelineLatency.js';
+import { archivePolicyBundle, policyManifest } from '../scoring/policyBundle.js';
 
 const text = (value, max = 120) => typeof value === 'string' ? value.slice(0, max) : null;
 const number = value => typeof value === 'number' && Number.isFinite(value) ? value : null;
@@ -23,6 +25,20 @@ export function compactCandidateTrace(event = {}) {
     observedAt: new Date().toISOString(), providerAt: timestamp(event.liveQuoteUpdatedAt),
     stage: text(event.stage, 40), cycle: text(event.cycle, 64), source: text(event.source, 80),
     outcomeStatus: 'UNKNOWN',
+    decisionRevision: number(event.decisionRevision),
+    evidenceSnapshotId: text(event.decisionProvenance?.evidenceSnapshotId,64),
+    scoringPolicyVersion: text(event.decisionProvenance?.scoringPolicyVersion,64),
+    strategyVersion: text(event.decisionProvenance?.strategyVersion,64),
+    evidencePolicyVersion: text(event.decisionProvenance?.evidencePolicyVersion,64),
+    policyBundleId: text(event.decisionProvenance?.policyBundleId,64),
+    configurationSnapshotId: text(event.decisionProvenance?.configurationSnapshot?.id,64),
+    // Config was allowlisted at snapshot creation; bound and re-filter on this boundary too.
+    configurationValues: Object.fromEntries(Object.entries(event.decisionProvenance?.configurationSnapshot?.values || {})
+      .filter(([key,value]) => /^[a-zA-Z]{1,60}$/.test(key) && !/key|secret|token|password|accountId/i.test(key) &&
+        (value === null || typeof value === 'boolean' || typeof value === 'number' && Number.isFinite(value))).slice(0,150)),
+    riskPolicyVersion: text(event.riskPolicyVersion,64),
+    calculationMs: number(event.decisionLatency?.calculationMs),
+    totalDecisionLatencyMs: number(event.totalDecisionLatencyMs),
     outcomeReason: 'A scan or order event does not establish a realized trading outcome',
     queueWaitMs: number(event.queueWaitMs),
     orderId: text(event.orderId, 80), clientOrderId: text(event.clientOrderId, 80),
@@ -49,12 +65,16 @@ export function createCandidateTraceStore(directory, options = {}) {
   const queueLimit = 512;
   let queue = [], worker = null, initialized = false, slot = 0, size = 0;
   let written = 0, dropped = 0, lastError = null, querying = false;
+  let persistenceFailures = 0, firstLossAt = null, lastLossAt = null;
+  const latency = createPipelineLatency();
+  const markLoss = () => { lastLossAt = new Date().toISOString(); firstLossAt ||= lastLossAt; };
   const observedStates = new Map();
   const journeys = new Map();
   const file = index => path.join(directory, `candidate-trace-${index}.jsonl`);
   async function initialize() {
     if (initialized) return;
     await fs.mkdir(directory, { recursive: true });
+    await archivePolicyBundle(directory);
     const stats = await Promise.all(Array.from({ length: fileCount }, async (_, index) => {
       try { return { index, ...(await fs.stat(file(index))) }; }
       catch (error) { if (error.code !== 'ENOENT') throw error; return null; }
@@ -97,7 +117,7 @@ export function createCandidateTraceStore(directory, options = {}) {
             scope: 'First observed in retained history; unrecorded or evicted history is unknown' };
         }
         const line = JSON.stringify(row) + '\n', bytes = Buffer.byteLength(line);
-        if (bytes > fileBytes) { queue.shift(); dropped++; continue; }
+        if (bytes > fileBytes) { queue.shift(); dropped++; markLoss(); continue; }
         if (size + bytes > fileBytes) {
           slot = (slot + 1) % fileCount;
           await fs.writeFile(file(slot), '', { mode: 0o600 });
@@ -110,6 +130,7 @@ export function createCandidateTraceStore(directory, options = {}) {
     } catch (error) {
       // Diagnostics must not crash the engine or silently grow a retry backlog.
       lastError = text(error.code || 'TRACE_WRITE_FAILED', 40);
+      persistenceFailures++; markLoss();
       dropped += queue.length; queue = [];
       initialized = false;
     }
@@ -117,6 +138,9 @@ export function createCandidateTraceStore(directory, options = {}) {
   function record(event) {
     const compact = compactCandidateTrace(event);
     if (!compact) return false;
+    latency.observe(compact.assetClass,'queueWaitMs',compact.queueWaitMs);
+    latency.observe(compact.assetClass,'calculationMs',compact.calculationMs);
+    latency.observe(compact.assetClass,'totalDecisionLatencyMs',compact.totalDecisionLatencyMs);
     const journey = journeys.get(compact.symbol) || { firstObservedAt: compact.observedAt, firstObservedPrice: compact.price };
     journeys.delete(compact.symbol); journeys.set(compact.symbol, journey);
     if (journeys.size > 1000) journeys.delete(journeys.keys().next().value);
@@ -142,7 +166,7 @@ export function createCandidateTraceStore(directory, options = {}) {
   }
   function enqueue(compact) {
     const line = JSON.stringify(compact) + '\n';
-    if (queue.length >= queueLimit || Buffer.byteLength(line) > fileBytes) { dropped++; return false; }
+    if (queue.length >= queueLimit || Buffer.byteLength(line) > fileBytes) { dropped++; markLoss(); return false; }
     queue.push(line);
     startWorker();
     return true;
@@ -154,6 +178,11 @@ export function createCandidateTraceStore(directory, options = {}) {
     });
   }
   const status = () => ({ written, dropped, pending: queue.length, lastError,
+    oldestPendingAgeMs: queue.length ? Math.max(0, Date.now() - Date.parse(JSON.parse(queue[0]).observedAt)) : 0,
+    diagnosticsStatus: lastError || dropped > 0 ? 'DIAGNOSTICS_DEGRADED' : 'AVAILABLE',
+    tracePersistenceFailures: persistenceFailures, firstLossAt, lastLossAt,
+    latency: latency.summary(),
+    policyArchive: { ...policyManifest, maxDiskBytes: 8 * 1048576 },
     maxQueue: queueLimit, maxDiskBytes: fileCount * fileBytes,
     retention: 'Rolling bounded history; not a complete market archive. Requires a persistent DATA_DIR to survive deployment.' });
   async function read(symbol, requestedLimit = 100) {

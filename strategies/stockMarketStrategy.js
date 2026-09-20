@@ -977,6 +977,7 @@ export function createStockMarketStrategy(dependencies) {
               }))
               : [];
           quote.technicals = computeTechnicals(technicalBars);
+          quote.barSnapshotId = quote.technicals.barSnapshotId;
           quote.technicalBarsFound = technicalBars.length;
           if (CONFIG.enableAdvancedFilters) {
             quote.confirmations = await getAdvancedConfirmations(quote, {

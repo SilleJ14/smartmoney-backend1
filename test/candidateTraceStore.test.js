@@ -79,7 +79,13 @@ test('trace backlog and disk are bounded under overload and rotation', async t =
   assert.equal(store.status().pending, 512);
   assert.equal(store.status().dropped, 488);
   await store.flush();
-  const files = await fs.readdir(dir);
+  const allFiles = await fs.readdir(dir);
+  const files = allFiles.filter(file => file.startsWith('candidate-trace-'));
+  const bundles = allFiles.filter(file => file.startsWith('policy-bundle-'));
+  assert.equal(bundles.length,1);
+  const bundle = JSON.parse(await fs.readFile(path.join(dir,bundles[0]),'utf8'));
+  assert.equal(bundle.id,store.status().policyArchive.id);
+  assert.ok(bundle.sources['decisionScores.js'].includes('STOCK_DECISION_WEIGHTS'));
   assert.equal(files.length, 8);
   let bytes = 0;
   for (const file of files) { const stat = await fs.stat(path.join(dir, file)); assert.ok(stat.size <= 4096); bytes += stat.size; }

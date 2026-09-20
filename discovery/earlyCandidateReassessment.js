@@ -27,7 +27,7 @@ export function createEarlyCandidateReassessment({ analyze, publish, trace = () 
       // New material evidence may bypass the normal cooldown, but not a burst
       // bound of five seconds. Identical events never bypass it.
       if (reviewed.has(symbol) && now() - reviewed.get(symbol) < (changed ? 5000 : retryMs)) continue;
-      if (queue.size >= capacity) { status.deferredByCapacity++; continue; }
+      if (queue.size >= capacity) { status.deferredByCapacity++; trace({ symbol, stage: 'EARLY_ANALYSIS_DEFERRED', reasons: ['QUEUE_CAPACITY'] }); continue; }
       if (event) events.set(symbol, event);
       while (events.size > capacity) events.delete(events.keys().next().value);
       queue.set(symbol, { at: now(), priority }); trace({ symbol, stage: 'EARLY_ANALYSIS_QUEUED', trigger: event });
@@ -43,6 +43,7 @@ export function createEarlyCandidateReassessment({ analyze, publish, trace = () 
       return rank(b) - rank(a) || queue.get(a).at - queue.get(b).at;
     }).slice(0, batchSize);
     const startedAt = now();
+    const queuedAtBySymbol = new Map(selected.map(symbol => [symbol, queue.get(symbol).at]));
     lastStartedAt = startedAt;
     for (const symbol of selected) {
       const queueWaitMs = Math.max(0, startedAt - queue.get(symbol).at);
@@ -66,6 +67,7 @@ export function createEarlyCandidateReassessment({ analyze, publish, trace = () 
       for (const symbol of selected) {
         const row = rows.find(r => r.symbol === symbol);
         trace({ ...(row || {}), symbol, stage: row ? 'EARLY_ANALYSIS_COMPLETED' : 'EARLY_ANALYSIS_NO_RESULT',
+          totalDecisionLatencyMs: Math.max(0, now() - queuedAtBySymbol.get(symbol)),
           reasons: row?.missingEvidenceReasons || ['EVIDENCE_OR_INSTRUMENT_FILTER_FAILED'] });
       }
       return { reviewed: selected.length, scored: rows.length, pending: queue.size };

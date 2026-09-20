@@ -197,6 +197,11 @@ function signalEvidenceAuthority(signal = {}) {
 function prefersNextSignal(current = {}, next = {}) {
   const left = signalEvidenceAuthority(current);
   const right = signalEvidenceAuthority(next);
+  if (hasDecisionUpdate(current) && hasDecisionUpdate(next)) {
+    const previous = Number(current.decisionRevision || current.centralAutonomousDecisionCore?.decisionRevision || 0);
+    const incoming = Number(next.decisionRevision || next.centralAutonomousDecisionCore?.decisionRevision || 0);
+    if (previous !== incoming && (previous > 0 || incoming > 0)) return incoming > previous;
+  }
   // Quote-only discoveries carry no authority to replace a decision. Between
   // real decisions, a newer rejection/reset must supersede an older approval.
   if (hasDecisionUpdate(current) && hasDecisionUpdate(next) &&

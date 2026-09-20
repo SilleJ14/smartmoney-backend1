@@ -65,12 +65,35 @@ test('broker-confirmed cancelled unfilled orders release budget; unknown orders 
 });
 test('two pending fills cannot both claim the same one-share position snapshot', async () => {
   const h = reservationHarness();
+  h.reserve('1').settle({ result: { status: 'filled', filled_qty: '1' } });
+  // Simulate a restored legacy journal with two fills. New submissions cannot
+  // create this state, but restart reconciliation must still handle it safely.
+  h.state.orderRiskReservations['2'] = {
+    ...structuredClone(h.state.orderRiskReservations['1']),
+    id: '2', clientOrderId: '2', orderIntentId: '2', reservationId: '2',
+  };
   for (const id of ['1', '2']) {
-    h.reserve(id).settle({ result: { status: 'filled', filled_qty: '1' } });
     h.orders.set(id, { symbol: 'BTC/USD', status: 'filled', filled_qty: '1' });
   }
   assert.equal(await h.ledger.reconcile([{ symbol: 'BTC/USD', qty: '1' }]), 200);
   assert.equal(await h.ledger.reconcile([{ symbol: 'BTC/USD', qty: '2' }]), 0);
+});
+
+test('an uncertain purchase blocks a new identity for the same symbol until reconciled', async () => {
+  const h = reservationHarness();
+  h.reserve('1').settle({ error: new Error('broker timeout') });
+  let posts = 0;
+  const service = createOrderService({ normalizeSymbol: String,
+    reserveRisk: order => h.reserve(order.client_order_id, order.symbol),
+    tradingRequest: async () => { posts++; return { status: 'new' }; },
+  });
+  await assert.rejects(service.cryptoMarketBuy({ symbol: 'BTC/USD', dollars: 25 }), /Unresolved purchase/);
+  assert.equal(posts, 0);
+  assert.equal(await h.ledger.reconcile([]), 100);
+  h.orders.set('1', { symbol: 'BTC/USD', status: 'canceled', filled_qty: '0' });
+  assert.equal(await h.ledger.reconcile([]), 0);
+  h.reserve('2');
+  assert.equal(h.state.orderRiskReservations['2'].status, 'submitting');
 });
 test('buy submissions serialize guard+reservation+POST and cannot POST if durable reservation fails', async () => {
   const events = []; let busy = 0;

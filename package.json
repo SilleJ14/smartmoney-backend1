@@ -7,6 +7,7 @@
     "start": "node --max-old-space-size=192 server.js",
     "dev": "node server.js",
     "test": "node --test",
+    "test:release": "node --test --test-concurrency=1",
     "test:2gb": "node --max-old-space-size=1536 --test"
   },
   "devDependencies": {

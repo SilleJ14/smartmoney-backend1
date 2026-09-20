@@ -1,6 +1,7 @@
 // Versioned research rules, not calibrated probabilities. Price/volume trend
 // families are scored once; EMAs and derivatives are supporting telemetry only.
 import { normalizeCryptoVolume } from '../market-data/normalizeCryptoVolume.js';
+import { barSnapshot } from '../market-data/barSnapshot.js';
 export const CRYPTO_SETUP_MODEL = 'CRYPTO_SETUP_V1';
 const finite = x => x !== null && x !== '' && Number.isFinite(Number(x));
 const clamp = x => Math.max(0, Math.min(100, x));
@@ -61,6 +62,7 @@ export function assessBtcContext(bars, { now = Date.now() } = {}) {
 export function assessCryptoSetup(signal = {}, { now = Date.now() } = {}) {
   const rows = completedCryptoBars(signal.chartBars || [], now);
   const base = { model: CRYPTO_SETUP_MODEL, available: false, eligible: false, score: null,
+    inputBarSnapshotId: barSnapshot(signal.chartBars).id,
     derivatives: { openInterest: { available: false, required: false }, funding: { available: false, required: false } } };
   if (rows.length < 24) return { ...base, reasons: ['CRYPTO_SETUP_HISTORY_UNAVAILABLE'] };
   const last = rows.at(-1), price = Number(signal.price ?? signal.current);

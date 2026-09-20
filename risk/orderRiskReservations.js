@@ -16,6 +16,15 @@ export function createOrderRiskReservations({ state, persist, lookupOrder, getOp
   function outstanding(entry, positions = []) {
     return outstandingOrderNotional(entry, positions, normalizeSymbol);
   }
+  function recordOwnership(entry) {
+    if (!(entry.filledQty > 0)) return;
+    const intents = state.liveTradeLimitState.positionIntents ||= {};
+    const intent = intents[entry.symbol];
+    if (!intent) return;
+    intent.origins = [...new Set([...(intent.origins || []), entry.origin || 'UNKNOWN'])].slice(0,3);
+    intent.managementPolicy = entry.managementPolicy || intent.managementPolicy || 'UNKNOWN';
+    intent.entryPolicies = [...new Set([...(intent.entryPolicies || []),entry.entryPolicy || 'UNKNOWN'])].slice(0,3);
+  }
   async function reconcile(positions) {
     if (positions?.stale === true) throw new Error('Fresh broker positions required for reconciliation');
     if (getOpenOrders) {
@@ -56,8 +65,11 @@ export function createOrderRiskReservations({ state, persist, lookupOrder, getOp
           // Missing fill quantity is unresolved exposure, not proof of no fill.
           if (order.filled_qty == null || order.filled_qty === '' ||
             !Number.isFinite(Number(order.filled_qty)) || Number(order.filled_qty) < 0) return;
+          // A delayed broker response must not erase exposure already observed.
+          if (Number(order.filled_qty) < Number(entry.filledQty || 0)) return;
           entry.status = order.status;
-          entry.filledQty = Number(order.filled_qty || 0);
+          entry.filledQty = Number(order.filled_qty);
+          recordOwnership(entry);
           entry.filledAt = Date.parse(order.filled_at) || entry.filledAt || null;
           if (['canceled', 'expired', 'rejected'].includes(order.status) && entry.filledQty === 0) releaseEntry(entry);
           if (['canceled', 'expired'].includes(order.status) && entry.filledQty > 0) {
@@ -105,12 +117,28 @@ export function createOrderRiskReservations({ state, persist, lookupOrder, getOp
     if (Object.keys(entries()).length >= 2500) throw new Error('Order safety journal full; reconcile before buying');
     const id = order.client_order_id;
     if (!id || entries()[id]) throw new Error('Duplicate or missing order identity');
+    const symbol = normalizeSymbol(order.symbol);
+    if (Object.values(entries()).some(entry => entry.symbol === symbol && outstanding(entry) > 0)) {
+      throw new Error('Unresolved purchase for this symbol must be reconciled before another order');
+    }
     const entry = { id, symbol: normalizeSymbol(order.symbol), notional: options.riskNotional,
+      orderIntentId: id, clientOrderId: id, reservationId: id, side: order.side,
+      maximumAuthorizedAmount: options.riskNotional,
+      origin: options.automated === false && !options.requireCandidateDecision ? 'MANUAL' : 'AUTOMATIC',
+      entryPolicy: options.automated === false && !options.requireCandidateDecision ? 'MANUAL_V1' : 'AI_ENTRY_V1',
+      managementPolicy: 'AI_MANAGED_V1',
+      purchasePolicyVersion: options.purchasePolicyVersion || null,
+      purchaseType: options.purchaseType || (options.automated === false && !options.requireCandidateDecision ? 'manual' : 'automatic'),
+      resultingExposure: options.scaleInEvidence?.resultingExposure ?? null,
       referencePrice: options.riskReferencePrice, baseQty: options.riskBaseQty || 0,
       version: options.riskDecisionVersion || null, category: options.holdCategory,
+      decisionRevision: options.riskDecisionRevision ?? null,
+      evidenceSnapshotId: options.decisionProvenance?.evidenceSnapshotId ?? null,
+      policyBundleId: options.decisionProvenance?.policyBundleId ?? null,
+      configurationSnapshotId: options.decisionProvenance?.configurationSnapshot?.id ?? null,
       dateKey: state.liveTradeLimitState?.dateKey,
       countedIntraday: !options.liveTradeLimitDecision?.isExistingPosition && options.holdCategory === 'intraday',
-      createdAt: now(), status: 'pending', filledQty: 0 };
+      createdAt: now(), status: 'submitting', filledQty: 0 };
     if (!(entry.notional > 0)) throw new Error('Missing verified reservation value');
     entries()[id] = entry;
     const limits = state.liveTradeLimitState;
@@ -121,11 +149,16 @@ export function createOrderRiskReservations({ state, persist, lookupOrder, getOp
     persist(); // must succeed BEFORE the POST
     return { settle({ result, error, notSubmitted = false }) {
       entry.status = result?.status || (error ? 'uncertain' : 'accepted');
-      entry.filledQty = Number(result?.filled_qty || 0);
-      entry.filledAt = Date.parse(result?.filled_at) || null;
+      const returnedQty = Number(result?.filled_qty);
+      if (result?.filled_qty != null && Number.isFinite(returnedQty) && returnedQty >= 0) {
+        entry.filledQty = Math.max(entry.filledQty || 0, returnedQty);
+        recordOwnership(entry);
+      }
+      entry.filledAt = Date.parse(result?.filled_at) || entry.filledAt || null;
       // HTTP rejection is definitive. Timeouts, duplicate-id errors and network
       // failures are ambiguous and must be looked up at the broker.
-      if (notSubmitted || [400, 401, 403].includes(error?.status)) releaseEntry(entry);
+      const identityConflict = /duplicate|client.?order.?id.*(unique|exist|used)/i.test(String(error?.message || ''));
+      if (notSubmitted || (!identityConflict && [400, 401, 403].includes(error?.status))) releaseEntry(entry);
       persist();
     } };
   }

@@ -142,7 +142,8 @@ export function createManagedExecution({ state, persist, request, getManagedSymb
     const row = ledger.orders[payload.client_order_id];
     if (!row) return;
     const status = Number(error?.statusCode || error?.status || 0);
-    if (!sent || (status >= 400 && status < 500 && ![408, 429].includes(status))) {
+    const identityConflict = /duplicate|client.?order.?id.*(unique|exist|used)/i.test(String(error?.message || ''));
+    if (!sent || (!identityConflict && status >= 400 && status < 500 && ![408, 429].includes(status))) {
       row.status = 'rejected'; row.done = true;
     } else row.status = 'uncertain';
     ready = false;

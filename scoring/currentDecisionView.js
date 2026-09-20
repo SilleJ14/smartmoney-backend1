@@ -3,6 +3,7 @@ import { evaluateCryptoTradeCandidate } from './componentScore.js';
 import { isCryptoSignal } from './canonicalSignalRank.js';
 import { candidateDiagnostics } from './candidateDiagnostics.js';
 import { decisionAuthorization } from './decisionAuthorization.js';
+import { decisionState } from './decisionState.js';
 
 const list = value => Array.isArray(value) ? value : [];
 // Presentation only: one current evidence set, never a union with old raw,
@@ -27,8 +28,23 @@ export function buildCurrentDecisionView(signal, { now = Date.now() } = {}) {
       /^(CANONICAL_(STOCK|CRYPTO)_FINAL_DECISION_UNAVAILABLE|(STOCK|CRYPTO)_(DISCOVERY_SCORE|ENTRY_SCORE|MULTI_DAY_EVIDENCE)_UNAVAILABLE|POSITION_SIZING_PENDING)$/.test(reason)),
   ])];
   const reasons = [...new Set([...researchReasons, ...gate.reasons])];
+  const authorization = decisionAuthorization(signal, gate, now);
   return { version: 1, evaluatedAt: new Date(now).toISOString(),
-    authorization: decisionAuthorization(signal, gate, now),
+    authorization,
+    states: decisionState(signal, evidence, gate, authorization, crypto),
+    scoringExplanation: evidence ? { coverage: evidence.coverage,
+      availableScoringWeight: evidence.availableScoringWeight ?? null,
+      totalConfiguredWeight: evidence.totalConfiguredWeight ?? null,
+      coverageAlgorithm: evidence.coverageAlgorithm ?? null,
+      calculation: evidence.calculation ?? null,
+      adjustments: evidence.scoreAdjustments || [],
+      missingComponents: evidence.missingComponents || [],
+      components: evidence.components || [],
+      fundamentalValidation: signal.fundamentalValidation || null,
+      newsReviewCoverage: signal.confirmations?.newsReviewCoverage || null,
+      newsReviewStatus: signal.confirmations?.newsRiskAvailable !== true ? 'UNAVAILABLE'
+        : signal.confirmations?.newsRisk === true ? 'RISK_FOUND' : 'CLEAR_WITHIN_REVIEWED_COVERAGE',
+    } : null,
     assessmentAt: signal.scoreAssessmentUpdatedAt || signal.decisionUpdatedAt || null,
     researchReasons, executionReasons: gate.reasons, reasons,
     diagnostics: candidateDiagnostics(signal, gate.evidence || evidence, gate) };

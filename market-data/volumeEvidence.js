@@ -1,9 +1,8 @@
 // Completed-bar participation, NOT session-relative volume. Missing is not zero.
+import { normalizeCryptoVolume } from './normalizeCryptoVolume.js';
 export function recentBarVolumeEvidence(bars = [], { minBaselineBars = 5, maxBaselineBars = 20 } = {}) {
-  const volume = bar => {
-    const value = bar?.v ?? bar?.volume;
-    return value != null && value !== '' && Number.isFinite(Number(value)) && Number(value) >= 0 ? Number(value) : null;
-  };
+  if (!Array.isArray(bars) || bars.some(b => !b || typeof b !== 'object' || Array.isArray(b))) bars = [];
+  const volume = bar => normalizeCryptoVolume(bar)?.volume ?? null;
   const latest = bars.at(-1);
   const timestamp = bar => {
     const raw = bar?.t ?? bar?.timestamp ?? bar?.time;

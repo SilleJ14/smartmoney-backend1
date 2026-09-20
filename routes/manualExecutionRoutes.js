@@ -34,7 +34,7 @@ export function registerManualExecutionRoutes(app, dependencies) {
   };
   app.post("/manual-buy-stock", requireAdmin, async (req, res) => {
     try {
-      const { symbol, dollars, shares, buyMode, holdCategory } = req.body;
+      const { symbol, dollars, shares, buyMode, holdCategory, confirmationId } = req.body;
       const cleanSymbol = normalizeSymbol(symbol), amount = Number(dollars), shareAmount = Number(shares || 0);
       const mode = String(buyMode || "dollars").toLowerCase();
       if (!cleanSymbol) throw new Error("Missing symbol");
@@ -57,7 +57,7 @@ export function registerManualExecutionRoutes(app, dependencies) {
       const order = await manualStockBuy({ symbol: cleanSymbol, dollars: amount, shares: shareAmount,
         buyMode: mode, fractionable, referencePrice,
         holdCategory: holdCategory === "multi_day" ? "multi_day" : "intraday",
-        marketOpen: true });
+        marketOpen: true, confirmationId });
       logger.log("MANUAL BUY ORDER:", order);
       if (!order?.id) return res.json({ ok: false, error: "Order not created" });
       markManagedSymbol(cleanSymbol);
@@ -132,6 +132,7 @@ export function registerManualExecutionRoutes(app, dependencies) {
         symbol: cleanSymbol,
         dollars,
         requireCandidateDecision: true,
+        confirmationId: req.body?.confirmationId,
         buyMode: "dollars",
         fractionable,
         referencePrice,
@@ -160,6 +161,25 @@ export function registerManualExecutionRoutes(app, dependencies) {
     try {
       if (!cleanSymbol) return res.status(400).json({ ok: false, error: "Missing crypto symbol" });
       if (!Number.isFinite(dollars) || dollars < 1) return res.status(400).json({ ok: false, error: "Invalid dollar amount" });
+      // The AI-sizing button retains canonical approval. Direct manual requests
+      // are discretionary but still pass the shared final execution/risk guard.
+      const manual = req.body?.source !== "AI_SIZING_BUTTON";
+      if (manual) {
+        const asset = await getAsset(cleanSymbol);
+        if (asset?.status !== "active" || asset?.tradable !== true ||
+            String(asset.asset_class || asset.class || "").toLowerCase() !== "crypto") {
+          return res.status(409).json({ ok: false, error: `${cleanSymbol} is not an active tradable crypto asset` });
+        }
+        const resolution = await getVerifiedCryptoQuote(cleanSymbol);
+        if (resolution?.quoteReady !== true) {
+          return res.status(409).json({ ok: false, error: "A verified live crypto quote is not available" });
+        }
+        const order = await manualCryptoBuy({ symbol: cleanSymbol, dollars, manual: true, ...(req.body?.confirmationId ? { confirmationId: req.body.confirmationId } : {}) });
+        if (!order?.id) return res.status(502).json({ ok: false, error: "Crypto order was not created" });
+        markManagedSymbol(cleanSymbol);
+        recordOrder("MANUAL_CRYPTO_BUY", cleanSymbol, { orderId: order.id, dollars, source: "DISCRETIONARY_MANUAL_CRYPTO" });
+        return res.json({ ok: true, symbol: cleanSymbol, dollars, order });
+      }
       const state = getState();
       const candidates = Array.isArray(state.lastCryptoSignals) ? state.lastCryptoSignals : [];
       const candidate = candidates.find((item) => normalizeSymbol(item?.symbol) === cleanSymbol);
@@ -188,7 +208,7 @@ export function registerManualExecutionRoutes(app, dependencies) {
       if (!Number.isFinite(sizingLimit) || sizingLimit < 1 || dollars > sizingLimit + 0.01) {
         return res.status(409).json({ ok: false, error: "Requested crypto amount exceeds the current verified sizing limit" });
       }
-      const order = await manualCryptoBuy({ symbol: cleanSymbol, dollars });
+      const order = await manualCryptoBuy({ symbol: cleanSymbol, dollars, ...(req.body?.confirmationId ? { confirmationId: req.body.confirmationId } : {}) });
       if (!order?.id) return res.status(502).json({ ok: false, error: "Crypto order was not created" });
       markManagedSymbol(cleanSymbol);
       recordOrder("MANUAL_CRYPTO_BUY", cleanSymbol, { orderId: order.id, dollars, source: "VERIFIED_CRYPTO_ROUTE" });

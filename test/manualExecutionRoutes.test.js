@@ -29,11 +29,11 @@ test("dedicated crypto route requires an approved sized candidate before broker 
     recordOrder: () => {}, recordFailedOrder: () => {}, logger: { log() {} },
   });
   const res = { status(code) { this.statusCode = code; return this; }, json(body) { this.body = body; return this; } };
-  await routes.get("/manual-buy-crypto")({ body: { symbol: "BTC/USD", dollars: 25 } }, res);
+  await routes.get("/manual-buy-crypto")({ body: { symbol: "BTC/USD", dollars: 25, source: "AI_SIZING_BUTTON" } }, res);
   assert.equal(res.body.ok, true);
   assert.deepEqual(calls, [{ symbol: "BTCUSD", dollars: 25 }]);
   const oversized = { status(code) { this.statusCode = code; return this; }, json(body) { this.body = body; return this; } };
-  await routes.get("/manual-buy-crypto")({ body: { symbol: "BTCUSD", dollars: 26 } }, oversized);
+  await routes.get("/manual-buy-crypto")({ body: { symbol: "BTCUSD", dollars: 26, source: "AI_SIZING_BUTTON" } }, oversized);
   assert.equal(oversized.statusCode, 409);
 });
 

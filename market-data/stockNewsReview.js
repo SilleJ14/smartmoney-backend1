@@ -31,6 +31,12 @@ export function createStockNewsReview({ providers, now = Date.now, onEvidence = 
             reason: catalyst.riskDetected ? 'Risky news detected' : articles.length ? 'News checked; no major risk detected' : 'News checked; no headlines returned',
             headlines: catalyst.riskDetected ? catalyst.headlines.slice(0, 3) : [],
             allHeadlines: catalyst.headlines, articles, catalyst, source: name,
+            reviewCoverage: { status: catalyst.riskDetected ? 'RISK_FOUND' : 'CLEAR_WITHIN_REVIEWED_COVERAGE',
+              provider: name, checkedAt: new Date(now()).toISOString(), returnedCount: raw.length,
+              reviewedCount: articles.length, resultLimit: 50,
+              oldestArticleAt: articles.length ? new Date(Math.min(...articles.map(a => a.datetime)) * 1000).toISOString() : null,
+              newestArticleAt: articles.length ? new Date(Math.max(...articles.map(a => a.datetime)) * 1000).toISOString() : null,
+              scope: 'Returned provider results only; absence of a headline is not proof of no material news' },
             fetchedAt: new Date(now()).toISOString(), cacheStatus: 'fresh', errors };
           remember(symbol, value, cacheMs);
           const material = articles.filter(article => {

@@ -19,6 +19,8 @@ export function decisionAuthorization(signal, gate, now = Date.now()) {
   if (!(amount >= 1)) reasons.push('POSITION_SIZING_PENDING');
   const approved = gate.approved === true && reasons.length === 0 && datesValid && expiresMs > now && amount >= 1;
   const record = { schemaVersion: 1, symbol: signal.symbol, approved,
+    decisionRevision: signal.decisionRevision ?? signal.centralAutonomousDecisionCore?.decisionRevision ?? null,
+    provenance: signal.decisionProvenance ?? signal.centralAutonomousDecisionCore?.provenance ?? null,
     approvedAmount: approved ? amount : 0, blockingReasons: [...new Set(reasons)],
     riskPolicyVersion: signal.riskPolicyVersion || null,
     decisionAt: signal.decisionUpdatedAt || null,

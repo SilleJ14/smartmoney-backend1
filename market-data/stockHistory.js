@@ -11,7 +11,7 @@ export function stockHistoryRequest(timeframe = '5Min', count = 30) {
 
 export function validCompletedStockBars(rows, spec, now = Date.now()) {
   const seen = new Set();
-  return (Array.isArray(rows) ? rows : []).map(bar => ({ ...bar,
+  return (Array.isArray(rows) ? rows : []).filter(bar => bar && typeof bar === 'object' && !Array.isArray(bar)).map(bar => ({ ...bar,
     t: typeof bar.t === 'number' ? bar.t : Date.parse(bar.t),
   })).filter(bar => {
     const t = bar.t;

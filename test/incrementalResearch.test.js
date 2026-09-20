@@ -1,6 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import fs from 'node:fs';
+import { canPublishDecision } from '../scoring/decisionProvenance.js';
 import vm from 'node:vm';
 import { parse } from 'acorn';
 import { createIncrementalResearch, canReuseResearch, needsCandidateResearch, incrementalResearchForState } from '../discovery/incrementalResearch.js';
@@ -92,7 +93,7 @@ function actualWorker({ invalidSetup = false } = {}) {
   const engineState = { running: true, marketOpen: true };
   let centralCalls = 0, pushes = 0;
   const context = vm.createContext({ engineState, createIncrementalResearch: options => createIncrementalResearch({ ...options, now: () => start }),
-    incrementalResearchForState: state => incrementalResearchForState(state, start),
+    incrementalResearchForState: state => incrementalResearchForState(state, start), canPublishDecision,
     buildMemoryGuardSnapshot: () => ({ shouldPauseHeavyWork: false }), isCrypto: s => s.includes('/'),
     canRefreshStockQuotes: () => true, getMarketSession: () => 'regular', normalizeSymbol: s => s,
     mergeLiveQuoteIntoSignal: row => ({ ...row, setupRevalidationRequired: invalidSetup }),
