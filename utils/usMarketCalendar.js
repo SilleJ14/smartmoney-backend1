@@ -93,6 +93,11 @@ export function isUsStockMarketSessionDayKey(dayKey) {
   return !marketHolidaysForYear(parsed.year).has(String(dayKey));
 }
 
+export function formatMarketDayKey(parts) {
+  if (!parts) return null;
+  return `${parts.year}-${String(parts.month).padStart(2, "0")}-${String(parts.day).padStart(2, "0")}`;
+}
+
 export function addUsStockMarketSessionDays(parts, numberOfDays) {
   const cursor = new Date(Date.UTC(parts.year, parts.month - 1, parts.day));
   let remaining = Math.max(0, Number(numberOfDays || 0));
@@ -107,5 +112,22 @@ export function addUsStockMarketSessionDays(parts, numberOfDays) {
     month: cursor.getUTCMonth() + 1,
     day: cursor.getUTCDate(),
   };
+}
+
+export function missingUsStockMarketSessionDays(fromKey, toKey) {
+  const start = parseMarketDayKey(fromKey);
+  const end = parseMarketDayKey(toKey);
+  if (!start || !end) return Number.POSITIVE_INFINITY;
+  if (fromKey === toKey) return 0;
+  if (fromKey > toKey) return Number.POSITIVE_INFINITY;
+  let count = 0;
+  let cursor = { year: start.year, month: start.month, day: start.day };
+  for (let i = 0; i < 40; i++) {
+    cursor = addUsStockMarketSessionDays(cursor, 1);
+    const key = formatMarketDayKey(cursor);
+    if (!key || key >= toKey) return count;
+    count += 1;
+  }
+  return count;
 }
 

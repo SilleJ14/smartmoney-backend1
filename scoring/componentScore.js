@@ -397,6 +397,9 @@ export function evaluateCryptoTradeCandidate(
     minimumScore = CRYPTO_MIN_FINAL_SCORE_TO_BUY,
     now = Date.now(),
     maxDiscoveryAgeMinutes = 15,
+    requireCentralDecision = true,
+    requireFreshDecision = true,
+    requireExplicitApproval = true,
   } = {}
 ) {
   const evidence = buildCryptoDecisionScore(signal, { now, maxDiscoveryAgeMinutes });
@@ -411,7 +414,7 @@ export function evaluateCryptoTradeCandidate(
     signal.cryptoDecisionScoreAvailable !== false &&
     resolvedScore !== undefined &&
     evidence.coreEvidencePass === true &&
-    centralEvidence?.coreEvidencePass === true;
+    (!requireCentralDecision || centralEvidence?.coreEvidencePass === true);
   // Quote refreshes may change entry quality between central scoring cycles.
   // A stored higher score must never override the evidence being evaluated now.
   const score = scoreAvailable ? evidence.score : 0;
@@ -421,7 +424,7 @@ export function evaluateCryptoTradeCandidate(
     Number(now) - decisionTime <= 15 * 60000;
   const centralAction = String(signal.centralAutonomousAction || signal.centralAutonomousDecisionCore?.action || "").toUpperCase();
   const reasons = [
-    ...researchExecutionIssues(signal,evidencePolicy('crypto','order','automatic'), now),
+    ...(requireCentralDecision ? researchExecutionIssues(signal,evidencePolicy('crypto','order','automatic'), now) : []),
     ...evidence.setupGate.reasons,
     ...(signal.scoringModelVersion === 'SMARTMONEY_CRYPTO_DECISION_V4' && getApprovedTradeAmount(signal) > 0
       ? evaluateCryptoTradePlan(signal, { now, notional: getApprovedTradeAmount(signal) }).reasons : []),
@@ -432,17 +435,17 @@ export function evaluateCryptoTradeCandidate(
     ...(signal.globalRiskOffDefense?.shouldBlock === true ? ['GLOBAL_RISK_OFF'] : []),
     ...(signal.shouldWaitForPullback === true ? ['WAIT_FOR_PULLBACK'] : []),
     ...(signal.finalMasterDecisionProfile?.suppressEntry === true ? ['ENTRY_SUPPRESSED'] : []),
-    ...(decisionFresh ? [] : ["CENTRAL_DECISION_EXPIRED_OR_UNDATED"]),
+    ...(requireFreshDecision && !decisionFresh ? ["CENTRAL_DECISION_EXPIRED_OR_UNDATED"] : []),
     ...(signal.setupRevalidationRequired === true ? ["SETUP_PRICE_MOVED_RESCAN_REQUIRED"] : []),
-    ...(["ALLOW", "ALLOW_REDUCED_SIZE", "ACCELERATE_CAPITAL"].includes(centralAction) ? [] : ["CENTRAL_DECISION_NOT_APPROVED"]),
-    ...(centralEvidence?.coreEvidencePass === true
-      ? []
-      : [centralEvidence ? "CENTRAL_CRYPTO_EVIDENCE_FAILED" : "MISSING_CENTRAL_CRYPTO_EVIDENCE"]),
+    ...(requireCentralDecision && !["ALLOW", "ALLOW_REDUCED_SIZE", "ACCELERATE_CAPITAL"].includes(centralAction)
+      ? ["CENTRAL_DECISION_NOT_APPROVED"] : []),
+    ...(requireCentralDecision && centralEvidence?.coreEvidencePass !== true
+      ? [centralEvidence ? "CENTRAL_CRYPTO_EVIDENCE_FAILED" : "MISSING_CENTRAL_CRYPTO_EVIDENCE"] : []),
     ...(evidence.coreEvidencePass ? [] : evidence.missingCriticalEvidence),
-    ...(signal.qualifiedToBuy === true ? [] : ["NOT_QUALIFIED_TO_BUY"]),
-    ...(signal.autoTradeApproved === true ? [] : ["AUTO_TRADE_NOT_APPROVED"]),
-    ...(signal.approved === true ? [] : ["FINAL_APPROVAL_MISSING"]),
-    ...(signal.backendApproved === true ? [] : ["BACKEND_APPROVAL_MISSING"]),
+    ...(requireExplicitApproval && signal.qualifiedToBuy !== true ? ["NOT_QUALIFIED_TO_BUY"] : []),
+    ...(requireExplicitApproval && signal.autoTradeApproved !== true ? ["AUTO_TRADE_NOT_APPROVED"] : []),
+    ...(requireExplicitApproval && signal.approved !== true ? ["FINAL_APPROVAL_MISSING"] : []),
+    ...(requireExplicitApproval && signal.backendApproved !== true ? ["BACKEND_APPROVAL_MISSING"] : []),
     ...(scoreAvailable ? [] : ["DECISION_SCORE_INVALID"]),
     ...(score >= Number(minimumScore || 0) && resolvedScore >= Number(minimumScore || 0)
       ? [] : ["DECISION_SCORE_BELOW_THRESHOLD"]),

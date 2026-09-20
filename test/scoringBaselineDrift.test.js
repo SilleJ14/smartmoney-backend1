@@ -9,7 +9,7 @@ const expected = {
   missingFundamentals: [92.8,93.38,83.77,.92,1,[29.69,39.22,7.2,7.65,0],[]],
   lateMover: [55,93.38,77.67,1,1,[17.6,39.22,7.2,7.65,6],[]],
   missingNews: [92.8,35,65.25,1,1,[29.7,14.7,7.2,7.65,6],['approvedEntry']],
-  sparse: [0,0,0,.74,0,[0,0,0,0,0],['discoveryEvidence','canonicalDiscoveryExtensionEvidence','entryEvidence','approvedEntry','decisionCoverage']],
+  sparse: [0,0,0,0,0,[0,0,0,0,0],['discoveryEvidence','canonicalDiscoveryExtensionEvidence','entryEvidence','approvedEntry','decisionCoverage']],
 };
 for (const [name, input] of Object.entries(scoringBaselineInputs)) test(`frozen baseline: ${name}`, () => {
   const c = buildStockDecisionScore(input);

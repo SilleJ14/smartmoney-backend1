@@ -30,6 +30,8 @@ test("latest-session symbols get storage slots and bootstrap preserves existing 
     store.writeDaily("2026-09-02", [row("NEW", "2026-09-02", 20)]);
     const read = await store.readRecentHistories({ maxSymbols: 1 });
     assert.deepEqual([...read.histories.keys()], ["NEW"]);
+    const priority = await store.readRecentHistories({ maxSymbols: 1, prioritySymbols: ["OLD"] });
+    assert.deepEqual([...priority.histories.keys()], ["OLD"]);
     store.seedHistories([[row("NEW", "2026-09-01", 19), row("NEW", "2026-09-02", 99)]], "2026-09-03");
     const hydrated = await store.readRecentHistories({ maxSymbols: 2 });
     assert.deepEqual(hydrated.histories.get("NEW").map((r) => r.c), [19, 20]);

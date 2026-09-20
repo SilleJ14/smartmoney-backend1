@@ -3,6 +3,7 @@ import assert from "node:assert/strict";
 import {
   addUsStockMarketSessionDays,
   isUsStockMarketSessionDayKey,
+  missingUsStockMarketSessionDays,
 } from "../utils/usMarketCalendar.js";
 
 test("US stock calendar excludes weekends and observed exchange holidays", () => {
@@ -18,4 +19,5 @@ test("market-session addition skips weekends and holidays", () => {
     addUsStockMarketSessionDays({ year: 2026, month: 7, day: 2 }, 1),
     { year: 2026, month: 7, day: 6 }
   );
+  assert.equal(missingUsStockMarketSessionDays("2026-07-02", "2026-07-06"), 0);
 });

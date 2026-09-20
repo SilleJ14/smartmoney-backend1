@@ -178,6 +178,7 @@ export function createCryptoMarketScanner(dependencies) {
     isCrypto,
     recordSkippedSymbol,
     updateQuoteCache,
+    persistCryptoQuietDiscovery,
     getRuntime,
   } = dependencies;
 
@@ -558,6 +559,7 @@ export function createCryptoMarketScanner(dependencies) {
     const btcBars = await getBestCryptoBars('BTC/USD').catch(() => []);
     const cryptoSkipped = [];
     const results = [];
+    const quietDailyHistories = [];
     console.log("CRYPTO SCAN START", {
       totalCryptoAssets: symbols.length,
       sampleAssets: symbols.slice(0, 10),
@@ -782,6 +784,10 @@ export function createCryptoMarketScanner(dependencies) {
           newsCatalyst,
           learning: engineState.quietCandidateOutcomeLearning?.crypto || null,
         });
+        if (Number(cryptoDiscoveryScorecard.score || 0) >= 58 &&
+            cryptoDiscoveryScorecard.extension?.alreadyExtended !== true) {
+          quietDailyHistories.push({ symbol, bars: dailyBars });
+        }
         const score = cryptoDiscoveryScorecard.score;
         const canonicalCryptoEntryQuality = calculateCryptoEntryQualityFromEvidence({
           spreadAvailable,
@@ -1230,16 +1236,34 @@ export function createCryptoMarketScanner(dependencies) {
         }
         : null,
     }));
-    if (!analysisOnly) engineState.cryptoQuietDiscoveryState = {
-      phase: "CRYPTO_QUIET_PRE_MOVE_DISCOVERY",
-      updatedAt: new Date().toISOString(),
-      reviewedCount: results.length,
-      selectedCount: compactQuietCandidates.length,
-      topCandidates: compactQuietCandidates,
-      reason: quietCandidates.length > 0
-        ? "Quiet crypto candidates selected before extension."
-        : "No quiet crypto candidate met the current discovery floor.",
-    };
+    if (!analysisOnly) {
+      const scanState = {
+        phase: "CRYPTO_QUIET_PRE_MOVE_DISCOVERY",
+        updatedAt: new Date().toISOString(),
+        reviewedCount: results.length,
+        selectedCount: compactQuietCandidates.length,
+        topCandidates: compactQuietCandidates,
+        reason: quietCandidates.length > 0
+          ? "Quiet crypto candidates selected before extension."
+          : "No quiet crypto candidate met the current discovery floor.",
+      };
+      if (typeof persistCryptoQuietDiscovery === "function") {
+        engineState.cryptoQuietDiscoveryState = scanState;
+        setImmediate(() => {
+          persistCryptoQuietDiscovery({
+            scanCandidates: compactQuietCandidates,
+            dailyHistories: quietDailyHistories,
+            reviewedCount: results.length,
+          }).then((state) => {
+            if (state) engineState.cryptoQuietDiscoveryState = state;
+          }).catch(() => {
+            engineState.cryptoQuietDiscoveryState = scanState;
+          });
+        });
+      } else {
+        engineState.cryptoQuietDiscoveryState = scanState;
+      }
+    }
     if (analysisOnly) for (const signal of results) Object.assign(signal, {
       analysisUpdatedAt: new Date().toISOString(),
       approved: false, backendApproved: false, autoTradeApproved: false, qualifiedToBuy: false,

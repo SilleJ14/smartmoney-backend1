@@ -1,4 +1,4 @@
-import { providerDailyBar } from "./providerDailyBar.js";
+import { providerDailyBar, providerDailyBarMatchesSession } from "./providerDailyBar.js";
 
 function nextDateKey(dateKey) {
   const date = new Date(`${dateKey}T00:00:00.000Z`);
@@ -11,7 +11,7 @@ function normalizeBars(payload = {}, dateKey) {
   for (const [symbol, bars] of Object.entries(payload.bars || {})) {
     for (const bar of Array.isArray(bars) ? bars : []) {
       const normalized = providerDailyBar(symbol, bar);
-      if (!normalized || normalized.d !== dateKey) continue;
+      if (!normalized || !providerDailyBarMatchesSession(normalized, dateKey)) continue;
       rows.push({
         T: symbol,
         o: Number(bar.o || 0),

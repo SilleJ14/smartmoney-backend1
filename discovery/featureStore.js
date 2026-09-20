@@ -75,14 +75,56 @@ export function createDiscoveryFeatureStore({ directory, maxHistoryDays = 120, m
     return { dateKey, rowCount: storedRows.length, bytesWritten: Buffer.byteLength(body), ...prune() };
   }
 
-  async function readRecentHistories({ days = 30, maxSymbols = 5000 } = {}) {
+  function mergeDaily(dateKey, rows = []) {
+    ensureDirectory();
+    if (!/^\d{4}-\d{2}-\d{2}$/.test(dateKey)) throw new Error("Invalid discovery date key");
+    const target = path.join(directory, `${dateKey}.jsonl`);
+    const existing = fs.existsSync(target) && fs.statSync(target).size <= MAX_FILE_BYTES
+      ? fs.readFileSync(target, "utf8").split("\n").map((line) => parseStoredLine(line, dateKey)).filter(Boolean)
+      : [];
+    const incomingSymbols = new Set();
+    const bySymbol = new Map(existing.map((row) => [row.s, row]));
+    for (const row of rows) {
+      const compact = compactStoredRow(row, dateKey);
+      if (!compact) continue;
+      incomingSymbols.add(compact.s);
+      bySymbol.set(compact.s, compact);
+    }
+    let merged = [...bySymbol.values()];
+    if (merged.length > MAX_SYMBOLS) {
+      merged.sort((a, b) => {
+        const aPriority = incomingSymbols.has(a.s) ? 1 : 0;
+        const bPriority = incomingSymbols.has(b.s) ? 1 : 0;
+        if (aPriority !== bPriority) return bPriority - aPriority;
+        return (b.c * b.v) - (a.c * a.v) || a.s.localeCompare(b.s);
+      });
+      merged = merged.slice(0, MAX_SYMBOLS);
+    }
+    return writeDaily(dateKey, merged);
+  }
+
+  async function readRecentHistories({ days = 30, maxSymbols = 5000, prioritySymbols = [] } = {}) {
     maxSymbols = Math.max(1, Math.min(MAX_SYMBOLS, Number(maxSymbols) || MAX_SYMBOLS));
+    const priority = new Set((Array.isArray(prioritySymbols) ? prioritySymbols : []).map((symbol) => String(symbol || "").toUpperCase()).filter(Boolean));
     const selectedFiles = files().slice(-Math.max(1, Math.min(days, maxHistoryDays)));
     const histories = new Map();
     let rowsRead = 0;
     let filesRead = 0;
     let skippedFiles = 0;
     let bytesRead = 0;
+    function admit(symbol) {
+      if (histories.has(symbol)) return true;
+      if (histories.size < maxSymbols) {
+        histories.set(symbol, []);
+        return true;
+      }
+      if (!priority.has(symbol)) return false;
+      const evict = [...histories.keys()].find((name) => !priority.has(name));
+      if (!evict) return false;
+      histories.delete(evict);
+      histories.set(symbol, []);
+      return true;
+    }
     for (const name of selectedFiles.reverse()) {
       const bytes = fs.statSync(path.join(directory, name)).size;
       if (bytes > MAX_FILE_BYTES || bytesRead + bytes > maxDiskBytes) { skippedFiles++; continue; }
@@ -96,8 +138,7 @@ export function createDiscoveryFeatureStore({ directory, maxHistoryDays = 120, m
         const row = parseStoredLine(line, name.slice(0, 10));
         if (!row || seen.has(row.s)) continue;
         seen.add(row.s);
-        if (!histories.has(row.s) && histories.size >= maxSymbols) continue;
-        if (!histories.has(row.s)) histories.set(row.s, []);
+        if (!admit(row.s)) continue;
         histories.get(row.s).push(row);
         rowsRead += 1;
       }
@@ -123,5 +164,5 @@ export function createDiscoveryFeatureStore({ directory, maxHistoryDays = 120, m
     }
   }
 
-  return { writeDaily, readRecentHistories, seedHistories, prune, stats };
+  return { writeDaily, mergeDaily, readRecentHistories, seedHistories, prune, stats };
 }

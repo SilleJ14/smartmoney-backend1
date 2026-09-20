@@ -29,8 +29,8 @@ import { createStockHistory } from "./market-data/stockHistory.js";
 import { recentBarVolumeEvidence } from './market-data/volumeEvidence.js';
 import { independentMarketRegime } from './market-data/independentMarketRegime.js';
 import { createStockNewsReview } from "./market-data/stockNewsReview.js";
-import { providerDailyBar } from "./discovery/providerDailyBar.js";
-import { quietDiscoverySessionDay } from './discovery/quietDiscoverySession.js';
+import { providerDailyBar, providerDailyBarMatchesSession } from "./discovery/providerDailyBar.js";
+import { quietDiscoverySessionDay, shouldReuseQuietDiscoveryState } from './discovery/quietDiscoverySession.js';
 import { createEarlyCandidateReassessment, freshEarlyAssessments } from './discovery/earlyCandidateReassessment.js';
 import { reassessmentTrigger } from './discovery/reassessmentTrigger.js';
 import { retainMeasuredStockScores } from './scoring/measuredScoreHistory.js';
@@ -229,6 +229,8 @@ import { buildRotatingScanUniverse } from "./discovery/scanUniverse.js";
 import { createDiscoveryFeatureStore } from "./discovery/featureStore.js";
 import { fetchAlpacaGroupedDaily } from "./discovery/alpacaDailyBars.js";
 import { prunePreMoverMemory } from "./discovery/preMoverMemory.js";
+import { isElitePreMoverLabel, isStrongPreMoverLabel, toPreMoverLabel } from "./discovery/preMoverLabels.js";
+import { cryptoDiscoveryDailyRows, runBoundedCryptoQuietDiscovery } from "./discovery/cryptoQuietDiscovery.js";
 import {
   calculateQuietPreMoveFeatures,
   DEFAULT_DISCOVERY_BUDGETS,
@@ -314,6 +316,12 @@ const discoveryFeatureStore = createDiscoveryFeatureStore({
   directory: DISCOVERY_FEATURE_DIRECTORY,
   maxHistoryDays: Math.min(500, Number(process.env.DISCOVERY_MAX_HISTORY_DAYS || 120)),
   maxDiskBytes: Math.min(500, Number(process.env.DISCOVERY_MAX_DISK_MB || 150)) * 1024 * 1024,
+});
+const CRYPTO_DISCOVERY_FEATURE_DIRECTORY = path.resolve(DATA_DIR, "crypto-discovery-features");
+const cryptoQuietFeatureStore = createDiscoveryFeatureStore({
+  directory: CRYPTO_DISCOVERY_FEATURE_DIRECTORY,
+  maxHistoryDays: Math.min(180, Number(process.env.CRYPTO_DISCOVERY_MAX_HISTORY_DAYS || 90)),
+  maxDiskBytes: Math.min(200, Number(process.env.CRYPTO_DISCOVERY_MAX_DISK_MB || 50)) * 1024 * 1024,
 });
 console.log("ENV CHECK:", {
   ALPACA_LIVE_SECRET: process.env.ALPACA_LIVE_SECRET ? "FOUND" : "MISSING",
@@ -13715,7 +13723,7 @@ const outcomeWorkerTimer = setInterval(async () => {
       const day = getTodayKeyET();
       const data = await alpacaDataRequest(`/v2/stocks/bars?symbols=${encodeURIComponent(symbols.join(','))}&timeframe=1Day&start=${day}T00:00:00Z&end=${encodeURIComponent(now.toISOString())}&limit=1000&feed=iex`, { maxResponseBytes: 512 * 1024 });
       return Object.entries(data.bars || {}).flatMap(([symbol, bars]) =>
-        bars.map(bar => providerDailyBar(symbol, bar)).filter(bar => bar?.d === day));
+        bars.map(bar => providerDailyBar(symbol, bar)).filter(bar => providerDailyBarMatchesSession(bar, day)));
     }, { maxPages: 16, tradeEvents: Object.values(engineState.orderRiskReservations || {})
       .filter(entry => entry.filledQty > 0 && entry.filledAt > 0)
       .map(entry => ({ symbol: entry.symbol, filledAt: entry.filledAt })) });
@@ -17941,6 +17949,7 @@ const { scoreCrypto, calculateCryptoInstitutionalQualification, scanCryptoMarket
   isCrypto,
   recordSkippedSymbol,
   updateQuoteCache,
+  persistCryptoQuietDiscovery,
   getRuntime: () => ({
     TRADING_MODE,
     LIVE_ORDER_MAX_QUOTE_AGE_SECONDS,
@@ -17988,6 +17997,17 @@ async function getCryptoDailyBarsForDiscovery(symbol) {
     }
   }
   return cryptoDailyDiscoveryBarsCache.get(clean)?.bars || [];
+}
+async function persistCryptoQuietDiscovery({ scanCandidates = [], dailyRows = [], dailyHistories = [], reviewedCount = 0 } = {}) {
+  const rows = dailyRows.length
+    ? dailyRows
+    : dailyHistories.flatMap((item) => cryptoDiscoveryDailyRows(item.symbol, item.bars));
+  return runBoundedCryptoQuietDiscovery({
+    featureStore: cryptoQuietFeatureStore,
+    dailyRows: rows,
+    scanCandidates,
+    reviewedCount,
+  });
 }
 const enrichCryptoResearchVolume = createCryptoResearchVolume({ getBars: (...args) => alpacaCryptoMarketData.getResearchBars(...args) });
 async function getBestCryptoBars(symbol) {
@@ -18649,7 +18669,7 @@ function calculateCanonicalPreMoverScore({
     : null;
   return {
     ...features,
-    preMoveLabel: features.discoveryTier,
+    preMoveLabel: toPreMoverLabel(features.discoveryTier, features.preMoveScore),
     intradayVolumeWakeupRatio: intradayVolumeWakeupRatio === null
       ? null
       : Number(intradayVolumeWakeupRatio.toFixed(3)),
@@ -18664,32 +18684,37 @@ let assetUniverseCache = {
   at: 0,
   symbols: [],
 };
+function discoverySymbolsFromState(state = {}, maxAgeMs) {
+  const updatedAtMs = state.updatedAt ? new Date(state.updatedAt).getTime() : 0;
+  if (!updatedAtMs || !Number.isFinite(updatedAtMs) || Date.now() - updatedAtMs > maxAgeMs) {
+    return [];
+  }
+  return (state.topCandidates || state.watchlist || [])
+    .map((item) => item.symbol || item)
+    .filter(Boolean)
+    .map(normalizeSymbol)
+    .filter(isValidStockSymbol);
+}
+
 function getPreMoverCache(maxAgeMs = Number(process.env.PRE_MOVER_DISCOVERY_CACHE_MS || 10 * 60 * 1000)) {
   const state = engineState.preMoverDiscoveryState || {};
-  const updatedAtMs = state.updatedAt ? new Date(state.updatedAt).getTime() : 0;
-  if (!updatedAtMs || !Number.isFinite(updatedAtMs)) {
-    return {
-      fresh: false,
-      symbols: [],
-    };
+  if (state.phase === "BOUNDED_QUIET_DISCOVERY_ENGINE") {
+    return { fresh: false, symbols: [] };
   }
-  if (Date.now() - updatedAtMs > maxAgeMs) {
-    return {
-      fresh: false,
-      symbols: [],
-    };
+  const updatedAtMs = state.updatedAt ? new Date(state.updatedAt).getTime() : 0;
+  if (!updatedAtMs || !Number.isFinite(updatedAtMs) || Date.now() - updatedAtMs > maxAgeMs) {
+    return { fresh: false, symbols: [] };
   }
   return {
     fresh: true,
-    symbols: (state.topCandidates || [])
-      .map((item) => item.symbol || item)
-      .filter(Boolean)
-      .map(normalizeSymbol)
-      .filter(isValidStockSymbol),
+    symbols: discoverySymbolsFromState(state, maxAgeMs),
   };
 }
+function getQuietDiscoverySymbols(maxAgeMs = Number(process.env.PRE_MOVER_DISCOVERY_CACHE_MS || 10 * 60 * 1000)) {
+  return discoverySymbolsFromState(engineState.boundedQuietDiscoveryState || {}, maxAgeMs);
+}
 function getCachedPreMoverSymbols(maxAgeMs = Number(process.env.PRE_MOVER_DISCOVERY_CACHE_MS || 10 * 60 * 1000)) {
-  return getPreMoverCache(maxAgeMs).symbols;
+  return [...new Set([...getQuietDiscoverySymbols(maxAgeMs), ...getPreMoverCache(maxAgeMs).symbols])];
 }
 async function getPreMoverAssetUniverse(limit = Number(process.env.PRE_MOVER_ASSET_FALLBACK_LIMIT || 300)) {
   const cacheMs = Number(process.env.PRE_MOVER_ASSET_UNIVERSE_CACHE_MS || 30 * 60 * 1000);
@@ -18750,10 +18775,10 @@ async function runBoundedQuietDiscoveryScan({ force = false } = {}) {
   if (!dateKey) return { ok: false, skipped: true, reason: 'Completed discovery session unavailable.' };
   const prior = engineState.boundedQuietDiscoveryState;
   const warming = prior?.dateKey === dateKey && prior?.ok === true;
-  if (warming && (!prior.historicalWarmupRemaining ||
-      Date.now() - Date.parse(prior.updatedAt) < 15 * 60000)) {
+  if (shouldReuseQuietDiscoveryState(prior, { dateKey, force })) {
     return prior;
   }
+  const reuseWarmingStore = warming && !force;
   // Bootstrap on premarket/restart, retaining daily deduplication and budgets.
   const memoryGuard = buildMemoryGuardSnapshot();
   engineState.memoryGuardState = {
@@ -18774,7 +18799,7 @@ async function runBoundedQuietDiscoveryScan({ force = false } = {}) {
   let downloadedBytes = 0;
   let providerTelemetry = {};
   let polygonFailure = "";
-  if (warming) {
+  if (reuseWarmingStore) {
     provider = prior.provider;
   } else if (ENABLE_POLYGON && POLYGON_API_KEY) {
     try {
@@ -18825,7 +18850,7 @@ async function runBoundedQuietDiscoveryScan({ force = false } = {}) {
   let bootstrapReservedBytes = 0;
   const bootstrapResponseLimit = 64 * 1024;
   const result = await runBoundedQuietDiscovery({
-    skipDailyWrite: warming,
+    skipDailyWrite: reuseWarmingStore,
     bootstrapHistories: (symbols) => processBatches(symbols, 5, async (symbol) => {
       // Reserve both possible provider responses before launching concurrent
       // bootstrap work. Failed downloads also consume this conservative budget.
@@ -18843,14 +18868,19 @@ async function runBoundedQuietDiscoveryScan({ force = false } = {}) {
     learning: engineState.quietCandidateOutcomeLearning?.stock || null,
   });
   const { discoveryCandidates, ...boundedResult } = result;
-  const state = { ...boundedResult, ok: true, provider, providerTelemetry, resourceUsage: {
+  const state = {
+    ...boundedResult,
+    ok: boundedResult.ok !== false,
+    provider,
+    providerTelemetry,
+    resourceUsage: {
     ...result.resourceUsage, downloadedBytes, bootstrapReservedBytes,
     totalDownloadBudgetChargedBytes: downloadedBytes + bootstrapReservedBytes,
     maxDownloadBytes: DISCOVERY_MAX_DOWNLOAD_BYTES } };
   engineState.quietCandidateOutcomeState = await updateQuietCandidateOutcomes(
     engineState.quietCandidateOutcomeState,
     discoveryCandidates || state.watchlist,
-    groupedResults.map((row) => providerDailyBar(row.T || row.symbol, row)).filter((row) => row?.d === dateKey),
+    groupedResults.map((row) => providerDailyBar(row.T || row.symbol, row)).filter((row) => providerDailyBarMatchesSession(row, dateKey)),
     {
       assetClass: "stock",
       dayKey: dateKey,
@@ -18865,21 +18895,12 @@ async function runBoundedQuietDiscoveryScan({ force = false } = {}) {
   };
   engineState.boundedQuietDiscoveryState = state;
   engineState.boundedQuietDiscoveryHistory = [state, ...(engineState.boundedQuietDiscoveryHistory || [])].slice(0, 30);
-  engineState.preMoverDiscoveryState = {
-    ok: true,
-    updatedAt: state.updatedAt,
-    phase: "BOUNDED_QUIET_DISCOVERY_ENGINE",
-    reviewedCount: state.universeRows,
-    selectedCount: state.watchlistCount,
-    topCandidates: state.watchlist,
-    reason: state.watchlistCount ? "Bounded broad-universe scan found quiet pre-mover candidates." : "Feature store is warming or no quiet candidates qualified.",
-  };
   if (!engineState.preMoverDiscoveryMemory) engineState.preMoverDiscoveryMemory = {};
-  for (const item of state.watchlist) {
+  for (const item of state.watchlist || []) {
     engineState.preMoverDiscoveryMemory[item.symbol] = {
       ...(engineState.preMoverDiscoveryMemory[item.symbol] || {}),
       ...item,
-      preMoveLabel: item.preMoveScore >= 82 ? "ELITE_PRE_MOVER" : item.preMoveScore >= 74 ? "STRONG_PRE_MOVER" : "DEVELOPING_PRE_MOVER",
+      preMoveLabel: toPreMoverLabel(item.discoveryTier, item.preMoveScore),
       lastSeenAt: state.updatedAt,
       seenCount: Number(engineState.preMoverDiscoveryMemory[item.symbol]?.seenCount || 0) + 1,
       source: "bounded_quiet_discovery",
@@ -19121,6 +19142,7 @@ async function getTopMovers() {
       ...repeatWatchlistSymbols,
       ...coolingOffRunnerSymbols,
       ...preMoverDiscoverySymbols,
+      ...getQuietDiscoverySymbols(),
       ...preMoverMemorySymbols,
       ...hiddenRunnerMemorySymbols,
       ...assetSymbols,
@@ -19165,8 +19187,8 @@ function getScanWeight(symbol) {
     (watchlistMatch ? 18 : 0) +
     (runnerMatch ? 22 : 0) +
     (continuationMatch ? 15 : 0) +
-    (preMoverLabel === "ELITE_PRE_MOVER" ? 40 : 0) +
-    (preMoverLabel === "STRONG_PRE_MOVER" ? 28 : 0) +
+    (isElitePreMoverLabel(preMoverLabel) ? 40 : 0) +
+    (isStrongPreMoverLabel(preMoverLabel) ? 28 : 0) +
     (preMoverMatch && !preMoverLabel ? 24 : 0) +
     Math.min(preMoverScore * 0.20, 20) +
     Math.min(recentAppearances * 4, 20)
@@ -19190,6 +19212,7 @@ function narrowScanUniverse(symbols = []) {
       .filter(row => getCanonicalFinalScore(row) !== null).sort(compareCanonicalSignals).slice(0, 10).map(row => row.symbol),
     ...(engineState.liveEarlyMoverSymbols || []),
     ...(engineState.preMoverDiscoveryState?.topCandidates || []).map((item) => item.symbol || item),
+    ...(engineState.boundedQuietDiscoveryState?.watchlist || []).map((item) => item.symbol || item),
     ...Object.values(engineState.preMoverDiscoveryMemory || {}).map((item) => item.symbol || item),
   ]
     .filter(Boolean)
@@ -32854,7 +32877,10 @@ registerIntelligenceRoutes(app, {
 registerQuietDiscoveryRoutes(app, {
   requireAdmin,
   getState: () => engineState,
-  getStoreStats: () => discoveryFeatureStore.stats(),
+  getStoreStats: () => ({
+    ...discoveryFeatureStore.stats(),
+    crypto: cryptoQuietFeatureStore.stats(),
+  }),
   runDiscovery: runBoundedQuietDiscoveryScan,
   summarizeQuietCandidateOutcomes,
   buildProofReport,

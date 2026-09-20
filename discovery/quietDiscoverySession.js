@@ -12,3 +12,16 @@ export function quietDiscoverySessionDay(dateKey, hour, minute) {
   }
   return null;
 }
+
+export function shouldReuseQuietDiscoveryState(prior, {
+  dateKey,
+  force = false,
+  now = Date.now(),
+  maxAgeMs = 15 * 60000,
+} = {}) {
+  if (force) return false;
+  if (!prior || prior.ok !== true || prior.dateKey !== dateKey) return false;
+  if (!prior.historicalWarmupRemaining) return true;
+  const updatedAt = Date.parse(prior.updatedAt);
+  return Number.isFinite(updatedAt) && Number(now) - updatedAt < maxAgeMs;
+}

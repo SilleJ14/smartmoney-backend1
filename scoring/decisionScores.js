@@ -12,6 +12,13 @@ const newYorkDayFormatter = new Intl.DateTimeFormat("en-CA", {
   day: "2-digit",
 });
 
+function scorecardHasEvidence(card) {
+  return Boolean(card)
+    && Number.isFinite(Number(card.coverage))
+    && Number(card.coverage) > 0
+    && Number.isFinite(Number(card.score));
+}
+
 function component(name, value, weight, source, available = true) {
   const normalized = clamp(value);
   return {
@@ -903,8 +910,11 @@ export function buildStockDecisionScore(signal = {}) {
   );
   const components = [
     component("discovery", useContinuation ? continuationSetup.score : discovery.score, effectiveWeights.discovery,
-      useContinuation ? 'measured_continuation_setup' : 'discoveryScorecard', true),
-    component("entry", entry.score, effectiveWeights.entry, "entryQualityScorecard", true),
+      useContinuation ? 'measured_continuation_setup' : 'discoveryScorecard',
+      useContinuation
+        ? continuationSetup.available !== false && Number.isFinite(Number(continuationSetup.score))
+        : scorecardHasEvidence(discovery)),
+    component("entry", entry.score, effectiveWeights.entry, "entryQualityScorecard", scorecardHasEvidence(entry)),
     component("marketContext", contextScore, effectiveWeights.marketContext, "macro_sector_context", contextScore !== undefined),
     component("riskPortfolio", riskPortfolioScore, effectiveWeights.riskPortfolio, riskPortfolioSource, riskPortfolioScore !== undefined),
     component("fundamentals", fundamentalScore, effectiveWeights.fundamentals, "validated_fundamentals", fundamentalDataValid && fundamentalScore !== undefined),

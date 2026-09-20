@@ -1,5 +1,6 @@
 import { calculateMultiHorizonExtension } from "../scoring/earlyDiscovery.js";
-import { providerDailyBar } from "./providerDailyBar.js";
+import { providerDailyBar, providerDailyBarMatchesSession } from "./providerDailyBar.js";
+import { missingUsStockMarketSessionDays } from "../utils/usMarketCalendar.js";
 
 const clamp = (value) => Math.max(0, Math.min(100, Number(value) || 0));
 const avg = (values) => values.length ? values.reduce((sum, value) => sum + Number(value || 0), 0) / values.length : 0;
@@ -64,10 +65,9 @@ function normalizeQuietHistory(history = [], now = Date.now()) {
 export function compactGroupedRows(results = [], dateKey, maxUniverse = 5000) {
   const bySymbol = new Map();
   for (const item of (Array.isArray(results) ? results : [])) {
-    if (bySymbol.size >= maxUniverse) break;
     const symbol = String(item?.T || item?.symbol || "").toUpperCase();
     const dated = providerDailyBar(symbol, item);
-    if (!dated || dated.d !== dateKey) continue;
+    if (!dated || !providerDailyBarMatchesSession(dated, dateKey)) continue;
     const row = {
       s: symbol,
       d: dateKey,
@@ -90,7 +90,10 @@ export function compactGroupedRows(results = [], dateKey, maxUniverse = 5000) {
     ) continue;
     bySymbol.set(row.s, row);
   }
-  return [...bySymbol.values()];
+  const rows = [...bySymbol.values()];
+  const limit = Math.max(1, Number(maxUniverse) || 5000);
+  if (rows.length <= limit) return rows;
+  return rows.sort((a, b) => (b.c * b.v) - (a.c * a.v) || a.s.localeCompare(b.s)).slice(0, limit);
 }
 
 export function calculateQuietPreMoveFeatures(history = [], { learning = null, now = Date.now() } = {}) {
@@ -98,7 +101,11 @@ export function calculateQuietPreMoveFeatures(history = [], { learning = null, n
   if (history.length && Number(now) - Date.parse(history.at(-1).d) > 7 * 86400000) return null;
   let contiguousStart = 0;
   for (let i = 1; i < history.length; i++) {
-    if (Date.parse(history[i].d) - Date.parse(history[i - 1].d) > 4.5 * 86400000) contiguousStart = i;
+    const missingSessions = missingUsStockMarketSessionDays(history[i - 1].d, history[i].d);
+    const calendarGapMs = Date.parse(history[i].d) - Date.parse(history[i - 1].d);
+    if (missingSessions > 1 || (!Number.isFinite(missingSessions) && calendarGapMs > 4.5 * 86400000)) {
+      contiguousStart = i;
+    }
   }
   history = history.slice(contiguousStart);
   if (history.length < 10) return null;
@@ -250,7 +257,8 @@ export async function runBoundedQuietDiscovery({ groupedResults = [], dateKey, f
   const startingHeapBytes = process.memoryUsage().heapUsed;
   const compactRows = compactGroupedRows(groupedResults, dateKey, config.maxUniverse);
   const write = skipDailyWrite ? { bytesWritten: 0 } : featureStore.writeDaily(dateKey, compactRows);
-  let read = await featureStore.readRecentHistories({ days: config.historyDays, maxSymbols: config.maxUniverse });
+  const historyRead = { days: config.historyDays, maxSymbols: config.maxUniverse, prioritySymbols: compactRows.map((row) => row.s) };
+  let read = await featureStore.readRecentHistories(historyRead);
   const attempts = bootstrapAttempts.get(featureStore) || new Map();
   bootstrapAttempts.set(featureStore, attempts);
   for (const symbol of attempts.keys()) if (!read.histories.has(symbol)) attempts.delete(symbol);
@@ -262,7 +270,7 @@ export async function runBoundedQuietDiscovery({ groupedResults = [], dateKey, f
     for (const symbol of bootstrapSymbols) attempts.set(symbol, now());
     const histories = await bootstrapHistories(bootstrapSymbols);
     featureStore.seedHistories(histories, dateKey);
-    read = await featureStore.readRecentHistories({ days: config.historyDays, maxSymbols: config.maxUniverse });
+    read = await featureStore.readRecentHistories(historyRead);
   }
   const stageA = [];
   let memoryBudgetExceeded = false;
@@ -286,6 +294,11 @@ export async function runBoundedQuietDiscovery({ groupedResults = [], dateKey, f
   const deepCandidates = stageA.slice(0, config.deepCandidates);
   const watchlist = deepCandidates.slice(0, config.watchlistSize);
   return {
+    ok: memoryBudgetExceeded !== true,
+    partial: memoryBudgetExceeded === true,
+    reason: memoryBudgetExceeded
+      ? "Quiet discovery ranking stopped because the working-memory budget was exceeded."
+      : undefined,
     phase: "BOUNDED_QUIET_DISCOVERY",
     updatedAt: new Date().toISOString(),
     dateKey,

@@ -31,10 +31,12 @@ function median(values = []) {
     : sorted[midpoint];
 }
 
-export function normalizeDiscoveryBars(
+export function inspectNormalizedDiscoveryBars(
   bars = [],
   { excludeIncomplete = false, now = Date.now(), maxLatestAgeMs = Infinity, maxGapMs = Infinity } = {}
 ) {
+  const reasons = [];
+  const supplied = Array.isArray(bars) ? bars.length : 0;
   const normalized = (Array.isArray(bars) ? bars : [])
     .map((bar, sourceIndex) => {
       const rawOpen = bar?.o ?? bar?.open;
@@ -71,6 +73,8 @@ export function normalizeDiscoveryBars(
       bar.high >= bar.low
     ));
 
+  if (supplied > 0 && normalized.length === 0) reasons.push("NO_VALID_OHLC_BARS");
+
   normalized.sort((left, right) => {
     if (left.timestampMs !== null && right.timestampMs !== null) {
       return left.timestampMs - right.timestampMs;
@@ -104,13 +108,35 @@ export function normalizeDiscoveryBars(
       bar.timestampMs + inferredIntervalMs <= Number(now)
     ))
     : deduplicated;
+  if (excludeIncomplete && completed.length < deduplicated.length) {
+    reasons.push("INCOMPLETE_BAR_EXCLUDED");
+  }
 
-  if (!completed.length || Number(now) - completed.at(-1).timestampMs > maxLatestAgeMs) return [];
+  if (!completed.length) {
+    if (!reasons.includes("NO_VALID_OHLC_BARS")) reasons.push("NO_VALID_OHLC_BARS");
+    return { bars: [], reasons, supplied };
+  }
+  if (Number(now) - completed.at(-1).timestampMs > maxLatestAgeMs) {
+    reasons.push("LATEST_COMPLETED_BAR_STALE");
+    return { bars: [], reasons, supplied };
+  }
   let contiguousStart = 0;
   for (let i = 1; i < completed.length; i++) {
     if (completed[i].timestampMs - completed[i - 1].timestampMs > maxGapMs) contiguousStart = i;
   }
-  return completed.slice(contiguousStart).map(({ sourceIndex: _sourceIndex, ...bar }) => bar);
+  if (contiguousStart > 0) reasons.push("CONTIGUOUS_GAP_TRUNCATED");
+  return {
+    bars: completed.slice(contiguousStart).map(({ sourceIndex: _sourceIndex, ...bar }) => bar),
+    reasons,
+    supplied,
+  };
+}
+
+export function normalizeDiscoveryBars(
+  bars = [],
+  options = {}
+) {
+  return inspectNormalizedDiscoveryBars(bars, options).bars;
 }
 
 const EXTENSION_THRESHOLDS = Object.freeze({
@@ -127,8 +153,8 @@ export function calculateMultiHorizonExtension({
   now = Date.now(),
 } = {}) {
   const clean = normalizeDiscoveryBars(bars, { excludeIncomplete, now,
-    maxLatestAgeMs: (assetClass === "crypto" ? 2 : 7) * 86400000,
-    maxGapMs: (assetClass === "crypto" ? 1.5 : 4.5) * 86400000 });
+    maxLatestAgeMs: (assetClass === "crypto" ? 3 : 7) * 86400000,
+    maxGapMs: (assetClass === "crypto" ? 2.5 : 4.5) * 86400000 });
   const current = firstPositive(currentPrice, clean.at(-1)?.close);
   const thresholds = EXTENSION_THRESHOLDS[assetClass] || EXTENSION_THRESHOLDS.stock;
   const horizons = [1, 3, 5, 20].map((days) => {
@@ -279,7 +305,13 @@ export function calculateCryptoEarlyDiscoveryScore({
   learning = null,
   now = Date.now(),
 } = {}) {
-  const daily = normalizeDiscoveryBars(dailyBars, { excludeIncomplete: true, now, maxLatestAgeMs: 2 * 86400000, maxGapMs: 1.5 * 86400000 });
+  const dailyInspected = inspectNormalizedDiscoveryBars(dailyBars, {
+    excludeIncomplete: true,
+    now,
+    maxLatestAgeMs: 3 * 86400000,
+    maxGapMs: 2.5 * 86400000,
+  });
+  const daily = dailyInspected.bars;
   const recent = daily.slice(-5);
   const baseline = daily.slice(-20, -5);
   const latest = recent.at(-1);
@@ -368,6 +400,7 @@ export function calculateCryptoEarlyDiscoveryScore({
     ...(extension.coverage >= 1 ? [] : ["INCOMPLETE_MULTI_HORIZON_EXTENSION_EVIDENCE"]),
     ...(extension.alreadyExtended ? ["ALREADY_EXTENDED_MULTI_HORIZON"] : []),
     ...(newsCatalyst?.riskDetected === true ? ["NEGATIVE_NEWS_RISK"] : []),
+    ...dailyInspected.reasons,
   ];
   if (daily.length < 21 || extension.coverage < 1) score = Math.min(score, 55);
   if (newsCatalyst?.riskDetected === true) score = Math.min(score, 35);
@@ -392,6 +425,7 @@ export function calculateCryptoEarlyDiscoveryScore({
       suppliedIntradayBars: Array.isArray(intradayBars) ? intradayBars.length : 0,
       completedValidIntradayBars: completedIntraday.length,
       fullExtensionCoverage: extension.coverage >= 1,
+      historyNormalization: dailyInspected.reasons,
     },
     gates,
     features: {
