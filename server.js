@@ -19,6 +19,7 @@ import { createAlpacaCryptoStream } from './live/alpacaCryptoStream.js';
 import {
   applyTradeTickWithoutClearingAlpacaBook,
   isAlpacaCryptoExecutionSource,
+  cryptoQuoteHasFreshAlpacaBook,
   FALLBACK_ALPACA_CRYPTO_USD_PAIRS,
   resolveCryptoAssetUniverse,
   selectAlpacaCryptoStreamSymbols,
@@ -23613,7 +23614,36 @@ function hydrateCryptoExecutionCandidate(candidate = {}) {
   const quoteSource = String(
     quote.liveQuoteSource || quote.source || "live_quote_cache"
   );
-  const priceIsLive = quote.priceIsLive === true && isFreshLiveQuote(quote);
+  const mergedForBook = {
+    ...quote,
+    bid,
+    ask,
+    spreadAvailable,
+    spreadSource: quote.spreadSource || quoteSource,
+    liveQuoteSource: quote.liveQuoteSource || quote.source,
+    spreadUpdatedAt: quote.spreadUpdatedAt || quote.bidAskUpdatedAt,
+    bidAskUpdatedAt: quote.bidAskUpdatedAt || quote.spreadUpdatedAt,
+  };
+  const alpacaBookReady = cryptoQuoteHasFreshAlpacaBook(mergedForBook, {
+    maxAgeSeconds: LIVE_ORDER_MAX_QUOTE_AGE_SECONDS,
+  });
+  const priceIsLive = alpacaBookReady;
+
+  if (!alpacaBookReady) {
+    const kept = {
+      ...candidate,
+      ...finalized,
+      ...(candidateIsNewer ? candidate : {}),
+      symbol,
+      assetClass: "crypto",
+      asset_class: "crypto",
+    };
+    if (current > 0) {
+      kept.current = current;
+      kept.price = current;
+    }
+    return kept;
+  }
 
   return {
     ...candidate,
@@ -28337,7 +28367,12 @@ function mergeLiveQuoteIntoSignal(signal = {}) {
     for (const old of keys.slice(0, Math.max(0, keys.length - 500))) delete engineState.measuredStockScoreHistory[old];
   }
   const liveQuote = engineState.liveQuoteCache?.[symbol];
-  if (!symbol || !liveQuote?.price || !isFreshLiveQuote(liveQuote)) {
+  const cryptoQuoteReady = isCrypto(symbol)
+    ? cryptoQuoteHasFreshAlpacaBook(liveQuote, {
+      maxAgeSeconds: LIVE_ORDER_MAX_QUOTE_AGE_SECONDS,
+    })
+    : isFreshLiveQuote(liveQuote);
+  if (!symbol || !liveQuote?.price || !cryptoQuoteReady) {
     return normalizeSignalScoreCompleteness(signal);
   }
   const measuredPercentPatch = buildMeasuredPercentChangePatch(
@@ -32399,18 +32434,23 @@ function getTopSignals(signals = [], limit = 25) {
         signalQuoteAgeMs !== null &&
         signalQuoteAgeMs >= -5000 &&
         signalQuoteAgeMs <= LIVE_ORDER_MAX_QUOTE_AGE_SECONDS * 1000 &&
-        isLiveQuoteSource(signal.liveQuoteSource || signal.source || "");
+        (isCrypto(symbol)
+          ? isAlpacaCryptoExecutionSource(signal.liveQuoteSource || signal.spreadSource || signal.source || "")
+          : isLiveQuoteSource(signal.liveQuoteSource || signal.source || ""));
       const cachedQuoteTimestamp = getProviderQuoteTimestampMs(liveQuote || {});
       const cachedQuoteAgeMs = cachedQuoteTimestamp === null
         ? null
         : Date.now() - cachedQuoteTimestamp;
-      const hasFreshLiveQuote =
-        liveQuote?.priceIsLive === true &&
-        isLiveQuoteSource(liveQuote?.liveQuoteSource || liveQuote?.source || "") &&
-        cachedQuoteAgeMs !== null &&
-        cachedQuoteAgeMs >= -5000 &&
-        cachedQuoteAgeMs <= LIVE_ORDER_MAX_QUOTE_AGE_SECONDS * 1000 &&
-        cachedLivePrice > 0;
+      const hasFreshLiveQuote = isCrypto(symbol)
+        ? cryptoQuoteHasFreshAlpacaBook(liveQuote, {
+          maxAgeSeconds: LIVE_ORDER_MAX_QUOTE_AGE_SECONDS,
+        }) && cachedLivePrice > 0
+        : liveQuote?.priceIsLive === true &&
+          isLiveQuoteSource(liveQuote?.liveQuoteSource || liveQuote?.source || "") &&
+          cachedQuoteAgeMs !== null &&
+          cachedQuoteAgeMs >= -5000 &&
+          cachedQuoteAgeMs <= LIVE_ORDER_MAX_QUOTE_AGE_SECONDS * 1000 &&
+          cachedLivePrice > 0;
       const displayPrice = hasFreshLiveQuote
         ? cachedLivePrice
         : signalAlreadyLive

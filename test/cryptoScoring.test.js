@@ -632,6 +632,43 @@ test("displayed crypto F 65 auto-buys on a live Alpaca quote even if rebuilt cor
   }, { now }).approved, false);
 });
 
+test("displayed crypto F 66 still buys when a complete live rebuild is below 65", () => {
+  const now = Date.now();
+  const iso = new Date(now).toISOString();
+  const result = evaluateCryptoTradeCandidate({
+    symbol: "BTC/USD",
+    cryptoDecisionScore: 66,
+    cryptoDecisionScoreAvailable: true,
+    masterFinalScore: 66,
+    current: 100,
+    bid: 99.95,
+    ask: 100.05,
+    priceIsLive: true,
+    liveQuoteUpdatedAt: iso,
+    liveQuoteSource: "alpaca_crypto_latest",
+    spreadUpdatedAt: iso,
+    spreadSource: "alpaca_crypto_latest",
+    spreadAvailable: true,
+    decisionUpdatedAt: iso,
+    cryptoDiscoveryScorecard: {
+      score: 20,
+      coverage: 1,
+      calculatedAt: iso,
+      extension: { alreadyExtended: false },
+    },
+    newsCatalyst: { dataAvailable: true, riskDetected: false },
+    barsFound: 30,
+    windowDollarVolume: 1_000_000,
+    chartBars: Array.from({ length: 24 }, () => ({ c: 100 })),
+    centralAutonomousDecisionCore: {
+      updatedAt: iso,
+      action: "WATCH",
+      cryptoDecisionEvidence: { coreEvidencePass: true },
+    },
+  }, { now });
+  assert.equal(result.approved, true);
+});
+
 test("research zero size does not revoke a live F65 Alpaca crypto buy", () => {
   const now = Date.now();
   const iso = new Date(now).toISOString();

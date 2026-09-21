@@ -417,9 +417,9 @@ export function evaluateCryptoTradeCandidate(
   const canonicalAvailable =
     signal.cryptoDecisionScoreAvailable !== false &&
     Number.isFinite(Number(resolvedScore));
-  const scoreTriggeredBuy = scoreAvailable
-    ? liveScore >= minBuyScore
-    : canonicalAvailable && Number(resolvedScore) >= minBuyScore;
+  const scoreTriggeredBuy =
+    (canonicalAvailable && Number(resolvedScore) >= minBuyScore)
+    || (scoreAvailable && liveScore >= minBuyScore);
   const quoteReady =
     evidence.quoteFreshness?.fresh === true &&
     evidence.spreadFreshness?.fresh === true &&

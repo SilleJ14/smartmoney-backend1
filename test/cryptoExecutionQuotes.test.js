@@ -44,7 +44,7 @@ test("stream slots go to held names and names that still need an Alpaca book", (
   assert.deepEqual(selected, ["DOGE/USD", "ETH/USD"]);
 });
 
-test("REST snapshots skip stream coins and rotate a small batch", () => {
+test("REST snapshots stream coins whose Alpaca book is stale", () => {
   const first = selectCryptoRestQuoteBatch({
     symbols: ["BTC/USD", "ETH/USD", "SOL/USD", "XRP/USD", "ADA/USD", "DOT/USD", "LINK/USD"],
     streamSymbols: ["BTC/USD", "ETH/USD"],
@@ -54,7 +54,7 @@ test("REST snapshots skip stream coins and rotate a small batch", () => {
     now,
     streamConnected: true,
   });
-  assert.deepEqual(first.symbols, ["SOL/USD", "XRP/USD", "ADA/USD"]);
+  assert.deepEqual(first.symbols, ["BTC/USD", "ETH/USD", "SOL/USD"]);
   const second = selectCryptoRestQuoteBatch({
     symbols: ["BTC/USD", "ETH/USD", "SOL/USD", "XRP/USD", "ADA/USD", "DOT/USD", "LINK/USD"],
     streamSymbols: ["BTC/USD", "ETH/USD"],
@@ -64,7 +64,20 @@ test("REST snapshots skip stream coins and rotate a small batch", () => {
     now,
     streamConnected: true,
   });
-  assert.deepEqual(second.symbols, ["DOT/USD", "LINK/USD", "SOL/USD"]);
+  assert.deepEqual(second.symbols, ["XRP/USD", "ADA/USD", "DOT/USD"]);
+});
+
+test("REST skips coins that already have a fresh Alpaca book", () => {
+  const batch = selectCryptoRestQuoteBatch({
+    symbols: ["BTC/USD", "ETH/USD", "SOL/USD"],
+    streamSymbols: ["BTC/USD"],
+    quotes: { "BTC/USD": alpacaBook },
+    batchSize: 3,
+    cursor: 0,
+    now,
+    streamConnected: true,
+  });
+  assert.deepEqual(batch.symbols, ["ETH/USD", "SOL/USD"]);
 });
 
 test("a Finnhub last trade keeps the Alpaca bid and ask", () => {

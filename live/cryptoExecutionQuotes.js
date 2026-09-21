@@ -140,17 +140,11 @@ export function selectCryptoRestQuoteBatch({
   maxAgeSeconds = 5,
   streamConnected = true,
 } = {}) {
-  const streamed = new Set(
-    (Array.isArray(streamSymbols) ? streamSymbols : []).map((symbol) => String(symbol || "").toUpperCase())
-  );
   const needRest = (Array.isArray(symbols) ? symbols : [])
     .map((symbol) => String(symbol || "").toUpperCase())
     .filter((symbol) => /^[A-Z0-9]+\/USD$/.test(symbol))
     .filter((symbol, index, rows) => rows.indexOf(symbol) === index)
-    .filter((symbol) => {
-      if (streamConnected && streamed.has(symbol)) return false;
-      return !cryptoQuoteHasFreshAlpacaBook(quotes[symbol], { now, maxAgeSeconds });
-    });
+    .filter((symbol) => !cryptoQuoteHasFreshAlpacaBook(quotes[symbol], { now, maxAgeSeconds }));
   const size = Math.max(1, Number(batchSize) || CRYPTO_REST_QUOTE_BATCH_SIZE);
   if (!needRest.length) return { symbols: [], nextCursor: 0 };
   const start = ((Number(cursor) || 0) % needRest.length + needRest.length) % needRest.length;
