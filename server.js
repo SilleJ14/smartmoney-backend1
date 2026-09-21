@@ -374,6 +374,8 @@ const adminAuth = createAdminAuth({
   allowInitialSignup: !process.env.RENDER,
   recoveryOwnerEmail: process.env.RECOVERY_OWNER_EMAIL || "",
   userFile: path.resolve(DATA_DIR, "users.json"),
+  durableUserFiles: [process.env.AUTH_USERS_FILE].filter(Boolean),
+  usersSnapshot: process.env.AUTH_USERS_JSON || "",
   sessionTtlMs: Math.max(15 * 60 * 1000, Number(process.env.AUTH_SESSION_TTL_HOURS || 12) * 60 * 60 * 1000),
   googleClientIds: [
     process.env.GOOGLE_WEB_CLIENT_ID,

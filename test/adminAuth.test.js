@@ -57,6 +57,74 @@ test("server-backed signup, login and session validation use persisted password 
   fs.rmSync(directory, { recursive: true, force: true });
 });
 
+test("a missing checkout users file still accepts the same password from a durable copy or env snapshot", () => {
+  const directory = fs.mkdtempSync(path.join(os.tmpdir(), "smartmoney-auth-durable-"));
+  const checkout = path.join(directory, "checkout", "users.json");
+  const durable = path.join(directory, "durable", "users.json");
+  fs.mkdirSync(path.dirname(checkout), { recursive: true });
+  const routes = new Map();
+  const first = createAdminAuth({
+    adminToken: "server-secret",
+    userFile: checkout,
+    durableUserFiles: [durable],
+    now: () => 1000,
+  });
+  first.registerRoutes({ post(route, ...handlers) { routes.set(route, handlers.at(-1)); }, get() {} });
+  const response = () => ({ status(code) { this.code = code; return this; }, json(body) { this.body = body; return this; } });
+  const signup = response();
+  routes.get("/auth/signup")({ headers: {}, ip: "1", body: { email: "owner@example.com", password: "twelve-chars!", name: "Owner" } }, signup);
+  const snapshot = fs.readFileSync(durable, "utf8");
+  fs.rmSync(path.dirname(checkout), { recursive: true, force: true });
+  const fromDisk = createAdminAuth({
+    adminToken: "server-secret",
+    userFile: checkout,
+    durableUserFiles: [durable],
+    now: () => 2000,
+  });
+  const loginRoutes = new Map();
+  fromDisk.registerRoutes({ post(route, ...handlers) { loginRoutes.set(route, handlers.at(-1)); }, get() {} });
+  const diskLogin = response();
+  loginRoutes.get("/auth/login")({ headers: {}, ip: "1", body: { email: "owner@example.com", password: "twelve-chars!" } }, diskLogin);
+  assert.equal(diskLogin.body.ok, true);
+  fs.rmSync(path.dirname(durable), { recursive: true, force: true });
+  const fromEnv = createAdminAuth({
+    adminToken: "server-secret",
+    userFile: checkout,
+    usersSnapshot: snapshot,
+    now: () => 3000,
+  });
+  const envRoutes = new Map();
+  fromEnv.registerRoutes({ post(route, ...handlers) { envRoutes.set(route, handlers.at(-1)); }, get() {} });
+  const envLogin = response();
+  envRoutes.get("/auth/login")({ headers: {}, ip: "1", body: { email: "owner@example.com", password: "twelve-chars!" } }, envLogin);
+  assert.equal(envLogin.body.ok, true);
+  fs.rmSync(directory, { recursive: true, force: true });
+});
+
+test("an empty user store does not treat a signed session or password as invalid", () => {
+  const auth = createAdminAuth({ adminToken: "server-secret", now: () => 1000 });
+  const populatedDir = fs.mkdtempSync(path.join(os.tmpdir(), "smartmoney-auth-empty-"));
+  const routes = new Map();
+  const seeded = createAdminAuth({
+    adminToken: "server-secret",
+    userFile: path.join(populatedDir, "users.json"),
+    now: () => 1000,
+  });
+  seeded.registerRoutes({ post(route, ...handlers) { routes.set(route, handlers.at(-1)); }, get() {} });
+  const response = () => ({ status(code) { this.code = code; return this; }, json(body) { this.body = body; return this; } });
+  const signup = response();
+  routes.get("/auth/signup")({ headers: {}, ip: "1", body: { email: "owner@example.com", password: "twelve-chars!", name: "Owner" } }, signup);
+  const emptyRoutes = new Map();
+  auth.registerRoutes({ post(route, ...handlers) { emptyRoutes.set(route, handlers.at(-1)); }, get() {} });
+  const login = response();
+  emptyRoutes.get("/auth/login")({ headers: {}, ip: "1", body: { email: "owner@example.com", password: "twelve-chars!" } }, login);
+  assert.equal(login.code, 503);
+  const session = response();
+  auth.requireAdmin({ method: "GET", headers: { authorization: `Bearer ${signup.body.token}` }, ip: "1", query: {} }, session, () => {});
+  assert.equal(session.code, 503);
+  fs.rmSync(populatedDir, { recursive: true, force: true });
+});
+
 test('production cannot reopen public ownership when the user store is missing', () => {
   const auth = createAdminAuth({ adminToken: 'fixture', allowInitialSignup: false });
   const routes = new Map();

@@ -58,15 +58,68 @@ function safeUsers(file) {
   } catch { return []; }
 }
 
-function persistUsers(file, users) {
-  if (!file) return;
-  fs.mkdirSync(path.dirname(file), { recursive: true });
-  const temporary = `${file}.${process.pid}.tmp`;
-  fs.writeFileSync(temporary, JSON.stringify({ version: 1, users: users.slice(0, 10) }, null, 2), { mode: 0o600 });
-  fs.renameSync(temporary, file);
+function usersFromSnapshot(raw) {
+  if (!raw) return [];
+  try {
+    const parsed = typeof raw === "string" ? JSON.parse(raw) : raw;
+    if (Array.isArray(parsed?.users)) return parsed.users.slice(0, 10);
+    if (Array.isArray(parsed)) return parsed.slice(0, 10);
+  } catch { /* invalid snapshot is not a user store */ }
+  return [];
 }
 
-export function createAdminAuth({ adminToken, userFile = "", sessionTtlMs = 12 * 60 * 60 * 1000,
+function uniqueFiles(files = []) {
+  return [...new Set(files.filter(Boolean).map((file) => path.resolve(String(file))))];
+}
+
+export function resolveDurableUserFiles(primary = "", extra = []) {
+  const renderDisk = process.platform !== "win32" && fs.existsSync("/var/data")
+    ? "/var/data/users.json"
+    : "";
+  return uniqueFiles([
+    primary,
+    ...extra,
+    process.env.AUTH_USERS_FILE,
+    renderDisk,
+  ]);
+}
+
+function loadUsers(files = [], snapshot = "") {
+  for (const file of files) {
+    const loaded = safeUsers(file);
+    if (loaded.length) return loaded;
+  }
+  return usersFromSnapshot(snapshot);
+}
+
+function persistUsers(files, users) {
+  const destinations = uniqueFiles(Array.isArray(files) ? files : [files]);
+  if (!destinations.length) return;
+  const payload = JSON.stringify({ version: 1, users: users.slice(0, 10) }, null, 2);
+  let lastError = null;
+  let wrote = false;
+  for (const file of destinations) {
+    try {
+      fs.mkdirSync(path.dirname(file), { recursive: true });
+      const temporary = `${file}.${process.pid}.${Date.now()}.tmp`;
+      fs.writeFileSync(temporary, payload, { mode: 0o600 });
+      try {
+        fs.renameSync(temporary, file);
+      } catch (error) {
+        if (process.platform !== "win32" || !["EEXIST", "EPERM"].includes(error?.code)) throw error;
+        fs.copyFileSync(temporary, file);
+        fs.unlinkSync(temporary);
+      }
+      wrote = true;
+    } catch (error) {
+      lastError = error;
+    }
+  }
+  if (!wrote && lastError) throw lastError;
+}
+
+export function createAdminAuth({ adminToken, userFile = "", durableUserFiles = [], usersSnapshot = "",
+  sessionTtlMs = 12 * 60 * 60 * 1000,
   allowInitialSignup = true,
   failureWindowMs = 15 * 60 * 1000, failureLimit = 20, ticketTtlMs = 30 * 1000,
   recoveryTtlMs = 10 * 60 * 1000, now = () => Date.now(), googleClientIds = [],
@@ -74,7 +127,11 @@ export function createAdminAuth({ adminToken, userFile = "", sessionTtlMs = 12 *
   appleTokenVerifier = verifyAppleIdentityToken, recoveryEmailSender = null, recoveryOwnerEmail = "",
   recoveryRequestWindowMs = 60 * 60 * 1000, recoveryRequestLimit = 3 }) {
   const failures = new Map(), tickets = new Map(), recoveryCodes = new Map(), recoveryRequests = new Map();
-  let users = userFile ? safeUsers(userFile) : [];
+  const userFiles = resolveDurableUserFiles(userFile, durableUserFiles);
+  let users = loadUsers(userFiles, usersSnapshot);
+  if (users.length && userFiles.length) {
+    try { persistUsers(userFiles, users); } catch { /* mirror into durable paths when they exist */ }
+  }
   const configuredOwnerEmail = normalizeIdentity(recoveryOwnerEmail);
   const ownerRecoveryConfigured = /^\S+@\S+\.\S+$/.test(configuredOwnerEmail);
   const recoveryDeliveries = new Set();
@@ -103,7 +160,7 @@ export function createAdminAuth({ adminToken, userFile = "", sessionTtlMs = 12 *
     const signature = crypto.createHmac("sha256", signingKey).update(payload).digest("base64url");
     return `${payload}.${signature}`;
   };
-  const sessionUser = (token) => {
+  const sessionClaims = (token) => {
     try {
       const [payload, signature] = String(token || "").split(".");
       if (!payload || !signature) return null;
@@ -112,9 +169,14 @@ export function createAdminAuth({ adminToken, userFile = "", sessionTtlMs = 12 *
       if (actual.length !== expected.length || !crypto.timingSafeEqual(actual, expected)) return null;
       const claims = JSON.parse(Buffer.from(payload, "base64url").toString("utf8"));
       if (!claims.sub || Number(claims.exp) <= now()) return null;
-      const user = users.find((candidate) => candidate.id === claims.sub) || null;
-      return user && claims.ver === (user.authVersion || user.passwordChangedAt || user.createdAt) ? user : null;
+      return claims;
     } catch { return null; }
+  };
+  const sessionUser = (token) => {
+    const claims = sessionClaims(token);
+    if (!claims) return null;
+    const user = users.find((candidate) => candidate.id === claims.sub) || null;
+    return user && claims.ver === (user.authVersion || user.passwordChangedAt || user.createdAt) ? user : null;
   };
   const bearerOf = (req) => {
     const auth = String(req.headers.authorization || "");
@@ -177,6 +239,12 @@ export function createAdminAuth({ adminToken, userFile = "", sessionTtlMs = 12 *
       if (user) req.authUser = publicUser(user);
       return next();
     }
+    if (sessionClaims(provided) && users.length === 0) {
+      return res.status(503).json({
+        ok: false,
+        error: "Account storage is temporarily unavailable. Your password was not changed.",
+      });
+    }
     return recordFailure(req, res, "Unauthorized");
   };
   const registerRoutes = (app) => {
@@ -190,11 +258,17 @@ export function createAdminAuth({ adminToken, userFile = "", sessionTtlMs = 12 *
       const passwordRecord = passwordDigest(password);
       const user = { id: crypto.randomUUID(), email, name: name.slice(0, 80) || "SmartMoney Owner", salt: passwordRecord.salt,
         passwordDigest: passwordRecord.digest, createdAt: new Date(now()).toISOString() };
-      users = [user]; persistUsers(userFile, users);
+      users = [user]; persistUsers(userFiles, users);
       return res.status(201).json({ ok: true, token: signSession(user), expiresInSeconds: sessionTtlMs / 1000, user: publicUser(user) });
     });
     app.post("/auth/login", (req, res) => {
       const email = normalizeIdentity(req.body?.email), password = String(req.body?.password || "");
+      if (users.length === 0) {
+        return res.status(503).json({
+          ok: false,
+          error: "Account storage is temporarily unavailable. Your password was not changed.",
+        });
+      }
       const user = users.find((candidate) => candidate.email === email);
       if (!user || !passwordIsValid(password, user)) return recordFailure(req, res);
       failures.delete(getClientIp(req));
@@ -220,7 +294,7 @@ export function createAdminAuth({ adminToken, userFile = "", sessionTtlMs = 12 *
         if (!user.googleSubject) {
           user.googleSubject = identity.sub;
           user.googleLinkedAt = new Date(now()).toISOString();
-          persistUsers(userFile, users);
+          persistUsers(userFiles, users);
         }
         failures.delete(getClientIp(req));
         return res.json({ ok: true, token: signSession(user), expiresInSeconds: sessionTtlMs / 1000, user: publicUser(user) });
@@ -257,7 +331,7 @@ export function createAdminAuth({ adminToken, userFile = "", sessionTtlMs = 12 *
         if (!user.appleSubject) {
           user.appleSubject = identity.sub;
           user.appleLinkedAt = new Date(now()).toISOString();
-          persistUsers(userFile, users);
+          persistUsers(userFiles, users);
         }
         failures.delete(getClientIp(req));
         return res.json({ ok: true, token: signSession(user), expiresInSeconds: sessionTtlMs / 1000, user: publicUser(user) });
@@ -345,7 +419,7 @@ export function createAdminAuth({ adminToken, userFile = "", sessionTtlMs = 12 *
 
       users = [user];
       recoveryCodes.clear();
-      persistUsers(userFile, users);
+      persistUsers(userFiles, users);
       const code = crypto.randomInt(0, 100000000).toString().padStart(8, "0");
       recoveryCodes.set(user.id, { digest: recoveryDigest(code), expiresAt: now() + recoveryTtlMs, attempts: 0 });
       failures.delete(getClientIp(req));
@@ -375,7 +449,7 @@ export function createAdminAuth({ adminToken, userFile = "", sessionTtlMs = 12 *
         ...(user.restoringOwner ? { id: crypto.randomUUID(), createdAt: changedAt } : {}) };
       delete updatedUser.restoringOwner;
       const updatedUsers = user.restoringOwner ? [updatedUser] : users.map(existing => existing.id === user.id ? updatedUser : existing);
-      try { persistUsers(userFile, updatedUsers); }
+      try { persistUsers(userFiles, updatedUsers); }
       catch { return res.status(503).json({ ok: false, error: "Account storage is unavailable. Your password was not changed; retry after storage is restored." }); }
       users = updatedUsers;
       recoveryCodes.delete(user.id);
@@ -394,7 +468,7 @@ export function createAdminAuth({ adminToken, userFile = "", sessionTtlMs = 12 *
       const passwordRecord = passwordDigest(newPassword);
       Object.assign(user, { salt: passwordRecord.salt, passwordDigest: passwordRecord.digest,
         passwordChangedAt: new Date(now()).toISOString(), authVersion: crypto.randomUUID() });
-      persistUsers(userFile, users);
+      persistUsers(userFiles, users);
       return res.json({ ok: true, token: signSession(user), expiresInSeconds: sessionTtlMs / 1000, user: publicUser(user) });
     });
     app.post("/auth/stream-ticket", requireAdmin, (req, res) => {
