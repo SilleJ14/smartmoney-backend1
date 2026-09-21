@@ -19,6 +19,8 @@ import { createAlpacaCryptoStream } from './live/alpacaCryptoStream.js';
 import {
   applyTradeTickWithoutClearingAlpacaBook,
   isAlpacaCryptoExecutionSource,
+  FALLBACK_ALPACA_CRYPTO_USD_PAIRS,
+  resolveCryptoAssetUniverse,
   selectAlpacaCryptoStreamSymbols,
   selectCryptoRestQuoteBatch,
 } from "./live/cryptoExecutionQuotes.js";
@@ -17902,14 +17904,26 @@ function computeTechnicals(bars = []) {
     intervalMs: snapshot.intervalMs,
   };
 }
+let cryptoAssetUniverseCache = { at: 0, symbols: [] };
 async function getCryptoAssets() {
-  const assets = await alpacaTradingRequest(
-    "/v2/assets?status=active&asset_class=crypto"
-  );
-  return assets
-    .filter((asset) => asset.tradable === true)
-    .map((asset) => asset.symbol)
-    .filter(Boolean);
+  try {
+    const assets = await alpacaTradingRequest(
+      "/v2/assets?status=active&asset_class=crypto"
+    );
+    const fetched = (Array.isArray(assets) ? assets : [])
+      .filter((asset) => asset.tradable === true)
+      .map((asset) => asset.symbol)
+      .filter(Boolean);
+    const symbols = resolveCryptoAssetUniverse({
+      fetched,
+      cached: cryptoAssetUniverseCache.symbols,
+    });
+    if (fetched.length) cryptoAssetUniverseCache = { at: Date.now(), symbols };
+    return symbols;
+  } catch (err) {
+    console.warn("Crypto asset universe failed:", err.message);
+    return resolveCryptoAssetUniverse({ cached: cryptoAssetUniverseCache.symbols });
+  }
 }
 function getFreshLiveCryptoQuote(symbol, maxAgeSeconds = 8) {
   const cleanSymbol = normalizeSymbol(symbol);
@@ -19319,7 +19333,7 @@ function getBotEntryScores() {
   }
   return engineState.aiEntryScores;
 }
-const { calculateInstitutionalScores, passesFilters, scoreStock, scanMarket, analyzeCandidates } = createStockMarketStrategy({
+const { calculateInstitutionalScores, attachStockWatchDecisionComponents, passesFilters, scoreStock, scanMarket, analyzeCandidates } = createStockMarketStrategy({
   recordCandidateEvent: event => candidateTraceStore.record(event),
   recordScanEvent: event => candidateTraceStore.recordScan(event),
   CONFIG,
@@ -27145,6 +27159,8 @@ function calculateCentralAutonomousDecisionCore(stockSignals = [], cryptoSignals
       isCrypto(signal.symbol);
     if (isCryptoSignal) {
       Object.assign(signal, hydrateCryptoExecutionCandidate(signal));
+    } else {
+      signal = attachStockWatchDecisionComponents({ ...signal });
     }
     const scoringStarted = performance.now();
     const snapshot = createDecisionSnapshot(signal, CONFIG);
@@ -31497,9 +31513,13 @@ function startLiveScheduler() {
       ...(engineState.lastStockSignals || []).filter(row => needsCandidateResearch(row)),
     ].map(reassessmentTrigger)));
     void runLiveScheduledTask('reassessCryptoCandidates', 1000, () => cryptoCandidateReassessment.run(
-      [...(engineState.incrementalResearchSignals || []).filter(row => isCrypto(row.symbol) && row.setupRevalidationRequired),
-        ...(engineState.lastCryptoSignals || [])].map(mergeLiveQuoteIntoSignal)
-        .filter(row => needsCandidateResearch(row)).map(reassessmentTrigger)
+      [
+        ...FALLBACK_ALPACA_CRYPTO_USD_PAIRS.map((symbol) => ({ symbol, assetClass: "crypto" })),
+        ...(engineState.incrementalResearchSignals || []).filter(row => isCrypto(row.symbol) && row.setupRevalidationRequired),
+        ...(engineState.lastCryptoSignals || []),
+      ].map(mergeLiveQuoteIntoSignal)
+        .filter(row => needsCandidateResearch(row) || !engineState.lastCryptoSignals?.length)
+        .map(reassessmentTrigger)
     ));
     void runLiveScheduledTask('refreshTradierQuoteStream', 5000,
       () => tradierQuoteStream.refresh(getActiveCandidateQuoteRefreshSymbols(ACTIVE_CANDIDATE_QUOTE_REFRESH_LIMIT, false).filter(s => !isCrypto(s))));
@@ -32056,6 +32076,7 @@ function getSymbolsForFinnhubLiveStream(limit = 75) {
       .filter(Boolean)
       .filter(isCrypto);
   const cryptoSymbols = [
+    ...FALLBACK_ALPACA_CRYPTO_USD_PAIRS,
     ...collectCryptoSymbols(engineState.lastCryptoSignals),
     ...collectCryptoSymbols(engineState.topCryptoSignals),
     ...collectCryptoSymbols(engineState.lastSignals),
@@ -33098,6 +33119,7 @@ const alpacaCryptoStream = createAlpacaCryptoStream({
   secret: process.env.ALPACA_LIVE_SECRET,
   getSymbols: () => selectAlpacaCryptoStreamSymbols({
     symbols: [
+      ...FALLBACK_ALPACA_CRYPTO_USD_PAIRS,
       ...(engineState.cachedPositions || []).map((item) => item.symbol),
       ...(engineState.lastCryptoSignals || []).map((item) => item.symbol),
       ...(engineState.topCryptoSignals || []).map((item) => item.symbol),

@@ -1,6 +1,6 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import { applyTradeTickWithoutClearingAlpacaBook } from "../live/cryptoExecutionQuotes.js";
+import { applyTradeTickWithoutClearingAlpacaBook, resolveCryptoAssetUniverse, FALLBACK_ALPACA_CRYPTO_USD_PAIRS } from "../live/cryptoExecutionQuotes.js";
 import { buildStrategyExecutionPlan } from "../strategies/strategyRouter.js";
 
 test("crypto auto-buy stays on after the stock market closes", () => {
@@ -42,4 +42,11 @@ test("a Finnhub quote does not replace a live Alpaca crypto book", () => {
   assert.equal(kept.liveQuoteSource, "alpaca_crypto_ws");
   assert.equal(kept.bid, 99.9);
   assert.equal(kept.ask, 100.1);
+});
+
+test("crypto scan keeps a USD universe when Alpaca trading assets are empty", () => {
+  assert.deepEqual(resolveCryptoAssetUniverse({ fetched: [], cached: [] }).slice(0, 3), ["BTC/USD", "ETH/USD", "SOL/USD"]);
+  assert.ok(FALLBACK_ALPACA_CRYPTO_USD_PAIRS.includes("BTC/USD"));
+  assert.deepEqual(resolveCryptoAssetUniverse({ fetched: ["ETH/USD", "DOGE/USD"] }), ["ETH/USD", "DOGE/USD"]);
+  assert.deepEqual(resolveCryptoAssetUniverse({ fetched: [], cached: ["SOL/USD"] }), ["SOL/USD"]);
 });

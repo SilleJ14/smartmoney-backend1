@@ -20,6 +20,42 @@ function scorecardHasEvidence(card) {
     && Number.isFinite(Number(card.score));
 }
 
+function entryCardEvidenceList(card = {}) {
+  return [
+    ...(Array.isArray(card.missingCriticalEvidence) ? card.missingCriticalEvidence : []),
+    ...(Array.isArray(card.missingComponents) ? card.missingComponents : []),
+    ...(Array.isArray(card.gates) ? card.gates : []),
+  ].map((item) => String(item || ""));
+}
+
+export function shouldRefreshEntryQualityScorecard(signal = {}) {
+  const card = signal.entryQualityScorecard;
+  if (!card) return true;
+  if (signal.setupRevalidationRequired === true) return false;
+  const spread = resolveMeasuredStockSpread(signal, signal.phase5SignalQuality || signal.institutionalSignalQuality || {});
+  const missing = entryCardEvidenceList(card);
+  const cardSpreadMissing =
+    !Number.isFinite(Number(card.spreadPercent)) ||
+    Number(card.coverage || 0) < 0.8 ||
+    missing.some((item) => /spread/i.test(item));
+  if (spread.spreadPercent !== null && cardSpreadMissing) return true;
+  const bars = Number(
+    signal.technicalBarsFound
+    || (Array.isArray(signal.stockChartBars) ? signal.stockChartBars.length : 0)
+    || (Array.isArray(signal.chartBars) ? signal.chartBars.length : 0)
+    || (Array.isArray(signal.historicalBars) ? signal.historicalBars.length : 0)
+    || 0
+  );
+  const trendMissing = Number(card.coverage || 0) === 0 || missing.some((item) => /trendAlignment|TREND_ALIGNMENT/i.test(item));
+  return bars >= 20 && trendMissing;
+}
+
+export function resolveEntryQualityScorecard(signal = {}) {
+  return shouldRefreshEntryQualityScorecard(signal)
+    ? calculateEntryQualityScore(signal)
+    : signal.entryQualityScorecard;
+}
+
 function component(name, value, weight, source, available = true) {
   const normalized = clamp(value);
   return {
@@ -856,7 +892,7 @@ export function buildStockDecisionScore(signal = {}) {
   const continuationSetup = assessContinuationSetup(signal);
   const classifiedLane = signal.discoveryLane || classifyStockDiscoveryLane(signal).lane;
   const useContinuation = classifiedLane === 'MEASURED_CONTINUATION' && continuationSetup.eligible === true;
-  const entry = signal.entryQualityScorecard || calculateEntryQualityScore(signal);
+  const entry = resolveEntryQualityScorecard(signal);
   const contextScore = signal.marketContextAvailable === false ? undefined : firstFinite(
     signal.contextScore,
     signal.phase12MacroCorrelation?.macroCorrelationScore,
@@ -1004,7 +1040,7 @@ export function buildStockDecisionScore(signal = {}) {
 
 export function buildDecisionScoreTelemetry(signal = {}) {
   const discovery = signal.discoveryScorecard || calculateEarlyDiscoveryScore(signal);
-  const entry = signal.entryQualityScorecard || calculateEntryQualityScore(signal);
+  const entry = resolveEntryQualityScorecard(signal);
   const continuation = signal.continuationScorecard || calculateMultiDayContinuationScore(signal);
   const stockDecision = buildStockDecisionScore({
     ...signal,

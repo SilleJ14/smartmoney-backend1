@@ -5,6 +5,7 @@ import {
   calculateEntryQualityScore,
   calculateMultiDayContinuationScore,
   evaluateStockTradeCandidate,
+  shouldRefreshEntryQualityScorecard,
 } from "../scoring/decisionScores.js";
 import { classifyStockDiscoveryLane } from "../discovery/stockDiscoveryLanes.js";
 import { normalizeSignalScoreCollection } from "../scoring/signalScoreCompleteness.js";
@@ -340,6 +341,7 @@ export function createStockMarketStrategy(dependencies) {
       sectorLiquidityScore: sector.sectorLiquidityScore,
       sectorLeadershipScore: sector.sectorLeadershipScore,
       sectorRole: sector.sectorRole,
+      riskPortfolioScore: blend.riskPortfolioScore,
       institutionalScore,
       aiConfidence: institutionalScore,
       riskLevel: getRiskLevel(riskScore),
@@ -349,6 +351,30 @@ export function createStockMarketStrategy(dependencies) {
       decisionLevel,
       autoTradeApproved,
     };
+  }
+
+  function attachStockWatchDecisionComponents(q = {}) {
+    const institutional = calculateInstitutionalScores(q);
+    q.contextScore = institutional.contextScore;
+    q.marketContextAvailable = institutional.marketContextAvailable;
+    q.marketContextEvidence = institutional.marketContextEvidence;
+    q.macroScore = institutional.macroScore;
+    q.riskScore = institutional.riskScore;
+    q.blendedRiskScore = institutional.riskScore;
+    q.institutionalRiskScore = institutional.institutionalRiskScore;
+    q.portfolioScore = institutional.portfolioScore;
+    q.portfolioConstructionScore = institutional.portfolioConstructionScore;
+    q.riskPortfolioScore = institutional.riskPortfolioScore;
+    q.fundamentalScore = institutional.fundamentalScore;
+    q.fundamentalDataValid = institutional.fundamentalDataValid === true;
+    q.fundamentalBlendScore = institutional.fundamentalBlendScore;
+    q.fundamentalValidation = institutional.fundamentalValidation;
+    q.dcfValuationScore = institutional.dcfValuationScore;
+    if (shouldRefreshEntryQualityScorecard(q)) {
+      q.entryQualityScorecard = calculateEntryQualityScore(q);
+      q.entryQualityScore = q.entryQualityScorecard.score;
+    }
+    return q;
   }
   
   function passesFilters(q) {
@@ -874,6 +900,7 @@ export function createStockMarketStrategy(dependencies) {
   
     q.entryScore = clampScoreFinal(score);
     q.entryQualityScore = q.entryScore;
+    attachStockWatchDecisionComponents(q);
     q.decisionScoreTelemetry = buildDecisionScoreTelemetry(q);
     return q.entryScore;
   
@@ -2181,5 +2208,5 @@ export function createStockMarketStrategy(dependencies) {
       .finally(() => { activeAnalysis = null; });
     return activeAnalysis;
   }
-  return { calculateInstitutionalScores, passesFilters, scoreStock, scanMarket, analyzeCandidates };
+  return { calculateInstitutionalScores, attachStockWatchDecisionComponents, passesFilters, scoreStock, scanMarket, analyzeCandidates };
 }

@@ -7,6 +7,34 @@ export const ALPACA_CRYPTO_EXECUTION_SOURCES = Object.freeze([
 ]);
 
 export const CRYPTO_REST_QUOTE_BATCH_SIZE = 24;
+export const FALLBACK_ALPACA_CRYPTO_USD_PAIRS = Object.freeze([
+  "BTC/USD",
+  "ETH/USD",
+  "SOL/USD",
+  "XRP/USD",
+  "DOGE/USD",
+  "ADA/USD",
+  "AVAX/USD",
+  "LINK/USD",
+  "LTC/USD",
+  "DOT/USD",
+  "UNI/USD",
+  "AAVE/USD",
+  "BCH/USD",
+  "SHIB/USD",
+  "PEPE/USD",
+  "BONK/USD",
+  "WIF/USD",
+  "ARB/USD",
+]);
+
+export function resolveCryptoAssetUniverse({ fetched = [], cached = [] } = {}) {
+  const live = (Array.isArray(fetched) ? fetched : []).map((symbol) => String(symbol || "").toUpperCase()).filter((symbol) => symbol.endsWith("/USD"));
+  if (live.length) return live;
+  const previous = (Array.isArray(cached) ? cached : []).map((symbol) => String(symbol || "").toUpperCase()).filter((symbol) => symbol.endsWith("/USD"));
+  if (previous.length) return previous;
+  return [...FALLBACK_ALPACA_CRYPTO_USD_PAIRS];
+}
 
 export function isAlpacaCryptoExecutionSource(source = "") {
   return ALPACA_CRYPTO_EXECUTION_SOURCES.includes(String(source || "").toLowerCase());

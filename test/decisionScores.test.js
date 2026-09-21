@@ -1,6 +1,6 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import { buildDecisionScoreTelemetry, buildStockDecisionScore, calculateEarlyDiscoveryScore, calculateEntryQualityScore, calculateMultiDayContinuationScore, evaluateStockTradeCandidate } from "../scoring/decisionScores.js";
+import { buildDecisionScoreTelemetry, buildStockDecisionScore, calculateEarlyDiscoveryScore, calculateEntryQualityScore, calculateMultiDayContinuationScore, evaluateStockTradeCandidate, shouldRefreshEntryQualityScorecard, STOCK_DECISION_WEIGHTS, STOCK_EXECUTION_THRESHOLDS } from "../scoring/decisionScores.js";
 
 const canonicalDiscoveryEvidence = {
   historyDays: 30,
@@ -354,6 +354,61 @@ test("missing optional stock evidence cannot improve the final score", () => {
   });
   assert.ok(missingFundamentals.score < complete.score);
   assert.ok(missingFundamentals.missingEvidencePenalty > 0);
+});
+
+test("watch names fill E when a live bid/ask arrives on an incomplete entry card", () => {
+  const incompleteEntry = {
+    score: 12,
+    coverage: 0.23,
+    approved: false,
+    spreadPercent: null,
+    missingCriticalEvidence: ["liquidityExecution", "spreadEvidence"],
+    gates: ["MISSING_SPREAD_EVIDENCE"],
+  };
+  const watch = {
+    discoveryScorecard: { score: 80, buyScore: 80, coverage: 1 },
+    entryQualityScorecard: incompleteEntry,
+    confirmations: { aboveVwap: true, closeNearHighPercent: 82, fakeBreakout: false },
+    technicals: { ema9: 11, ema20: 10, macd: 2, macdSignal: 1, rsi: 60 },
+    phase5SignalQuality: { liquidityStabilityScore: 85, antiChaseRisk: 15, exhaustionRisk: 15, spreadWideningRisk: 10, breakoutRetestConfirmation: true },
+    technicalBarsFound: 30,
+    bid: 10,
+    ask: 10.02,
+    spreadAvailable: true,
+  };
+  assert.equal(shouldRefreshEntryQualityScorecard(watch), true);
+  const filled = buildStockDecisionScore(watch);
+  assert.equal(filled.entry.approved, true);
+  assert.ok(filled.components.find((item) => item.name === "entry").available);
+  assert.ok(filled.score > buildStockDecisionScore({ discoveryScorecard: watch.discoveryScorecard, entryQualityScorecard: incompleteEntry }).score);
+  const completeCard = calculateEntryQualityScore(watch);
+  assert.equal(shouldRefreshEntryQualityScorecard({ ...watch, entryQualityScorecard: completeCard }), false);
+});
+
+test("scoring context, risk, and fundamentals on a watch name lifts F without changing weights or auto quote rules", () => {
+  const discoveryOnly = buildStockDecisionScore({
+    discoveryScorecard: { score: 80, buyScore: 80, coverage: 1 },
+  });
+  const watched = buildStockDecisionScore({
+    discoveryScorecard: { score: 80, buyScore: 80, coverage: 1 },
+    entryQualityScorecard: { score: 80, coverage: 1, approved: true, spreadPercent: 0.2 },
+    contextScore: 70,
+    riskPortfolioScore: 70,
+    fundamentalScore: 70,
+    fundamentalDataValid: true,
+  });
+  assert.ok(watched.score > discoveryOnly.score);
+  assert.equal(watched.components.find((item) => item.name === "marketContext").available, true);
+  assert.equal(watched.components.find((item) => item.name === "riskPortfolio").available, true);
+  assert.equal(watched.components.find((item) => item.name === "fundamentals").available, true);
+  assert.equal(STOCK_DECISION_WEIGHTS.discovery, 0.32);
+  assert.equal(STOCK_DECISION_WEIGHTS.entry, 0.42);
+  assert.equal(STOCK_DECISION_WEIGHTS.marketContext, 0.09);
+  assert.equal(STOCK_DECISION_WEIGHTS.riskPortfolio, 0.09);
+  assert.equal(STOCK_DECISION_WEIGHTS.fundamentals, 0.08);
+  assert.equal(STOCK_EXECUTION_THRESHOLDS.maxSpreadPercent, 1);
+  assert.equal(STOCK_EXECUTION_THRESHOLDS.maxQuoteAgeSeconds, 5);
+  assert.equal(STOCK_EXECUTION_THRESHOLDS.finalScore, 70);
 });
 
 test("bounded reinforcement changes the canonical stock decision score", () => {
