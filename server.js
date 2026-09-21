@@ -3151,7 +3151,7 @@ function buildBackendHealthPayload(clock = {}) {
     },
     engine: {
       running: Boolean(engineState.running),
-      crashed: Boolean(engineState.lastError),
+      crashed: Boolean(engineState.lastError) && engineState.lastEngineStopReason === "ENGINE_ERROR",
       lastError: engineState.lastError || null,
       lastScanAt: engineState.lastScanAt || null,
       lastSuccessfulCycleAt: engineState.lastSuccessfulCycleAt || null,

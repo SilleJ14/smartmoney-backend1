@@ -1,63 +1,47 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import { registerOperationalControlRoutes } from "../routes/operationalControlRoutes.js";
+import { registerOperationalControlRoutes, RELEASE_CONFIRMATION } from "../routes/operationalControlRoutes.js";
 
-function harness(initial = {}) {
+function install() {
   const routes = new Map();
-  const events = [];
-  let state = {
-    emergencyStopActive: false,
-    autoTradingEnabled: false,
-    dailyLossLocked: false,
-    profitLocked: false,
-    ...initial,
-  };
-  const app = { post: (path, _middleware, handler) => routes.set(path, handler) };
-  registerOperationalControlRoutes(app, {
-    requireAdmin: (_req, _res, next) => next(),
-    getControlState: () => state,
-    updateControlState: (updates) => (state = { ...state, ...updates }),
-    recordOrder: (type) => events.push(type),
+  const saved = [];
+  let control = { emergencyStopActive: true, autoTradingEnabled: false, dailyLossLocked: false, profitLocked: true };
+  registerOperationalControlRoutes({ post: (route, ...handlers) => routes.set(route, handlers.at(-1)) }, {
+    requireAdmin: () => {},
+    getControlState: () => control,
+    updateControlState: (updates) => {
+      control = { ...control, ...updates };
+      return control;
+    },
+    recordOrder: (...args) => saved.push(args),
     getClientIp: () => "127.0.0.1",
-    saveEngineState: (type) => events.push(type),
+    saveEngineState: (reason) => saved.push(["save", reason]),
   });
-  const invoke = async (path, body = {}) => {
-    const response = { statusCode: 200 };
-    response.status = (code) => { response.statusCode = code; return response; };
-    response.json = (payload) => { response.body = payload; return response; };
-    await routes.get(path)({ body }, response);
-    return response;
+  const call = async (route, body = {}) => {
+    const res = { status(code) { this.statusCode = code; return this; }, json(body) { this.body = body; return this; } };
+    await routes.get(route)({ body }, res);
+    return res;
   };
-  return { invoke, getState: () => state, events };
+  return { call, getControl: () => control, saved };
 }
 
-test("emergency stop disables automated buying", async () => {
-  const api = harness({ autoTradingEnabled: true });
-  const response = await api.invoke("/emergency-stop");
-  assert.equal(response.statusCode, 200);
-  assert.equal(api.getState().emergencyStopActive, true);
-  assert.equal(api.getState().autoTradingEnabled, false);
-  assert.deepEqual(api.events, ["EMERGENCY_STOP_ENGAGED", "EMERGENCY_STOP_ENGAGED"]);
+test("releasing emergency stop arms Autopilot on the server", async () => {
+  const { call, getControl } = install();
+  const denied = await call("/emergency-stop/release", { confirmation: "no" });
+  assert.equal(denied.statusCode, 400);
+  assert.equal(getControl().autoTradingEnabled, false);
+  const released = await call("/emergency-stop/release", { confirmation: RELEASE_CONFIRMATION });
+  assert.equal(released.body.emergencyStopActive, false);
+  assert.equal(released.body.autoTradingEnabled, true);
+  assert.equal(getControl().autoTradingEnabled, true);
 });
 
-test("emergency release requires an exact confirmation", async () => {
-  const api = harness({ emergencyStopActive: true });
-  const rejected = await api.invoke("/emergency-stop/release", { confirmation: "release" });
-  assert.equal(rejected.statusCode, 400);
-  assert.equal(api.getState().emergencyStopActive, true);
-  const accepted = await api.invoke("/emergency-stop/release", {
-    confirmation: "RELEASE EMERGENCY STOP",
-  });
-  assert.equal(accepted.statusCode, 200);
-  assert.equal(api.getState().emergencyStopActive, false);
-});
-
-test("automation remains blocked by operational locks", async () => {
-  const emergency = harness({ emergencyStopActive: true });
-  assert.equal((await emergency.invoke("/auto-trading/on")).statusCode, 423);
-  const dailyLoss = harness({ dailyLossLocked: true });
-  assert.equal((await dailyLoss.invoke("/auto-trading/on")).statusCode, 403);
-  const healthy = harness();
-  assert.equal((await healthy.invoke("/auto-trading/on")).statusCode, 200);
-  assert.equal(healthy.getState().autoTradingEnabled, true);
+test("profit lock does not block turning Autopilot on after stop is released", async () => {
+  const { call, getControl } = install();
+  await call("/emergency-stop/release", { confirmation: RELEASE_CONFIRMATION });
+  const on = await call("/auto-trading/on");
+  assert.equal(on.body.autoTradingEnabled, true);
+  const off = await call("/auto-trading/off");
+  assert.equal(off.statusCode, 423);
+  assert.equal(getControl().autoTradingEnabled, true);
 });

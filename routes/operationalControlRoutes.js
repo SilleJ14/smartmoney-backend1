@@ -27,7 +27,7 @@ export function registerOperationalControlRoutes(app, dependencies) {
         error: `Exact confirmation phrase required: ${RELEASE_CONFIRMATION}`,
       });
     }
-    const state = updateControlState({ emergencyStopActive: false, autoTradingEnabled: false });
+    const state = updateControlState({ emergencyStopActive: false, autoTradingEnabled: true });
     recordOrder("EMERGENCY_STOP_RELEASED", "ACCOUNT", {
       ip: getClientIp(req), releasedAt: new Date().toISOString(),
     });
@@ -36,7 +36,7 @@ export function registerOperationalControlRoutes(app, dependencies) {
       ok: true,
       emergencyStopActive: state.emergencyStopActive,
       autoTradingEnabled: state.autoTradingEnabled,
-      message: "Emergency stop released. Auto trading remains disabled.",
+      message: "Emergency stop released. Autopilot stays armed on the server until emergency stop is engaged again.",
     });
   });
 
@@ -48,14 +48,16 @@ export function registerOperationalControlRoutes(app, dependencies) {
         message: "Emergency stop is active. Release it before enabling auto trading.",
       });
     }
-    if (state.dailyLossLocked) {
-      return res.status(403).json({ message: "Auto trading locked because daily loss limit was reached" });
-    }
-    if (state.profitLocked) {
-      return res.status(403).json({ message: "Auto trading locked because profit lock was hit" });
-    }
     const nextState = updateControlState({ autoTradingEnabled: true });
     saveEngineState("AUTO_TRADING_ENABLED");
     res.json({ message: "Auto trading enabled", autoTradingEnabled: nextState.autoTradingEnabled });
+  });
+
+  app.post("/auto-trading/off", requireAdmin, (_req, res) => {
+    res.status(423).json({
+      ok: false,
+      autoTradingEnabled: getControlState().autoTradingEnabled,
+      error: "Autopilot stays on after emergency stop is released. Engage emergency stop to halt new buys.",
+    });
   });
 }

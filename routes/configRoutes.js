@@ -10,16 +10,16 @@ export function registerConfigRoutes(app, dependencies) {
   };
   const automationBlock = (updates = {}) => {
     const enabling = updates.autoTradingEnabled === true || updates.autoTradingEnabled === "true";
-    if (!enabling) return null;
+    const disabling = updates.autoTradingEnabled === false || updates.autoTradingEnabled === "false";
     const state = controlState();
-    if (state.emergencyStopActive) {
+    if (enabling && state.emergencyStopActive) {
       return { status: 423, error: "Emergency stop is active. Auto trading cannot be enabled." };
     }
-    if (state.dailyLossLocked) {
-      return { status: 403, error: "Auto trading is locked because the daily loss limit was reached." };
-    }
-    if (state.profitLocked) {
-      return { status: 403, error: "Auto trading is locked because the profit lock was reached." };
+    if (disabling && state.emergencyStopActive !== true) {
+      return {
+        status: 423,
+        error: "Autopilot stays on after emergency stop is released. Engage emergency stop to halt new buys.",
+      };
     }
     return null;
   };

@@ -51,3 +51,22 @@ test('failed persistence releases the cycle lock and records failure, never comp
   assert.equal(state.running, false);
   assert.deepEqual(events.map(e => e.stage), ['SCAN_STARTED', 'SCAN_PERSISTENCE_FAILED']);
 });
+
+test("a 429 scan does not mark the engine as crashed", async () => {
+  const state = { running: false, totalEngineTicks: 0 };
+  const saves = [];
+  const runner = createCycleRunner({
+    state,
+    saveState: async (reason) => { saves.push(reason); },
+    now: () => 1,
+    onError: () => {},
+  });
+  const error = new Error("rate limit exceeded");
+  error.status = 429;
+  const result = await runner.run(async () => { throw error; });
+  assert.equal(result.reason, "rate_limited");
+  assert.equal(state.lastError, null);
+  assert.equal(state.lastEngineStopReason, "SCAN_RATE_LIMIT_RECOVERED");
+  assert.equal(state.running, false);
+  assert.deepEqual(saves, ["SCAN_RATE_LIMIT_RECOVERED"]);
+});
