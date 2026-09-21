@@ -35,6 +35,15 @@ export function evaluatePreTradeRisk({ order = {}, context = {}, options = {} } 
 
   if (isBuy) {
     const policy = purchasePolicy(options, context.isCrypto === true);
+    if (policy.purchaseType === "manual") {
+      return {
+        approved: reasons.length === 0,
+        symbol,
+        side: side.toUpperCase(),
+        reasons,
+        checkedAt: new Date().toISOString(),
+      };
+    }
     if (!validBrokerAccount(context.account) || !validBrokerPositions(context.positions)) reasons.push('Broker risk evidence is malformed or incomplete');
     if (context.safetyReconciliationRequired) reasons.push('Safety state requires reconciliation before new entries');
     if (context.account?.stale === true || context.positions?.stale === true || context.brokerEvidenceStale === true) reasons.push('Broker account/positions evidence is stale');
@@ -61,7 +70,7 @@ export function evaluatePreTradeRisk({ order = {}, context = {}, options = {} } 
       reasons.push("Auto trading is disabled");
     }
     if (context.dailyLossLocked) reasons.push("Daily loss lock is active");
-    if (context.profitLocked) reasons.push("Profit lock is active");
+    if (context.profitLocked && context.isCrypto !== true) reasons.push("Profit lock is active");
     if (!context.isCrypto && context.marketClockAvailable === false) reasons.push('Broker market clock is unavailable or stale');
     else if (!context.isCrypto && !context.marketOpen) reasons.push("Stock market is closed");
     if (price <= 0) reasons.push("Missing valid live price");

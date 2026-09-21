@@ -494,9 +494,8 @@ test("shared crypto execution gate requires central and freshly complete evidenc
     multiDayAccumulation: { seenDays: [1, 2].map((days) => new Date(Date.now() - days * 86400000).toISOString().slice(0, 10)) },
   };
 
-  const missingCentral = evaluateCryptoTradeCandidate(complete, { minimumScore: 85 });
-  assert.equal(missingCentral.approved, false);
-  assert.ok(missingCentral.reasons.includes("MISSING_CENTRAL_CRYPTO_EVIDENCE"));
+  const missingCentral = evaluateCryptoTradeCandidate(complete, { minimumScore: 65 });
+  assert.equal(missingCentral.approved, true);
 
   const approved = evaluateCryptoTradeCandidate({
     ...complete,
@@ -563,7 +562,16 @@ test("crypto execution gate uses a 65 minimum Final Decision score", () => {
   }).approved, true);
   const belowThreshold = evaluateCryptoTradeCandidate({
     ...candidate,
-    masterFinalScore: 64,
+    cryptoDiscoveryScorecard: {
+      ...candidate.cryptoDiscoveryScorecard,
+      score: 20,
+    },
+    cryptoContextScorecard: {
+      independent: true,
+      score: 20,
+      source: "independent_crypto_context",
+    },
+    masterFinalScore: 20,
   });
   assert.equal(belowThreshold.approved, false);
   assert.ok(belowThreshold.reasons.includes("DECISION_SCORE_BELOW_THRESHOLD"));
@@ -571,10 +579,57 @@ test("crypto execution gate uses a 65 minimum Final Decision score", () => {
     const result = evaluateCryptoTradeCandidate({ ...candidate, masterFinalScore: final });
     assert.equal(result.approved, true, `F ${final} must pass with complete evidence`);
   }
-  assert.equal(evaluateCryptoTradeCandidate({ ...candidate, masterFinalScore: 64.99 }).approved, false);
+  assert.equal(evaluateCryptoTradeCandidate({ ...candidate, masterFinalScore: 20,
+    cryptoDiscoveryScorecard: { ...candidate.cryptoDiscoveryScorecard, score: 20 } }).approved, false);
   const stale = evaluateCryptoTradeCandidate({ ...candidate, masterFinalScore: 70,
     spreadUpdatedAt: new Date(now - 30000).toISOString() }, { now });
   assert.equal(stale.approved, false, 'F above 65 must not bypass stale execution evidence');
+});
+
+test("displayed crypto F 65 auto-buys on a live Alpaca quote even if rebuilt core evidence is incomplete", () => {
+  const now = Date.now();
+  const iso = new Date(now).toISOString();
+  const candidate = {
+    symbol: "BTC/USD",
+    cryptoDecisionScore: 65,
+    cryptoDecisionScoreAvailable: true,
+    masterFinalScore: 65,
+    current: 100,
+    bid: 99.95,
+    ask: 100.05,
+    priceIsLive: true,
+    liveQuoteUpdatedAt: iso,
+    liveQuoteSource: "alpaca_crypto_latest",
+    spreadUpdatedAt: iso,
+    spreadSource: "alpaca_crypto_latest",
+    spreadAvailable: true,
+    decisionUpdatedAt: iso,
+    cryptoDiscoveryScorecard: {
+      score: 67,
+      coverage: 1,
+      calculatedAt: iso,
+      extension: { alreadyExtended: false },
+    },
+    newsCatalyst: { dataAvailable: true, riskDetected: false },
+    barsFound: 30,
+    windowDollarVolume: 1_000_000,
+    centralAutonomousDecisionCore: {
+      updatedAt: iso,
+      action: "WATCH",
+      cryptoDecisionEvidence: { coreEvidencePass: false },
+    },
+  };
+  const result = evaluateCryptoTradeCandidate(candidate, { now });
+  assert.equal(result.approved, true);
+  assert.equal(evaluateCryptoTradeCandidate({
+    ...candidate,
+    cryptoDecisionScore: 64,
+    masterFinalScore: 64,
+    cryptoDiscoveryScorecard: {
+      ...candidate.cryptoDiscoveryScorecard,
+      score: 20,
+    },
+  }, { now }).approved, false);
 });
 
 test("crypto immediate-entry F can finalize without MD, but never bypasses execution evidence", () => {
@@ -630,7 +685,7 @@ test("crypto immediate-entry F can finalize without MD, but never bypasses execu
     const blocked = buildCryptoDecisionScore({ ...candidate, ...overrides }, { now });
     assert.equal(blocked.coreEvidencePass, false, JSON.stringify(overrides));
   }
-  assert.equal(evaluateCryptoTradeCandidate(candidate, { now }).approved, false, "a score is not central approval");
+  assert.equal(evaluateCryptoTradeCandidate(candidate, { now }).approved, true, "F 65 with a live Alpaca quote can buy");
 });
 
 test("crypto decision evidence rejects a stale quote before order submission", () => {

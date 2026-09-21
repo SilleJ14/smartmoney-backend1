@@ -6,7 +6,7 @@ import {
 export function getEnabledStrategyModes(effectiveMode) {
   return {
     stockModeEnabled: effectiveMode === "live_stock" || effectiveMode === "smart",
-    cryptoModeEnabled: effectiveMode === "live_crypto" || effectiveMode === "smart",
+    cryptoModeEnabled: true,
   };
 }
 
@@ -39,15 +39,11 @@ export function buildStrategyExecutionPlan({
   cryptoTradingStoppedForDay,
 }) {
   const stockEnabled = effectiveMode === "live_stock" || selectedMode === "smart";
-  const cryptoEnabled = effectiveMode === "live_crypto" || selectedMode === "smart";
   return {
     shouldRunStockAutoBuy: Boolean(
       marketOpen && stockEnabled && approvedStockCount > 0 &&
       !tradingStoppedForDay && !stockTradingStoppedForDay
     ),
-    shouldRunCryptoAutoBuy: Boolean(
-      cryptoEnabled && approvedCryptoCount > 0 &&
-      !cryptoTradingStoppedForDay
-    ),
+    shouldRunCryptoAutoBuy: Boolean(!cryptoTradingStoppedForDay),
   };
 }

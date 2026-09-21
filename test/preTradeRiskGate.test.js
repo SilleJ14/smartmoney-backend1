@@ -111,13 +111,38 @@ test("rejects exposure and open-position limit violations", () => {
   assert.match(result.reasons.join(" | "), /Maximum open-trade count reached/);
 });
 
-test("manual buys may proceed while automation is disabled", () => {
+test("manual buys skip profit lock, quote age, spread, and a closed session", () => {
   const result = evaluatePreTradeRisk({
     order: { symbol: "AAPL", side: "buy", notional: 25 },
-    context: safeContext({ autoTradingEnabled: false }),
+    context: safeContext({
+      emergencyStopActive: true,
+      realCashTradingUnlocked: false,
+      autoTradingEnabled: false,
+      dailyLossLocked: true,
+      profitLocked: true,
+      marketOpen: false,
+      quoteAgeSeconds: 90,
+      quoteIsLive: false,
+      spreadPercent: 8,
+      spreadAvailable: false,
+    }),
     options: { automated: false },
   });
   assert.equal(result.approved, true);
+});
+
+test("profit lock pauses stocks but not crypto", () => {
+  const stock = evaluatePreTradeRisk({
+    order: { symbol: "AAPL", side: "buy", notional: 25 },
+    context: safeContext({ profitLocked: true }),
+  });
+  const crypto = evaluatePreTradeRisk({
+    order: { symbol: "BTC/USD", side: "buy", notional: 25 },
+    context: safeContext({ profitLocked: true, isCrypto: true, marketOpen: false }),
+  });
+  assert.equal(stock.approved, false);
+  assert.ok(stock.reasons.includes("Profit lock is active"));
+  assert.equal(crypto.approved, true);
 });
 
 test("closed equity market blocks stock buys but not crypto buys", () => {
@@ -159,7 +184,6 @@ test("sells remain available during emergency and account-data failures", () => 
 test("central pre-trade gate enforces strategy position limits only for buys", () => {
   const blocked = evaluatePreTradeRisk({
     order: { symbol: "AAA", side: "buy", notional: 10 },
-    options: { automated: false },
     context: {
       realCashTradingUnlocked: true, marketOpen: true, price: 10, quoteIsLive: true,
       quoteAgeSeconds: 1, maxQuoteAgeSeconds: 15, spreadPercent: 0.1,

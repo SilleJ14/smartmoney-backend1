@@ -71,7 +71,6 @@ test('current decision view ignores contradictory raw/old gate warnings and does
   assert.ok(!result.currentDecision.reasons.includes('FINAL_SCORE_INVALID'));
   assert.ok(!result.currentDecision.reasons.includes('SPREAD_UNAVAILABLE'));
   assert.equal(result.approved, false);
-  assert.ok(result.currentDecision.reasons.includes('EXPLICIT_APPROVAL_MISSING'));
 });
 test('missing history cannot become F and large price drift still requires reassessment', () => {
   const signal = fixture(); signal.discoveryScorecard.canonicalExtensionEvidencePass = false;

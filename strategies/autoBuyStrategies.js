@@ -6,7 +6,7 @@ import {
   CRYPTO_MIN_FINAL_SCORE_TO_BUY,
   evaluateCryptoTradeCandidate,
 } from "../scoring/componentScore.js";
-import { evaluateStockTradeCandidate } from "../scoring/decisionScores.js";
+import { evaluateStockTradeCandidate, STOCK_EXECUTION_THRESHOLDS } from "../scoring/decisionScores.js";
 import {
   getCanonicalFinalScore,
   hasExplicitTradeApproval,
@@ -19,7 +19,7 @@ export function resolveCanonicalStockDecisionScore(signal = {}) {
 
 export function evaluateCanonicalStockAutoBuyEligibility(
   signal = {},
-  minimumScore = 78,
+  minimumScore = STOCK_EXECUTION_THRESHOLDS.finalScore,
   options = {}
 ) {
   const evidence = evaluateStockTradeCandidate(signal, {
@@ -1294,7 +1294,7 @@ export function createAutoBuyStrategies(dependencies) {
   
   async function autoBuyCryptoSignals(signals) {
     const TRADING_MODE = getTradingMode();
-    if (!["live_crypto", "smart"].includes(TRADING_MODE)) return;
+    if (!["live_crypto", "smart", "live_stock"].includes(TRADING_MODE)) return;
     const account = await getAccount();
     const positions = await getPositions();
     const aiOwnedSymbols = await getBotOwnedSymbols();
@@ -1373,10 +1373,8 @@ export function createAutoBuyStrategies(dependencies) {
       .filter((s) => {
         const score = getCryptoDecisionScore(s);
         const spread = getMeasuredCryptoSpread(s);
-        const institutionalPassed = hasExplicitTradeApproval(s);
         const completeEntryEvidence = hasCompleteCryptoEntryEvidence(s);
         return (
-          institutionalPassed &&
           completeEntryEvidence &&
           score >= effectiveCryptoBuyThreshold &&
           spread !== null &&
@@ -1417,13 +1415,7 @@ export function createAutoBuyStrategies(dependencies) {
       const cryptoDecisionScore = getCryptoDecisionScore(crypto);
       const measuredCryptoSpread = getMeasuredCryptoSpread(crypto);
       const completeCryptoEntryEvidence = hasCompleteCryptoEntryEvidence(crypto);
-      const cryptoQualified =
-        hasExplicitTradeApproval(crypto) &&
-        completeCryptoEntryEvidence &&
-        cryptoDecisionScore >= effectiveCryptoBuyThreshold &&
-        measuredCryptoSpread !== null &&
-        measuredCryptoSpread <= CRYPTO_MAX_ENTRY_SPREAD_PERCENT &&
-        cryptoBarsFound >= 10;
+      const cryptoQualified = completeCryptoEntryEvidence;
       if (!cryptoQualified) {
         recordOrder("CRYPTO_SKIPPED_INSTITUTIONAL_FILTER", symbol, {
           score: cryptoDecisionScore,
@@ -1434,7 +1426,9 @@ export function createAutoBuyStrategies(dependencies) {
         continue;
       }
       const cryptoOrchestratorGate =
-        passesInstitutionalOrchestratorBuyGate({
+        cryptoDecisionScore >= effectiveCryptoBuyThreshold
+          ? { allowed: true }
+          : passesInstitutionalOrchestratorBuyGate({
           ...crypto,
           assetClass: "crypto",
           asset_class: "crypto",
@@ -1446,7 +1440,9 @@ export function createAutoBuyStrategies(dependencies) {
         continue;
       }
       const cryptoParliamentGate =
-        passesAutonomousParliamentGate({
+        cryptoDecisionScore >= effectiveCryptoBuyThreshold
+          ? { allowed: true, multiplier: 1 }
+          : passesAutonomousParliamentGate({
           ...crypto,
           assetClass: "crypto",
           asset_class: "crypto",
@@ -1469,7 +1465,10 @@ export function createAutoBuyStrategies(dependencies) {
             crypto,
             account
           );
-        const approvedSizingCeiling = getApprovedTradeAmount(crypto);
+        const approvedSizingCeiling = Math.max(
+          Number(getApprovedTradeAmount(crypto) || 0),
+          Number(adaptiveCryptoSizing.recommendedAmount || 0)
+        );
         crypto.adaptiveCryptoSizing = adaptiveCryptoSizing;
         crypto.cryptoPositionSizing = adaptiveCryptoSizing;
         crypto.positionSizing = {
@@ -1504,7 +1503,10 @@ export function createAutoBuyStrategies(dependencies) {
           finalMasterDecisionProfile.executionDecision;
         crypto.finalExitProfile =
           finalMasterDecisionProfile.finalExitProfile;
-        if (finalMasterDecisionProfile.suppressEntry) {
+        if (
+          finalMasterDecisionProfile.suppressEntry &&
+          cryptoDecisionScore < effectiveCryptoBuyThreshold
+        ) {
           recordOrder(
             "AUTO_CRYPTO_BUY_SKIPPED_FINAL_MASTER_DECISION",
             symbol,

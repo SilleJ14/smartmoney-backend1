@@ -35,6 +35,8 @@ export function installCentralDecision(signal, decision, { crypto = false, now =
       stockDecisionScore: available ? score : null,
       stockDecisionScoreAvailable: available,
       stockDecisionEvidence: evidence,
+      discoveryLane: evidence?.discoveryLane || signal.discoveryLane,
+      continuationSetup: evidence?.continuationSetup || signal.continuationSetup,
     }),
   });
   return crypto ? signal : retainMeasuredStockScores(signal, {}, now);

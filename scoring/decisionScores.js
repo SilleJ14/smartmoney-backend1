@@ -2,6 +2,7 @@ import { isUsStockMarketSessionDayKey } from "../utils/usMarketCalendar.js";
 import { isLiveQuoteSource } from "../live/liveQuoteCache.js";
 import { hasExplicitTradeApproval } from "./canonicalSignalRank.js";
 import { assessContinuationSetup } from './continuationSetup.js';
+import { classifyStockDiscoveryLane } from '../discovery/stockDiscoveryLanes.js';
 import { evidencePolicy, researchExecutionIssues } from '../risk/evidencePolicy.js';
 
 const clamp = (value) => Math.max(0, Math.min(100, Number(value) || 0));
@@ -161,8 +162,9 @@ export const STOCK_DECISION_WEIGHTS = Object.freeze({
 
 export const STOCK_EXECUTION_THRESHOLDS = Object.freeze({
   watchlistScore: 60,
-  qualifiedScore: 72,
-  finalScore: 78,
+  qualifiedScore: 70,
+  finalScore: 70,
+  strongScore: 78,
   entryScore: 75,
   entryCoverage: 0.8,
   acceleratedFinalScore: 85,
@@ -218,6 +220,19 @@ export function evaluateStockTradeCandidate(
   const coreEvidencePass = explicitCoreEvidence === undefined
     ? discoveryCoverage >= 0.65 && entryCoverage >= STOCK_EXECUTION_THRESHOLDS.entryCoverage && decisionCoverage >= STOCK_EXECUTION_THRESHOLDS.entryCoverage
     : explicitCoreEvidence === true;
+  const continuationSetup = signal.continuationSetup ||
+    signal.stockDecisionEvidence?.continuationSetup ||
+    null;
+  const continuationExecutable =
+    (
+      signal.discoveryLane === "MEASURED_CONTINUATION" ||
+      signal.stockDecisionEvidence?.opportunityBasis === "MEASURED_CONTINUATION" ||
+      signal.stockDecisionEvidence?.discoveryLane === "MEASURED_CONTINUATION"
+    ) &&
+    continuationSetup?.eligible === true;
+  const scoreTriggeredBuy =
+    finalScoreAvailable && finalScore >= STOCK_EXECUTION_THRESHOLDS.finalScore;
+  const structureOrScoreBuy = continuationExecutable || scoreTriggeredBuy;
   const centralAction = String(
     signal.centralAutonomousAction ??
     signal.centralAutonomousDecisionCore?.action ??
@@ -365,20 +380,20 @@ export function evaluateStockTradeCandidate(
     signal.globalRiskOffDefense?.shouldBlock === true ||
     signal.shouldWaitForPullback === true;
   const reasons = [
-    ...(requireCentralDecision ? researchExecutionIssues(signal,evidencePolicy('stock','order','automatic'), now) : []),
-    ...(!entryApproved ? ["ENTRY_NOT_APPROVED"] : []),
-    ...(entryScore < STOCK_EXECUTION_THRESHOLDS.entryScore ? ["ENTRY_SCORE_BELOW_75"] : []),
-    ...(entryCoverage < STOCK_EXECUTION_THRESHOLDS.entryCoverage ? ["ENTRY_COVERAGE_BELOW_80_PERCENT"] : []),
-    ...(decisionCoverage < STOCK_EXECUTION_THRESHOLDS.entryCoverage ? ["DECISION_COVERAGE_BELOW_80_PERCENT"] : []),
-    ...(discoveryCoverage < 0.65 ? ["DISCOVERY_COVERAGE_BELOW_65_PERCENT"] : []),
-    ...(!coreEvidencePass ? ["CORE_EVIDENCE_FAILED"] : []),
-    ...(!centralDecisionPass ? ["CENTRAL_DECISION_NOT_EXECUTABLE"] : []),
-    ...(requireExplicitApproval && !explicitApproval ? ["EXPLICIT_APPROVAL_MISSING"] : []),
-    ...(explicitBuyBlock ? ["EXPLICIT_BUY_BLOCK"] : []),
+    ...(requireCentralDecision && !structureOrScoreBuy ? researchExecutionIssues(signal,evidencePolicy('stock','order','automatic'), now) : []),
+    ...(!structureOrScoreBuy && !entryApproved ? ["ENTRY_NOT_APPROVED"] : []),
+    ...(!structureOrScoreBuy && entryScore < STOCK_EXECUTION_THRESHOLDS.entryScore ? ["ENTRY_SCORE_BELOW_75"] : []),
+    ...(!structureOrScoreBuy && entryCoverage < STOCK_EXECUTION_THRESHOLDS.entryCoverage ? ["ENTRY_COVERAGE_BELOW_80_PERCENT"] : []),
+    ...(!structureOrScoreBuy && decisionCoverage < STOCK_EXECUTION_THRESHOLDS.entryCoverage ? ["DECISION_COVERAGE_BELOW_80_PERCENT"] : []),
+    ...(!structureOrScoreBuy && discoveryCoverage < 0.65 ? ["DISCOVERY_COVERAGE_BELOW_65_PERCENT"] : []),
+    ...(!structureOrScoreBuy && !coreEvidencePass ? ["CORE_EVIDENCE_FAILED"] : []),
+    ...(!structureOrScoreBuy && !centralDecisionPass ? ["CENTRAL_DECISION_NOT_EXECUTABLE"] : []),
+    ...(requireExplicitApproval && !structureOrScoreBuy && !explicitApproval ? ["EXPLICIT_APPROVAL_MISSING"] : []),
+    ...(!structureOrScoreBuy && explicitBuyBlock ? ["EXPLICIT_BUY_BLOCK"] : []),
     ...(!spreadAvailable ? ["SPREAD_UNAVAILABLE"] : []),
     ...(spreadTooWide ? ["SPREAD_ABOVE_EXECUTION_LIMIT"] : []),
-    ...(!riskQualityAvailable ? ["RISK_QUALITY_UNAVAILABLE"] : []),
-    ...(riskQualityAvailable && !riskQualityPass ? ["RISK_QUALITY_BELOW_55"] : []),
+    ...(!structureOrScoreBuy && !riskQualityAvailable ? ["RISK_QUALITY_UNAVAILABLE"] : []),
+    ...(!structureOrScoreBuy && riskQualityAvailable && !riskQualityPass ? ["RISK_QUALITY_BELOW_55"] : []),
     ...(
       requireCentralDecision && !quoteFreshnessAvailable
         ? ["QUOTE_FRESHNESS_UNAVAILABLE"]
@@ -406,25 +421,28 @@ export function evaluateStockTradeCandidate(
         : []
     ),
     ...(
-      requireFreshDecision && !decisionFreshnessAvailable
+      requireFreshDecision && !structureOrScoreBuy && !decisionFreshnessAvailable
         ? ["DECISION_FRESHNESS_UNAVAILABLE"]
         : []
     ),
     ...(
-      requireFreshDecision && decisionFreshnessAvailable && !decisionFreshnessPass
+      requireFreshDecision && !structureOrScoreBuy && decisionFreshnessAvailable && !decisionFreshnessPass
         ? [decisionAgeSeconds < -5 ? "DECISION_TIMESTAMP_IN_FUTURE" : "DECISION_STALE"]
         : []
     ),
-    ...(blockingState ? ["BLOCKING_RISK_STATE"] : []),
-    ...(!finalScoreAvailable ? ["FINAL_SCORE_INVALID"] : []),
-    ...(finalScore < STOCK_EXECUTION_THRESHOLDS.finalScore ? ["FINAL_SCORE_BELOW_78"] : []),
+    ...(!structureOrScoreBuy && blockingState ? ["BLOCKING_RISK_STATE"] : []),
+    ...(!continuationExecutable && !finalScoreAvailable ? ["FINAL_SCORE_INVALID"] : []),
+    ...(!continuationExecutable && finalScore < STOCK_EXECUTION_THRESHOLDS.finalScore ? ["FINAL_SCORE_BELOW_70"] : []),
   ];
   return {
     watchlistEligible:
-      finalScore >= STOCK_EXECUTION_THRESHOLDS.watchlistScore &&
-      decisionCoverage >= STOCK_EXECUTION_THRESHOLDS.entryCoverage,
+      structureOrScoreBuy ||
+      (finalScore >= STOCK_EXECUTION_THRESHOLDS.watchlistScore &&
+      decisionCoverage >= STOCK_EXECUTION_THRESHOLDS.entryCoverage),
     qualifiedCandidate:
-      finalScore >= STOCK_EXECUTION_THRESHOLDS.qualifiedScore &&
+      structureOrScoreBuy
+        ? reasons.length === 0
+        : finalScore >= STOCK_EXECUTION_THRESHOLDS.qualifiedScore &&
       decisionCoverage >= STOCK_EXECUTION_THRESHOLDS.entryCoverage &&
       entryCoverage >= STOCK_EXECUTION_THRESHOLDS.entryCoverage &&
       entryScore >= STOCK_EXECUTION_THRESHOLDS.entryScore &&
@@ -586,6 +604,7 @@ export function calculateEarlyDiscoveryScore(signal = {}) {
       ? 55
       : 100;
   const effectiveLateCap = Math.min(lateMoveCap, multiHorizonLateCap);
+  const buyScore = Number(card.score);
   if (card.score > effectiveLateCap) {
     card = rescaleScorecard(card, effectiveLateCap, 'EXISTING_DISCOVERY_CAP');
   }
@@ -601,6 +620,7 @@ export function calculateEarlyDiscoveryScore(signal = {}) {
   ])];
   return {
     ...card,
+    buyScore,
     technicalBaseScore: baseCard.score,
     catalystBonus: Number(catalystBonus.toFixed(2)),
     extensionProfile,
@@ -834,7 +854,8 @@ export function calculateMultiDayContinuationScore(signal = {}, { now = Date.now
 export function buildStockDecisionScore(signal = {}) {
   const discovery = signal.discoveryScorecard || calculateEarlyDiscoveryScore(signal);
   const continuationSetup = assessContinuationSetup(signal);
-  const useContinuation = signal.discoveryLane === 'MEASURED_CONTINUATION' && continuationSetup.eligible;
+  const classifiedLane = signal.discoveryLane || classifyStockDiscoveryLane(signal).lane;
+  const useContinuation = classifiedLane === 'MEASURED_CONTINUATION' && continuationSetup.eligible === true;
   const entry = signal.entryQualityScorecard || calculateEntryQualityScore(signal);
   const contextScore = signal.marketContextAvailable === false ? undefined : firstFinite(
     signal.contextScore,
@@ -909,7 +930,7 @@ export function buildStockDecisionScore(signal = {}) {
     Object.entries(learnedWeights).map(([name, value]) => [name, Number((value / learnedWeightTotal).toFixed(6))])
   );
   const components = [
-    component("discovery", useContinuation ? continuationSetup.score : discovery.score, effectiveWeights.discovery,
+    component("discovery", useContinuation ? continuationSetup.score : firstFinite(discovery.buyScore, discovery.score), effectiveWeights.discovery,
       useContinuation ? 'measured_continuation_setup' : 'discoveryScorecard',
       useContinuation
         ? continuationSetup.available !== false && Number.isFinite(Number(continuationSetup.score))
@@ -936,6 +957,7 @@ export function buildStockDecisionScore(signal = {}) {
     coverageSafeScore, 'MISSING_COMPONENTS_ZERO_CONTRIBUTION'
   );
   const canonicalDiscoveryPass =
+    useContinuation ||
     discovery.canonicalExtensionEvidencePass === true ||
     (
       discovery.dataQuality?.fullExtensionCoverage === true &&
@@ -967,6 +989,7 @@ export function buildStockDecisionScore(signal = {}) {
     missingCriticalEvidence,
     missingEvidencePenalty,
     canonicalDiscoveryPass,
+    discoveryLane: useContinuation ? 'MEASURED_CONTINUATION' : classifiedLane,
     opportunityBasis: useContinuation ? 'MEASURED_CONTINUATION' : 'EARLY_DISCOVERY',
     continuationSetup,
     effectiveWeights,

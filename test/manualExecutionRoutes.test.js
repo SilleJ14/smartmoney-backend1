@@ -11,6 +11,25 @@ test("manual close clears learned position state and starts cooldown", () => {
   assert.equal(state.runnerPositions.AAPL, undefined);
 });
 
+test("discretionary crypto buys do not wait for a verified quote", async () => {
+  const routes = new Map(), calls = [];
+  const app = { post: (route, ...handlers) => routes.set(route, handlers.at(-1)) };
+  registerManualExecutionRoutes(app, {
+    requireAdmin: () => {}, normalizeSymbol: (value) => String(value || "").replace("/", "").toUpperCase(),
+    getAsset: async () => ({ status: "active", tradable: true, asset_class: "crypto" }),
+    getStockQuote: async () => ({}),
+    getVerifiedCryptoQuote: async () => ({ quoteReady: false }),
+    manualStockBuy: async () => ({}),
+    manualCryptoBuy: async (input) => { calls.push(input); return { id: "order-1" }; },
+    markManagedSymbol: () => {}, getState: () => ({ aiManagedSymbols: [] }), closePosition: async () => ({}),
+    recordOrder: () => {}, recordFailedOrder: () => {}, logger: { log() {} },
+  });
+  const res = { status(code) { this.statusCode = code; return this; }, json(body) { this.body = body; return this; } };
+  await routes.get("/manual-buy-crypto")({ body: { symbol: "BTC/USD", dollars: 25 } }, res);
+  assert.equal(res.body.ok, true);
+  assert.deepEqual(calls, [{ symbol: "BTCUSD", dollars: 25, manual: true }]);
+});
+
 test("dedicated crypto route requires an approved sized candidate before broker submission", async () => {
   const routes = new Map(), calls = [];
   const app = { post: (route, ...handlers) => routes.set(route, handlers.at(-1)) };
@@ -78,9 +97,8 @@ test("manual stock route is enabled but still requires a tradable asset", async 
   marketOpen = false;
   const closed = { status(code) { this.statusCode = code; return this; }, json(body) { this.body = body; return this; } };
   await routes.get("/manual-buy-stock")({ body: { symbol: "AAPL", dollars: 25, buyMode: "dollars" } }, closed);
-  assert.equal(closed.statusCode, 409);
-  assert.match(closed.body.error, /regular market is closed/i);
-  assert.equal(calls.length, 1);
+  assert.equal(closed.body.ok, true);
+  assert.equal(calls.length, 2);
 
   marketOpen = true;
   dependencies.getAsset = async () => ({ status: "inactive", tradable: false, fractionable: false });

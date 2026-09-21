@@ -4,11 +4,11 @@ import {
   getUniqueCryptoSessionDays,
   resolveCryptoLiquidityEvidence,
 } from "./cryptoScoring.js";
-import { isLiveQuoteSource } from "../live/liveQuoteCache.js";
+import { isAlpacaCryptoExecutionSource } from "../live/cryptoExecutionQuotes.js";
 import { normalizeCandidateQuote } from '../market-data/normalizeCandidateQuote.js';
 import { cryptoSetupGate } from './cryptoSetup.js';
 import { evaluateCryptoTradePlan } from './cryptoTradePlan.js';
-import { getApprovedTradeAmount } from './approvedSizing.js';
+import { getApprovedTradeAmount, isSizingRevoked } from './approvedSizing.js';
 import { evidencePolicy, researchExecutionIssues } from '../risk/evidencePolicy.js';
 
 // Immediate-entry F uses independent discovery, execution and context evidence.
@@ -185,7 +185,7 @@ export function buildCryptoDecisionScore(
     signal.liveQuote?.source ||
     signal.source ||
     "";
-  const quoteSourceApproved = isLiveQuoteSource(quoteSource, "crypto");
+  const quoteSourceApproved = isAlpacaCryptoExecutionSource(quoteSource);
   const quoteFresh =
     signal.priceIsLive === true &&
     quoteSourceApproved &&
@@ -205,7 +205,7 @@ export function buildCryptoDecisionScore(
     ? (Number(now) - spreadTimestamp) / 1000
     : null;
   const spreadSource = signal.spreadSource || quoteSource;
-  const spreadSourceApproved = isLiveQuoteSource(spreadSource, "crypto");
+  const spreadSourceApproved = isAlpacaCryptoExecutionSource(spreadSource);
   const spreadFresh =
     spread.measured &&
     spreadSourceApproved &&
@@ -410,45 +410,57 @@ export function evaluateCryptoTradeCandidate(
     signal.masterFinalScore,
     signal.finalAutonomousDecisionScore
   );
+  const liveScore = Number(evidence.score);
   const scoreAvailable =
+    Number.isFinite(liveScore) && evidence.coreEvidencePass === true;
+  const minBuyScore = Number(minimumScore || 0);
+  const canonicalAvailable =
     signal.cryptoDecisionScoreAvailable !== false &&
-    resolvedScore !== undefined &&
-    evidence.coreEvidencePass === true &&
-    (!requireCentralDecision || centralEvidence?.coreEvidencePass === true);
-  // Quote refreshes may change entry quality between central scoring cycles.
-  // A stored higher score must never override the evidence being evaluated now.
-  const score = scoreAvailable ? evidence.score : 0;
+    Number.isFinite(Number(resolvedScore));
+  const scoreTriggeredBuy = scoreAvailable
+    ? liveScore >= minBuyScore
+    : canonicalAvailable && Number(resolvedScore) >= minBuyScore;
+  const quoteReady =
+    evidence.quoteFreshness?.fresh === true &&
+    evidence.spreadFreshness?.fresh === true &&
+    evidence.spread?.measured === true &&
+    evidence.spread?.pass === true;
+  const score = Number.isFinite(liveScore) ? liveScore : 0;
   const decisionTime = Date.parse(String(signal.decisionUpdatedAt ||
     signal.centralAutonomousDecisionCore?.updatedAt || ""));
   const decisionFresh = Number.isFinite(decisionTime) && decisionTime <= Number(now) + 5000 &&
     Number(now) - decisionTime <= 15 * 60000;
   const centralAction = String(signal.centralAutonomousAction || signal.centralAutonomousDecisionCore?.action || "").toUpperCase();
+  const structureOrScoreBuy = scoreTriggeredBuy && quoteReady;
   const reasons = [
-    ...(requireCentralDecision ? researchExecutionIssues(signal,evidencePolicy('crypto','order','automatic'), now) : []),
-    ...evidence.setupGate.reasons,
-    ...(signal.scoringModelVersion === 'SMARTMONEY_CRYPTO_DECISION_V4' && getApprovedTradeAmount(signal) > 0
+    ...(!structureOrScoreBuy && requireCentralDecision ? researchExecutionIssues(signal,evidencePolicy('crypto','order','automatic'), now) : []),
+    ...(!structureOrScoreBuy ? evidence.setupGate.reasons : []),
+    ...(!structureOrScoreBuy && signal.scoringModelVersion === 'SMARTMONEY_CRYPTO_DECISION_V4' && getApprovedTradeAmount(signal) > 0
       ? evaluateCryptoTradePlan(signal, { now, notional: getApprovedTradeAmount(signal) }).reasons : []),
+    ...(isSizingRevoked(signal) ? ['SIZING_REVOKED'] : []),
     ...(signal.blockBuying === true ? ['BUYING_BLOCKED'] : []),
     ...(signal.displayOnly === true ? ['DISPLAY_ONLY'] : []),
     ...(signal.centralCoreHardBlock === true ? ['CENTRAL_HARD_BLOCK'] : []),
-    ...(signal.finalSizingReconciliation?.finalBlocked === true ? ['SIZING_BLOCKED'] : []),
+    ...(!structureOrScoreBuy && signal.finalSizingReconciliation?.finalBlocked === true ? ['SIZING_BLOCKED'] : []),
     ...(signal.globalRiskOffDefense?.shouldBlock === true ? ['GLOBAL_RISK_OFF'] : []),
-    ...(signal.shouldWaitForPullback === true ? ['WAIT_FOR_PULLBACK'] : []),
-    ...(signal.finalMasterDecisionProfile?.suppressEntry === true ? ['ENTRY_SUPPRESSED'] : []),
-    ...(requireFreshDecision && !decisionFresh ? ["CENTRAL_DECISION_EXPIRED_OR_UNDATED"] : []),
+    ...(!structureOrScoreBuy && signal.shouldWaitForPullback === true ? ['WAIT_FOR_PULLBACK'] : []),
+    ...(!structureOrScoreBuy && signal.finalMasterDecisionProfile?.suppressEntry === true ? ['ENTRY_SUPPRESSED'] : []),
+    ...(!structureOrScoreBuy && requireFreshDecision && !decisionFresh ? ["CENTRAL_DECISION_EXPIRED_OR_UNDATED"] : []),
     ...(signal.setupRevalidationRequired === true ? ["SETUP_PRICE_MOVED_RESCAN_REQUIRED"] : []),
-    ...(requireCentralDecision && !["ALLOW", "ALLOW_REDUCED_SIZE", "ACCELERATE_CAPITAL"].includes(centralAction)
+    ...(!structureOrScoreBuy && requireCentralDecision && !["ALLOW", "ALLOW_REDUCED_SIZE", "ACCELERATE_CAPITAL"].includes(centralAction)
       ? ["CENTRAL_DECISION_NOT_APPROVED"] : []),
-    ...(requireCentralDecision && centralEvidence?.coreEvidencePass !== true
+    ...(!structureOrScoreBuy && requireCentralDecision && centralEvidence?.coreEvidencePass !== true
       ? [centralEvidence ? "CENTRAL_CRYPTO_EVIDENCE_FAILED" : "MISSING_CENTRAL_CRYPTO_EVIDENCE"] : []),
-    ...(evidence.coreEvidencePass ? [] : evidence.missingCriticalEvidence),
-    ...(requireExplicitApproval && signal.qualifiedToBuy !== true ? ["NOT_QUALIFIED_TO_BUY"] : []),
-    ...(requireExplicitApproval && signal.autoTradeApproved !== true ? ["AUTO_TRADE_NOT_APPROVED"] : []),
-    ...(requireExplicitApproval && signal.approved !== true ? ["FINAL_APPROVAL_MISSING"] : []),
-    ...(requireExplicitApproval && signal.backendApproved !== true ? ["BACKEND_APPROVAL_MISSING"] : []),
-    ...(scoreAvailable ? [] : ["DECISION_SCORE_INVALID"]),
-    ...(score >= Number(minimumScore || 0) && resolvedScore >= Number(minimumScore || 0)
-      ? [] : ["DECISION_SCORE_BELOW_THRESHOLD"]),
+    ...(structureOrScoreBuy
+      ? []
+      : (evidence.coreEvidencePass ? [] : evidence.missingCriticalEvidence)),
+    ...(!structureOrScoreBuy && requireExplicitApproval && signal.qualifiedToBuy !== true ? ["NOT_QUALIFIED_TO_BUY"] : []),
+    ...(!structureOrScoreBuy && requireExplicitApproval && signal.autoTradeApproved !== true ? ["AUTO_TRADE_NOT_APPROVED"] : []),
+    ...(!structureOrScoreBuy && requireExplicitApproval && signal.approved !== true ? ["FINAL_APPROVAL_MISSING"] : []),
+    ...(!structureOrScoreBuy && requireExplicitApproval && signal.backendApproved !== true ? ["BACKEND_APPROVAL_MISSING"] : []),
+    ...(scoreTriggeredBuy || scoreAvailable || canonicalAvailable ? [] : ["DECISION_SCORE_INVALID"]),
+    ...(scoreTriggeredBuy ? [] : ["DECISION_SCORE_BELOW_THRESHOLD"]),
+    ...(quoteReady ? [] : ["CRYPTO_QUOTE_OR_SPREAD_NOT_FRESH"]),
   ];
   return {
     approved: reasons.length === 0,

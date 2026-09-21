@@ -6,7 +6,7 @@ export const ALPACA_CRYPTO_EXECUTION_SOURCES = Object.freeze([
   "alpaca_crypto_orderbook",
 ]);
 
-export const CRYPTO_REST_QUOTE_BATCH_SIZE = 6;
+export const CRYPTO_REST_QUOTE_BATCH_SIZE = 24;
 
 export function isAlpacaCryptoExecutionSource(source = "") {
   return ALPACA_CRYPTO_EXECUTION_SOURCES.includes(String(source || "").toLowerCase());
@@ -28,6 +28,14 @@ export function cryptoQuoteHasFreshAlpacaBook(quote = {}, {
 }
 
 export function applyTradeTickWithoutClearingAlpacaBook(previous = {}, incoming = {}) {
+  const incomingSource = incoming.liveQuoteSource || incoming.source;
+  if (
+    isAlpacaCryptoExecutionSource(previous.liveQuoteSource || previous.spreadSource || previous.source) &&
+    previous.spreadAvailable === true &&
+    !isAlpacaCryptoExecutionSource(incomingSource)
+  ) {
+    incoming = { ...incoming, eventType: incoming.eventType || "trade" };
+  }
   if (!isTradeOnlyQuoteTick(incoming)) return incoming;
   const previousSource = previous.liveQuoteSource || previous.spreadSource || previous.source;
   if (!isAlpacaCryptoExecutionSource(previousSource) || previous.spreadAvailable !== true) {

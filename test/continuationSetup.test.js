@@ -2,7 +2,7 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import { assessContinuationSetup } from '../scoring/continuationSetup.js';
 import { classifyStockDiscoveryLane } from '../discovery/stockDiscoveryLanes.js';
-import { buildStockDecisionScore } from '../scoring/decisionScores.js';
+import { buildStockDecisionScore, evaluateStockTradeCandidate } from '../scoring/decisionScores.js';
 function fixture() {
   const now = Date.now();
   const chartBars = Array.from({ length: 20 }, (_, i) => ({ t: now - (20 - i) * 300000,
@@ -32,4 +32,37 @@ test('large daily gain alone, exhaustion, missing or stale bars cannot establish
   assert.equal(assessContinuationSetup(row, { now: Date.now() + 3600000 }).available, false);
   row.chartBars[3].t = Date.now() + 60000;
   assert.equal(assessContinuationSetup(row).available, false);
+});
+test('scoring classifies continuation without an explicit discoveryLane flag', () => {
+  const evidence = buildStockDecisionScore(fixture());
+  assert.equal(evidence.discoveryLane, 'MEASURED_CONTINUATION');
+  assert.equal(evidence.opportunityBasis, 'MEASURED_CONTINUATION');
+  assert.equal(evidence.canonicalDiscoveryPass, true);
+});
+test('a measured continuation can execute below F 78 when structure, spread, and quote pass', () => {
+  const now = new Date().toISOString();
+  const setup = assessContinuationSetup(fixture());
+  const gate = evaluateStockTradeCandidate({
+    masterFinalScore: 52,
+    stockDecisionScoreAvailable: true,
+    discoveryLane: 'MEASURED_CONTINUATION',
+    continuationSetup: setup,
+    stockDecisionEvidence: { opportunityBasis: 'MEASURED_CONTINUATION', continuationSetup: setup, coreEvidencePass: false },
+    entryQualityScore: 40,
+    entryQualityScorecard: { approved: false, coverage: 0.4 },
+    discoveryScorecard: { coverage: 0.4 },
+    decisionScoreCoverage: 0.4,
+    centralAutonomousAction: 'ALLOW',
+    riskScore: 70,
+    spreadPercent: 0.4,
+    liveQuoteUpdatedAt: now,
+    spreadUpdatedAt: now,
+    liveQuoteSource: 'alpaca_latest_stock_quote',
+    spreadSource: 'alpaca_latest_stock_quote',
+    priceIsLive: true,
+    decisionUpdatedAt: now,
+  }, { requireCentralDecision: true, requireFreshDecision: true, requireExplicitApproval: false });
+  assert.equal(gate.approved, true);
+  assert.equal(gate.qualifiedCandidate, true);
+  assert.ok(!gate.reasons.includes('FINAL_SCORE_BELOW_70'));
 });

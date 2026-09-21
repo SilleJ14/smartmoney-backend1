@@ -36,7 +36,7 @@ test("stock quote route normalizes a live manual-search payload", async () => {
   assert.deepEqual(res.body.stock.historicalBars, res.body.stock.chartBars);
 });
 
-test("stock quote route marks stale or wide-spread quotes as not manually buyable", async () => {
+test("stock quote route still lets a tradable name be bought by hand when the quote is stale or wide", async () => {
   const routes = new Map(), app = { get: (path, ...handlers) => routes.set(path, handlers.at(-1)) };
   registerQuoteDiagnosticRoutes(app, {
     requireAdmin: () => {}, normalizeSymbol: (value) => value.toUpperCase(),
@@ -59,7 +59,8 @@ test("stock quote route marks stale or wide-spread quotes as not manually buyabl
   const res = { status(code) { this.statusCode = code; return this; }, json(body) { this.body = body; } };
   await routes.get("/stock-quote/:symbol")({ params: { symbol: "dkl" } }, res);
   assert.equal(res.body.stock.symbol, "DKL");
-  assert.equal(res.body.stock.manuallyBuyable, false);
+  assert.equal(res.body.stock.manuallyBuyable, true);
+  assert.equal(res.body.stock.quoteExecutable, false);
   assert.equal(res.body.stock.priceStale, true);
   assert.equal(res.body.stock.quoteAgeSeconds, 90);
   assert.deepEqual(res.body.stock.buyBlockReasons, [

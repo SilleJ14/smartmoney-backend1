@@ -50,6 +50,10 @@ export function purchasePolicy(options = {}, crypto = false) {
   return evidencePolicy(crypto ? 'crypto' : 'stock', 'order', purchase);
 }
 
+export function isDiscretionaryManualPurchase(options = {}) {
+  return purchasePolicy(options).purchaseType === 'manual';
+}
+
 export function executionEvidenceIssues({ priceAt, spreadAt, now = Date.now(), policy }) {
   const reasons = [];
   const limits = policy.executionTime;

@@ -195,11 +195,6 @@ export function createOrderService({
   }) {
     const cleanSymbol = normalizeSymbol(symbol);
     if (!cleanSymbol) throw new Error("Missing symbol");
-    if (marketOpen !== true) {
-      throw new Error(
-        `${cleanSymbol} order blocked: stocks trade only while the regular market is open`
-      );
-    }
     const cleanHoldCategory = requireStockHoldCategory(holdCategory, cleanSymbol);
     const payload = {
       symbol: cleanSymbol,

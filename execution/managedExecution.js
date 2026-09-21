@@ -110,8 +110,9 @@ export function createManagedExecution({ state, persist, request, getManagedSymb
     if (!positive(payload.qty)) throw new Error('No confirmed quantity available to sell');
     return current;
   }
-  async function beforeSubmit(payload) {
+  async function beforeSubmit(payload, options = {}) {
     if (payload.side === 'sell') return prepareSell(payload);
+    if (options.automated === false && options.requireCandidateDecision !== true) return;
     await reconcileNow();
     if (!ready) throw new Error('Position protection not reconciled; new buys paused');
   }
@@ -213,8 +214,10 @@ export function createManagedExecution({ state, persist, request, getManagedSymb
         if (uncertainSymbols.has(symbol)) continue;
         if (current.some(p => key(p.symbol) === symbol) || activeRows(symbol).some(r => !r.protective)) continue;
         for (const row of activeRows(symbol)) await cancel(row);
-        onFlat({ ...total, profitPercent: (total.proceeds / total.cost - 1) * 100,
-          exitPrice: total.proceeds / total.qty, entryPrice: total.cost / total.qty, fillConfirmed: true });
+        try {
+          onFlat({ ...total, profitPercent: (total.proceeds / total.cost - 1) * 100,
+            exitPrice: total.proceeds / total.qty, entryPrice: total.cost / total.qty, fillConfirmed: true });
+        } catch (error) { errors.push(error); }
         delete ledger.realized[symbol];
         if (ledger.buyPlans) delete ledger.buyPlans[symbol];
         save();
@@ -224,7 +227,23 @@ export function createManagedExecution({ state, persist, request, getManagedSymb
       }
       const completed = Object.values(ledger.orders).filter(r => r.done).sort((a, b) => b.createdAt - a.createdAt);
       for (const row of completed.slice(200)) delete ledger.orders[row.clientId];
-      if (errors.length) throw new Error(errors.map(error => error.message).slice(0, 3).join('; '));
+      if (errors.length) {
+        const brokerUncertain = uncertainSymbols.size > 0;
+        lastChecked = now();
+        ready = !brokerUncertain;
+        state.positionProtection = {
+          ok: false,
+          checkedAt: new Date(now()).toISOString(),
+          reason: errors.map(error => error.message).slice(0, 3).join('; ').slice(0, 240),
+          requiresAttention: true,
+          newBuysPaused: brokerUncertain,
+          recoveryPolicy: 'RECONCILE_EXISTING_ORDER_IDS_BEFORE_RETRY; KEEP_AVAILABLE_EXIT_HANDLING',
+          automaticEmergencyLiquidation: false,
+        };
+        save();
+        if (brokerUncertain) throw new Error(errors.map(error => error.message).slice(0, 3).join('; '));
+        return;
+      }
       lastChecked = now();
       ready = true;
       state.positionProtection = { ok: true, checkedAt: new Date(lastChecked).toISOString(),

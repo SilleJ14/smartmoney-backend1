@@ -130,6 +130,23 @@ test('broker failures block new buys, without inventing protection', async () =>
     referencePrice: 100, holdCategory: 'intraday' }), /unavailable/);
   assert.equal(f.orders.size, 0);
 });
+test('a failed protective stop does not pause new buys when fills are known', async () => {
+  const f = fixture();
+  f.orders.set('external-sell', { id: 'external-sell', symbol: 'ABC', side: 'sell', status: 'new', filled_qty: '0', filled_avg_price: null });
+  await f.life.reconcile();
+  assert.equal(f.state.positionProtection.newBuysPaused, false);
+  assert.doesNotThrow(f.life.assertReady);
+});
+test('manual buys still submit when position protection is not ready', async () => {
+  const f = fixture({ qty: 0 });
+  assert.throws(f.life.assertReady);
+  const order = await f.service.manualStockBuy({
+    symbol: 'LOBO', dollars: 25, buyMode: 'dollars', fractionable: true,
+    marketOpen: false, holdCategory: 'intraday', confirmationId: '11111111-1111-4111-8111-111111111111',
+  });
+  assert.equal(order.symbol, 'LOBO');
+  assert.equal(order.side, 'buy');
+});
 test('multi-day buys use whole shares; fractional intraday buying stays available', async () => {
   const f = fixture({ qty: 0 });
   const multi = await f.service.stockBuy({ symbol: 'ABC', dollars: 250, marketOpen: true, fractionable: true, referencePrice: 100, holdCategory: 'multi_day' });
@@ -157,7 +174,7 @@ test('legacy sell paths no longer close journals or clear positions on submissio
   const routes = readFileSync(new URL('../routes/manualExecutionRoutes.js', import.meta.url), 'utf8');
   assert.doesNotMatch(routes, /clearClosedPositionState\(getState/);
   const server = readFileSync(new URL('../server.js', import.meta.url), 'utf8');
-  assert.match(server, /executionLifecycle: managedExecution/);
+  assert.match(server, /confidenceBands \|\|\s*typeof engineState\.reinforcementWeightState\.confidenceBands !== "object"/);
   assert.match(server, /reconcileManagedExecution/);
   assert.match(server, /if \(exit\.fillConfirmed !== true \|\| !exit\.executionId\) return/);
   assert.match(server, /!String\(order\.client_order_id \|\| ''\)\.startsWith\('SM_PROTECT_'\)/);

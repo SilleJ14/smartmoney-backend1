@@ -38,9 +38,6 @@ export function registerManualExecutionRoutes(app, dependencies) {
       const cleanSymbol = normalizeSymbol(symbol), amount = Number(dollars), shareAmount = Number(shares || 0);
       const mode = String(buyMode || "dollars").toLowerCase();
       if (!cleanSymbol) throw new Error("Missing symbol");
-      if (await getMarketOpen() !== true) {
-        throw new Error(`${cleanSymbol} stock buy blocked because the regular market is closed`);
-      }
       if (!["dollars", "shares"].includes(mode)) throw new Error("Invalid buy mode");
       const asset = await getAsset(cleanSymbol), fractionable = asset?.fractionable === true;
       if (asset?.status !== "active" || asset?.tradable !== true) {
@@ -54,11 +51,13 @@ export function registerManualExecutionRoutes(app, dependencies) {
       }
       let referencePrice;
       if (mode !== "shares" && (!fractionable || holdCategory === "multi_day")) {
-        // Whole-share conversion needs a verified reference even when the asset
-        // supports fractional intraday orders. The final guard verifies again.
         const resolution = await getVerifiedStockQuote?.(cleanSymbol);
-        if (resolution?.quoteReady !== true) throw new Error('A verified live stock quote is not available');
-        referencePrice = Number(resolution.quote?.current || resolution.quote?.price || 0);
+        referencePrice = Number(resolution?.quote?.current || resolution?.quote?.price || 0);
+        if (!(referencePrice > 0) && typeof getStockQuote === "function") {
+          const quote = await getStockQuote(cleanSymbol);
+          referencePrice = Number(quote?.current || quote?.price || 0);
+        }
+        if (!(referencePrice > 0)) throw new Error("A price is not available to convert dollars to shares");
       }
       const order = await manualStockBuy({ symbol: cleanSymbol, dollars: amount, shares: shareAmount,
         buyMode: mode, fractionable, referencePrice,
@@ -167,18 +166,14 @@ export function registerManualExecutionRoutes(app, dependencies) {
     try {
       if (!cleanSymbol) return res.status(400).json({ ok: false, error: "Missing crypto symbol" });
       if (!Number.isFinite(dollars) || dollars < 1) return res.status(400).json({ ok: false, error: "Invalid dollar amount" });
-      // The AI-sizing button retains canonical approval. Direct manual requests
-      // are discretionary but still pass the shared final execution/risk guard.
+      // Direct manual requests are discretionary and are not blocked by quote,
+      // score, profit-lock, or protection gates. Alpaca still has to accept the order.
       const manual = req.body?.source !== "AI_SIZING_BUTTON";
       if (manual) {
         const asset = await getAsset(cleanSymbol);
         if (asset?.status !== "active" || asset?.tradable !== true ||
             String(asset.asset_class || asset.class || "").toLowerCase() !== "crypto") {
           return res.status(409).json({ ok: false, error: `${cleanSymbol} is not an active tradable crypto asset` });
-        }
-        const resolution = await getVerifiedCryptoQuote(cleanSymbol);
-        if (resolution?.quoteReady !== true) {
-          return res.status(409).json({ ok: false, error: "A verified live crypto quote is not available" });
         }
         const order = await manualCryptoBuy({ symbol: cleanSymbol, dollars, manual: true, ...(req.body?.confirmationId ? { confirmationId: req.body.confirmationId } : {}) });
         if (!order?.id) return res.status(502).json({ ok: false, error: "Crypto order was not created" });

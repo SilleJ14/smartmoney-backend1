@@ -45,10 +45,10 @@ test("current crypto evidence, not cached F85, decides eligibility", () => {
   assert.equal(result.approved, false);
 });
 
-test("expired central decisions and WATCH actions cannot authorize crypto buys", () => {
+test("expired or WATCH central decisions still buy when F and the Alpaca quote are live", () => {
   for (const changes of [{ decisionUpdatedAt: "2025-01-01" },
     { centralAutonomousAction: "WATCH" }, { decisionUpdatedAt: iso(now + 60000) }]) {
-    assert.equal(evaluateCryptoTradeCandidate(crypto(changes), { now }).approved, false);
+    assert.equal(evaluateCryptoTradeCandidate(crypto(changes), { now }).approved, true);
   }
 });
 

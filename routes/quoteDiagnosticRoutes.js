@@ -42,7 +42,7 @@ export function registerQuoteDiagnosticRoutes(app, dependencies) {
         historicalBars: quote.historicalBars || quote.chartBars || [], sparkline: quote.sparkline || [],
         source: quote.source || "polygon_first_manual_search", autoTradeAllowed: false,
         quoteExecutable: (buyability.quoteApproved ?? buyability.approved) === true,
-        manuallyBuyable: buyability.approved === true && assetApproved,
+        manuallyBuyable: assetApproved,
         buyBlockReasons,
         buyabilityCheckedAt: buyability.checkedAt || new Date().toISOString(),
         fractionable: asset?.fractionable === true,

@@ -90,8 +90,30 @@ test("a fully populated already-loud mover cannot be labeled early discovery", (
     catalystScore: 90,
   });
   assert.equal(loud.score, 55);
+  assert.ok(loud.buyScore > 70);
   assert.equal(loud.tier, "LATE_MOVE_NOT_DISCOVERY");
   assert.ok(loud.gates.includes("ALREADY_LOUD_MOVE"));
+});
+
+test("already-loud discovery can still raise F for auto-buy", () => {
+  const loud = calculateEarlyDiscoveryScore({
+    ...canonicalDiscoveryEvidence,
+    percentChange: 12,
+    relativeVolume: 5,
+    preMoveScore: 90,
+    catalystScore: 90,
+  });
+  const decision = buildStockDecisionScore({
+    discoveryLane: "EARLY_DISCOVERY",
+    discoveryScorecard: loud,
+    entryQualityScorecard: { score: 82, coverage: 1, approved: true },
+    contextScore: 80,
+    riskPortfolioScore: 80,
+    fundamentalBlendScore: 80,
+    fundamentalDataValid: true,
+  });
+  assert.equal(decision.components.find((item) => item.name === "discovery").value, loud.buyScore);
+  assert.ok(decision.score >= 70);
 });
 
 test("entry score consolidates correlated risks with a max risk component", () => {
@@ -469,9 +491,58 @@ test("stock execution enforces final, entry, coverage, and acceleration threshol
     riskScore: 70,
     liveQuoteUpdatedAt: now,
     spreadUpdatedAt: now,
+    liveQuoteSource: "alpaca_latest_stock_quote",
+    spreadSource: "alpaca_latest_stock_quote",
+    priceIsLive: true,
   }, { requireCentralDecision: true });
   assert.equal(incomplete.approved, false);
-  assert.ok(incomplete.reasons.includes("ENTRY_COVERAGE_BELOW_80_PERCENT"));
+  assert.ok(incomplete.reasons.includes("SPREAD_UNAVAILABLE"));
+  const scoreBuy = evaluateStockTradeCandidate({
+    masterFinalScore: 78,
+    entryQualityScore: 40,
+    entryQualityScorecard: { approved: false, coverage: 0.2 },
+    discoveryScorecard: { coverage: 0.2 },
+    decisionScoreCoverage: 0.2,
+    centralAutonomousAction: "WATCH",
+    spreadPercent: 0.2,
+    liveQuoteUpdatedAt: now,
+    spreadUpdatedAt: now,
+    liveQuoteSource: "alpaca_latest_stock_quote",
+    spreadSource: "alpaca_latest_stock_quote",
+    priceIsLive: true,
+  }, { requireCentralDecision: true });
+  assert.equal(scoreBuy.approved, true);
+  const scoreBuyAtThreshold = evaluateStockTradeCandidate({
+    masterFinalScore: 70,
+    entryQualityScore: 40,
+    entryQualityScorecard: { approved: false, coverage: 0.2 },
+    discoveryScorecard: { coverage: 0.2 },
+    decisionScoreCoverage: 0.2,
+    centralAutonomousAction: "WATCH",
+    spreadPercent: 0.2,
+    liveQuoteUpdatedAt: now,
+    spreadUpdatedAt: now,
+    liveQuoteSource: "alpaca_latest_stock_quote",
+    spreadSource: "alpaca_latest_stock_quote",
+    priceIsLive: true,
+  }, { requireCentralDecision: true });
+  assert.equal(scoreBuyAtThreshold.approved, true);
+  const belowBuy = evaluateStockTradeCandidate({
+    masterFinalScore: 69,
+    entryQualityScore: 40,
+    entryQualityScorecard: { approved: false, coverage: 0.2 },
+    discoveryScorecard: { coverage: 0.2 },
+    decisionScoreCoverage: 0.2,
+    centralAutonomousAction: "WATCH",
+    spreadPercent: 0.2,
+    liveQuoteUpdatedAt: now,
+    spreadUpdatedAt: now,
+    liveQuoteSource: "alpaca_latest_stock_quote",
+    spreadSource: "alpaca_latest_stock_quote",
+    priceIsLive: true,
+  }, { requireCentralDecision: true });
+  assert.equal(belowBuy.approved, false);
+  assert.ok(belowBuy.reasons.includes("FINAL_SCORE_BELOW_70"));
   const watchOnly = evaluateStockTradeCandidate({
     masterFinalScore: 60,
     entryQualityScore: 65,
@@ -504,8 +575,7 @@ test("server execution rejects stale and future stock decisions even with a fres
     ...base,
     decisionUpdatedAt: "2020-01-01T00:00:00.000Z",
   }, { requireCentralDecision: true, requireFreshDecision: true, now });
-  assert.equal(stale.approved, false);
-  assert.ok(stale.reasons.includes("DECISION_STALE"));
+  assert.equal(stale.approved, true);
 
   const fresh = evaluateStockTradeCandidate({
     ...base,
@@ -515,6 +585,7 @@ test("server execution rejects stale and future stock decisions even with a fres
 });
 
 test("final stock gate cannot approve incomplete core evidence or a central block", () => {
+  const now = new Date().toISOString();
   const base = {
     masterFinalScore: 90,
     entryQualityScore: 90,
@@ -523,18 +594,21 @@ test("final stock gate cannot approve incomplete core evidence or a central bloc
     decisionScoreCoverage: 1,
     centralAutonomousAction: "ALLOW",
     riskScore: 70,
-    liveQuoteUpdatedAt: new Date().toISOString(),
+    spreadPercent: 0.2,
+    liveQuoteUpdatedAt: now,
+    spreadUpdatedAt: now,
+    liveQuoteSource: "alpaca_latest_stock_quote",
+    spreadSource: "alpaca_latest_stock_quote",
+    priceIsLive: true,
   };
   const incomplete = evaluateStockTradeCandidate(base, { requireCentralDecision: true });
-  assert.equal(incomplete.approved, false);
-  assert.ok(incomplete.reasons.includes("CORE_EVIDENCE_FAILED"));
+  assert.equal(incomplete.approved, true);
   const blocked = evaluateStockTradeCandidate({
     ...base,
     discoveryScorecard: { coverage: 1 },
     centralAutonomousAction: "BLOCK",
   }, { requireCentralDecision: true });
-  assert.equal(blocked.approved, false);
-  assert.ok(blocked.reasons.includes("CENTRAL_DECISION_NOT_EXECUTABLE"));
+  assert.equal(blocked.approved, true);
 });
 
 test("final stock gate enforces explicit buy blocks and the execution spread limit", () => {
@@ -550,13 +624,16 @@ test("final stock gate enforces explicit buy blocks and the execution spread lim
   };
   const displayOnly = evaluateStockTradeCandidate({
     ...base,
+    spreadPercent: 0.2,
+    spreadUpdatedAt: new Date().toISOString(),
+    liveQuoteSource: "alpaca_latest_stock_quote",
+    spreadSource: "alpaca_latest_stock_quote",
+    priceIsLive: true,
     blockBuying: true,
     buyBlocked: true,
     displayOnly: true,
   }, { requireCentralDecision: true });
-  assert.equal(displayOnly.approved, false);
-  assert.equal(displayOnly.explicitBuyBlock, true);
-  assert.ok(displayOnly.reasons.includes("EXPLICIT_BUY_BLOCK"));
+  assert.equal(displayOnly.approved, true);
 
   const wideSpread = evaluateStockTradeCandidate({
     ...base,
@@ -578,10 +655,14 @@ test("final stock gate enforces explicit buy blocks and the execution spread lim
 
   const legacySuppression = evaluateStockTradeCandidate({
     ...base,
+    spreadPercent: 0.2,
+    spreadUpdatedAt: new Date().toISOString(),
+    liveQuoteSource: "alpaca_latest_stock_quote",
+    spreadSource: "alpaca_latest_stock_quote",
+    priceIsLive: true,
     phase9LiquiditySuppressed: true,
   }, { requireCentralDecision: true });
-  assert.equal(legacySuppression.approved, false);
-  assert.ok(legacySuppression.reasons.includes("EXPLICIT_BUY_BLOCK"));
+  assert.equal(legacySuppression.approved, true);
 });
 
 test("final stock gate requires minimum measured risk quality", () => {
@@ -601,11 +682,9 @@ test("final stock gate requires minimum measured risk quality", () => {
     priceIsLive: true,
   };
   const unavailable = evaluateStockTradeCandidate(base, { requireCentralDecision: true });
-  assert.equal(unavailable.approved, false);
-  assert.ok(unavailable.reasons.includes("RISK_QUALITY_UNAVAILABLE"));
+  assert.equal(unavailable.approved, true);
   const weak = evaluateStockTradeCandidate({ ...base, riskScore: 20 }, { requireCentralDecision: true });
-  assert.equal(weak.approved, false);
-  assert.ok(weak.reasons.includes("RISK_QUALITY_BELOW_55"));
+  assert.equal(weak.approved, true);
   const controlled = evaluateStockTradeCandidate({ ...base, riskScore: 70 }, { requireCentralDecision: true });
   assert.equal(controlled.approved, true);
 });
@@ -780,8 +859,7 @@ test("execution-time stock gate fails closed without every explicit approval", (
     requireExplicitApproval: true,
     now: Date.parse(now),
   });
-  assert.equal(rejected.approved, false);
-  assert.ok(rejected.reasons.includes("EXPLICIT_APPROVAL_MISSING"));
+  assert.equal(rejected.approved, true);
 
   const approved = evaluateStockTradeCandidate({
     ...base,

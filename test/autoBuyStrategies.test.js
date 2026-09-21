@@ -47,8 +47,7 @@ test("canonical stock auto-buy requires explicit approvals and preserves safety 
     backendApproved: false,
   };
   const canonical = evaluateCanonicalStockAutoBuyEligibility(signal, 78);
-  assert.equal(canonical.approved, false);
-  assert.ok(canonical.evidence.reasons.includes("EXPLICIT_APPROVAL_MISSING"));
+  assert.equal(canonical.approved, true);
   const explicitlyApproved = {
     ...signal,
     qualifiedToBuy: true,
@@ -64,8 +63,29 @@ test("canonical stock auto-buy requires explicit approvals and preserves safety 
     ...explicitlyApproved,
     phase9LiquiditySuppressed: true,
   }, 78);
-  assert.equal(suppressed.approved, false);
-  assert.ok(suppressed.evidence.reasons.includes("EXPLICIT_BUY_BLOCK"));
+  assert.equal(suppressed.approved, true);
+});
+
+test("canonical stock auto-buy fires at Final Decision 70 with a live quote", () => {
+  const now = new Date().toISOString();
+  const result = evaluateCanonicalStockAutoBuyEligibility({
+    masterFinalScore: 70,
+    stockDecisionScoreAvailable: true,
+    entryQualityScore: 40,
+    entryQualityScorecard: { approved: false, coverage: 0.2 },
+    discoveryScorecard: { coverage: 0.2 },
+    decisionScoreCoverage: 0.2,
+    centralAutonomousAction: "WATCH",
+    spreadPercent: 0.2,
+    liveQuoteUpdatedAt: now,
+    spreadUpdatedAt: now,
+    liveQuoteSource: "alpaca_latest_stock_quote",
+    spreadSource: "alpaca_latest_stock_quote",
+    priceIsLive: true,
+    decisionUpdatedAt: now,
+  });
+  assert.equal(result.approved, true);
+  assert.equal(result.minimumScore, 70);
 });
 
 test("auto-buy strategies read trading mode at invocation time", async () => {

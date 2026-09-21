@@ -3,7 +3,6 @@ import { applyCrossAssetCryptoContext } from "../scoring/cryptoContext.js";
 import {
   compareCanonicalSignals,
   getCanonicalFinalScore,
-  hasExplicitTradeApproval,
 } from "../scoring/canonicalSignalRank.js";
 import { normalizeSignalScoreCollection } from "../scoring/signalScoreCompleteness.js";
 import { installCentralDecision } from "../scoring/installCentralDecision.js";
@@ -13,6 +12,19 @@ import { availableBuyingPower } from '../risk/brokerEvidence.js';
 import { refreshCycleSubscriptions } from './refreshCycleSubscriptions.js';
 import { refreshCandidateQuotes } from '../market-data/refreshCandidateQuotes.js';
 const yieldToIO = () => new Promise(resolve => setImmediate(resolve));
+export function isTransientMarketDataError(error) {
+  const status = Number(error?.status);
+  const message = String(error?.message || error || "");
+  return status === 429 || /rate limit/i.test(message);
+}
+export async function scanWithRateLimitFallback(scan, previous = []) {
+  try {
+    return await scan();
+  } catch (error) {
+    if (!isTransientMarketDataError(error)) throw error;
+    return Array.isArray(previous) ? previous : [];
+  }
+}
 async function normalizeCollectionCooperatively(signals) {
   const result = [];
   for (let index = 0; index < signals.length; index += 4) {
@@ -273,7 +285,10 @@ export function createEngineCycle(dependencies) {
       // or crypto execution mode cannot make the other dashboard disappear.
       {
         markCycleStage("SCANNING_CRYPTO");
-        cryptoSignals = await scanCryptoMarket();
+        cryptoSignals = await scanWithRateLimitFallback(
+          scanCryptoMarket,
+          engineState.lastCryptoSignals
+        );
         markCycleStage("CRYPTO_SCAN_COMPLETED", {
           signalCount: cryptoSignals.length,
         });
@@ -297,7 +312,10 @@ export function createEngineCycle(dependencies) {
       }
       {
         markCycleStage("SCANNING_STOCKS");
-        stockSignals = await scanMarket();
+        stockSignals = await scanWithRateLimitFallback(
+          scanMarket,
+          engineState.lastStockSignals
+        );
         if (typeof updateQuietCandidateOutcomes === 'function') {
           engineState.quietCandidateOutcomeState = await updateQuietCandidateOutcomes(
             engineState.quietCandidateOutcomeState, stockSignals, stockSignals, {
@@ -2612,14 +2630,21 @@ export function createEngineCycle(dependencies) {
       for (const signal of cryptoSignals) {
         const finalEligibility = evaluateCryptoTradeCandidate(signal);
         signal.executionEligibility = finalEligibility;
-        if (!finalEligibility.approved) Object.assign(signal, {
-          approved: false, backendApproved: false, autoTradeApproved: false, qualifiedToBuy: false,
-          buyableNow: false, blockedReasons: [...new Set([...(signal.blockedReasons || []), ...finalEligibility.reasons])],
-        });
-        const finalScore = getCanonicalFinalScore(signal);
+        if (!finalEligibility.approved) {
+          Object.assign(signal, {
+            approved: false, backendApproved: false, autoTradeApproved: false, qualifiedToBuy: false,
+            buyableNow: false, blockedReasons: [...new Set([...(signal.blockedReasons || []), ...finalEligibility.reasons])],
+          });
+        } else {
+          Object.assign(signal, {
+            approved: true, backendApproved: true, autoTradeApproved: true, qualifiedToBuy: true,
+            buyableNow: true,
+          });
+        }
+        const finalScore = getCanonicalFinalScore(signal) ?? finalEligibility.score;
         const sizingPositions = portfolioBrokerPositions;
         const reserved = Object.values(engineState.orderRiskReservations || {}).reduce((sum, entry) => sum + outstandingOrderNotional(entry, sizingPositions), 0);
-        const suggested = hasExplicitTradeApproval(signal) ? calculateDynamicTradeAmount({
+        const suggested = finalEligibility.approved ? calculateDynamicTradeAmount({
           account: { ...portfolioRefreshAccount, cash: Math.max(0, Number(portfolioRefreshAccount.cash || 0) - reserved),
             buying_power: Math.max(0, Number(portfolioRefreshAccount.buying_power ?? portfolioRefreshAccount.cash ?? 0) - reserved) }, positions: sizingPositions,
           signalScore: finalScore ?? 0, config: CONFIG, signal,
@@ -2860,10 +2885,7 @@ export function createEngineCycle(dependencies) {
           signal.finalStockExecutionGate?.approved === true
       );
       const approvedCryptoSignals = cryptoSignals.filter(
-        (signal) =>
-          hasExplicitTradeApproval(signal) &&
-          Number(getCanonicalFinalScore(signal) ?? -Infinity) >=
-            CRYPTO_MIN_FINAL_SCORE_TO_BUY
+        (signal) => signal.executionEligibility?.approved === true
       );
       effectiveMode = selectSmartTradingMode({
         selectedMode: TRADING_MODE,
@@ -2883,13 +2905,12 @@ export function createEngineCycle(dependencies) {
           stockTradingStoppedForDay: engineState.stockTradingStoppedForDay,
           cryptoTradingStoppedForDay: engineState.cryptoTradingStoppedForDay,
         });
-      if (
-        autoTradingEnabled &&
-        !engineState.dailyLossLocked &&
-        !engineState.profitLocked &&
-        !riskLocked
-      ) {
-        if (shouldRunStockAutoBuy) {
+      if (autoTradingEnabled && !engineState.dailyLossLocked) {
+        if (
+          shouldRunStockAutoBuy &&
+          !engineState.profitLocked &&
+          !riskLocked
+        ) {
           if (typeof refreshStockExecutionQuotes === "function") stockSignals = await refreshStockExecutionQuotes(stockSignals);
           engineState.lastStockSignals = stockSignals;
           await autoBuySignals(stockSignals);

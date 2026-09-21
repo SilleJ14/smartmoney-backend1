@@ -128,16 +128,18 @@ test("stock buys fail closed when holding category is missing", () => {
   assert.equal(requests.length, 0);
 });
 
-test("manual stock buys also reject a closed regular market", () => {
+test("manual dollar buys still submit when the regular market is closed", async () => {
   const { service, requests } = harness();
-  assert.throws(() => service.manualStockBuy({
+  await service.manualStockBuy({
     symbol: "AAPL",
     dollars: 50,
     buyMode: "dollars",
     fractionable: true,
     marketOpen: false,
-  }), /regular market is open/i);
-  assert.equal(requests.length, 0);
+    holdCategory: "intraday",
+  });
+  assert.equal(requests.length, 1);
+  assert.equal(requests[0].body.notional, 50);
 });
 
 test("builds crypto orders with GTC time in force", async () => {

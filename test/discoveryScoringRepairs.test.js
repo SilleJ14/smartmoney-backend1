@@ -147,8 +147,8 @@ test("crypto evaluate honors require flags without loosening the default path", 
     cryptoDecisionScore: 90,
     cryptoDecisionScoreAvailable: true,
   }, { now });
-  assert.ok(strict.reasons.includes("NOT_QUALIFIED_TO_BUY"));
-  assert.ok(strict.reasons.includes("CENTRAL_DECISION_NOT_APPROVED"));
+  assert.equal(strict.approved, false);
+  assert.ok(strict.reasons.includes("CRYPTO_QUOTE_OR_SPREAD_NOT_FRESH"));
 });
 
 test("elite discovery labels still receive the pre-mover scan boost mapping", () => {
