@@ -165,6 +165,7 @@ import {
   calculateTrendQualityHoldDuration as calculateTrendQualityHoldDurationCore,
 } from "./risk/exitRiskEngine.js";
 import { calculateDynamicTradeAmount } from "./risk/positionSizing.js";
+import { attachCryptoExecutableAllocation } from "./scoring/cryptoExecutableAllocation.js";
 import { calculateLossBudgetSizing } from "./risk/lossBudgetSizing.js";
 import { confirmedBotOwnedSymbols } from "./execution/confirmedOwnership.js";
 import { candidateFeedDecision, migrateStockFloorPreference } from "./discovery/candidateFeedPolicy.js";
@@ -31410,11 +31411,20 @@ async function reviewCandidateScores(rows, crypto = false) {
   return fresh.map(row => {
     const decision = central.rankedDecisions.find(item => normalizeSymbol(item.symbol) === normalizeSymbol(row.symbol));
     if (decision) installCentralDecision(row, decision, { crypto });
-    // Research cannot grant an order or inherit an old sizing approval.
-    Object.assign(row, { approved: false, backendApproved: false, autoTradeApproved: false, qualifiedToBuy: false,
-      buyableNow: false, recommendedTradeAmount: 0, finalApprovedTradeAmount: 0, finalTradeAmount: 0,
-      analysisUpdatedAt: new Date().toISOString(),
-      executionEligibility: { approved: false, reasons: ['CENTRAL_RISK_AND_SIZING_REVIEW_REQUIRED'] } });
+    if (crypto) {
+      attachCryptoExecutableAllocation(row, {
+        account: engineState.cachedAccount || {},
+        positions: engineState.cachedPositions || [],
+        config: CONFIG,
+        reservations: engineState.orderRiskReservations || {},
+        dailyStartEquity: engineState.dailyStartEquity,
+      });
+    } else {
+      Object.assign(row, { approved: false, backendApproved: false, autoTradeApproved: false, qualifiedToBuy: false,
+        buyableNow: false, recommendedTradeAmount: 0, finalApprovedTradeAmount: 0, finalTradeAmount: 0,
+        analysisUpdatedAt: new Date().toISOString(),
+        executionEligibility: { approved: false, reasons: ['CENTRAL_RISK_AND_SIZING_REVIEW_REQUIRED'] } });
+    }
     return normalizeSignalScoreCompleteness(row);
   });
 }
@@ -31475,6 +31485,15 @@ const incrementalResearch = createIncrementalResearch({
     const central = calculateCentralAutonomousDecisionCore(crypto ? [] : [current], crypto ? [current] : []);
     const decision = central.rankedDecisions.find(item => normalizeSymbol(item.symbol) === normalizeSymbol(current.symbol));
     if (decision) installCentralDecision(current, decision, { crypto });
+    if (crypto) {
+      attachCryptoExecutableAllocation(current, {
+        account: engineState.cachedAccount || {},
+        positions: engineState.cachedPositions || [],
+        config: CONFIG,
+        reservations: engineState.orderRiskReservations || {},
+        dailyStartEquity: engineState.dailyStartEquity,
+      });
+    }
     return current;
   },
   publish: rows => {

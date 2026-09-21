@@ -62,12 +62,20 @@ export function createIncrementalResearch({ review, publish, canRun = () => true
         // Pure synchronous calculation; no provider requests or shared mutation.
         const result = review(structuredClone(row));
         if (!result || typeof result.then === 'function') throw new Error('Incremental research must be synchronous');
-        return Object.assign(result, { researchEvidenceAt: new Date(researchEvidenceTime(row)).toISOString(),
-          analysisUpdatedAt: new Date(startedAt).toISOString(), researchOnly: true,
-          approved: false, backendApproved: false, autoTradeApproved: false, qualifiedToBuy: false,
-          starterBuyApproved: false, buyableNow: false, recommendedTradeAmount: 0,
-          finalApprovedTradeAmount: 0, finalTradeAmount: 0,
-          executionEligibility: { approved: false, reasons: ['CENTRAL_RISK_AND_SIZING_REVIEW_REQUIRED'] } });
+        const keepCryptoExecution = result.buyableNow === true && Number(result.finalApprovedTradeAmount) >= 1;
+        return Object.assign(result, {
+          researchEvidenceAt: new Date(researchEvidenceTime(row)).toISOString(),
+          analysisUpdatedAt: new Date(startedAt).toISOString(),
+          ...(keepCryptoExecution
+            ? { researchOnly: false }
+            : {
+              researchOnly: true,
+              approved: false, backendApproved: false, autoTradeApproved: false, qualifiedToBuy: false,
+              starterBuyApproved: false, buyableNow: false, recommendedTradeAmount: 0,
+              finalApprovedTradeAmount: 0, finalTradeAmount: 0,
+              executionEligibility: { approved: false, reasons: ['CENTRAL_RISK_AND_SIZING_REVIEW_REQUIRED'] },
+            }),
+        });
       });
       publish(rows);
       Object.assign(status, { completedBatches: status.completedBatches + 1, reviewed: status.reviewed + rows.length,

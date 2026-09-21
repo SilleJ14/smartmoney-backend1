@@ -1,4 +1,4 @@
-import { CRYPTO_MIN_FINAL_SCORE_TO_BUY, evaluateCryptoTradeCandidate } from "../scoring/componentScore.js";
+import { CRYPTO_MIN_FINAL_SCORE_TO_BUY } from "../scoring/componentScore.js";
 import { applyCrossAssetCryptoContext } from "../scoring/cryptoContext.js";
 import {
   compareCanonicalSignals,
@@ -6,9 +6,7 @@ import {
 } from "../scoring/canonicalSignalRank.js";
 import { normalizeSignalScoreCollection } from "../scoring/signalScoreCompleteness.js";
 import { installCentralDecision } from "../scoring/installCentralDecision.js";
-import { calculateDynamicTradeAmount } from '../risk/positionSizing.js';
-import { outstandingOrderNotional } from '../risk/orderRiskReservations.js';
-import { availableBuyingPower } from '../risk/brokerEvidence.js';
+import { attachCryptoExecutableAllocation } from '../scoring/cryptoExecutableAllocation.js';
 import { refreshCycleSubscriptions } from './refreshCycleSubscriptions.js';
 import { refreshCandidateQuotes } from '../market-data/refreshCandidateQuotes.js';
 const yieldToIO = () => new Promise(resolve => setImmediate(resolve));
@@ -2627,45 +2625,15 @@ export function createEngineCycle(dependencies) {
         }
       }
       stockSignals = await normalizeCollectionCooperatively(stockSignals);
+      const cryptoAllocationContext = {
+        account: portfolioRefreshAccount,
+        positions: portfolioBrokerPositions,
+        config: CONFIG,
+        reservations: engineState.orderRiskReservations || {},
+        dailyStartEquity: engineState.dailyStartEquity || portfolioRefreshAccount.last_equity,
+      };
       for (const signal of cryptoSignals) {
-        const finalEligibility = evaluateCryptoTradeCandidate(signal);
-        signal.executionEligibility = finalEligibility;
-        if (!finalEligibility.approved) {
-          Object.assign(signal, {
-            approved: false, backendApproved: false, autoTradeApproved: false, qualifiedToBuy: false,
-            buyableNow: false, blockedReasons: [...new Set([...(signal.blockedReasons || []), ...finalEligibility.reasons])],
-          });
-        } else {
-          Object.assign(signal, {
-            approved: true, backendApproved: true, autoTradeApproved: true, qualifiedToBuy: true,
-            buyableNow: true,
-          });
-        }
-        const finalScore = getCanonicalFinalScore(signal) ?? finalEligibility.score;
-        const sizingPositions = portfolioBrokerPositions;
-        const reserved = Object.values(engineState.orderRiskReservations || {}).reduce((sum, entry) => sum + outstandingOrderNotional(entry, sizingPositions), 0);
-        const suggested = finalEligibility.approved ? calculateDynamicTradeAmount({
-          account: { ...portfolioRefreshAccount, cash: Math.max(0, Number(portfolioRefreshAccount.cash || 0) - reserved),
-            buying_power: Math.max(0, Number(portfolioRefreshAccount.buying_power ?? portfolioRefreshAccount.cash ?? 0) - reserved) }, positions: sizingPositions,
-          signalScore: finalScore ?? 0, config: CONFIG, signal,
-          dailyStartEquity: engineState.dailyStartEquity || portfolioRefreshAccount.last_equity,
-          pendingNotional: reserved,
-          getExposure: (rows) => rows.reduce((sum, row) => sum + Math.abs(Number(row.market_value || 0)), reserved),
-        }) : 0;
-        const cryptoExposure = sizingPositions.filter((row) => String(row.asset_class || '').toLowerCase() === 'crypto' || String(row.symbol || '').includes('/') || String(row.symbol || '').endsWith('USD'))
-          .reduce((sum, row) => sum + Math.abs(Number(row.market_value || 0)), 0);
-        const cryptoBudget = Number(portfolioRefreshAccount.equity || 0) * Number(CONFIG.maxBotExposurePercent || 0) / 100 * Number(CONFIG.cryptoMaxExposureShareOfBotExposure ?? 100) / 100;
-        const bounded = Math.min(suggested, Math.max(0, cryptoBudget - cryptoExposure - reserved),
-          Math.max(0, availableBuyingPower(portfolioRefreshAccount, true) - reserved));
-        const amount = bounded >= Number(CONFIG.minCryptoTradeAmount || 25) ? Math.floor(bounded * 100) / 100 : 0;
-        signal.sizingDecisionUpdatedAt = signal.decisionUpdatedAt;
-        signal.finalApprovedTradeAmount = amount;
-        signal.finalTradeAmount = amount;
-        signal.recommendedTradeAmount = amount;
-        signal.displayTradeAmount = amount;
-        signal.finalSizingReconciliation = { finalTradeAmount: amount, finalBlocked: amount <= 0, basis: 'REMAINING_SHARED_BOT_CAP' };
-        if (amount <= 0) Object.assign(signal, { approved: false, backendApproved: false,
-          autoTradeApproved: false, qualifiedToBuy: false, buyableNow: false });
+        attachCryptoExecutableAllocation(signal, cryptoAllocationContext);
       }
       cryptoSignals = await normalizeCollectionCooperatively(cryptoSignals);
       signals = [...stockSignals, ...cryptoSignals];
@@ -2928,6 +2896,15 @@ export function createEngineCycle(dependencies) {
         }
         if (shouldRunCryptoAutoBuy) {
           if (typeof refreshCryptoExecutionQuotes === "function") cryptoSignals = await refreshCryptoExecutionQuotes(cryptoSignals);
+          for (const signal of cryptoSignals) {
+            attachCryptoExecutableAllocation(signal, {
+              account: engineState.cachedAccount || portfolioRefreshAccount,
+              positions: engineState.cachedPositions || portfolioBrokerPositions,
+              config: CONFIG,
+              reservations: engineState.orderRiskReservations || {},
+              dailyStartEquity: engineState.dailyStartEquity || portfolioRefreshAccount.last_equity,
+            });
+          }
           engineState.lastCryptoSignals = cryptoSignals;
           await autoBuyCryptoSignals(cryptoSignals);
           engineState.aiDecisionHistory.unshift({

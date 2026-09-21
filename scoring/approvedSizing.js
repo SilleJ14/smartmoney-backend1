@@ -10,9 +10,8 @@ export function getApprovedTradeAmount(signal = {}) {
 }
 
 export function isSizingRevoked(signal = {}) {
-  if (signal.sizingDecisionUpdatedAt && signal.sizingDecisionUpdatedAt !== signal.decisionUpdatedAt) return true;
-  return [signal.finalApprovedTradeAmount, signal.finalTradeAmount, signal.recommendedTradeAmount,
-    signal.finalSizingReconciliation?.finalTradeAmount].some((value) =>
-    value !== null && value !== undefined && value !== "" &&
-    (!Number.isFinite(Number(value)) || Number(value) <= 0));
+  return Boolean(
+    signal.sizingDecisionUpdatedAt
+    && signal.sizingDecisionUpdatedAt !== signal.decisionUpdatedAt
+  );
 }

@@ -632,6 +632,40 @@ test("displayed crypto F 65 auto-buys on a live Alpaca quote even if rebuilt cor
   }, { now }).approved, false);
 });
 
+test("research zero size does not revoke a live F65 Alpaca crypto buy", () => {
+  const now = Date.now();
+  const iso = new Date(now).toISOString();
+  const candidate = {
+    symbol: "BTC/USD",
+    cryptoDecisionScore: 66,
+    cryptoDecisionScoreAvailable: true,
+    masterFinalScore: 66,
+    current: 100,
+    bid: 99.95,
+    ask: 100.05,
+    priceIsLive: true,
+    liveQuoteUpdatedAt: iso,
+    liveQuoteSource: "alpaca_crypto_latest",
+    spreadUpdatedAt: iso,
+    spreadSource: "alpaca_crypto_latest",
+    spreadAvailable: true,
+    decisionUpdatedAt: iso,
+    recommendedTradeAmount: 0,
+    finalApprovedTradeAmount: 0,
+    finalTradeAmount: 0,
+    cryptoDiscoveryScorecard: {
+      score: 67,
+      coverage: 1,
+      calculatedAt: iso,
+      extension: { alreadyExtended: false },
+    },
+    newsCatalyst: { dataAvailable: true, riskDetected: false },
+    barsFound: 30,
+    windowDollarVolume: 1_000_000,
+  };
+  assert.equal(evaluateCryptoTradeCandidate(candidate, { now }).approved, true);
+});
+
 test("crypto immediate-entry F can finalize without MD, but never bypasses execution evidence", () => {
   const now = Date.now();
   const candidate = {
