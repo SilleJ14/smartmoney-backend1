@@ -293,15 +293,12 @@ import {
 import {
   isValidStockTicker as isValidStockTickerBase,
 } from "./utils/symbolHelpers.js";
-import {
-  fromFinnhubStreamSymbol,
-  toFinnhubStreamSymbol,
-} from "./live/finnhubStreamSymbols.js";
+import { resolveDataDir, defaultDurableUserFiles } from "./storage/dataDirectory.js";
 dotenv.config({ path: path.resolve(process.cwd(), ".env") });
-const DATA_DIR = process.env.DATA_DIR || process.cwd();
+const DATA_DIR = resolveDataDir();
 const processDiagnostics = installProcessDiagnostics({ directory: path.resolve(DATA_DIR, "process-diagnostics") });
-if (process.env.RENDER && (!process.env.DATA_DIR || path.resolve(DATA_DIR) === process.cwd())) {
-  console.warn("PERSISTENT_STORAGE_UNVERIFIED: DATA_DIR uses the checkout directory. Configure an attached persistent disk and migrate existing state before changing DATA_DIR.");
+if (process.env.RENDER && path.resolve(DATA_DIR) === path.resolve(process.cwd())) {
+  console.warn("PERSISTENT_STORAGE_UNVERIFIED: DATA_DIR uses the checkout directory. Attach a Render disk at /var/data so passwords survive deploys.");
 }
 try {
   fs.mkdirSync(DATA_DIR, { recursive: true });
@@ -378,8 +375,9 @@ const adminAuth = createAdminAuth({
   allowInitialSignup: !process.env.RENDER,
   recoveryOwnerEmail: process.env.RECOVERY_OWNER_EMAIL || "",
   userFile: path.resolve(DATA_DIR, "users.json"),
-  durableUserFiles: [process.env.AUTH_USERS_FILE].filter(Boolean),
+  durableUserFiles: [process.env.AUTH_USERS_FILE, ...defaultDurableUserFiles()].filter(Boolean),
   usersSnapshot: process.env.AUTH_USERS_JSON || "",
+  sessionSecret: process.env.AUTH_SESSION_SECRET || process.env.ADMIN_API_TOKEN || "",
   sessionTtlMs: Math.max(15 * 60 * 1000, Number(process.env.AUTH_SESSION_TTL_HOURS || 12) * 60 * 60 * 1000),
   googleClientIds: [
     process.env.GOOGLE_WEB_CLIENT_ID,
@@ -3141,9 +3139,10 @@ function buildBackendHealthPayload(clock = {}) {
         : engineState.dailyLossLocked ? 'DAILY_LOSS_LOCK' : engineState.profitLocked ? 'PROFIT_LOCK' : null,
       savedEnabled: typeof runtimeConfig.autoTradingEnabled === 'boolean' ? runtimeConfig.autoTradingEnabled : null,
       runtimeConfigPersisted: fs.existsSync(CONFIG_FILE),
-      externalDataDirectoryConfigured: Boolean(process.env.DATA_DIR && path.resolve(DATA_DIR) !== process.cwd()),
+      externalDataDirectoryConfigured: Boolean(path.resolve(DATA_DIR) !== path.resolve(process.cwd())),
       persistenceNote: 'Restart retention requires the configured data directory to survive host replacement.',
     },
+    accountStore: adminAuth.getAccountStoreStatus(),
     market: {
       marketOpen: Boolean(clock?.is_open),
       marketSession: getMarketSession(clock),

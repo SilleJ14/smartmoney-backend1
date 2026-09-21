@@ -3,6 +3,9 @@ import fs from "fs";
 import path from "path";
 import { OAuth2Client } from "google-auth-library";
 import { createRemoteJWKSet, jwtVerify } from "jose";
+import { defaultDurableUserFiles } from "../storage/dataDirectory.js";
+
+const SCRYPT_OPTIONS = Object.freeze({ N: 16384, r: 8, p: 1, maxmem: 64 * 1024 * 1024 });
 
 const normalizeIdentity = (value) => String(value || "").trim().toLowerCase();
 const encode = (value) => Buffer.from(JSON.stringify(value)).toString("base64url");
@@ -41,7 +44,7 @@ async function verifyAppleIdentityToken({ identityToken, clientIds }) {
 }
 
 function passwordDigest(password, salt = crypto.randomBytes(16).toString("base64url")) {
-  return { salt, digest: crypto.scryptSync(String(password), salt, 64).toString("base64url") };
+  return { salt, digest: crypto.scryptSync(String(password), salt, 64, SCRYPT_OPTIONS).toString("base64url") };
 }
 
 function passwordIsValid(password, user = {}) {
@@ -72,15 +75,12 @@ function uniqueFiles(files = []) {
   return [...new Set(files.filter(Boolean).map((file) => path.resolve(String(file))))];
 }
 
-export function resolveDurableUserFiles(primary = "", extra = []) {
-  const renderDisk = process.platform !== "win32" && fs.existsSync("/var/data")
-    ? "/var/data/users.json"
-    : "";
+export function resolveDurableUserFiles(primary = "", extra = [], { platform = process.platform } = {}) {
   return uniqueFiles([
-    primary,
-    ...extra,
+    ...defaultDurableUserFiles({ platform }),
     process.env.AUTH_USERS_FILE,
-    renderDisk,
+    ...extra,
+    primary,
   ]);
 }
 
@@ -118,7 +118,7 @@ function persistUsers(files, users) {
   if (!wrote && lastError) throw lastError;
 }
 
-export function createAdminAuth({ adminToken, userFile = "", durableUserFiles = [], usersSnapshot = "",
+export function createAdminAuth({ adminToken, sessionSecret = "", userFile = "", durableUserFiles = [], usersSnapshot = "",
   sessionTtlMs = 12 * 60 * 60 * 1000,
   allowInitialSignup = true,
   failureWindowMs = 15 * 60 * 1000, failureLimit = 20, ticketTtlMs = 30 * 1000,
@@ -151,7 +151,7 @@ export function createAdminAuth({ adminToken, userFile = "", durableUserFiles = 
       .filter(Boolean)
       .slice(0, 10)
   )];
-  const signingKey = crypto.createHash("sha256").update(String(adminToken || "missing-admin-token")).digest();
+  const signingKey = crypto.createHash("sha256").update(String(sessionSecret || adminToken || "missing-admin-token")).digest();
   const getClientIp = (req) => String(req.headers["x-forwarded-for"] || req.ip || "unknown").split(",")[0].trim();
   const publicUser = (user) => ({ id: user.id, name: user.name, email: user.email, createdAt: user.createdAt });
   const signSession = (user) => {
@@ -478,5 +478,9 @@ export function createAdminAuth({ adminToken, userFile = "", durableUserFiles = 
     });
   };
   const getRecoveryConfiguration = () => ({ emailConfigured: typeof recoveryEmailSender === 'function', ownerRecoveryConfigured });
-  return { requireAdmin, registerRoutes, getClientIp, sessionUser, getRecoveryConfiguration };
+  const getAccountStoreStatus = () => ({
+    ready: users.length > 0,
+    durablePathCount: userFiles.length,
+  });
+  return { requireAdmin, registerRoutes, getClientIp, sessionUser, getRecoveryConfiguration, getAccountStoreStatus };
 }
