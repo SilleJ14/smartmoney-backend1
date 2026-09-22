@@ -473,8 +473,8 @@ export function evaluateStockTradeCandidate(
   return {
     watchlistEligible:
       structureOrScoreBuy ||
-      (finalScore >= STOCK_EXECUTION_THRESHOLDS.watchlistScore &&
-      decisionCoverage >= STOCK_EXECUTION_THRESHOLDS.entryCoverage),
+      discoveryCoverage >= 0.65 ||
+      (finalScoreAvailable && finalScore >= STOCK_EXECUTION_THRESHOLDS.watchlistScore),
     qualifiedCandidate:
       structureOrScoreBuy
         ? reasons.length === 0

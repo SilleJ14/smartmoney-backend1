@@ -1,9 +1,10 @@
 export const RELEASE_CONFIRMATION = "RELEASE EMERGENCY STOP";
+export const RESET_DAILY_LOSS_CONFIRMATION = "RESET DAILY LOSS LOCK";
 
 export function registerOperationalControlRoutes(app, dependencies) {
   const {
     requireAdmin, getControlState, updateControlState,
-    recordOrder, getClientIp, saveEngineState,
+    recordOrder, getClientIp, saveEngineState, resetDailyLossLock,
   } = dependencies;
 
   app.post("/emergency-stop", requireAdmin, (req, res) => {
@@ -37,6 +38,33 @@ export function registerOperationalControlRoutes(app, dependencies) {
       emergencyStopActive: state.emergencyStopActive,
       autoTradingEnabled: state.autoTradingEnabled,
       message: "Emergency stop released. Autopilot stays armed on the server until emergency stop is engaged again.",
+    });
+  });
+
+  app.post("/daily-loss-lock/reset", requireAdmin, (req, res) => {
+    if (String(req.body?.confirmation || "") !== RESET_DAILY_LOSS_CONFIRMATION) {
+      return res.status(400).json({
+        ok: false,
+        error: `Exact confirmation phrase required: ${RESET_DAILY_LOSS_CONFIRMATION}`,
+      });
+    }
+    const result = typeof resetDailyLossLock === "function"
+      ? resetDailyLossLock()
+      : { dailyLossLocked: false };
+    recordOrder("DAILY_LOSS_LOCK_RESET", "ACCOUNT", {
+      ip: getClientIp(req),
+      resetAt: new Date().toISOString(),
+      dailyStartEquity: result?.dailyStartEquity,
+    });
+    saveEngineState("DAILY_LOSS_LOCK_RESET");
+    const state = getControlState();
+    res.json({
+      ok: true,
+      dailyLossLocked: state.dailyLossLocked === true,
+      autoTradingEnabled: state.autoTradingEnabled,
+      emergencyStopActive: state.emergencyStopActive,
+      dailyStartEquity: result?.dailyStartEquity,
+      message: "Daily loss lock cleared. The daily loss clock now starts from current equity. Autopilot and emergency stop are unchanged.",
     });
   });
 

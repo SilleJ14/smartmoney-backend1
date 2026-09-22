@@ -62,11 +62,11 @@ export function createIncrementalResearch({ review, publish, canRun = () => true
         // Pure synchronous calculation; no provider requests or shared mutation.
         const result = review(structuredClone(row));
         if (!result || typeof result.then === 'function') throw new Error('Incremental research must be synchronous');
-        const keepCryptoExecution = result.buyableNow === true && Number(result.finalApprovedTradeAmount) >= 1;
+        const keepLiveExecution = result.buyableNow === true && Number(result.finalApprovedTradeAmount) >= 1;
         return Object.assign(result, {
           researchEvidenceAt: new Date(researchEvidenceTime(row)).toISOString(),
           analysisUpdatedAt: new Date(startedAt).toISOString(),
-          ...(keepCryptoExecution
+          ...(keepLiveExecution
             ? { researchOnly: false }
             : {
               researchOnly: true,

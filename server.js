@@ -167,6 +167,7 @@ import {
 } from "./risk/exitRiskEngine.js";
 import { calculateDynamicTradeAmount } from "./risk/positionSizing.js";
 import { attachCryptoExecutableAllocation } from "./scoring/cryptoExecutableAllocation.js";
+import { attachStockExecutableAllocation } from "./scoring/stockExecutableAllocation.js";
 import { calculateLossBudgetSizing } from "./risk/lossBudgetSizing.js";
 import { confirmedBotOwnedSymbols } from "./execution/confirmedOwnership.js";
 import { candidateFeedDecision, migrateStockFloorPreference } from "./discovery/candidateFeedPolicy.js";
@@ -246,6 +247,11 @@ import {
   DEFAULT_DISCOVERY_BUDGETS,
   runBoundedQuietDiscovery,
 } from "./discovery/quietDiscoveryPipeline.js";
+import {
+  collectNewsWatchSymbols,
+  isStockWatchlistEligible,
+  passesWatchMoverActivity,
+} from "./discovery/watchOnlyDiscovery.js";
 import { createCycleRunner } from "./engine/cycleRunner.js";
 import { createEngineCycle } from "./engine/createEngineCycle.js";
 import { startServerLifecycle } from "./bootstrap/serverLifecycle.js";
@@ -270,6 +276,7 @@ import { registerFrontendRoutes } from "./routes/frontendRoutes.js";
 import { registerLiveMoversRoutes } from "./routes/liveMoversRoutes.js";
 import { registerStatusRoutes } from "./routes/statusRoutes.js";
 import {
+  manualResetDailyLossLock,
   recordTradingModeWithoutResettingSafety,
   resetDailySafetyState,
 } from "./state/dailySafetyState.js";
@@ -18188,26 +18195,11 @@ async function loadPolygonMoverSymbols(limit, forceRefresh) {
       isValidStockSymbol,
     }).filter((item) => {
       const regularMarket = engineState.marketOpen === true;
-      if (regularMarket) {
-        const earlyMovePercent = Number(
-          process.env.POLYGON_EARLY_MOVE_MIN_PERCENT || 0.25
-        );
-        const unusualVolumeMinimum = Number(
-          process.env.POLYGON_EARLY_VOLUME_MIN ||
-          CONFIG.minScanVolume * 3
-        );
-        return (
-          (
-            Math.abs(item.percentChange) >= earlyMovePercent &&
-            Number(item.volume || 0) >= CONFIG.minScanVolume
-          ) ||
-          Number(item.volume || 0) >= unusualVolumeMinimum
-        );
-      }
-      return (
-        Math.abs(item.percentChange) >= 0.3 ||
-        Number(item.volume || 0) >= 500
-      );
+      return passesWatchMoverActivity(item, {
+        marketOpen: regularMarket,
+        minWatchShareVolume: Number(process.env.POLYGON_WATCH_MIN_VOLUME || 50000),
+        earlyMoveMinPercent: Number(process.env.POLYGON_EARLY_MOVE_MIN_PERCENT || 0.25),
+      });
     });
     const quotePolicy = getStockMoverQuotePolicy({
       marketOpen: engineState.marketOpen === true,
@@ -19189,6 +19181,18 @@ async function getTopMovers() {
     });
     preMoverDiscoverySymbols = await discoverPreMovers(preMoverSeedSymbols);
   }
+  const newsFeed = await getMarketNewsFeed().catch(() => ({ articles: [] }));
+  const newsWatchSymbols = collectNewsWatchSymbols(newsFeed.articles || [])
+    .map(normalizeSymbol)
+    .filter(isValidStockSymbol);
+  engineState.newsWatchState = {
+    updatedAt: new Date().toISOString(),
+    symbolCount: newsWatchSymbols.length,
+    symbols: newsWatchSymbols.slice(0, 15),
+    reason: newsWatchSymbols.length
+      ? "Watch-only news symbols from recent confirmed headlines."
+      : "No recent headline symbols for watch.",
+  };
   const combinedSymbols = [
     ...new Set([
       ...freshEarlyAssessments(engineState.earlyAssessedStockSignals).map(row => row.symbol),
@@ -19199,6 +19203,7 @@ async function getTopMovers() {
       ...getQuietDiscoverySymbols(),
       ...preMoverMemorySymbols,
       ...hiddenRunnerMemorySymbols,
+      ...newsWatchSymbols,
       ...assetSymbols,
     ]),
   ].filter(isValidStockSymbol);
@@ -27513,8 +27518,12 @@ function calculateCentralAutonomousDecisionCore(stockSignals = [], cryptoSignals
       stockDecisionScore: isCryptoSignal ? null : finalDecisionScore,
       watchlistEligible: isCryptoSignal
         ? null
-        : finalDecisionScore >= STOCK_EXECUTION_THRESHOLDS.watchlistScore &&
-          stockDecisionEvidence.coverage >= STOCK_EXECUTION_THRESHOLDS.entryCoverage,
+        : isStockWatchlistEligible({
+          finalScore: finalDecisionScore,
+          discoveryAvailable:
+            Number(stockDecisionEvidence.discovery?.coverage || 0) >= 0.65 ||
+            Number.isFinite(Number(stockDecisionEvidence.discovery?.score)),
+        }),
       qualifiedCandidate: isCryptoSignal
         ? null
         : finalDecisionScore >= STOCK_EXECUTION_THRESHOLDS.qualifiedScore &&
@@ -31449,20 +31458,15 @@ async function reviewCandidateScores(rows, crypto = false) {
   return fresh.map(row => {
     const decision = central.rankedDecisions.find(item => normalizeSymbol(item.symbol) === normalizeSymbol(row.symbol));
     if (decision) installCentralDecision(row, decision, { crypto });
-    if (crypto) {
-      attachCryptoExecutableAllocation(row, {
-        account: engineState.cachedAccount || {},
-        positions: engineState.cachedPositions || [],
-        config: CONFIG,
-        reservations: engineState.orderRiskReservations || {},
-        dailyStartEquity: engineState.dailyStartEquity,
-      });
-    } else {
-      Object.assign(row, { approved: false, backendApproved: false, autoTradeApproved: false, qualifiedToBuy: false,
-        buyableNow: false, recommendedTradeAmount: 0, finalApprovedTradeAmount: 0, finalTradeAmount: 0,
-        analysisUpdatedAt: new Date().toISOString(),
-        executionEligibility: { approved: false, reasons: ['CENTRAL_RISK_AND_SIZING_REVIEW_REQUIRED'] } });
-    }
+    const allocation = {
+      account: engineState.cachedAccount || {},
+      positions: engineState.cachedPositions || [],
+      config: CONFIG,
+      reservations: engineState.orderRiskReservations || {},
+      dailyStartEquity: engineState.dailyStartEquity,
+    };
+    if (crypto) attachCryptoExecutableAllocation(row, allocation);
+    else attachStockExecutableAllocation(row, allocation);
     return normalizeSignalScoreCompleteness(row);
   });
 }
@@ -31523,15 +31527,15 @@ const incrementalResearch = createIncrementalResearch({
     const central = calculateCentralAutonomousDecisionCore(crypto ? [] : [current], crypto ? [current] : []);
     const decision = central.rankedDecisions.find(item => normalizeSymbol(item.symbol) === normalizeSymbol(current.symbol));
     if (decision) installCentralDecision(current, decision, { crypto });
-    if (crypto) {
-      attachCryptoExecutableAllocation(current, {
-        account: engineState.cachedAccount || {},
-        positions: engineState.cachedPositions || [],
-        config: CONFIG,
-        reservations: engineState.orderRiskReservations || {},
-        dailyStartEquity: engineState.dailyStartEquity,
-      });
-    }
+    const allocation = {
+      account: engineState.cachedAccount || {},
+      positions: engineState.cachedPositions || [],
+      config: CONFIG,
+      reservations: engineState.orderRiskReservations || {},
+      dailyStartEquity: engineState.dailyStartEquity,
+    };
+    if (crypto) attachCryptoExecutableAllocation(current, allocation);
+    else attachStockExecutableAllocation(current, allocation);
     return current;
   },
   publish: rows => {
@@ -33024,6 +33028,17 @@ registerOperationalControlRoutes(app, {
     emergencyStopActive = nextEmergencyStop;
     autoTradingEnabled = nextAutoTrading;
     return { emergencyStopActive, autoTradingEnabled };
+  },
+  resetDailyLossLock: () => {
+    const equity = Number(engineState.cachedAccount?.equity || 0);
+    manualResetDailyLossLock(engineState, {
+      equity,
+      todayKey: getTodayKeyET(),
+    });
+    return {
+      dailyLossLocked: engineState.dailyLossLocked === true,
+      dailyStartEquity: engineState.dailyStartEquity,
+    };
   },
   recordOrder,
   getClientIp,

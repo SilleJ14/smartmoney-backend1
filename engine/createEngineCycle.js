@@ -7,6 +7,7 @@ import {
 import { normalizeSignalScoreCollection } from "../scoring/signalScoreCompleteness.js";
 import { installCentralDecision } from "../scoring/installCentralDecision.js";
 import { attachCryptoExecutableAllocation } from '../scoring/cryptoExecutableAllocation.js';
+import { attachStockExecutableAllocation } from '../scoring/stockExecutableAllocation.js';
 import { refreshCycleSubscriptions } from './refreshCycleSubscriptions.js';
 import { refreshCandidateQuotes } from '../market-data/refreshCandidateQuotes.js';
 const yieldToIO = () => new Promise(resolve => setImmediate(resolve));
@@ -2623,6 +2624,16 @@ export function createEngineCycle(dependencies) {
           signal.approved = true;
           signal.backendApproved = true;
         }
+      }
+      const stockAllocationContext = {
+        account: portfolioRefreshAccount,
+        positions: portfolioBrokerPositions,
+        config: CONFIG,
+        reservations: engineState.orderRiskReservations || {},
+        dailyStartEquity: engineState.dailyStartEquity || portfolioRefreshAccount.last_equity,
+      };
+      for (const signal of stockSignals) {
+        attachStockExecutableAllocation(signal, stockAllocationContext);
       }
       stockSignals = await normalizeCollectionCooperatively(stockSignals);
       const cryptoAllocationContext = {

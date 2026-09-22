@@ -13,9 +13,9 @@ export const DEFAULT_DISCOVERY_BUDGETS = Object.freeze({
   watchlistSize: 30,
   liveSymbols: 15,
   historyDays: 60,
-  maxCurrentMovePercent: 3,
+  maxCurrentMovePercent: 10,
   minPrice: 0.5,
-  minAverageDollarVolume: 500000,
+  minAverageDollarVolume: 100000,
   maxWorkingMemoryMb: 96,
 });
 

@@ -14,6 +14,18 @@ export function resetDailySafetyState(state, { todayKey, equity }) {
   return { reset: true, state };
 }
 
+export function manualResetDailyLossLock(state, { equity, todayKey } = {}) {
+  const normalizedEquity = Number(equity || 0);
+  const nextStart = normalizedEquity > 0 ? normalizedEquity : Number(state.dailyStartEquity || 0);
+  Object.assign(state, {
+    dailyLossLocked: false,
+    dailyDateKey: todayKey || state.dailyDateKey,
+    dailyStartEquity: nextStart || state.dailyStartEquity,
+    dailyPeakEquity: nextStart > 0 ? nextStart : state.dailyPeakEquity,
+  });
+  return { reset: true, state };
+}
+
 export function recordTradingModeWithoutResettingSafety(state, nextMode) {
   const previousMode = state.lastMode || null;
   state.lastMode = nextMode || null;
