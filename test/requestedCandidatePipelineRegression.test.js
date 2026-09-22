@@ -74,6 +74,7 @@ test("fresh trade ticks cannot starve independent bid-ask refreshes", () => {
   assert.match(refreshBlock, /isFreshMeasuredSpread/);
   assert.match(refreshBlock, /selectCryptoRestQuoteBatch/);
   assert.match(refreshBlock, /isAlpacaCryptoExecutionSource/);
+  assert.match(refreshBlock, /alpacaCryptoBook/);
   assert.doesNotMatch(refreshBlock, /incomingTimestamp < currentTimestamp/);
 
   const cacheBlock = serverSource.slice(
@@ -99,6 +100,14 @@ test("fresh trade ticks cannot starve independent bid-ask refreshes", () => {
   );
   assert.match(finnhubBlock, /eventType: "trade"/);
   assert.match(finnhubBlock, /spreadAvailable: false/);
+  assert.match(finnhubBlock, /if \(isCrypto\(symbol\)\) continue/);
+
+  const finnhubSymbolsBlock = serverSource.slice(
+    serverSource.indexOf("function getSymbolsForFinnhubLiveStream"),
+    serverSource.indexOf("function subscribeFinnhubSymbol")
+  );
+  assert.doesNotMatch(finnhubSymbolsBlock, /collectCryptoSymbols/);
+  assert.match(finnhubSymbolsBlock, /filter\(\(symbol\) => !isCrypto\(symbol\)\)/);
 
   const cryptoCacheCall = cryptoScannerSource.slice(
     cryptoScannerSource.indexOf("const cachedCryptoQuote = updateQuoteCache"),
@@ -109,11 +118,12 @@ test("fresh trade ticks cannot starve independent bid-ask refreshes", () => {
   assert.match(cryptoCacheCall, /spreadSource:/);
 
   const streamBlock = serverSource.slice(
-    serverSource.indexOf("const alpacaCryptoStream = createAlpacaCryptoStream"),
+    serverSource.indexOf("alpacaCryptoStream = createAlpacaCryptoStream"),
     serverSource.indexOf("startServerLifecycle({")
   );
   assert.match(streamBlock, /selectAlpacaCryptoStreamSymbols/);
   assert.match(streamBlock, /heldSymbols:/);
+  assert.match(streamBlock, /pinnedSymbols:/);
 });
 
 test("frontend live-score merge updates canonical approval and sizing only when explicitly supplied", frontendTestOptions, () => {

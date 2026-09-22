@@ -44,6 +44,19 @@ test("stream slots go to held names and names that still need an Alpaca book", (
   assert.deepEqual(selected, ["DOGE/USD", "ETH/USD"]);
 });
 
+test("already subscribed coins stay pinned instead of rotating off the socket", () => {
+  const selected = selectAlpacaCryptoStreamSymbols({
+    symbols: ["USDT/USD", "BTC/USD", "ETH/USD", "DOGE/USD"],
+    quotes: { "BTC/USD": alpacaBook },
+    scores: { "USDT/USD": 40, "BTC/USD": 90, "ETH/USD": 80, "DOGE/USD": 70 },
+    heldSymbols: [],
+    pinnedSymbols: ["BTC/USD", "USDT/USD"],
+    limit: 2,
+    now,
+  });
+  assert.deepEqual(selected, ["BTC/USD", "USDT/USD"]);
+});
+
 test("REST snapshots stream coins whose Alpaca book is stale", () => {
   const first = selectCryptoRestQuoteBatch({
     symbols: ["BTC/USD", "ETH/USD", "SOL/USD", "XRP/USD", "ADA/USD", "DOT/USD", "LINK/USD"],

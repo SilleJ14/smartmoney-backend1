@@ -103,6 +103,7 @@ export function selectAlpacaCryptoStreamSymbols({
   quotes = {},
   scores = {},
   heldSymbols = [],
+  pinnedSymbols = [],
   limit = 120,
   now = Date.now(),
   maxAgeSeconds = 5,
@@ -117,7 +118,7 @@ export function selectAlpacaCryptoStreamSymbols({
       .map((symbol) => String(symbol || "").toUpperCase())
       .filter((symbol) => /^[A-Z0-9]+\/USD$/.test(symbol))
   )];
-  const ranked = unique.sort((left, right) => {
+  const ranked = [...unique].sort((left, right) => {
     const heldGap = Number(held.has(right)) - Number(held.has(left));
     if (heldGap) return heldGap;
     const leftNeedsBook = cryptoQuoteHasFreshAlpacaBook(quotes[left], { now, maxAgeSeconds }) ? 0 : 1;
@@ -127,7 +128,25 @@ export function selectAlpacaCryptoStreamSymbols({
     if (scoreGap) return scoreGap;
     return left.localeCompare(right);
   });
-  return ranked.slice(0, Math.max(1, Number(limit) || 120));
+  const cap = Math.max(1, Number(limit) || 120);
+  const pinned = [...new Set(
+    (Array.isArray(pinnedSymbols) ? pinnedSymbols : [])
+      .map((symbol) => String(symbol || "").toUpperCase())
+      .filter((symbol) => unique.includes(symbol))
+  )];
+  const selected = [];
+  const seen = new Set();
+  const add = (symbol) => {
+    if (!symbol || seen.has(symbol) || selected.length >= cap) return;
+    seen.add(symbol);
+    selected.push(symbol);
+  };
+  // Held names and the current socket set stay put. Ranking only fills empty
+  // slots so a stale book does not unsubscribe a live coin every few seconds.
+  for (const symbol of unique.filter((symbol) => held.has(symbol))) add(symbol);
+  for (const symbol of pinned) add(symbol);
+  for (const symbol of ranked) add(symbol);
+  return selected;
 }
 
 export function selectCryptoRestQuoteBatch({

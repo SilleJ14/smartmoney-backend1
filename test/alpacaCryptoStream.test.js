@@ -12,6 +12,7 @@ test('crypto quote stream authenticates, resubscribes and preserves quote timest
   assert.equal(ws.sent[0].action,'auth');
   ws.emit('message',JSON.stringify([{T:'success',msg:'authenticated'}]));
   assert.deepEqual(ws.sent[1].quotes,['BTC/USD']);
+  assert.deepEqual(ws.sent[1].orderbooks,['BTC/USD']);
   const stamp='2026-09-13T01:59:30Z';
   ws.emit('message',JSON.stringify([{T:'q',S:'BTC/USD',bp:99,ap:101,t:stamp}]));
   assert.equal(quotes[0].priceIsLive,false);assert.equal(quotes[0].spreadUpdatedAt,stamp.replace('Z','.000Z'));
@@ -23,29 +24,48 @@ test('crypto stream without credentials never opens a socket', () => {
   createAlpacaCryptoStream({WebSocket:class {constructor(){throw Error('must not connect');}},getSymbols:()=>[]}).start();
 });
 
-test('symbol limit rejection reduces the next batch without dropping REST coverage', () => {
-  let ws, tick, now = 100000; let opened = 0;
+test('symbol limit rejection trims in place without dropping the live books', () => {
+  let ws, now = 100000; let opened = 0; const quotes = [];
   class Socket extends EventEmitter {
     constructor() { super(); ws = this; this.sent = []; opened++; }
     send(x) { this.sent.push(JSON.parse(x)); }
     close() {}
   }
   const stream = createAlpacaCryptoStream({ WebSocket: Socket, key: 'fixture', secret: 'fixture',
-    getSymbols: () => ['BTC/USD', 'ETH/USD', 'SOL/USD', 'LINK/USD'], onQuote: () => {},
-    now: () => now, setTimer: f => { tick = f; return 1; }, clearTimer: () => {} });
-  const auth = () => { ws.emit('open'); ws.emit('message', JSON.stringify([{ T: 'success', msg: 'authenticated' }])); };
-  stream.start(); auth();
+    getSymbols: () => ['BTC/USD', 'ETH/USD', 'SOL/USD', 'LINK/USD'],
+    onQuote: (s, q) => quotes.push(q),
+    now: () => now, setTimer: () => 1, clearTimer: () => {} });
+  stream.start();
+  ws.emit('open');
+  ws.emit('message', JSON.stringify([{ T: 'success', msg: 'authenticated' }]));
   assert.equal(ws.sent[1].quotes.length, 4);
   ws.emit('message', JSON.stringify([{ T: 'error', code: 405 }]));
-  assert.equal(stream.getStatus().symbolLimit, 2);
-  tick(); assert.equal(opened, 1);
-  now += 5000; tick(); auth();
-  assert.equal(ws.sent[1].quotes.length, 2);
-  assert.deepEqual(stream.getStatus().subscribedSymbols, ['BTC/USD', 'ETH/USD']);
-  assert.equal(stream.getStatus().restOnlySymbolCount, 2);
+  assert.equal(opened, 1);
+  assert.equal(stream.getStatus().connected, true);
+  assert.equal(stream.getStatus().authenticated, true);
+  assert.equal(stream.getStatus().symbolLimit, 3);
+  assert.deepEqual(stream.getStatus().subscribedSymbols, ['BTC/USD', 'ETH/USD', 'SOL/USD']);
+  assert.equal(stream.getStatus().restOnlySymbolCount, 1);
   assert.equal(stream.getStatus().errorCode, null);
-  // A later transport reconnect retains the learned limit.
-  ws.emit('close'); now += 15000; tick(); auth();
-  assert.equal(ws.sent[1].quotes.length, 2);
+  ws.emit('message', JSON.stringify([{ T: 'q', S: 'BTC/USD', bp: 99, ap: 101, t: new Date(now).toISOString() }]));
+  assert.equal(quotes.length, 1);
+  assert.equal(quotes[0].liveQuoteSource, 'alpaca_crypto_ws');
+  stream.stop();
+});
+
+test('crypto orderbook stream messages keep the Alpaca bid and ask', () => {
+  let ws; const quotes = [];
+  class Socket extends EventEmitter { constructor() { super(); ws = this; this.sent = []; } send(x) { this.sent.push(JSON.parse(x)); } close() {} }
+  const now = Date.parse('2026-09-13T02:00:00Z');
+  const stream = createAlpacaCryptoStream({ WebSocket: Socket, key:'fixture',secret:'fixture',getSymbols:()=>['BTC/USD'],
+    onQuote:(s,q)=>quotes.push(q), now:()=>now, setTimer:()=>1,clearTimer:()=>{} });
+  stream.start(); ws.emit('open');
+  ws.emit('message', JSON.stringify([{ T: 'success', msg: 'authenticated' }]));
+  ws.emit('message', JSON.stringify([{ T: 'o', S: 'BTC/USD', t: '2026-09-13T01:59:59Z',
+    b: [{ p: 99.5, s: 2 }], a: [{ p: 100.5, s: 1 }] }]));
+  assert.equal(quotes[0].bid, 99.5);
+  assert.equal(quotes[0].ask, 100.5);
+  assert.equal(quotes[0].liveQuoteSource, 'alpaca_crypto_orderbook');
+  assert.equal(quotes[0].priceIsLive, true);
   stream.stop();
 });

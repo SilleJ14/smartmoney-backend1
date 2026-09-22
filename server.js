@@ -170,7 +170,7 @@ import { attachCryptoExecutableAllocation } from "./scoring/cryptoExecutableAllo
 import { attachStockExecutableAllocation } from "./scoring/stockExecutableAllocation.js";
 import { calculateLossBudgetSizing } from "./risk/lossBudgetSizing.js";
 import { confirmedBotOwnedSymbols } from "./execution/confirmedOwnership.js";
-import { candidateFeedDecision, migrateStockFloorPreference } from "./discovery/candidateFeedPolicy.js";
+import { candidateFeedDecision, migrateStockFloorPreference, migrateStockPriceCapPreference } from "./discovery/candidateFeedPolicy.js";
 import { createPositionExitManager } from "./risk/positionExitManager.js";
 import {
   calculateInstitutionalRiskScore,
@@ -326,6 +326,7 @@ const DISCOVERY_BUDGETS = Object.freeze({
   historyDays: Math.min(120, Number(process.env.DISCOVERY_HISTORY_DAYS || 60)),
   maxCurrentMovePercent: Number(process.env.DISCOVERY_MAX_CURRENT_MOVE_PERCENT || DEFAULT_DISCOVERY_BUDGETS.maxCurrentMovePercent),
   minPrice: Number(process.env.DISCOVERY_MIN_PRICE || DEFAULT_DISCOVERY_BUDGETS.minPrice),
+  maxPrice: Number(process.env.DISCOVERY_MAX_PRICE || DEFAULT_DISCOVERY_BUDGETS.maxPrice),
   minAverageDollarVolume: Number(process.env.DISCOVERY_MIN_AVERAGE_DOLLAR_VOLUME || DEFAULT_DISCOVERY_BUDGETS.minAverageDollarVolume),
   maxWorkingMemoryMb: Math.min(192, Number(process.env.DISCOVERY_MAX_WORKING_MEMORY_MB || 96)),
 });
@@ -537,6 +538,9 @@ let runtimeConfig = loadRuntimeConfig(CONFIG_FILE);
 // saved preference. Subsequent user-selected higher floors remain persistent.
 if (Number(runtimeConfig.stockFloorPolicyVersion || 0) < 1) {
   runtimeConfig = saveRuntimeConfig(CONFIG_FILE, migrateStockFloorPreference(runtimeConfig));
+}
+if (Number(runtimeConfig.stockPriceCapPolicyVersion || 0) < 2) {
+  runtimeConfig = saveRuntimeConfig(CONFIG_FILE, migrateStockPriceCapPreference(runtimeConfig));
 }
 function runtimeNumber(key, envName, defaultValue) {
   const runtimeValue = runtimeConfig?.[key];
@@ -930,7 +934,7 @@ const CONFIG = {
   targetCapitalSlots: Number(process.env.TARGET_CAPITAL_SLOTS || 15),
   minAutonomousTradeAmount: Number(process.env.MIN_AUTONOMOUS_TRADE_AMOUNT || 25),
   minStockPrice: Number(process.env.MIN_STOCK_PRICE || 0.5),
-  maxStockPrice: Number(process.env.MAX_STOCK_PRICE || 1000),
+  maxStockPrice: Number(process.env.MAX_STOCK_PRICE || 50),
   replaceWeakestMinScoreGap: Number(process.env.REPLACE_SCORE_GAP || 8),
   maxRotationsPerDay: Number(process.env.MAX_ROTATIONS_PER_DAY || 6),
   enableWeakestReplacement:
@@ -1176,7 +1180,7 @@ const NUMERIC_CONFIG_DEFAULTS = {
   targetCapitalSlots: 15,
   minAutonomousTradeAmount: 25,
   minStockPrice: 0.5,
-  maxStockPrice: 1000,
+  maxStockPrice: 50,
   minScoreToBuy: 70,
   minCryptoDiscoveryScore: 60,
   replaceWeakestMinScoreGap: 8,
@@ -1217,6 +1221,12 @@ for (const [key, fallback] of Object.entries(NUMERIC_CONFIG_DEFAULTS)) {
   } else {
     CONFIG[key] = Number(CONFIG[key]);
   }
+}
+if (Number.isFinite(Number(runtimeConfig.minStockPrice))) {
+  CONFIG.minStockPrice = Number(runtimeConfig.minStockPrice);
+}
+if (Number.isFinite(Number(runtimeConfig.maxStockPrice))) {
+  CONFIG.maxStockPrice = Number(runtimeConfig.maxStockPrice);
 }
 let engineState = createInitialEngineState({
   effectiveMode: getEffectiveTradingMode(false),
@@ -18199,6 +18209,8 @@ async function loadPolygonMoverSymbols(limit, forceRefresh) {
         marketOpen: regularMarket,
         minWatchShareVolume: Number(process.env.POLYGON_WATCH_MIN_VOLUME || 50000),
         earlyMoveMinPercent: Number(process.env.POLYGON_EARLY_MOVE_MIN_PERCENT || 0.25),
+        minWatchPrice: Number(CONFIG.minStockPrice || 0.5),
+        maxWatchPrice: Number(CONFIG.maxStockPrice || 50),
       });
     });
     const quotePolicy = getStockMoverQuotePolicy({
@@ -18909,7 +18921,7 @@ async function runBoundedQuietDiscoveryScan({ force = false } = {}) {
     groupedResults,
     dateKey,
     featureStore: discoveryFeatureStore,
-    budgets: { ...DISCOVERY_BUDGETS, minPrice: Math.max(0.5, Number(CONFIG.minStockPrice) || 0.5) },
+    budgets: { ...DISCOVERY_BUDGETS, minPrice: Math.max(0.5, Number(CONFIG.minStockPrice) || 0.5), maxPrice: Math.max(0.5, Number(CONFIG.maxStockPrice) || 50) },
     downloadedBytes,
     learning: engineState.quietCandidateOutcomeLearning?.stock || null,
   });
@@ -31927,11 +31939,17 @@ async function refreshActiveCandidateQuotes(symbols = []) {
     for (const quote of receivedQuotes) {
       const symbol = normalizeSymbol(quote?.symbol);
       const incomingTimestamp = getProviderQuoteTimestampMs(quote);
+      const alpacaCryptoBook =
+        isCrypto(symbol) &&
+        quote?.spreadAvailable === true &&
+        isAlpacaCryptoExecutionSource(
+          quote.liveQuoteSource || quote.spreadSource || quote.source
+        );
       if (
         !symbol ||
-        quote?.priceIsLive !== true ||
         incomingTimestamp === null ||
-        incomingTimestamp > Date.now() + 5000
+        incomingTimestamp > Date.now() + 5000 ||
+        (quote?.priceIsLive !== true && !alpacaCryptoBook)
       ) {
         continue;
       }
@@ -32131,21 +32149,8 @@ function getSymbolsForFinnhubLiveStream(limit = 75) {
       .map((item) => normalizeSymbol(item?.symbol || item))
       .filter(Boolean)
       .filter((symbol) => !isCrypto(symbol));
-  const collectCryptoSymbols = (items = []) =>
-    (Array.isArray(items) ? items : [])
-      .map((item) => normalizeSymbol(item?.symbol || item))
-      .filter(Boolean)
-      .filter(isCrypto);
-  const cryptoSymbols = [
-    ...FALLBACK_ALPACA_CRYPTO_USD_PAIRS,
-    ...collectCryptoSymbols(engineState.lastCryptoSignals),
-    ...collectCryptoSymbols(engineState.topCryptoSignals),
-    ...collectCryptoSymbols(engineState.lastSignals),
-    ...collectCryptoSymbols(engineState.topSignals),
-    ...collectCryptoSymbols(engineState.fastRunnerCandidates),
-    ...collectCryptoSymbols(engineState.quickInstitutionalCandidates),
-    ...collectCryptoSymbols(engineState.cachedPositions),
-  ];
+  // Crypto execution books come from Alpaca. Finnhub's one websocket is
+  // reserved for stocks so Binance last-trades cannot occupy the tape.
   const stockSymbols = [
     ...collectStockSymbols(engineState.boundedQuietDiscoveryState?.liveSymbols),
     ...collectStockSymbols(engineState.liveEarlyMoverSymbols),
@@ -32158,10 +32163,7 @@ function getSymbolsForFinnhubLiveStream(limit = 75) {
     ...collectStockSymbols(engineState.quickInstitutionalCandidates),
     ...collectStockSymbols(engineState.cachedPositions),
   ];
-  // Finnhub permits one websocket connection per API key, so crypto and stock
-  // symbols share this bounded connection. Crypto is first because it has no
-  // Polygon route; stocks retain Polygon and Alpaca as independent providers.
-  return [...new Set([...cryptoSymbols, ...stockSymbols])].slice(0, limit);
+  return [...new Set(stockSymbols)].slice(0, limit);
 }
 function subscribeFinnhubSymbol(symbol) {
   const cleanSymbol = normalizeSymbol(symbol);
@@ -32306,6 +32308,7 @@ function startFinnhubStream() {
 
           const providerTimestamp = parseProviderTimestamp(trade.t);
           if (!symbol || !price || price <= 0 || !providerTimestamp) continue;
+          if (isCrypto(symbol)) continue;
 
           updateQuoteCache(symbol, {
             price,
@@ -33190,7 +33193,8 @@ registerMorningStrikeRoutes(app, {
   }),
 });
 
-const alpacaCryptoStream = createAlpacaCryptoStream({
+let alpacaCryptoStream = null;
+alpacaCryptoStream = createAlpacaCryptoStream({
   WebSocket: TradierWebSocket,
   key: process.env.ALPACA_LIVE_KEY,
   secret: process.env.ALPACA_LIVE_SECRET,
@@ -33209,6 +33213,8 @@ const alpacaCryptoStream = createAlpacaCryptoStream({
     heldSymbols: (engineState.cachedPositions || [])
       .map((item) => normalizeSymbol(item.symbol))
       .filter((symbol) => isCrypto(symbol)),
+    pinnedSymbols: alpacaCryptoStream?.getStatus()?.subscribedSymbols || [],
+    limit: alpacaCryptoStream?.getStatus()?.symbolLimit || 120,
   }),
   onQuote: (symbol, quote) => updateQuoteCache(symbol, quote),
   onStatus: status => { engineState.alpacaCryptoStreamState = status; },
