@@ -294,6 +294,10 @@ import {
   isValidStockTicker as isValidStockTickerBase,
 } from "./utils/symbolHelpers.js";
 import { resolveDataDir, defaultDurableUserFiles } from "./storage/dataDirectory.js";
+import {
+  fromFinnhubStreamSymbol,
+  toFinnhubStreamSymbol,
+} from "./live/finnhubStreamSymbols.js";
 dotenv.config({ path: path.resolve(process.cwd(), ".env") });
 const DATA_DIR = resolveDataDir();
 const processDiagnostics = installProcessDiagnostics({ directory: path.resolve(DATA_DIR, "process-diagnostics") });

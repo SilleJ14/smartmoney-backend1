@@ -59,6 +59,7 @@ test("provider routing uses all three stock providers but never starts Polygon c
   assert.match(serverSource, /subscribedCount: finnhubSubscribedSymbols\.size/);
   assert.match(serverSource, /getAlpacaLatestStockQuotes/);
   assert.match(serverSource, /alpacaCryptoMarketData\.getLatestQuotes/);
+  assert.match(serverSource, /import \{\s*fromFinnhubStreamSymbol,\s*toFinnhubStreamSymbol,\s*\} from "\.\/live\/finnhubStreamSymbols\.js";/);
   if (frontendSource !== null) {
     assert.doesNotMatch(frontendSource, /polygon_crypto_ws_quote/);
   }
