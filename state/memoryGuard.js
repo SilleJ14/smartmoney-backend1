@@ -27,18 +27,40 @@ export function buildMemoryGuardSnapshot(
   memory = process.memoryUsage(),
   {
     limitMb = detectedBudget.limitMb,
-    softRatio = Number(process.env.MEMORY_GUARD_SOFT_RATIO || 0.72),
-    hardRatio = Number(process.env.MEMORY_GUARD_HARD_RATIO || 0.85),
+    softRatio = Number(process.env.MEMORY_GUARD_SOFT_RATIO || 0.60),
+    hardRatio = Number(process.env.MEMORY_GUARD_HARD_RATIO || 0.75),
+    // Exit 134 comes from the V8 heap, not the 2 GB container RSS budget.
+    // Pause discovery while heap is still recoverable (~50% of heap_size_limit).
+    heapSoftRatio = Number(process.env.MEMORY_GUARD_HEAP_SOFT_RATIO || 0.5),
+    heapHardRatio = Number(process.env.MEMORY_GUARD_HEAP_HARD_RATIO || 0.65),
+    heapLimitMb,
   } = {}
 ) {
   const safeLimitMb = positive(limitMb) ?? detectedBudget.limitMb;
-  softRatio = positive(softRatio) && softRatio < 1 ? softRatio : 0.72;
-  hardRatio = positive(hardRatio) && hardRatio > softRatio && hardRatio < 1 ? hardRatio : Math.max(0.85, (softRatio + 1) / 2);
+  softRatio = positive(softRatio) && softRatio < 1 ? softRatio : 0.60;
+  hardRatio = positive(hardRatio) && hardRatio > softRatio && hardRatio < 1
+    ? hardRatio
+    : Math.max(0.75, (softRatio + 1) / 2);
+  heapSoftRatio = positive(heapSoftRatio) && heapSoftRatio < 1 ? heapSoftRatio : 0.5;
+  heapHardRatio = positive(heapHardRatio) && heapHardRatio > heapSoftRatio && heapHardRatio < 1
+    ? heapHardRatio
+    : Math.max(0.65, (heapSoftRatio + 1) / 2);
+
   const rssMb = mb(memory.rss);
   const heapUsedMb = mb(memory.heapUsed);
   const heapTotalMb = mb(memory.heapTotal);
   const externalMb = mb(memory.external);
   const usageRatio = rssMb / safeLimitMb;
+  const heapLimitBytes = positive(heapLimitMb)
+    ? heapLimitMb * 1048576
+    : v8.getHeapStatistics().heap_size_limit;
+  const heapLimit = mb(heapLimitBytes);
+  const heapRatio = heapLimit > 0 ? heapUsedMb / heapLimit : 0;
+  const rssPressure = usageRatio >= hardRatio ? 'critical' : usageRatio >= softRatio ? 'elevated' : 'normal';
+  const heapPressure = heapRatio >= heapHardRatio ? 'critical' : heapRatio >= heapSoftRatio ? 'elevated' : 'normal';
+  const rank = { normal: 0, elevated: 1, critical: 2 };
+  const pressure = rank[heapPressure] > rank[rssPressure] ? heapPressure : rssPressure;
+
   return {
     rssMb,
     heapUsedMb,
@@ -46,15 +68,12 @@ export function buildMemoryGuardSnapshot(
     externalMb,
     limitMb: safeLimitMb,
     limitSource: limitMb === detectedBudget.limitMb ? detectedBudget.limitSource : 'explicit',
-    heapLimitMb: mb(v8.getHeapStatistics().heap_size_limit),
+    heapLimitMb: heapLimit,
+    heapUsagePercent: Number((heapRatio * 100).toFixed(1)),
     usagePercent: Number((usageRatio * 100).toFixed(1)),
     softLimitMb: Number((safeLimitMb * softRatio).toFixed(2)),
     hardLimitMb: Number((safeLimitMb * hardRatio).toFixed(2)),
-    pressure: usageRatio >= hardRatio
-      ? "critical"
-      : usageRatio >= softRatio
-        ? "elevated"
-        : "normal",
-    shouldPauseHeavyWork: usageRatio >= softRatio,
+    pressure,
+    shouldPauseHeavyWork: usageRatio >= softRatio || heapRatio >= heapSoftRatio,
   };
 }

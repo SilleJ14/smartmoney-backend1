@@ -26,5 +26,25 @@ test('malformed configuration cannot disable pressure detection', () => {
 });
 test('small real limits are never rounded up and healthy usage permits discovery', () => {
   assert.equal(buildMemoryGuardSnapshot({ rss: 120 * 1048576 }, { limitMb: 128 }).pressure, 'critical');
-  assert.equal(buildMemoryGuardSnapshot({ rss: 300 * 1048576 }, { limitMb: 512 }).shouldPauseHeavyWork, false);
+  assert.equal(buildMemoryGuardSnapshot(
+    { rss: 200 * 1048576, heapUsed: 50 * 1048576 },
+    { limitMb: 512, heapLimitMb: 256 }
+  ).shouldPauseHeavyWork, false);
+});
+
+test('heap pressure pauses heavy work before a V8 abort even when RSS looks fine', () => {
+  const healthyRssHighHeap = buildMemoryGuardSnapshot(
+    { rss: 400 * 1048576, heapUsed: 140 * 1048576 },
+    { limitMb: 2048, softRatio: 0.60, hardRatio: 0.75, heapLimitMb: 256, heapSoftRatio: 0.5, heapHardRatio: 0.65 }
+  );
+  assert.equal(healthyRssHighHeap.pressure, 'elevated');
+  assert.equal(healthyRssHighHeap.shouldPauseHeavyWork, true);
+  assert.ok(healthyRssHighHeap.heapUsagePercent >= 50);
+
+  const criticalHeap = buildMemoryGuardSnapshot(
+    { rss: 400 * 1048576, heapUsed: 180 * 1048576 },
+    { limitMb: 2048, softRatio: 0.60, hardRatio: 0.75, heapLimitMb: 256, heapSoftRatio: 0.5, heapHardRatio: 0.65 }
+  );
+  assert.equal(criticalHeap.pressure, 'critical');
+  assert.equal(criticalHeap.shouldPauseHeavyWork, true);
 });

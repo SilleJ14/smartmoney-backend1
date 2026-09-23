@@ -77,6 +77,7 @@ export function createStockMarketStrategy(dependencies) {
     getSuggestedHoldTime,
     getTopMovers,
     getTradeQuality,
+    getMemoryGuardState,
     isMorningStrikeWindow,
     isPremarketMomentumWindow,
     narrowScanUniverse,
@@ -951,8 +952,23 @@ export function createStockMarketStrategy(dependencies) {
       // a minute before the central execution decision is evaluated.
       const batchSize = 4;
       let processedSymbols = 0;
+      let memoryAbort = false;
       const rawResults = await processBatches(limitedSymbols, batchSize, async (symbol) => {
         processedSymbols += 1;
+        if (memoryAbort) return null;
+        if (typeof getMemoryGuardState === "function") {
+          const memoryGuard = getMemoryGuardState();
+          engineState.memoryGuardState = {
+            ...memoryGuard,
+            checkedAt: new Date().toISOString(),
+          };
+          if (memoryGuard.shouldPauseHeavyWork) {
+            memoryAbort = true;
+            engineState.lastEngineStopReason = "MEMORY_GUARD_STOCK_SCAN_ABORTED";
+            recordSkippedSymbol(symbol, "MEMORY_GUARD_STOCK_SCAN_ABORTED");
+            return null;
+          }
+        }
         engineState.lastHeartbeatAt = new Date().toISOString();
         engineState.engineCycleStage = {
           stage: "SCANNING_STOCKS",
@@ -1338,6 +1354,11 @@ export function createStockMarketStrategy(dependencies) {
           return null;
         }
       });
+      if (memoryAbort) {
+        console.warn(
+          `Stock scan aborted early by memory guard after ${processedSymbols}/${limitedSymbols.length} symbols`
+        );
+      }
       const results = rawResults.filter(Boolean);
       const skipReasonCounts = (engineState.skippedSymbols || []).reduce(
         (acc, item) => {

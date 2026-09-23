@@ -276,15 +276,15 @@ test("loader backs up migratable state and archives state above the hard budget"
 test("memory guard pauses heavy work before the configured hard limit", () => {
   const normal = buildMemoryGuardSnapshot(
     { rss: 500 * 1024 * 1024, heapUsed: 300, heapTotal: 400, external: 0 },
-    { limitMb: 2048, softRatio: 0.72, hardRatio: 0.85 }
+    { limitMb: 2048, softRatio: 0.72, hardRatio: 0.85, heapLimitMb: 1024 }
   );
   const elevated = buildMemoryGuardSnapshot(
     { rss: 1600 * 1024 * 1024, heapUsed: 300, heapTotal: 400, external: 0 },
-    { limitMb: 2048, softRatio: 0.72, hardRatio: 0.85 }
+    { limitMb: 2048, softRatio: 0.72, hardRatio: 0.85, heapLimitMb: 1024 }
   );
   const critical = buildMemoryGuardSnapshot(
     { rss: 1800 * 1024 * 1024, heapUsed: 300, heapTotal: 400, external: 0 },
-    { limitMb: 2048, softRatio: 0.72, hardRatio: 0.85 }
+    { limitMb: 2048, softRatio: 0.72, hardRatio: 0.85, heapLimitMb: 1024 }
   );
 
   assert.equal(normal.pressure, "normal");
@@ -292,4 +292,13 @@ test("memory guard pauses heavy work before the configured hard limit", () => {
   assert.equal(elevated.pressure, "elevated");
   assert.equal(elevated.shouldPauseHeavyWork, true);
   assert.equal(critical.pressure, "critical");
+});
+
+test("memory guard pauses on heap soft limit independently of RSS", () => {
+  const paused = buildMemoryGuardSnapshot(
+    { rss: 400 * 1024 * 1024, heapUsed: 560 * 1024 * 1024, heapTotal: 600 * 1024 * 1024, external: 0 },
+    { limitMb: 2048, softRatio: 0.72, hardRatio: 0.85, heapLimitMb: 1024, heapSoftRatio: 0.5, heapHardRatio: 0.65 }
+  );
+  assert.equal(paused.shouldPauseHeavyWork, true);
+  assert.ok(["elevated", "critical"].includes(paused.pressure));
 });

@@ -19438,6 +19438,7 @@ const { calculateInstitutionalScores, attachStockWatchDecisionComponents, passes
   getSuggestedHoldTime,
   getTopMovers,
   getTradeQuality,
+  getMemoryGuardState: buildMemoryGuardSnapshot,
   isMorningStrikeWindow,
   isPremarketMomentumWindow,
   narrowScanUniverse,
