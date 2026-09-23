@@ -19,6 +19,8 @@ test("frozen forex spec does not share stock F or Alpaca auto", () => {
   assert.equal(FOREX_SPEC.version, "fx-v1");
   assert.equal(FOREX_SPEC.quoteProviderMaxAgeSeconds, 2);
   assert.equal(FOREX_SPEC.liveOrdersAuthorized, false);
+  assert.equal(FOREX_SPEC.practiceOrdersEnabled, true);
+  assert.equal(FOREX_SPEC.practiceRiskCapPercent, 10);
   assert.equal(pipSize("USD_JPY"), 0.01);
   assert.equal(pipSize("EUR_USD"), 0.0001);
 });

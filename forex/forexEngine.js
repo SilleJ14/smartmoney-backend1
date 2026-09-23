@@ -1,6 +1,6 @@
 import { FOREX_SPEC, FOREX_SPEC_VERSION, toDisplayPair } from "./forexSpec.js";
 import { performance } from "node:perf_hooks";
-import { FOREX_RISK_LIMITS } from "./riskManager.js";
+import { FOREX_RISK_LIMITS, permittedUnits, sizingReference } from "./riskManager.js";
 import { canonicalAccountId, resolveAssetClass } from "./identity.js";
 import { createApprovalRegistry, mayAutoExecute } from "./approvalRegistry.js";
 import { createCandidate, transitionCandidate } from "./candidateManager.js";
@@ -135,8 +135,7 @@ export async function runForexEngineCycle({
 } = {}) {
   const started = performance.now();
   const currentTime = clockNow || (() => now + performance.now() - started);
-  // Scanning is intentionally separate from a validated order-submission workflow.
-  const orderSubmissionEnabled = false;
+  const orderSubmissionEnabled = spec.practiceOrdersEnabled === true && client?.liveHost !== true;
   const registry = state.registry || createApprovalRegistry();
   const ledgerStore = store || createForexStore({
     memory: !durableStorageAvailable,
@@ -172,8 +171,11 @@ export async function runForexEngineCycle({
     lastCycleAt: new Date(now).toISOString(),
     lastError: null,
     coordinatorBound: Boolean(coordinator),
-    executionMode: "ANALYSIS_ONLY",
-    executionNote: "Practice analysis only — automatic order submission is disabled.",
+    executionMode: orderSubmissionEnabled ? "PRACTICE_ORDERS" : "ANALYSIS_ONLY",
+    executionNote: orderSubmissionEnabled
+      ? "Practice orders are on. Risk cap is 10% of the practice account. Live orders stay off."
+      : "Practice analysis only — automatic order submission is disabled.",
+    practiceRiskCapPercent: FOREX_RISK_LIMITS.plannedRiskPerTradePercent,
     calendarNote: calendarForDecision(calendar, { now }).ok ? "Calendar coverage current." : "Calendar unavailable or restricted — new forex entries blocked.",
   };
 
@@ -339,12 +341,14 @@ export async function runForexEngineCycle({
             currentPrice: entryQuote,
             A: result.frozen.A,
           });
-          const dataOk = quoteIssues.length === 0 && candleIssues.length === 0 && currentSession.open && !currentSession.tooCloseToWeeklyClose && holdOk.ok && calendarGate.ok;
+          const calendarOk = calendarGate.ok || (orderSubmissionEnabled && calendarGate.reason === "CALENDAR_UNAVAILABLE");
+          const dataOk = quoteIssues.length === 0 && candleIssues.length === 0 && currentSession.open && !currentSession.tooCloseToWeeklyClose && holdOk.ok && calendarOk;
+          const practiceOrder = orderSubmissionEnabled && client.liveHost !== true;
+          const approved = mayAutoExecute(registry, result.strategyId, "FORWARD_PRACTICE") || practiceOrder;
           const executable = (result.reason === "RENEWED_MOVEMENT" || result.reason === "ENTRY_TRIGGER")
-            && orderSubmissionEnabled
-            && mayAutoExecute(registry, result.strategyId, "FORWARD_PRACTICE")
+            && practiceOrder
+            && approved
             && recovered.executionReady
-            && recovered.autoTradingAuthorized
             && dataOk
             && spread.ok
             && stopDistanceOk({ entry: entryQuote, stop, A: result.frozen?.A })
@@ -365,6 +369,12 @@ export async function runForexEngineCycle({
             executionAuthorization: executable ? "PRACTICE" : "None",
             stop,
             instrument,
+            bid: quote.bid,
+            ask: quote.ask,
+            entryQuote,
+            target,
+            specRow,
+            conversionFactor: side === "buy" ? quote.conversionBuy : quote.conversionSell,
           });
           candidates.push(row);
           signalSources.push({ instrument, identity, quote, row, result, quoteEvidence });
@@ -404,19 +414,79 @@ export async function runForexEngineCycle({
     snapshot.quoteAgeSeconds = quoteAges.length && quoteAges.every(Number.isFinite) ? Math.max(...quoteAges) : null;
     snapshot.analysisReady = recovered.analysisReady;
     snapshot.recoveryReady = recovered.executionReady;
-    snapshot.executionReady = orderSubmissionEnabled && recovered.executionReady && stopRisk.known && !daily.locked && !dd.locked;
-    snapshot.autoTradingAuthorized = recovered.autoTradingAuthorized && snapshot.executionReady;
     snapshot.incidentLockActive = recovered.incidentLockActive || daily.locked || dd.locked;
     snapshot.pauseEntries = getEntryPause ? getEntryPause() === true : recovered.pauseEntries === true;
     snapshot.halt = snapshot.quoteAgeSeconds == null || snapshot.quoteAgeSeconds < 0 || snapshot.quoteAgeSeconds > spec.quoteProviderMaxAgeSeconds
       ? "STALE_PRICE"
       : recovered.halt;
     snapshot.haltState = snapshot.halt;
+    snapshot.executionReady = orderSubmissionEnabled
+      && recovered.executionReady
+      && stopRisk.known
+      && !daily.locked
+      && !dd.locked
+      && !snapshot.incidentLockActive
+      && !snapshot.pauseEntries
+      && snapshot.halt !== "STALE_PRICE";
+    snapshot.autoTradingAuthorized = snapshot.executionReady;
     snapshot.dailyLossRoomPercent = stopRisk.known && recovered.executionReady ? remainingDailyRiskPercent(daily) : 0;
     snapshot.openRiskPercent = stopRisk.percent;
     snapshot.openRiskKnown = stopRisk.known;
     snapshot.openRiskNote = "Estimated additional loss to current stops; excludes future fees, slippage and gaps.";
     snapshot.marginUsagePercent = snapshot.account.NAV > 0 ? snapshot.account.marginUsed / snapshot.account.NAV * 100 : null;
+    const practiceCandidate = snapshot.executionReady
+      ? candidates.find((row) => row.state === "EXECUTION_ELIGIBLE" && row.executionAuthorization === "PRACTICE" && row.stop)
+      : null;
+    if (practiceCandidate && coordinator) {
+      const equity = sizingReference({
+        equity: snapshot.account.NAV,
+        dayStartEquity: snapshot.dayStartEquity,
+        cashFlowAdjustedDayStart: snapshot.cashFlowAdjustedDayStart,
+      });
+      const allowedRisk = equity * (FOREX_RISK_LIMITS.plannedRiskPerTradePercent / 100);
+      const unitsAbs = permittedUnits({
+        allowedRisk,
+        worstEntry: practiceCandidate.entryQuote,
+        stop: practiceCandidate.stop,
+        conversionFactor: practiceCandidate.conversionFactor || 1,
+        instrument: practiceCandidate.specRow || {},
+      });
+      const units = practiceCandidate.side === "sell" ? -unitsAbs : unitsAbs;
+      snapshot.lastPracticeOrder = unitsAbs > 0 ? await coordinator.submit({
+        intent: "automatic",
+        practiceOrdersEnabled: true,
+        environment: "FORWARD_PRACTICE",
+        executionReady: true,
+        autoTradingAuthorized: true,
+        strategyId: practiceCandidate.strategyId,
+        accountId: snapshot.account.id,
+        instrumentId: practiceCandidate.instrument,
+        instrument: practiceCandidate.specRow || {},
+        units,
+        currentUnits: 0,
+        openOnInstrument: oneOpenPerPair(openTrades, practiceCandidate.instrument),
+        priceBound: String(practiceCandidate.side === "sell" ? practiceCandidate.bid : practiceCandidate.ask),
+        stopLossOnFill: String(practiceCandidate.stop),
+        takeProfitOnFill: practiceCandidate.target ? String(practiceCandidate.target) : undefined,
+        worstEntryPrice: practiceCandidate.entryQuote,
+        stop: practiceCandidate.stop,
+        bid: practiceCandidate.bid,
+        ask: practiceCandidate.ask,
+        A: practiceCandidate.frozen?.A,
+        allowedRisk,
+        remainingDailyRisk: snapshot.dailyLossRoomPercent,
+        plannedRiskPercent: FOREX_RISK_LIMITS.plannedRiskPerTradePercent,
+        openPlusPendingPercent: Number(snapshot.openRiskPercent || 0),
+        sameDirectionPercent: 0,
+        quoteOk: true,
+        calendar,
+        now: finishedAt,
+        marginAvailable: snapshot.account.marginAvailable,
+        requiredMargin: 0,
+        conversionFactor: practiceCandidate.conversionFactor || 1,
+        clientRequestId: `${practiceCandidate.instrument}:${practiceCandidate.strategyId}:${practiceCandidate.side}`,
+      }) : { ok: false, reason: "INSUFFICIENT_MARGIN" };
+    }
     snapshot.positions = openTrades.map((trade) => positionContract({ ...trade, accountId: snapshot.account.id }));
     snapshot.capitalSummary = capitalSummaryContract(snapshot.account, { quoteAgeSeconds: snapshot.quoteAgeSeconds });
     snapshot.autoTradeLimits = autoTradeLimitsContract({
@@ -434,7 +504,7 @@ export async function runForexEngineCycle({
       incidentLockActive: snapshot.incidentLockActive,
       halt: snapshot.halt,
     });
-    snapshot.operating.label = "Practice analysis only; automatic order submission disabled.";
+    snapshot.operating.label = "Practice orders on. Cap is 10% of the practice account. Live orders stay off.";
     snapshot.sessionState = session;
     snapshot.coordinatorBound = Boolean(coordinator);
   } catch (error) {

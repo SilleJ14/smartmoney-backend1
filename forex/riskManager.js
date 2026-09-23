@@ -2,11 +2,11 @@ import { conversionLossPerUnit } from "./instrumentSpecs.js";
 import { isOpeningRisk } from "./identity.js";
 
 export const FOREX_RISK_LIMITS = Object.freeze({
-  plannedRiskPerTradePercent: 0.25,
-  openPlusPendingPercent: 0.75,
-  sameDirectionCurrencyPercent: 0.50,
-  dailyLossTriggerPercent: 1.0,
-  drawdownPausePercent: 5.0,
+  plannedRiskPerTradePercent: 10,
+  openPlusPendingPercent: 10,
+  sameDirectionCurrencyPercent: 10,
+  dailyLossTriggerPercent: 10,
+  drawdownPausePercent: 10,
   marginBufferPercent: 20,
   gapShockAtr: 0.25,
   scaleInsDisabled: true,

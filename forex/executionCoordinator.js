@@ -45,15 +45,19 @@ export function createExecutionCoordinator({
         || Math.abs(units) > Math.abs(current)) return blocked("CLOSE_WOULD_OPEN");
       plan = { ...plan, currentUnits: current };
     }
+    const practiceOrder = plan?.practiceOrdersEnabled === true
+      && plan?.environment === "FORWARD_PRACTICE"
+      && adapter.liveHost !== true;
     if (!reducing) {
-      if (plan.intent === "automatic" && !plan.autoTradingAuthorized) {
+      if (plan.intent === "automatic" && !practiceOrder && !plan.autoTradingAuthorized) {
         return blocked("STRATEGY_NOT_APPROVED");
       }
-      if (plan.intent === "automatic" && !mayAutoExecute(registry, plan.strategyId, plan.environment || "FORWARD_PRACTICE")) {
+      if (plan.intent === "automatic" && !practiceOrder && !mayAutoExecute(registry, plan.strategyId, plan.environment || "FORWARD_PRACTICE")) {
         return blocked("STRATEGY_NOT_APPROVED");
       }
       const calendar = calendarForDecision(plan.calendar, { now: plan.now, instrument: plan.instrumentId });
-      if (plan.intent === "automatic" && calendar.ok !== true) return blocked(calendar.reason || "CALENDAR_UNAVAILABLE");
+      if (plan.intent === "automatic" && !practiceOrder && calendar.ok !== true) return blocked(calendar.reason || "CALENDAR_UNAVAILABLE");
+      if (plan.intent === "automatic" && practiceOrder && calendar.reason === "EVENT_WINDOW") return blocked("EVENT_WINDOW");
       if (plan.quoteOk !== true) return blocked("QUOTE_STALE");
       if (plan.confirmedAt && entryExpired({ confirmedAt: plan.confirmedAt, now: plan.now })) {
         return blocked("ENTRY_EXPIRED");

@@ -38,6 +38,8 @@ export const FOREX_SPEC = Object.freeze({
   centralBankBlockBeforeMinutes: 60,
   centralBankBlockAfterMinutes: 60,
   liveOrdersAuthorized: false,
+  practiceOrdersEnabled: true,
+  practiceRiskCapPercent: 10,
   marginBufferPercent: 20,
 });
 
