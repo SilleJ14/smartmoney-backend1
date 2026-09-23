@@ -143,6 +143,8 @@ export function createEngineCycle(dependencies) {
     runFullBrainFastSync,
     runLiveStarterBuyGate,
     runQuickInstitutionalGate,
+    runForexEngineCycle,
+    getForexEngineRuntime,
     saveEngineState,
     scanCryptoMarket,
     scanMarket,
@@ -2950,6 +2952,22 @@ export function createEngineCycle(dependencies) {
           message:
             "Stocks are paused until the regular market opens; crypto remains eligible 24/7.",
         });
+      }
+      if (typeof runForexEngineCycle === "function") {
+        try {
+          const forexRuntime = typeof getForexEngineRuntime === "function" ? getForexEngineRuntime() : {};
+          engineState.forexEngine = await runForexEngineCycle({
+            state: engineState.forexEngine || {},
+            ...forexRuntime,
+          });
+        } catch (error) {
+          engineState.forexEngine = {
+            ...(engineState.forexEngine || {}),
+            halt: "ENGINE_ERROR",
+            haltState: "ENGINE_ERROR",
+            lastError: String(error?.message || error),
+          };
+        }
       }
   }
 

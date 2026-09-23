@@ -254,6 +254,11 @@ import {
 } from "./discovery/watchOnlyDiscovery.js";
 import { createCycleRunner } from "./engine/cycleRunner.js";
 import { createEngineCycle } from "./engine/createEngineCycle.js";
+import { FOREX_SPEC } from "./forex/forexSpec.js";
+import { createOandaClient } from "./forex/oandaClient.js";
+import { runForexEngineCycle } from "./forex/forexEngine.js";
+import { createForexStore } from "./forex/durableStore.js";
+import { resolveOandaEnv } from "./forex/oandaEnv.js";
 import { startServerLifecycle } from "./bootstrap/serverLifecycle.js";
 import { registerOperationalControlRoutes } from "./routes/operationalControlRoutes.js";
 import { registerSystemRoutes } from "./routes/systemRoutes.js";
@@ -295,6 +300,7 @@ import { createInitialEngineState } from "./state/initialEngineState.js";
 import {
   getEffectiveTradingMode as resolveEffectiveTradingMode,
   resolveAutoTradingEnabled as resolveConfiguredAutoTrading,
+  resolveForexAutoEnabled as resolveConfiguredForexAuto,
   sanitizeRuntimeConfig,
 } from "./config/runtimePolicy.js";
 import {
@@ -917,6 +923,7 @@ const ENABLE_MAIN_SWING_SCAN =
 const MAIN_SWING_SCAN_INTERVAL_MS =
   parseEnvNumber("MAIN_SWING_SCAN_INTERVAL_MS", 300000);
 let autoTradingEnabled = resolveAutoTradingEnabled(runtimeConfig);
+let forexAutoEnabled = resolveConfiguredForexAuto(runtimeConfig, process.env.FOREX_AUTO_ENABLED);
 let emergencyStopActive =
   runtimeConfig.emergencyStopActive ??
   parseEnvBoolean("EMERGENCY_STOP_ACTIVE", true);
@@ -24211,7 +24218,7 @@ const { executeEngineCycleBody } = createEngineCycle({
   updateQuietCandidateOutcomes,
   updateStockScoreOutcomes,
   updateWhaleSmartMoneyState,
-  getRuntime: () => ({
+    getRuntime: () => ({
     TRADING_MODE,
     autoTradingEnabled,
     ENABLE_POLYGON_WEBSOCKET,
@@ -24220,6 +24227,24 @@ const { executeEngineCycleBody } = createEngineCycle({
     LIVE_ORDER_MAX_QUOTE_AGE_SECONDS,
     LIVE_ORDER_MAX_SPREAD_PERCENT,
   }),
+  runForexEngineCycle,
+  getForexEngineRuntime: () => {
+    const oanda = resolveOandaEnv(process.env);
+    return {
+    client: createOandaClient({
+      accountId: runtimeConfig.oandaAccountId || oanda.accountId,
+      token: runtimeConfig.oandaPracticeToken || oanda.token,
+      baseUrl: oanda.baseUrl,
+    }),
+    spec: FOREX_SPEC,
+    forexAutoEnabled,
+    now: Date.now(),
+    store: createForexStore({
+      useFile: true,
+      filePath: process.env.FOREX_LEDGER_PATH,
+    }),
+  };
+  },
 });
 setInterval(() => {
   const lastProgressAt = Date.parse(engineState.lastHeartbeatAt || "");
@@ -28203,6 +28228,8 @@ function getLatestFrontendStatusSnapshot() {
     liveSchedulerState: engineState.liveSchedulerState || null,
     liveMemoryCount: Object.keys(engineState.liveMarketMemory || {}).length,
     liveQuoteCacheCount: Object.keys(engineState.liveQuoteCache || {}).length,
+    forexEngine: engineState.forexEngine || null,
+    forexAutoEnabled,
     institutionalDashboard: buildInstitutionalDashboardPayload(),
     autonomousTradingSystem: engineState.autonomousTradingSystemState || {},
     phase20AutonomousOrchestration: engineState.phase20AutonomousOrchestrationState || {},
@@ -32926,6 +32953,7 @@ registerStatusRoutes(app, {
     mode: TRADING_MODE,
     tradingModeLocked,
     autoTradingEnabled,
+    forexAutoEnabled,
     emergencyStopActive,
     config: CONFIG,
   }),
@@ -33016,21 +33044,27 @@ registerOperationalControlRoutes(app, {
   getControlState: () => ({
     emergencyStopActive,
     autoTradingEnabled,
+    forexAutoEnabled,
     dailyLossLocked: engineState.dailyLossLocked,
     profitLocked: engineState.profitLocked,
   }),
   updateControlState: (updates) => {
     const nextEmergencyStop = typeof updates.emergencyStopActive === "boolean" ? updates.emergencyStopActive : emergencyStopActive;
     const nextAutoTrading = typeof updates.autoTradingEnabled === "boolean" ? updates.autoTradingEnabled : autoTradingEnabled;
+    const nextForexAuto = typeof updates.forexAutoEnabled === "boolean" ? updates.forexAutoEnabled : forexAutoEnabled;
     const saved = saveRuntimeConfig(CONFIG_FILE, {
       ...runtimeConfig,
       emergencyStopActive: nextEmergencyStop,
       autoTradingEnabled: nextAutoTrading,
+      forexAutoEnabled: nextForexAuto,
+      oandaAccountId: updates.oandaAccountId !== undefined ? updates.oandaAccountId : runtimeConfig.oandaAccountId,
+      oandaPracticeToken: updates.oandaPracticeToken !== undefined ? updates.oandaPracticeToken : runtimeConfig.oandaPracticeToken,
     });
     runtimeConfig = saved;
     emergencyStopActive = nextEmergencyStop;
     autoTradingEnabled = nextAutoTrading;
-    return { emergencyStopActive, autoTradingEnabled };
+    forexAutoEnabled = nextForexAuto;
+    return { emergencyStopActive, autoTradingEnabled, forexAutoEnabled };
   },
   resetDailyLossLock: () => {
     const equity = Number(engineState.cachedAccount?.equity || 0);

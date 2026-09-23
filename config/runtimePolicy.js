@@ -4,6 +4,13 @@ export function sanitizeRuntimeConfig(config = {}) {
     const minimum = Number(safe.minStockPrice);
     safe.minStockPrice = Number.isFinite(minimum) ? Math.max(0.5, minimum) : 0.5;
   }
+  if (safe.maxStockPrice !== undefined) {
+    const floor = Number.isFinite(Number(safe.minStockPrice)) ? Number(safe.minStockPrice) : 0.5;
+    const maximum = Number(safe.maxStockPrice);
+    safe.maxStockPrice = Number.isFinite(maximum)
+      ? Math.min(10000, Math.max(floor, maximum))
+      : Math.max(floor, 50);
+  }
   if (safe.minScoreToBuy !== undefined) {
     safe.minScoreToBuy = Math.max(70, Number(safe.minScoreToBuy || 70));
   }
@@ -19,6 +26,16 @@ export function getEffectiveTradingMode(selectedMode) {
 export function resolveAutoTradingEnabled(config = {}, environmentValue) {
   if (typeof config.autoTradingEnabled === "boolean") {
     return config.autoTradingEnabled;
+  }
+  if (environmentValue !== undefined) {
+    return String(environmentValue).trim().toLowerCase() === "true";
+  }
+  return false;
+}
+
+export function resolveForexAutoEnabled(config = {}, environmentValue) {
+  if (typeof config.forexAutoEnabled === "boolean") {
+    return config.forexAutoEnabled;
   }
   if (environmentValue !== undefined) {
     return String(environmentValue).trim().toLowerCase() === "true";

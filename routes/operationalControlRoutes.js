@@ -88,4 +88,67 @@ export function registerOperationalControlRoutes(app, dependencies) {
       error: "Autopilot stays on after emergency stop is released. Engage emergency stop to halt new buys.",
     });
   });
+
+  app.post("/forex-auto/on", requireAdmin, (_req, res) => {
+    const nextState = updateControlState({ forexAutoEnabled: true });
+    saveEngineState("FOREX_AUTO_ENABLED");
+    res.json({
+      ok: true,
+      message: "Forex Autopilot enabled",
+      forexAutoEnabled: nextState.forexAutoEnabled === true,
+      autoTradingEnabled: nextState.autoTradingEnabled,
+    });
+  });
+
+  app.post("/forex-auto/off", requireAdmin, (_req, res) => {
+    const nextState = updateControlState({ forexAutoEnabled: false });
+    saveEngineState("FOREX_AUTO_DISABLED");
+    res.json({
+      ok: true,
+      message: "Forex Autopilot paused",
+      forexAutoEnabled: nextState.forexAutoEnabled === true,
+      autoTradingEnabled: nextState.autoTradingEnabled,
+    });
+  });
+
+  app.post("/forex-entries/pause", requireAdmin, (req, res) => {
+    const nextState = updateControlState({ forexPauseEntries: true });
+    saveEngineState("FOREX_ENTRIES_PAUSED");
+    res.json({
+      ok: true,
+      message: "Forex new entries paused. Existing protection is unchanged.",
+      forexPauseEntries: true,
+      forexAutoEnabled: nextState.forexAutoEnabled === true,
+      autoTradingEnabled: nextState.autoTradingEnabled,
+    });
+  });
+
+  app.post("/forex-entries/resume", requireAdmin, (req, res) => {
+    if (String(req.body?.confirmation || "") !== "RESUME FOREX ENTRIES") {
+      return res.status(400).json({ ok: false, error: "Exact confirmation phrase required: RESUME FOREX ENTRIES" });
+    }
+    const nextState = updateControlState({ forexPauseEntries: false });
+    saveEngineState("FOREX_ENTRIES_RESUMED");
+    res.json({
+      ok: true,
+      message: "Forex entry pause cleared. Execution still requires safety checks.",
+      forexPauseEntries: false,
+      forexAutoEnabled: nextState.forexAutoEnabled === true,
+    });
+  });
+
+  app.post("/forex-credentials", requireAdmin, (req, res) => {
+    const nextState = updateControlState({
+      oandaAccountId: String(req.body?.accountId || req.body?.oandaAccountId || "").trim(),
+      oandaPracticeToken: String(req.body?.token || req.body?.oandaPracticeToken || "").trim(),
+    });
+    saveEngineState("FOREX_CREDENTIALS_UPDATED");
+    res.json({
+      ok: true,
+      message: "OANDA practice credentials stored on the server. Autopilot is unchanged.",
+      forexAutoEnabled: nextState.forexAutoEnabled === true,
+      autoTradingEnabled: nextState.autoTradingEnabled,
+      hasAccount: Boolean(nextState),
+    });
+  });
 }

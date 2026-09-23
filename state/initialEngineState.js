@@ -27,6 +27,7 @@ export function createInitialEngineState({ effectiveMode = "live_stock", maxRota
   lastSignals: [],
   lastStockSignals: [],
   lastCryptoSignals: [],
+  forexEngine: null,
   topSignals: [],
   topStockSignals: [],
   topCryptoSignals: [],

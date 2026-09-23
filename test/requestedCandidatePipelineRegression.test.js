@@ -126,6 +126,93 @@ test("fresh trade ticks cannot starve independent bid-ask refreshes", () => {
   assert.match(streamBlock, /pinnedSymbols:/);
 });
 
+test("portfolio desk keeps forex off Autopilot and shares the position book filter", frontendTestOptions, () => {
+  const portfolioBlock = frontendSource.slice(
+    frontendSource.indexOf("const PortfolioTab = () => {"),
+    frontendSource.indexOf("const AiTab = () => {")
+  );
+  assert.match(frontendSource, /STOCKS \/ CRYPTO/);
+  assert.match(frontendSource, /FOREX OPEN/);
+  assert.match(frontendSource, /OANDA PRACTICE/);
+  assert.match(frontendSource, /FREE MARGIN/);
+  assert.match(frontendSource, /showForexDesk \? "FOREX" : "TRADING MODE"/);
+  assert.match(frontendSource, /showForexDesk \? null : \(/);
+  assert.match(frontendSource, /setPortfolioDesk\(key\)/);
+  assert.match(portfolioBlock, /OPEN RISK LIMIT/);
+  assert.match(portfolioBlock, /reviewForexTrade/);
+  assert.match(portfolioBlock, /No OANDA order yet/);
+  assert.match(portfolioBlock, /\["forex", "FOREX"\]/);
+  assert.doesNotMatch(portfolioBlock, /setAutoTrading\(true\)/);
+  assert.match(frontendSource, /function isForexSymbol/);
+});
+
+test("home buyable and watching mix stocks crypto and forex", frontendTestOptions, () => {
+  const homeTables = frontendSource.slice(
+    frontendSource.indexOf("const AssetFilterTabs"),
+    frontendSource.indexOf("const HomeTab = () =>")
+  );
+  assert.match(homeTables, /\["forex", "FOREX"\]/);
+  assert.match(homeTables, /homeForexTape\.ready/);
+  assert.match(homeTables, /homeForexTape\.watching/);
+  assert.match(homeTables, /homeForexTape\.equityBuyable/);
+  assert.match(homeTables, /homeForexTape\.equityWatching/);
+  assert.doesNotMatch(homeTables, /showForexDesk/);
+  assert.match(homeTables, />REVIEW</);
+  assert.match(homeTables, /buySignalWithAiSizing\(item\)/);
+  assert.match(frontendSource, /return items\.filter\(\(item\) => matchesOpportunityFilter\(item, filter\)\)/);
+});
+
+test("signals forex chip stays off F scores and Alpaca buy", frontendTestOptions, () => {
+  const signalsBlock = frontendSource.slice(
+    frontendSource.indexOf("const SignalsTab = () => {"),
+    frontendSource.indexOf("const firstFinite = (...values")
+  );
+  assert.match(signalsBlock, /\["all", "stock", "crypto", "forex"\]/);
+  assert.match(signalsBlock, /FOREX MOVERS/);
+  assert.match(signalsBlock, /TRADE READY/);
+  assert.match(signalsBlock, /reviewForexSignal/);
+  assert.match(signalsBlock, /forex \? "REVIEW" : "BUY"/);
+  assert.match(signalsBlock, /buySignalWithAiSizing\(item\)/);
+  assert.match(frontendSource, /function matchesOpportunityFilter/);
+});
+
+test("ai forex desk stays off Autopilot and mixes all three on All", frontendTestOptions, () => {
+  const aiBlock = frontendSource.slice(
+    frontendSource.indexOf("const AiTab = () => {"),
+    frontendSource.indexOf("const SettingsTab = () => {")
+  );
+  assert.match(aiBlock, /\["all", "stock", "crypto", "forex"\]/);
+  assert.match(aiBlock, /AUTO OFF/);
+  assert.match(aiBlock, /ECONOMIC CALENDAR/);
+  assert.match(aiBlock, /FOREX/);
+  assert.match(aiBlock, /DETAILS/);
+  assert.doesNotMatch(aiBlock, /setAutoTrading\(true\)/);
+  assert.match(aiBlock, /matchesOpportunityFilter\(row\.candidate, aiDecisionAssetFilter\)/);
+});
+
+test("settings forex engine stays off Autopilot and keeps OANDA practice keys local", frontendTestOptions, () => {
+  const settingsBlock = frontendSource.slice(
+    frontendSource.indexOf("const SettingsTab = () => {"),
+    frontendSource.indexOf("const renderWelcomeScreen = () => {")
+  );
+  assert.match(settingsBlock, /Forex Engine/);
+  assert.match(settingsBlock, /OANDA Practice Account ID/);
+  assert.match(settingsBlock, /Forex Autopilot/);
+  assert.match(settingsBlock, /FOREX AUTO OFF/);
+  assert.match(settingsBlock, /FOREX AUTO ON/);
+  assert.match(settingsBlock, /oandaForexPairList/);
+  assert.doesNotMatch(settingsBlock, /OANDA practice desk/);
+  assert.doesNotMatch(settingsBlock, /Live forex orders stay blocked/);
+  assert.doesNotMatch(settingsBlock, /FOREX AUTO STAYS OFF/);
+  assert.doesNotMatch(settingsBlock, /Live Orders/);
+  assert.match(settingsBlock, /Autopilot requested/);
+  assert.match(settingsBlock, /\/forex-auto\//);
+  assert.match(frontendSource, /forexAutoEnabled/);
+  assert.doesNotMatch(settingsBlock, /setAutoTrading\(true\)/);
+  assert.match(frontendSource, /SMARTMONEY_OANDA_PRACTICE_TOKEN/);
+  assert.match(frontendSource, /OANDA_FOREX_PAIRS/);
+});
+
 test("frontend live-score merge updates canonical approval and sizing only when explicitly supplied", frontendTestOptions, () => {
   const mergeBlock = frontendSource.slice(
     frontendSource.indexOf("function mergeSignalByFreshness"),
