@@ -117,7 +117,7 @@ export function registerOperationalControlRoutes(app, dependencies) {
     res.json({
       ok: true,
       message: "Forex new entries paused. Existing protection is unchanged.",
-      forexPauseEntries: true,
+      forexPauseEntries: nextState.forexPauseEntries === true,
       forexAutoEnabled: nextState.forexAutoEnabled === true,
       autoTradingEnabled: nextState.autoTradingEnabled,
     });
@@ -132,7 +132,7 @@ export function registerOperationalControlRoutes(app, dependencies) {
     res.json({
       ok: true,
       message: "Forex entry pause cleared. Execution still requires safety checks.",
-      forexPauseEntries: false,
+      forexPauseEntries: nextState.forexPauseEntries === true,
       forexAutoEnabled: nextState.forexAutoEnabled === true,
     });
   });

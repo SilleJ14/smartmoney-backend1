@@ -96,7 +96,7 @@ export function createOandaClient({
       const names = instruments.join(",");
       return request(
         "GET",
-        `/v3/accounts/${encodeURIComponent(id)}/pricing?instruments=${encodeURIComponent(names)}`
+        `/v3/accounts/${encodeURIComponent(id)}/pricing?instruments=${encodeURIComponent(names)}&includeHomeConversions=true`
       );
     },
     async getCandles(instrument, { granularity = "M15", count = FOREX_SPEC.m15Count, price = "M" } = {}) {
@@ -123,6 +123,7 @@ export function createOandaClient({
       stopLossPrice,
       takeProfitPrice,
       reduceOnly = false,
+      clientOrderId,
     }) {
       if (liveHost) {
         const error = new Error("LIVE_FOREX_ORDERS_NOT_AUTHORIZED");
@@ -137,6 +138,7 @@ export function createOandaClient({
           units: String(units),
           timeInForce: "FOK",
           positionFill: reduceOnly ? "REDUCE_ONLY" : "DEFAULT",
+          ...(clientOrderId ? { clientExtensions: { id: clientOrderId } } : {}),
           ...(priceBound ? { priceBound: String(priceBound) } : {}),
           ...(stopLossPrice ? {
             stopLossOnFill: {

@@ -63,6 +63,8 @@ test("practice cycle can scan when the client returns account prices and candles
     async getAccount() {
       return { account: { id: "101-001", currency: "USD", balance: "5000", NAV: "5015", unrealizedPL: "15", marginUsed: "80", marginAvailable: "4920", openTradeCount: "0" } };
     },
+    async getTransactionsSince() { return { transactions: [] }; },
+    async getOpenTrades() { return { trades: [] }; },
     async getPrices() {
       return {
         prices: FOREX_SPEC.scanInstruments.map((instrument) => ({

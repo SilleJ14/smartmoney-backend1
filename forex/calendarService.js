@@ -10,12 +10,16 @@ export function calendarAllowsEntry({
   if (!coverageComplete || !refreshedAt) {
     return { ok: false, reason: "CALENDAR_UNAVAILABLE" };
   }
-  if (now - Date.parse(refreshedAt) > maxAgeMinutes * 60 * 1000) {
+  const refreshed = Date.parse(refreshedAt);
+  if (!Number.isFinite(now) || !Number.isFinite(refreshed) || refreshed > now || now - refreshed > maxAgeMinutes * 60 * 1000) {
     return { ok: false, reason: "CALENDAR_UNAVAILABLE" };
   }
   if (!eventStart) return { ok: true };
   const start = Date.parse(eventStart);
   const end = Date.parse(eventEnd || eventStart);
+  if (!Number.isFinite(start) || !Number.isFinite(end) || end < start) {
+    return { ok: false, reason: "CALENDAR_UNAVAILABLE" };
+  }
   const before = /central|fomc|boe|ecb|rba|boj/i.test(String(eventType || "")) ? 60 : 30;
   const after = /central|fomc|boe|ecb|rba|boj/i.test(String(eventType || "")) ? 60 : 15;
   const windowStart = start - before * 60 * 1000;

@@ -10,10 +10,11 @@ export function createSafetySupervisor({ store, instanceId = "local" } = {}) {
       lastTransactionId,
       transactions = [],
       openTrades = [],
-      pendingOrders = [],
+      pendingOrders = null,
       historyLoaded,
       forexAutoEnabled,
       clockOk = true,
+      entryPauseRequested,
     } = {}) {
       const durable = store?.isDurable?.() === true;
       const statuses = {
@@ -21,7 +22,7 @@ export function createSafetySupervisor({ store, instanceId = "local" } = {}) {
         executionReady: false,
         autoTradingAuthorized: false,
         incidentLockActive: false,
-        pauseEntries: false,
+        pauseEntries: entryPauseRequested === true,
         connected: credentialsOk === true && Boolean(accountSnapshot),
       };
       if (!credentialsOk) {
@@ -44,6 +45,7 @@ export function createSafetySupervisor({ store, instanceId = "local" } = {}) {
       let unexplained = false;
       let incident = false;
       let pause = false;
+      let uncertain = false;
       const accountId = accountSnapshot?.id;
       try {
         await store.commit((ledger) => {
@@ -53,18 +55,21 @@ export function createSafetySupervisor({ store, instanceId = "local" } = {}) {
             throw Object.assign(new Error("NOT_EXECUTION_OWNER"), { reason: "NOT_EXECUTION_OWNER" });
           }
           ingestTransactions(ledger, accountId, transactions);
+          if (historyLoaded) ledger.fillSchemaVersion = 1;
           missedOk = true;
           ledger.lastTransactionId[accountId] = Number(lastTransactionId || ledger.lastTransactionId[accountId] || 0);
           incident = Boolean(ledger.incidentLocks[accountId]);
+          if (typeof entryPauseRequested === "boolean") ledger.pauseEntries[accountId] = entryPauseRequested;
           pause = Boolean(ledger.pauseEntries[accountId]);
-          const knownIds = new Set(ledger.fills.map((row) => String(row.brokerTradeId)));
+          uncertain = ledger.intents.some((row) => row.accountId === accountId && ["INTENT_SAVED", "OUTCOME_UNKNOWN", "ACKNOWLEDGED"].includes(row.state));
+          const knownIds = new Set(ledger.fills.filter((row) => row.accountId === accountId && row.intentId).map((row) => String(row.brokerTradeId)));
           for (const trade of openTrades) {
             const check = protectionVerified(trade, {});
             if (!check.ok) {
               protectionOk = false;
               ledger.protection.push({ tradeId: trade.id, reason: check.reason, at: new Date().toISOString() });
             }
-            if (!knownIds.has(String(trade.id)) && !ledger.intents.some((intent) => intent.brokerTradeId === trade.id)) {
+            if (!knownIds.has(String(trade.id)) && !ledger.intents.some((intent) => intent.accountId === accountId && String(intent.brokerTradeId) === String(trade.id))) {
               unexplained = true;
               ledger.unexplained.push({ tradeId: trade.id, instrument: trade.instrument, units: trade.currentUnits });
             }
@@ -86,11 +91,17 @@ export function createSafetySupervisor({ store, instanceId = "local" } = {}) {
         && missedOk
         && protectionOk
         && !unexplained
+        && !uncertain
         && lastTransactionId != null
         && !incident
-        && pendingOrders != null;
+        && Array.isArray(pendingOrders)
+        && !pendingOrders.some((order) => !["STOP_LOSS", "GUARANTEED_STOP_LOSS", "TAKE_PROFIT", "TRAILING_STOP_LOSS"].includes(order.type));
       statuses.autoTradingAuthorized = statuses.executionReady && forexAutoEnabled === true && !pause;
-      const halt = !protectionOk
+      const halt = uncertain ? "UNCERTAIN_ORDER" : !Array.isArray(pendingOrders)
+        ? "PENDING_ORDERS_UNVERIFIED"
+        : pendingOrders.some((order) => !["STOP_LOSS", "GUARANTEED_STOP_LOSS", "TAKE_PROFIT", "TRAILING_STOP_LOSS"].includes(order.type))
+          ? "PENDING_ENTRY_ORDERS"
+        : !protectionOk
         ? "MISSING_PROTECTION"
         : unexplained
           ? "UNEXPLAINED_POSITION"

@@ -255,6 +255,7 @@ import {
 import { createCycleRunner } from "./engine/cycleRunner.js";
 import { createEngineCycle } from "./engine/createEngineCycle.js";
 import { FOREX_SPEC } from "./forex/forexSpec.js";
+import { loadCalendarSnapshot } from "./forex/calendarFeed.js";
 import { createOandaClient } from "./forex/oandaClient.js";
 import { runForexEngineCycle } from "./forex/forexEngine.js";
 import { createForexStore } from "./forex/durableStore.js";
@@ -24237,6 +24238,8 @@ const { executeEngineCycleBody } = createEngineCycle({
       baseUrl: oanda.baseUrl,
     }),
     spec: FOREX_SPEC,
+    calendar: loadCalendarSnapshot(process.env.FOREX_CALENDAR_PATH),
+    getEntryPause: () => runtimeConfig.forexPauseEntries === true,
     forexAutoEnabled,
     now: Date.now(),
     store: createForexStore({
@@ -33052,11 +33055,13 @@ registerOperationalControlRoutes(app, {
     const nextEmergencyStop = typeof updates.emergencyStopActive === "boolean" ? updates.emergencyStopActive : emergencyStopActive;
     const nextAutoTrading = typeof updates.autoTradingEnabled === "boolean" ? updates.autoTradingEnabled : autoTradingEnabled;
     const nextForexAuto = typeof updates.forexAutoEnabled === "boolean" ? updates.forexAutoEnabled : forexAutoEnabled;
+    const nextForexPause = typeof updates.forexPauseEntries === "boolean" ? updates.forexPauseEntries : runtimeConfig.forexPauseEntries === true;
     const saved = saveRuntimeConfig(CONFIG_FILE, {
       ...runtimeConfig,
       emergencyStopActive: nextEmergencyStop,
       autoTradingEnabled: nextAutoTrading,
       forexAutoEnabled: nextForexAuto,
+      forexPauseEntries: nextForexPause,
       oandaAccountId: updates.oandaAccountId !== undefined ? updates.oandaAccountId : runtimeConfig.oandaAccountId,
       oandaPracticeToken: updates.oandaPracticeToken !== undefined ? updates.oandaPracticeToken : runtimeConfig.oandaPracticeToken,
     });
@@ -33064,7 +33069,7 @@ registerOperationalControlRoutes(app, {
     emergencyStopActive = nextEmergencyStop;
     autoTradingEnabled = nextAutoTrading;
     forexAutoEnabled = nextForexAuto;
-    return { emergencyStopActive, autoTradingEnabled, forexAutoEnabled };
+    return { emergencyStopActive, autoTradingEnabled, forexAutoEnabled, forexPauseEntries: nextForexPause };
   },
   resetDailyLossLock: () => {
     const equity = Number(engineState.cachedAccount?.equity || 0);

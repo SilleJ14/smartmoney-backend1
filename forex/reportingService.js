@@ -16,7 +16,7 @@ export function autoTradeLimitsContract({ configured, consumed, pending, remaini
   return {
     limitType: "FOREX_ACCOUNT_RISK",
     configuredCeiling: configured ?? null,
-    consumedAmount: consumed ?? 0,
+    consumedAmount: consumed ?? null,
     pendingReservations: pending ?? 0,
     remainingCapacity: remaining ?? 0,
     locks: locks || [],

@@ -5,6 +5,9 @@ import { conversionLossPerUnit } from "./instrumentSpecs.js";
 import { spreadChecks } from "./spreadCost.js";
 import { chasedAway, entryExpired, stopDistanceOk } from "./strategyExits.js";
 import { calendarForDecision } from "./calendarFeed.js";
+import { randomUUID } from "node:crypto";
+import { ingestTransactions } from "./fills.js";
+import { orderOutcome } from "./orderOutcome.js";
 
 function blocked(reason, extra = {}) {
   return { ok: false, state: "BLOCKED", reason, ...extra };
@@ -15,6 +18,7 @@ export function createExecutionCoordinator({
   registry,
   store,
   instanceId = "local",
+  getEntryPause,
 } = {}) {
   if (!adapter) throw new Error("BROKER_ADAPTER_REQUIRED");
 
@@ -22,11 +26,25 @@ export function createExecutionCoordinator({
     const durable = store?.isDurable?.() === true;
     if (!durable) return blocked("DURABLE_STORAGE_UNAVAILABLE");
     if (plan?.overridePermissions || plan?.aiDirective) return blocked("UNTRUSTED_INPUT");
-    if (!plan?.executionReady) return blocked("EXECUTION_NOT_READY");
-    if (plan.incidentLockActive || plan.pauseEntries) return blocked("INCIDENT_LOCK");
+    const reducing = plan?.positionFill === "REDUCE_ONLY" || plan?.intent === "close";
+    if (!reducing && !plan?.executionReady) return blocked("EXECUTION_NOT_READY");
+    if (!reducing && (plan.incidentLockActive || plan.pauseEntries)) return blocked("INCIDENT_LOCK");
     if (adapter.liveHost || plan.environment === "LIVE") return blocked("LIVE_BLOCKED");
 
-    const reducing = plan.positionFill === "REDUCE_ONLY" || plan.intent === "close";
+    if (reducing) {
+      // Verify the position at the broker; caller-supplied units cannot authorize an exit.
+      if (typeof adapter.getOpenTrades !== "function" || !plan.brokerTradeId) return blocked("EXIT_POSITION_UNVERIFIED");
+      let trades;
+      try { trades = (await adapter.getOpenTrades()).trades; }
+      catch { return blocked("EXIT_POSITION_UNVERIFIED"); }
+      const trade = trades?.find((row) => String(row.id) === String(plan.brokerTradeId));
+      const current = Number(trade?.currentUnits);
+      const units = Number(plan.units);
+      if (!trade || trade.instrument !== plan.instrumentId || !Number.isFinite(current) || !current
+        || !Number.isFinite(units) || !units || Math.sign(units) === Math.sign(current)
+        || Math.abs(units) > Math.abs(current)) return blocked("CLOSE_WOULD_OPEN");
+      plan = { ...plan, currentUnits: current };
+    }
     if (!reducing) {
       if (plan.intent === "automatic" && !plan.autoTradingAuthorized) {
         return blocked("STRATEGY_NOT_APPROVED");
@@ -34,7 +52,7 @@ export function createExecutionCoordinator({
       if (plan.intent === "automatic" && !mayAutoExecute(registry, plan.strategyId, plan.environment || "FORWARD_PRACTICE")) {
         return blocked("STRATEGY_NOT_APPROVED");
       }
-      const calendar = calendarForDecision(plan.calendar, { now: plan.now });
+      const calendar = calendarForDecision(plan.calendar, { now: plan.now, instrument: plan.instrumentId });
       if (plan.intent === "automatic" && calendar.ok !== true) return blocked(calendar.reason || "CALENDAR_UNAVAILABLE");
       if (plan.quoteOk !== true) return blocked("QUOTE_STALE");
       if (plan.confirmedAt && entryExpired({ confirmedAt: plan.confirmedAt, now: plan.now })) {
@@ -106,9 +124,13 @@ export function createExecutionCoordinator({
       if (!plan.priceBound || !plan.stopLossOnFill) return blocked("MISSING_PROTECTION", { effect });
     }
 
-    const intentId = plan.intentId || `fx-${Date.now()}`;
+    const intentId = plan.intentId || `fx-${randomUUID()}`;
+    const clientOrderId = `fx-${randomUUID()}`;
     try {
       await store.commit((ledger) => {
+        if (!reducing && (getEntryPause?.() === true || ledger.pauseEntries[plan.accountId])) {
+          throw Object.assign(new Error("ENTRIES_PAUSED"), { reason: "ENTRIES_PAUSED" });
+        }
         if (ledger.owner && ledger.owner.instanceId !== instanceId) {
           throw Object.assign(new Error("NOT_EXECUTION_OWNER"), { reason: "NOT_EXECUTION_OWNER" });
         }
@@ -123,6 +145,7 @@ export function createExecutionCoordinator({
           units: plan.units,
           state: "INTENT_SAVED",
           clientRequestId: plan.clientRequestId,
+          clientOrderId,
           strategyId: plan.strategyId,
           candidateId: plan.candidateId,
         });
@@ -138,7 +161,7 @@ export function createExecutionCoordinator({
     }
 
     try {
-      const response = reducing && plan.brokerTradeId && adapter.closeTrade
+      const response = reducing && Math.abs(Number(plan.units)) === Math.abs(Number(plan.currentUnits)) && plan.brokerTradeId && adapter.closeTrade
         ? await adapter.closeTrade(plan.brokerTradeId)
         : await adapter.createMarketOrder({
           instrument: plan.instrumentId,
@@ -147,24 +170,42 @@ export function createExecutionCoordinator({
           stopLossPrice: plan.stopLossOnFill,
           takeProfitPrice: plan.takeProfitOnFill,
           reduceOnly: reducing,
+          clientOrderId,
         });
+      const outcome = orderOutcome(response);
       await store.commit((ledger) => {
         const row = ledger.intents.find((item) => item.intentId === intentId);
-        if (row) row.state = "ACKNOWLEDGED";
+        if (row) {
+          row.state = outcome.state;
+          row.brokerOrderId = String(response.orderCreateTransaction?.id || outcome.transaction?.orderID || "");
+        }
+        if (outcome.transaction) {
+          ingestTransactions(ledger, plan.accountId, [outcome.transaction], { advanceCursor: false });
+        }
+        for (const reservation of ledger.reservations.filter((item) => item.intentId === intentId)) {
+          reservation.state = outcome.state === "FILLED" ? "CONSUMED" : outcome.state === "OUTCOME_UNKNOWN" ? "RESERVED" : "RELEASED";
+        }
       });
-      return { ok: true, state: "ACKNOWLEDGED", effect, intentId, response };
+      return { ok: outcome.state === "FILLED", state: outcome.state, reason: outcome.reason, effect, intentId, response,
+        keepReservation: outcome.state === "OUTCOME_UNKNOWN" };
     } catch (error) {
+      // Without an explicit broker rejection, a timeout/transport/storage failure is uncertain.
+      const outcome = orderOutcome(error.data);
+      const rejected = outcome.state === "REJECTED";
       await store.commit((ledger) => {
         const row = ledger.intents.find((item) => item.intentId === intentId);
-        if (row) row.state = error.halt === "UNCERTAIN_ORDER" ? "OUTCOME_UNKNOWN" : "REJECTED";
+        if (row) row.state = rejected ? "REJECTED" : "OUTCOME_UNKNOWN";
+        if (rejected) {
+          for (const reservation of ledger.reservations.filter((item) => item.intentId === intentId)) reservation.state = "RELEASED";
+        }
       }).catch(() => {});
       return {
         ok: false,
-        state: error.halt === "UNCERTAIN_ORDER" ? "OUTCOME_UNKNOWN" : "BLOCKED",
-        reason: error.halt || error.reason || "ORDER_OUTCOME_UNKNOWN",
+        state: rejected ? "REJECTED" : "OUTCOME_UNKNOWN",
+        reason: rejected ? outcome.reason : "ORDER_OUTCOME_UNKNOWN",
         effect,
         intentId,
-        keepReservation: error.halt === "UNCERTAIN_ORDER",
+        keepReservation: !rejected,
       };
     }
   }

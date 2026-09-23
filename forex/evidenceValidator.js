@@ -54,7 +54,11 @@ export function validateQuote(evidence, { now = Date.now(), policy } = {}) {
   const providerAt = Date.parse(evidence?.providerTimestamp || "");
   const receivedAt = Date.parse(evidence?.receivedAt || "");
   if (!Number.isFinite(providerAt)) reasons.push("QUOTE_STALE");
-  else if (now - providerAt > policy.quote.providerMaxAgeSeconds * 1000) reasons.push("QUOTE_STALE");
+  else if (!Number.isFinite(now) || providerAt > now || now - providerAt > policy.quote.providerMaxAgeSeconds * 1000) reasons.push("QUOTE_STALE");
+  if (!Number.isFinite(receivedAt) || receivedAt > now) reasons.push("QUOTE_STALE");
+  const bid = Number(evidence?.payload?.bid);
+  const ask = Number(evidence?.payload?.ask);
+  if (!(bid > 0) || !(ask >= bid) || evidence?.payload?.tradeable === false) reasons.push("QUOTE_INVALID");
   if (Number.isFinite(providerAt) && Number.isFinite(receivedAt) && receivedAt - providerAt > policy.quote.transportMaxAgeSeconds * 1000) {
     reasons.push("QUOTE_STALE");
   }

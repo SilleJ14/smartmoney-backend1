@@ -286,7 +286,7 @@ test("unknown order outcome keeps reservation and does not retry", async () => {
     openPlusPendingPercent: 0,
     sameDirectionPercent: 0,
     quoteOk: true,
-    calendar: { coverageComplete: true, refreshedAt: new Date().toISOString() },
+    calendar: { coverageComplete: true, refreshedAt: new Date().toISOString(), events: [] },
     marginAvailable: 4000,
     requiredMargin: 10,
     instrument: { minimumTradeSize: 1 },
@@ -304,7 +304,7 @@ test("unknown order outcome keeps reservation and does not retry", async () => {
     environment: "FORWARD_PRACTICE",
     clientRequestId: "once",
     quoteOk: true,
-    calendar: { coverageComplete: true, refreshedAt: new Date().toISOString() },
+    calendar: { coverageComplete: true, refreshedAt: new Date().toISOString(), events: [] },
   });
   assert.equal(second.reason, "DUPLICATE_INTENT");
 });
@@ -314,13 +314,15 @@ test("reduce-only close cannot open an opposite position", async () => {
   const { createExecutionCoordinator } = await import("../forex/executionCoordinator.js");
   const store = createMemoryStore({ treatAsDurable: true });
   const coordinator = createExecutionCoordinator({
-    adapter: { liveHost: false, async createMarketOrder() { throw new Error("no"); } },
+    adapter: { liveHost: false, async createMarketOrder() { throw new Error("no"); },
+      async getOpenTrades() { return { trades: [{ id: "t1", instrument: "EUR_USD", currentUnits: "1000" }] }; } },
     registry: createApprovalRegistry(),
     store,
   });
   const result = await coordinator.submit({
     intent: "close",
     positionFill: "REDUCE_ONLY",
+    brokerTradeId: "t1",
     executionReady: true,
     units: -2000,
     currentUnits: 1000,
@@ -334,4 +336,3 @@ test("empty calendar is not treated as no news", async () => {
   const { calendarForDecision } = await import("../forex/calendarFeed.js");
   assert.equal(calendarForDecision({ coverageComplete: false, events: [] }).reason, "CALENDAR_UNAVAILABLE");
 });
-
