@@ -170,7 +170,8 @@ import { attachCryptoExecutableAllocation } from "./scoring/cryptoExecutableAllo
 import { attachStockExecutableAllocation } from "./scoring/stockExecutableAllocation.js";
 import { calculateLossBudgetSizing } from "./risk/lossBudgetSizing.js";
 import { confirmedBotOwnedSymbols } from "./execution/confirmedOwnership.js";
-import { candidateFeedDecision, migrateStockFloorPreference, migrateStockPriceCapPreference } from "./discovery/candidateFeedPolicy.js";
+import { candidateFeedDecision, migrateStockFloorPreference } from "./discovery/candidateFeedPolicy.js";
+import { migrateStockPriceCapPreference } from "./discovery/stockPriceCapMigration.js";
 import { createPositionExitManager } from "./risk/positionExitManager.js";
 import {
   calculateInstitutionalRiskScore,
