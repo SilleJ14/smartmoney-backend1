@@ -495,7 +495,7 @@ test("shared crypto execution gate requires central and freshly complete evidenc
   };
 
   const missingCentral = evaluateCryptoTradeCandidate(complete, { minimumScore: 65 });
-  assert.equal(missingCentral.approved, true);
+  assert.equal(missingCentral.approved, false);
 
   const approved = evaluateCryptoTradeCandidate({
     ...complete,
@@ -586,7 +586,7 @@ test("crypto execution gate uses a 65 minimum Final Decision score", () => {
   assert.equal(stale.approved, false, 'F above 65 must not bypass stale execution evidence');
 });
 
-test("displayed crypto F 65 auto-buys on a live Alpaca quote even if rebuilt core evidence is incomplete", () => {
+test("displayed crypto F 65 cannot bypass incomplete core evidence", () => {
   const now = Date.now();
   const iso = new Date(now).toISOString();
   const candidate = {
@@ -620,7 +620,7 @@ test("displayed crypto F 65 auto-buys on a live Alpaca quote even if rebuilt cor
     },
   };
   const result = evaluateCryptoTradeCandidate(candidate, { now });
-  assert.equal(result.approved, true);
+  assert.equal(result.approved, false);
   assert.equal(evaluateCryptoTradeCandidate({
     ...candidate,
     cryptoDecisionScore: 64,
@@ -632,7 +632,7 @@ test("displayed crypto F 65 auto-buys on a live Alpaca quote even if rebuilt cor
   }, { now }).approved, false);
 });
 
-test("displayed crypto F 66 still buys when a complete live rebuild is below 65", () => {
+test("displayed crypto F 66 cannot override a live rebuild below 65", () => {
   const now = Date.now();
   const iso = new Date(now).toISOString();
   const result = evaluateCryptoTradeCandidate({
@@ -666,10 +666,10 @@ test("displayed crypto F 66 still buys when a complete live rebuild is below 65"
       cryptoDecisionEvidence: { coreEvidencePass: true },
     },
   }, { now });
-  assert.equal(result.approved, true);
+  assert.equal(result.approved, false);
 });
 
-test("research zero size does not revoke a live F65 Alpaca crypto buy", () => {
+test("research-only F65 crypto needs authorization before buying", () => {
   const now = Date.now();
   const iso = new Date(now).toISOString();
   const candidate = {
@@ -700,7 +700,7 @@ test("research zero size does not revoke a live F65 Alpaca crypto buy", () => {
     barsFound: 30,
     windowDollarVolume: 1_000_000,
   };
-  assert.equal(evaluateCryptoTradeCandidate(candidate, { now }).approved, true);
+  assert.equal(evaluateCryptoTradeCandidate(candidate, { now }).approved, false);
 });
 
 test("crypto immediate-entry F can finalize without MD, but never bypasses execution evidence", () => {
@@ -756,7 +756,7 @@ test("crypto immediate-entry F can finalize without MD, but never bypasses execu
     const blocked = buildCryptoDecisionScore({ ...candidate, ...overrides }, { now });
     assert.equal(blocked.coreEvidencePass, false, JSON.stringify(overrides));
   }
-  assert.equal(evaluateCryptoTradeCandidate(candidate, { now }).approved, true, "F 65 with a live Alpaca quote can buy");
+  assert.equal(evaluateCryptoTradeCandidate(candidate, { now }).approved, false, "F alone cannot authorize an automatic purchase");
 });
 
 test("crypto decision evidence rejects a stale quote before order submission", () => {

@@ -3,6 +3,7 @@ import { applyCrossAssetCryptoContext } from "../scoring/cryptoContext.js";
 import {
   compareCanonicalSignals,
   getCanonicalFinalScore,
+  hasExplicitTradeApproval,
 } from "../scoring/canonicalSignalRank.js";
 import { normalizeSignalScoreCollection } from "../scoring/signalScoreCompleteness.js";
 import { installCentralDecision } from "../scoring/installCentralDecision.js";
@@ -2867,6 +2868,8 @@ export function createEngineCycle(dependencies) {
       );
       const approvedCryptoSignals = cryptoSignals.filter(
         (signal) => signal.executionEligibility?.approved === true
+          && hasExplicitTradeApproval(signal)
+          && getCanonicalFinalScore(signal) >= CRYPTO_MIN_FINAL_SCORE_TO_BUY
       );
       effectiveMode = selectSmartTradingMode({
         selectedMode: TRADING_MODE,

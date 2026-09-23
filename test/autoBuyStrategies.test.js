@@ -47,7 +47,7 @@ test("canonical stock auto-buy requires explicit approvals and preserves safety 
     backendApproved: false,
   };
   const canonical = evaluateCanonicalStockAutoBuyEligibility(signal, 78);
-  assert.equal(canonical.approved, true);
+  assert.equal(canonical.approved, false);
   const explicitlyApproved = {
     ...signal,
     qualifiedToBuy: true,
@@ -63,10 +63,10 @@ test("canonical stock auto-buy requires explicit approvals and preserves safety 
     ...explicitlyApproved,
     phase9LiquiditySuppressed: true,
   }, 78);
-  assert.equal(suppressed.approved, true);
+  assert.equal(suppressed.approved, false);
 });
 
-test("canonical stock auto-buy fires at Final Decision 70 with a live quote", () => {
+test("canonical stock auto-buy still requires approval at Final Decision 70", () => {
   const now = new Date().toISOString();
   const result = evaluateCanonicalStockAutoBuyEligibility({
     masterFinalScore: 70,
@@ -84,7 +84,7 @@ test("canonical stock auto-buy fires at Final Decision 70 with a live quote", ()
     priceIsLive: true,
     decisionUpdatedAt: now,
   });
-  assert.equal(result.approved, true);
+  assert.equal(result.approved, false);
   assert.equal(result.minimumScore, 70);
 });
 

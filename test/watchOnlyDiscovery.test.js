@@ -7,6 +7,8 @@ import {
   WATCH_DISCOVERY_DEFAULTS,
 } from "../discovery/watchOnlyDiscovery.js";
 import { DEFAULT_DISCOVERY_BUDGETS } from "../discovery/quietDiscoveryPipeline.js";
+import { candidateFeedDecision } from "../discovery/candidateFeedPolicy.js";
+import { migrateStockPriceCapPreference } from "../discovery/stockPriceCapMigration.js";
 import { evaluateStockTradeCandidate, STOCK_EXECUTION_THRESHOLDS } from "../scoring/decisionScores.js";
 import { manualResetDailyLossLock } from "../state/dailySafetyState.js";
 import { RESET_DAILY_LOSS_CONFIRMATION, registerOperationalControlRoutes } from "../routes/operationalControlRoutes.js";
@@ -23,9 +25,22 @@ test("quiet watch discovery is looser than buy gates", () => {
 });
 
 test("regular-session watch movers can enter before 300k volume or 5x RVOL", () => {
-  assert.equal(passesWatchMoverActivity({ percentChange: 2.5, volume: 60000 }, { marketOpen: true }), true);
-  assert.equal(passesWatchMoverActivity({ percentChange: 0.1, volume: 20000 }, { marketOpen: true }), false);
-  assert.equal(passesWatchMoverActivity({ percentChange: 6, volume: 80000 }, { marketOpen: true }), true);
+  assert.equal(passesWatchMoverActivity({ percentChange: 2.5, volume: 60000, price: 12 }, { marketOpen: true }), true);
+  assert.equal(passesWatchMoverActivity({ percentChange: 0.1, volume: 20000, price: 12 }, { marketOpen: true }), false);
+  assert.equal(passesWatchMoverActivity({ percentChange: 6, volume: 80000, price: 8 }, { marketOpen: true }), true);
+});
+
+test("moving stocks respect the user price range", () => {
+  assert.equal(WATCH_DISCOVERY_DEFAULTS.maxWatchPrice, 50);
+  assert.equal(DEFAULT_DISCOVERY_BUDGETS.maxPrice, 50);
+  assert.equal(passesWatchMoverActivity({ percentChange: 20, volume: 400000, price: 51 }, { marketOpen: true }), false);
+  assert.equal(passesWatchMoverActivity({ percentChange: 8, volume: 90000, price: 49.5 }, { marketOpen: true }), true);
+  assert.equal(passesWatchMoverActivity({ percentChange: 8, volume: 90000, price: 80 }, { marketOpen: true, minWatchPrice: 1, maxWatchPrice: 120 }), true);
+  assert.equal(candidateFeedDecision({ symbol: "NVDA", price: 140, previousClose: 138 }).visible, false);
+  assert.equal(candidateFeedDecision({ symbol: "NVDA", price: 140, previousClose: 138 }, { minStockPrice: 1, maxStockPrice: 200 }).visible, true);
+  assert.equal(candidateFeedDecision({ symbol: "JAGX", price: 16, previousClose: 2.67 }).visible, true);
+  const migrated = migrateStockPriceCapPreference({ maxStockPrice: 1000 });
+  assert.equal(migrated.maxStockPrice, 1000);
 });
 
 test("incomplete entry coverage can still be watch-only and is not buyable", () => {

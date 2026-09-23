@@ -15,6 +15,7 @@ export const DEFAULT_DISCOVERY_BUDGETS = Object.freeze({
   historyDays: 60,
   maxCurrentMovePercent: 10,
   minPrice: 0.5,
+  maxPrice: 50,
   minAverageDollarVolume: 100000,
   maxWorkingMemoryMb: 96,
 });
@@ -281,7 +282,7 @@ export async function runBoundedQuietDiscovery({ groupedResults = [], dateKey, f
       const features = calculateQuietPreMoveFeatures(history, { learning, now: now() });
       if (!features) continue;
       if (Math.abs(features.dayChangePercent) > config.maxCurrentMovePercent) continue;
-      if (history.at(-1).c < config.minPrice || features.averageDollarVolume < config.minAverageDollarVolume) continue;
+      if (history.at(-1).c < config.minPrice || history.at(-1).c > Number(config.maxPrice || 50) || features.averageDollarVolume < config.minAverageDollarVolume) continue;
       stageA.push(features);
     }
     if (process.memoryUsage().heapUsed - startingHeapBytes > config.maxWorkingMemoryMb * 1024 * 1024) {

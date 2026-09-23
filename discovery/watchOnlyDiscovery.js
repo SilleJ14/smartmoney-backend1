@@ -3,6 +3,8 @@ export const WATCH_DISCOVERY_DEFAULTS = Object.freeze({
   maxCurrentMovePercent: 10,
   minAverageDollarVolume: 100000,
   minWatchShareVolume: 50000,
+  minWatchPrice: 0.5,
+  maxWatchPrice: 50,
   earlyMoveMinPercent: 0.25,
   newsMaxAgeMs: 4 * 60 * 60 * 1000,
   newsSymbolLimit: 15,
@@ -13,7 +15,13 @@ export function passesWatchMoverActivity(item = {}, {
   marketOpen = true,
   minWatchShareVolume = WATCH_DISCOVERY_DEFAULTS.minWatchShareVolume,
   earlyMoveMinPercent = WATCH_DISCOVERY_DEFAULTS.earlyMoveMinPercent,
+  minWatchPrice = WATCH_DISCOVERY_DEFAULTS.minWatchPrice,
+  maxWatchPrice = WATCH_DISCOVERY_DEFAULTS.maxWatchPrice,
 } = {}) {
+  const price = Number(item.price || item.current || item.last || 0);
+  const minPrice = Number.isFinite(Number(minWatchPrice)) ? Number(minWatchPrice) : WATCH_DISCOVERY_DEFAULTS.minWatchPrice;
+  const maxPrice = Number.isFinite(Number(maxWatchPrice)) ? Number(maxWatchPrice) : WATCH_DISCOVERY_DEFAULTS.maxWatchPrice;
+  if (!Number.isFinite(price) || price < minPrice || price > maxPrice) return false;
   const percentChange = Math.abs(Number(item.percentChange || 0));
   const volume = Number(item.volume || 0);
   if (!Number.isFinite(volume) || volume < 0) return false;

@@ -18094,6 +18094,13 @@ async function getBestCryptoBars(symbol) {
   return enrichCryptoResearchVolume(symbol, await cryptoIntradayBars.get(symbol));
 }
 async function placeCryptoMarketBuy(symbol, dollars, options = {}) {
+  // Discretionary manual purchases use broker/order-integrity checks only.
+  // AI-sized and automatic purchases continue through every gate below.
+  if (options.manual === true) {
+    return orderService.cryptoMarketBuy({
+      symbol, dollars, manual: true, confirmationId: options.confirmationId,
+    });
+  }
   if (CONFIG.realCashTradingUnlocked !== true) {
     throw new Error("Real cash trading locked: set REAL_CASH_TRADING_UNLOCKED=true only after paper validation");
   }
@@ -32900,6 +32907,7 @@ registerStreamRoutes(app, {
 });
 
 registerLiveMoversRoutes(app, {
+  getConfig: () => CONFIG,
   requireAdmin,
   getState: () => engineState,
   normalizeSymbol,
@@ -32926,6 +32934,7 @@ registerLiveEngineRoutes(app, {
 });
 
 registerLiveSignalRoutes(app, {
+  getConfig: () => CONFIG,
   requireAdmin,
   getState: () => engineState,
   runFastRunnerEngine,
@@ -32982,6 +32991,7 @@ registerStatusRoutes(app, {
 });
 
 registerSignalRoutes(app, {
+  getConfig: () => CONFIG,
   requireAdmin,
   getState: () => engineState,
   getMode: () => TRADING_MODE,

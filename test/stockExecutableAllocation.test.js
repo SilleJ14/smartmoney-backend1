@@ -26,7 +26,7 @@ function liveStock(now = Date.now(), extras = {}) {
     spreadAvailable: true,
     decisionUpdatedAt: iso,
     chartBars: Array.from({ length: 24 }, () => ({ c: 100 })),
-    centralAutonomousDecisionCore: { updatedAt: iso, action: "WATCH" },
+    centralAutonomousDecisionCore: { updatedAt: iso, action: "ALLOW" },
     researchEvidenceAt: iso,
     ...extras,
   };
@@ -62,6 +62,16 @@ test("F70 stock with a live Tradier book gets a size and a 5s buy window", () =>
   const auth = decisionAuthorization(sized, gate, now);
   assert.equal(auth.approved, true);
   assert.ok(Date.parse(auth.expiresAt) > now);
+});
+
+test("a locked live account cannot receive automatic stock approval or sizing", () => {
+  const now = Date.now();
+  const sized = attachStockExecutableAllocation(liveStock(now), {
+    now, account, config: { ...config, realCashTradingUnlocked: false },
+  });
+  assert.equal(sized.approved, false);
+  assert.equal(sized.finalApprovedTradeAmount, 0);
+  assert.ok(sized.executionEligibility.reasons.includes("REAL_CASH_TRADING_LOCKED"));
 });
 
 test("stock F 69 is not buyable", () => {

@@ -5,11 +5,13 @@ import { isSizingRevoked, getApprovedTradeAmount } from "../scoring/approvedSizi
 import { createIncrementalResearch } from "../discovery/incrementalResearch.js";
 import { decisionAuthorization } from "../scoring/decisionAuthorization.js";
 import { evaluateCryptoTradeCandidate } from "../scoring/componentScore.js";
+import { cryptoSetupEvidence } from './fixtures/cryptoSetupFixture.js';
 
 function liveBtc(now = Date.now(), extras = {}) {
   const iso = new Date(now).toISOString();
   return {
     symbol: "BTC/USD",
+    ...cryptoSetupEvidence(100, now),
     assetClass: "crypto",
     cryptoDecisionScore: 66,
     cryptoDecisionScoreAvailable: true,
@@ -34,8 +36,7 @@ function liveBtc(now = Date.now(), extras = {}) {
     newsCatalyst: { dataAvailable: true, riskDetected: false },
     barsFound: 30,
     windowDollarVolume: 1_000_000,
-    chartBars: Array.from({ length: 24 }, () => ({ c: 100 })),
-    centralAutonomousDecisionCore: { updatedAt: iso, action: "WATCH" },
+    centralAutonomousDecisionCore: { updatedAt: iso, action: "ALLOW", cryptoDecisionEvidence: { coreEvidencePass: true } },
     researchEvidenceAt: iso,
     ...extras,
   };
@@ -80,6 +81,16 @@ test("F66 BTC with a live Alpaca book gets a size and a 5s buy window", () => {
   const auth = decisionAuthorization(sized, gate, now);
   assert.equal(auth.approved, true);
   assert.ok(Date.parse(auth.expiresAt) > now);
+});
+
+test("a locked live account cannot receive automatic crypto approval or sizing", () => {
+  const now = Date.now();
+  const sized = attachCryptoExecutableAllocation(liveBtc(now), {
+    now, account, config: { ...config, realCashTradingUnlocked: false },
+  });
+  assert.equal(sized.approved, false);
+  assert.equal(sized.finalApprovedTradeAmount, 0);
+  assert.ok(sized.executionEligibility.reasons.includes("REAL_CASH_TRADING_LOCKED"));
 });
 
 test("Finnhub still cannot make BTC buyable", () => {

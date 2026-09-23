@@ -14,7 +14,11 @@ export function attachCryptoExecutableAllocation(signal = {}, {
   reservations = {},
   dailyStartEquity,
 } = {}) {
-  const eligibility = evaluateCryptoTradeCandidate(signal, { now });
+  const eligibility = evaluateCryptoTradeCandidate(signal, { now, requireExplicitApproval: false });
+  if (config.realCashTradingUnlocked === false) {
+    eligibility.approved = false;
+    eligibility.reasons = [...(eligibility.reasons || []), "REAL_CASH_TRADING_LOCKED"];
+  }
   signal.executionEligibility = eligibility;
   if (!eligibility.approved) {
     Object.assign(signal, {
@@ -23,6 +27,7 @@ export function attachCryptoExecutableAllocation(signal = {}, {
       autoTradeApproved: false,
       qualifiedToBuy: false,
       buyableNow: false,
+      finalApprovedTradeAmount: 0, finalTradeAmount: 0, recommendedTradeAmount: 0,
     });
     return signal;
   }

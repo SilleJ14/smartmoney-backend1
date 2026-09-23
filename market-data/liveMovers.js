@@ -148,6 +148,7 @@ export function buildRawEarlyMoverCandidates({
 
 export function buildLiveMovers({
   state,
+  config = {},
   limit = 50,
   normalizeSymbol,
   mergeLiveQuote,
@@ -762,7 +763,7 @@ export function buildLiveMovers({
     }
   }
 
-  return selectCandidateDisplayWindow(Array.from(moversBySymbol.values()).filter(candidate => candidateFeedDecision(candidate).visible)
+  return selectCandidateDisplayWindow(Array.from(moversBySymbol.values()).filter(candidate => candidateFeedDecision(candidate, config).visible)
     .map((candidate) => ({
       ...candidate,
       canonicalFinalScore: getCanonicalFinalScore(candidate),

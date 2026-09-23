@@ -10,7 +10,7 @@ function createHarness(overrides = {}) {
   registerFrontendRoutes(app, {
     requireAdmin: (_req, _res, next) => next(),
     getState: () => ({}),
-    getConfig: () => ({}),
+    getConfig: () => ({ maxStockPrice: 1000 }),
     refreshAccountCache: async () => {},
     getLatestStatus: () => ({}),
     buildStartupSnapshot: () => ({}),

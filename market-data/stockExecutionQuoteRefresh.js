@@ -32,7 +32,12 @@ export function createStockExecutionQuoteRefresher({
         .filter(([symbol, quote]) => symbol && quote)
     );
 
-    return sourceSignals.map((signal) => {
+    const refreshedSignals = [];
+    for (let index = 0; index < sourceSignals.length; index += 4) {
+      // Quote reassessment is CPU work. Yield between small batches so a full
+      // universe refresh does not starve health checks or position protection.
+      await new Promise(resolve => setImmediate(resolve));
+      refreshedSignals.push(...sourceSignals.slice(index, index + 4).map((signal) => {
       const symbol = normalizeSymbol(signal?.symbol);
       const quote = quoteBySymbol.get(symbol);
       const cached = (quote ? updateQuoteCache(symbol, {
@@ -78,6 +83,8 @@ export function createStockExecutionQuoteRefresher({
         ...percentPatch,
       };
       return revalidateCandidate(signal, refreshed);
-    });
+      }));
+    }
+    return refreshedSignals;
   };
 }

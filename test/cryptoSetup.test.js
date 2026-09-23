@@ -120,6 +120,6 @@ test('continuation opportunity can replace low early-D in F without changing D o
   assert.equal(result.earlyDiscovery.value, 55);
   assert.equal(result.componentsByName.base.value, result.setup.score);
   assert.equal(result.coreEvidencePass, true, JSON.stringify(result.missingCriticalEvidence));
-  assert.equal(evaluateCryptoTradeCandidate(s, { now }).approved, true, 'F with a live Alpaca quote can buy without extra central flags');
+  assert.equal(evaluateCryptoTradeCandidate(s, { now }).approved, false, 'F does not replace central authorization');
   assert.equal(buildCryptoDecisionScore({ ...s, newsCatalyst: { dataAvailable: false } }, { now }).coreEvidencePass, false);
 });

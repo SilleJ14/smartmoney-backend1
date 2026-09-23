@@ -5,6 +5,28 @@ import { registerLiveMoversRoutes } from "../routes/liveMoversRoutes.js";
 const normalizeSymbol = (symbol) => String(symbol || "").toUpperCase();
 const isCrypto = (symbol) => String(symbol || "").includes("/");
 
+test('live movers honor changed stock price limits immediately, including cached responses', async () => {
+  const routes = new Map();
+  let cap = 50;
+  registerLiveMoversRoutes({ get: (path, ...handlers) => routes.set(path, handlers.at(-1)) }, {
+    requireAdmin() {}, getConfig: () => ({ maxStockPrice: cap }),
+    getState: () => ({ topStockSignals: [{ symbol: 'ABC', price: 100, previousClose: 99 }] }),
+    normalizeSymbol, isCrypto, mergeLiveQuote: row => row, getRuntimeStatus: () => ({}),
+  });
+  const read = async () => {
+    const res = { json(body) { this.body = body; }, status() { return this; } };
+    await routes.get('/live-movers')({ query: {} }, res);
+    return res.body;
+  };
+  assert.equal((await read()).count, 0);
+  cap = 150;
+  const visible = await read();
+  assert.equal(visible.cache.hit, false);
+  assert.equal(visible.items[0].symbol, 'ABC');
+  cap = 50;
+  assert.equal((await read()).count, 0);
+});
+
 test("live movers can actively refresh a bounded visible candidate before responding", async () => {
   const routes = new Map();
   const app = {

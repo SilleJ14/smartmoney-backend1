@@ -1,5 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
+import fs from 'node:fs';
+import vm from 'node:vm';
 import { createOrderService } from '../execution/orderService.js';
 import { assertPreTradeRisk } from '../risk/preTradeRiskGate.js';
 import { evaluateCryptoTradePlan } from '../scoring/cryptoTradePlan.js';
@@ -10,7 +12,31 @@ const context = () => ({ account: { equity: 1000, cash: 1000, buying_power: 1000
   price: 100, quoteAgeSeconds: 0, quoteIsLive: true, spreadAvailable: true, spreadPercent: .1,
   maxExposurePercent: 0, maxQuoteAgeSeconds: 5, maxSpreadPercent: 1 });
 
-for (const crypto of [false, true]) test(`manual ${crypto ? 'crypto' : 'stock'} bypasses bot policy but retains execution protections`, async () => {
+test('actual crypto server wrapper bypasses app restrictions only for explicit manual purchases', async () => {
+  const source = fs.readFileSync(new URL('../server.js', import.meta.url), 'utf8');
+  const start = source.indexOf('async function placeCryptoMarketBuy(');
+  const end = source.indexOf('async function placeCryptoMarketSell(', start);
+  assert.ok(start >= 0 && end > start);
+  const calls = [];
+  const scope = { CONFIG: { realCashTradingUnlocked: false }, TRADING_MODE: 'disabled',
+    validateLiveOrder: () => ({ approved: false, blockReasons: ['blocked'] }),
+    orderService: { cryptoMarketBuy: async input => { calls.push(input); return { id: 'mock' }; } } };
+  vm.createContext(scope);
+  vm.runInContext(source.slice(start, end), scope);
+  await scope.placeCryptoMarketBuy('BTCUSD', 25, { manual: true });
+  assert.equal(calls.length, 1);
+  assert.equal(calls[0].manual, true);
+  assert.equal(calls[0].dollars, 25);
+  await assert.rejects(scope.placeCryptoMarketBuy('BTCUSD', 25), /Real cash trading locked/);
+  scope.CONFIG.realCashTradingUnlocked = true;
+  await assert.rejects(scope.placeCryptoMarketBuy('BTCUSD', 25), /only allowed in live modes/);
+  scope.TRADING_MODE = 'smart';
+  await assert.rejects(scope.placeCryptoMarketBuy('BTCUSD', 25), /live order blocked/);
+  assert.equal(calls.length, 1);
+});
+
+// Explicit user policy (2026-09-23): discretionary manual orders bypass app gates.
+for (const crypto of [false, true]) test(`manual ${crypto ? 'crypto' : 'stock'} bypasses SmartMoney policy gates`, async () => {
   let overrides = {}, calls = 0;
   const service = createOrderService({ normalizeSymbol: s => s, tradingRequest: async () => { calls++; return { id: 'mock' }; },
     preTradeRiskGuard: { assertAllowed(order, options) {
@@ -27,8 +53,9 @@ for (const crypto of [false, true]) test(`manual ${crypto ? 'crypto' : 'stock'} 
     { accountExposurePositions: [{ symbol: 'OTHER', market_value: 990 }], maxAccountExposurePercent: 100 },
     { liveTradeLimitDecision: { approved: false, reasons: ['Position limit'] } }]) {
     overrides = blocked;
-    await assert.rejects(buy);
-    assert.equal(calls, 1);
+    const before = calls;
+    await buy();
+    assert.equal(calls, before + 1);
   }
   overrides = {};
   if (crypto) await assert.rejects(service.cryptoMarketBuy({ symbol: 'BTCUSD', dollars: 25 }), /Canonical/);
@@ -52,7 +79,7 @@ test('manual crypto needs execution depth but no strategy setup', () => {
   assert.equal(evaluateCryptoTradePlan(signal, { now, notional: 2000, manual: true }).approved, false);
 });
 
-test('manual crypto route accepts an unscored asset, still blocks failed verification', async () => {
+test('manual crypto route accepts an unscored asset without quote verification', async () => {
   const routes = new Map(), calls = [];
   let quoteReady = true;
   registerManualExecutionRoutes({ post: (path, ...handlers) => routes.set(path, handlers.at(-1)) }, {
@@ -71,6 +98,6 @@ test('manual crypto route accepts an unscored asset, still blocks failed verific
   quoteReady = false;
   const bad = response();
   await routes.get('/manual-buy-crypto')(req, bad);
-  assert.equal(bad.statusCode, 409);
-  assert.equal(calls.length, 1);
+  assert.equal(bad.body.ok, true);
+  assert.equal(calls.length, 2);
 });

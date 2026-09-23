@@ -423,9 +423,9 @@ export function evaluateStockTradeCandidate(
     ...(!structureOrScoreBuy && decisionCoverage < STOCK_EXECUTION_THRESHOLDS.entryCoverage ? ["DECISION_COVERAGE_BELOW_80_PERCENT"] : []),
     ...(!structureOrScoreBuy && discoveryCoverage < 0.65 ? ["DISCOVERY_COVERAGE_BELOW_65_PERCENT"] : []),
     ...(!structureOrScoreBuy && !coreEvidencePass ? ["CORE_EVIDENCE_FAILED"] : []),
-    ...(!structureOrScoreBuy && !centralDecisionPass ? ["CENTRAL_DECISION_NOT_EXECUTABLE"] : []),
-    ...(requireExplicitApproval && !structureOrScoreBuy && !explicitApproval ? ["EXPLICIT_APPROVAL_MISSING"] : []),
-    ...(!structureOrScoreBuy && explicitBuyBlock ? ["EXPLICIT_BUY_BLOCK"] : []),
+    ...(!centralDecisionPass ? ["CENTRAL_DECISION_NOT_EXECUTABLE"] : []),
+    ...(requireExplicitApproval && !explicitApproval ? ["EXPLICIT_APPROVAL_MISSING"] : []),
+    ...(explicitBuyBlock ? ["EXPLICIT_BUY_BLOCK"] : []),
     ...(!spreadAvailable ? ["SPREAD_UNAVAILABLE"] : []),
     ...(spreadTooWide ? ["SPREAD_ABOVE_EXECUTION_LIMIT"] : []),
     ...(!structureOrScoreBuy && !riskQualityAvailable ? ["RISK_QUALITY_UNAVAILABLE"] : []),
@@ -457,16 +457,16 @@ export function evaluateStockTradeCandidate(
         : []
     ),
     ...(
-      requireFreshDecision && !structureOrScoreBuy && !decisionFreshnessAvailable
+      requireFreshDecision && !decisionFreshnessAvailable
         ? ["DECISION_FRESHNESS_UNAVAILABLE"]
         : []
     ),
     ...(
-      requireFreshDecision && !structureOrScoreBuy && decisionFreshnessAvailable && !decisionFreshnessPass
+      requireFreshDecision && decisionFreshnessAvailable && !decisionFreshnessPass
         ? [decisionAgeSeconds < -5 ? "DECISION_TIMESTAMP_IN_FUTURE" : "DECISION_STALE"]
         : []
     ),
-    ...(!structureOrScoreBuy && blockingState ? ["BLOCKING_RISK_STATE"] : []),
+    ...(blockingState ? ["BLOCKING_RISK_STATE"] : []),
     ...(!continuationExecutable && !finalScoreAvailable ? ["FINAL_SCORE_INVALID"] : []),
     ...(!continuationExecutable && finalScore < STOCK_EXECUTION_THRESHOLDS.finalScore ? ["FINAL_SCORE_BELOW_70"] : []),
   ];

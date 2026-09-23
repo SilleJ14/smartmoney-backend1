@@ -6,6 +6,8 @@ import vm from 'node:vm';
 import { parse } from 'acorn';
 import { createIncrementalResearch, canReuseResearch, needsCandidateResearch, incrementalResearchForState } from '../discovery/incrementalResearch.js';
 import { createEarlyCandidateReassessment } from '../discovery/earlyCandidateReassessment.js';
+import { attachCryptoExecutableAllocation } from '../scoring/cryptoExecutableAllocation.js';
+import { attachStockExecutableAllocation } from '../scoring/stockExecutableAllocation.js';
 
 const start = Date.parse('2026-09-11T15:01:00Z');
 const candidate = (symbol, at = start) => ({ symbol, chartBars: Array(24).fill({ close: 10 }),
@@ -94,7 +96,8 @@ function actualWorker({ invalidSetup = false } = {}) {
   const activeScanLocks = { scanMarket: false };
   const research = { stock: false, crypto: false };
   let centralCalls = 0, pushes = 0;
-  const context = vm.createContext({ engineState, activeScanLocks,
+  const context = vm.createContext({ engineState, activeScanLocks, CONFIG: {},
+    attachCryptoExecutableAllocation, attachStockExecutableAllocation,
     earlyCandidateReassessment: { getStatus: () => ({ running: research.stock }) },
     cryptoCandidateReassessment: { getStatus: () => ({ running: research.crypto }) },
     createIncrementalResearch: options => createIncrementalResearch({ ...options, now: () => start }),

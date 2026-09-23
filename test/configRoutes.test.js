@@ -56,6 +56,14 @@ test("generic config endpoints still allow pausing automation", async () => {
   assert.deepEqual(api.applied, [{ autoTradingEnabled: false }]);
 });
 
+test('an explicit user OFF works without requiring emergency stop first', async () => {
+  for (const path of ['/config', '/api/config']) {
+    const api = harness();
+    assert.equal((await api.invoke(path, { autoTradingEnabled: false })).statusCode, 200);
+    assert.deepEqual(api.applied, [{ autoTradingEnabled: false }]);
+  }
+});
+
 test("api config validates numeric values and strips non-config persistence flags", async () => {
   const api = harness();
   const invalid = await api.invoke("/api/config", { maxBotExposurePercent: "bad" });

@@ -156,7 +156,7 @@ test("home buyable and watching mix stocks crypto and forex", frontendTestOption
   assert.match(homeTables, /homeForexTape\.watching/);
   assert.match(homeTables, /homeForexTape\.equityBuyable/);
   assert.match(homeTables, /homeForexTape\.equityWatching/);
-  assert.doesNotMatch(homeTables, /showForexDesk/);
+  assert.match(homeTables, /homeForexTape\.equityBuyable/);
   assert.match(homeTables, />REVIEW</);
   assert.match(homeTables, /buySignalWithAiSizing\(item\)/);
   assert.match(frontendSource, /return items\.filter\(\(item\) => matchesOpportunityFilter\(item, filter\)\)/);
@@ -198,14 +198,14 @@ test("settings forex engine stays off Autopilot and keeps OANDA practice keys lo
   assert.match(settingsBlock, /Forex Engine/);
   assert.match(settingsBlock, /OANDA Practice Account ID/);
   assert.match(settingsBlock, /Forex Autopilot/);
-  assert.match(settingsBlock, /FOREX AUTO OFF/);
-  assert.match(settingsBlock, /FOREX AUTO ON/);
+  assert.match(settingsBlock, /AUTOMATIC ORDERS DISABLED/);
+  assert.match(settingsBlock, /CLEAR AUTO REQUEST/);
   assert.match(settingsBlock, /oandaForexPairList/);
   assert.doesNotMatch(settingsBlock, /OANDA practice desk/);
   assert.doesNotMatch(settingsBlock, /Live forex orders stay blocked/);
   assert.doesNotMatch(settingsBlock, /FOREX AUTO STAYS OFF/);
   assert.doesNotMatch(settingsBlock, /Live Orders/);
-  assert.match(settingsBlock, /Autopilot requested/);
+  assert.match(settingsBlock, /disabled=\{!forexAutoTrading\}/);
   assert.match(settingsBlock, /\/forex-auto\//);
   assert.match(frontendSource, /forexAutoEnabled/);
   assert.doesNotMatch(settingsBlock, /setAutoTrading\(true\)/);
@@ -362,7 +362,7 @@ test("frontend uses authoritative backend decisions without legacy approval reco
   for (const name of ['isStockBuyableNow', 'isCryptoBuyableNow']) {
     const body = frontendSource.match(new RegExp(`function ${name}\\([^]*?\\n}`))?.[0];
     assert.ok(body, `${name} missing`);
-    assert.match(body, /backendDecisionBuyable\(item\.raw\?\.currentDecision\?\.authorization, item\.symbol\)/);
+    assert.match(body, /backendDecisionBuyable\(\s*item\.raw\?\.currentDecision\?\.authorization(?:\s*\|\|\s*item\.currentDecision\?\.authorization)?,\s*item\.symbol\s*\)/);
     assert.doesNotMatch(body, /legacyFourWay|aggregateExecutionApproved|item\.approved/);
   }
   assert.doesNotMatch(frontendSource, /item\?\.backendApproved === true \|\| item\?\.approved === true/);

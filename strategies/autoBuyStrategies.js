@@ -1,5 +1,4 @@
 import { getApprovedTradeAmount, isSizingRevoked } from "../scoring/approvedSizing.js";
-import { attachCryptoExecutableAllocation } from "../scoring/cryptoExecutableAllocation.js";
 import {
   CRYPTO_MAX_ENTRY_SPREAD_PERCENT,
 } from "../scoring/cryptoScoring.js";
@@ -1353,13 +1352,8 @@ export function createAutoBuyStrategies(dependencies) {
     }
     const baseTradeAmount = getDynamicTradeAmount(account, cryptoPositions);
     if (typeof refreshCryptoExecutionQuotes === "function") signals = await refreshCryptoExecutionQuotes(signals);
-    signals = (Array.isArray(signals) ? signals : []).map((signal) => attachCryptoExecutableAllocation(signal, {
-      account,
-      positions,
-      config: CONFIG,
-      reservations: engineState.orderRiskReservations || {},
-      dailyStartEquity: engineState.dailyStartEquity,
-    }));
+    // Execution consumes an authorized allocation; it must not issue a new one.
+    signals = Array.isArray(signals) ? signals : [];
     const bestCandidateScore = Math.max(
       0,
       ...signals
@@ -1403,13 +1397,6 @@ export function createAutoBuyStrategies(dependencies) {
     let cryptoBudgetReservedThisCycle = 0;
     for (let crypto of buyCandidates) {
       if (typeof refreshCryptoExecutionQuotes === "function") crypto = (await refreshCryptoExecutionQuotes([crypto]))[0] || crypto;
-      crypto = attachCryptoExecutableAllocation(crypto, {
-        account,
-        positions,
-        config: CONFIG,
-        reservations: engineState.orderRiskReservations || {},
-        dailyStartEquity: engineState.dailyStartEquity,
-      });
       const symbol = normalizeSymbol(crypto.symbol);
       const cryptoInstitutionalScore = Number(
         crypto.institutionalScore ||
@@ -1480,7 +1467,7 @@ export function createAutoBuyStrategies(dependencies) {
             crypto,
             account
           );
-        const approvedSizingCeiling = Math.max(
+        const approvedSizingCeiling = Math.min(
           Number(getApprovedTradeAmount(crypto) || 0),
           Number(adaptiveCryptoSizing.recommendedAmount || 0)
         );

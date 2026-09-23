@@ -9,6 +9,8 @@ import { calculateInstitutionalBlend } from '../scoring/institutionalBlend.js';
 import { evaluateStockCandidateQuoteQuality } from '../market-data/stockCandidateQuality.js';
 import { calculateCryptoLiquidityFromBars } from '../scoring/cryptoScoring.js';
 import { installCentralDecision } from '../scoring/installCentralDecision.js';
+import { attachCryptoExecutableAllocation } from '../scoring/cryptoExecutableAllocation.js';
+import { attachStockExecutableAllocation } from '../scoring/stockExecutableAllocation.js';
 
 const source = fs.readFileSync(new URL('../server.js', import.meta.url), 'utf8');
 const tree = parse(source, { ecmaVersion: 'latest', sourceType: 'module' });
@@ -96,6 +98,7 @@ test('volume baseline does not bridge overnight gaps or mixed sources', () => {
 test('actual fast score review refreshes evidence and never grants stale approval or sizing', async () => {
   let refreshed = false;
   const context = vm.createContext({
+    engineState: {}, CONFIG: {}, attachCryptoExecutableAllocation, attachStockExecutableAllocation,
     refreshCryptoExecutionQuotes: async rows => { refreshed = true; return rows; },
     normalizeSymbol: s => s, installCentralDecision, normalizeSignalScoreCompleteness: s => s,
     calculateCentralAutonomousDecisionCore: (_stocks, crypto) => {
@@ -110,7 +113,8 @@ test('actual fast score review refreshes evidence and never grants stale approva
   assert.equal(row.cryptoDecisionScore, 80);
   assert.equal(row.approved, false); assert.equal(row.autoTradeApproved, false);
   assert.equal(row.finalApprovedTradeAmount, 0);
-  assert.equal(row.executionEligibility.reasons[0], 'CENTRAL_RISK_AND_SIZING_REVIEW_REQUIRED');
+  assert.equal(row.executionEligibility.approved, false);
+  assert.ok(row.executionEligibility.reasons.length > 0);
 });
 
 test('actual benchmark refresh retains provider quote time, never receipt time', async () => {

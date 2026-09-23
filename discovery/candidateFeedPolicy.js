@@ -1,5 +1,6 @@
 // Presentation policy only: never use this to remove positions or outcome records.
 export const MIN_STOCK_PRICE = 0.5;
+export const DEFAULT_MAX_STOCK_PRICE = 50;
 
 function finite(value) {
   if (value == null || value === '' || typeof value === 'boolean') return null;
@@ -7,7 +8,7 @@ function finite(value) {
   return Number.isFinite(parsed) ? parsed : null;
 }
 
-export function candidateFeedDecision(signal = {}, { minStockPrice = MIN_STOCK_PRICE } = {}) {
+export function candidateFeedDecision(signal = {}, { minStockPrice = MIN_STOCK_PRICE, maxStockPrice = DEFAULT_MAX_STOCK_PRICE } = {}) {
   const symbol = String(signal.symbol || '').toUpperCase();
   const crypto = String(signal.assetClass || signal.asset_class || signal.assetType || '').toLowerCase() === 'crypto' ||
     symbol.includes('/') || /-(USD|USDT)$/.test(symbol) || symbol.endsWith('USDT') || (symbol.endsWith('USD') && symbol.length > 5);
@@ -16,6 +17,8 @@ export function candidateFeedDecision(signal = {}, { minStockPrice = MIN_STOCK_P
   if (crypto) return { visible: true, reason: 'CRYPTO_NO_UNIT_PRICE_FLOOR' };
   const floor = Math.max(MIN_STOCK_PRICE, finite(minStockPrice) ?? MIN_STOCK_PRICE);
   if (price < floor) return { visible: false, reason: 'STOCK_BELOW_PRICE_FLOOR' };
+  const cap = Math.max(floor, finite(maxStockPrice) ?? DEFAULT_MAX_STOCK_PRICE);
+  if (price > cap) return { visible: false, reason: 'STOCK_ABOVE_PRICE_CAP' };
   const previousClose = finite(signal.previousClose ?? signal.previous_close ?? signal.prevClose ?? signal.pc);
   const measured = signal.changePercentMeasured !== false && signal.dayChangePercentAvailable !== false &&
     signal.changePercentAvailable !== false && signal.percentChangeAvailable !== false;

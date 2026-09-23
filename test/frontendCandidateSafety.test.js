@@ -23,7 +23,9 @@ try {
   const ast = ts.createSourceFile("index.tsx", source, ts.ScriptTarget.Latest, true, ts.ScriptKind.TSX);
   const functions = ast.statements.filter((node) => ts.isFunctionDeclaration(node) && names.has(node.name?.text));
   assert.equal(functions.length, names.size, "all tested helpers must exist");
-  const js = ts.transpileModule(functions.map((node) => node.getText(ast)).join("\n"), {
+  const currencies = ast.statements.find(node => ts.isVariableStatement(node) && node.declarationList.declarations.some(d => d.name.getText(ast) === 'FOREX_CURRENCIES'));
+  assert.ok(currencies, 'real forex currency dependency must exist');
+  const js = ts.transpileModule([currencies.getText(ast), ...functions.map((node) => node.getText(ast))].join("\n"), {
     compilerOptions: { target: ts.ScriptTarget.ES2022 },
   }).outputText;
   api = vm.createContext({ Date, LIVE_FRESH_SECONDS: 5, LIVE_STALE_SECONDS: 180,

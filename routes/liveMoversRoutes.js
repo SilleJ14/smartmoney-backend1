@@ -27,6 +27,7 @@ export function registerLiveMoversRoutes(app, dependencies) {
   const {
     requireAdmin,
     getState,
+    getConfig = () => ({}),
     normalizeSymbol,
     mergeLiveQuote,
     isCrypto,
@@ -53,11 +54,13 @@ export function registerLiveMoversRoutes(app, dependencies) {
   app.get("/live-movers", requireAdmin, async (req, res) => {
     try {
       const state = getState();
+      const config = getConfig();
       const limit = boundedLimit(req.query.limit);
       let activeQuoteRefresh = null;
       if (String(req.query.refresh || "").toLowerCase() === "true" && typeof refreshQuotes === "function") {
         const refreshCandidates = buildLiveMovers({
           state,
+          config,
           limit: 100,
           normalizeSymbol,
           mergeLiveQuote,
@@ -67,7 +70,7 @@ export function registerLiveMoversRoutes(app, dependencies) {
           refreshCandidates.map((candidate) => candidate.symbol)
         );
       }
-      const stateVersion = getStateVersion(state);
+      const stateVersion = `${getStateVersion(state)}:${config.minStockPrice}:${config.maxStockPrice}`;
       const nowMs = Date.now();
       const cacheHit = activeQuoteRefresh === null &&
         cachedSnapshot?.stateVersion === stateVersion &&
@@ -79,6 +82,7 @@ export function registerLiveMoversRoutes(app, dependencies) {
           generatedAtMs: nowMs,
           items: buildLiveMovers({
             state,
+            config,
             limit: 100,
             normalizeSymbol,
             mergeLiveQuote,

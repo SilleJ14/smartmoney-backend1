@@ -17,11 +17,15 @@ export function attachStockExecutableAllocation(signal = {}, {
   const eligibility = evaluateStockTradeCandidate(signal, {
     requireCentralDecision: true,
     requireFreshDecision: true,
-    requireExplicitApproval: true,
+    requireExplicitApproval: false,
     maxQuoteAgeSeconds: STOCK_EXECUTION_THRESHOLDS.maxQuoteAgeSeconds,
     maxSpreadPercent: STOCK_EXECUTION_THRESHOLDS.maxSpreadPercent,
     now,
   });
+  if (config.realCashTradingUnlocked === false) {
+    eligibility.approved = false;
+    eligibility.reasons = [...(eligibility.reasons || []), "REAL_CASH_TRADING_LOCKED"];
+  }
   signal.executionEligibility = eligibility;
   if (!eligibility.approved) {
     Object.assign(signal, {
@@ -30,6 +34,7 @@ export function attachStockExecutableAllocation(signal = {}, {
       autoTradeApproved: false,
       qualifiedToBuy: false,
       buyableNow: false,
+      finalApprovedTradeAmount: 0, finalTradeAmount: 0, recommendedTradeAmount: 0,
     });
     return signal;
   }

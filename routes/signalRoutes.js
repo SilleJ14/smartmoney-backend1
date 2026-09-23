@@ -1,14 +1,14 @@
 import { candidateFeedDecision } from '../discovery/candidateFeedPolicy.js';
 
 export function registerSignalRoutes(app, dependencies) {
-  const { requireAdmin, getState, getMode, mergeLiveQuote, scanCrypto, buildDashboard, initializeJournal } = dependencies;
+  const { requireAdmin, getState, getConfig = () => ({}), getMode, mergeLiveQuote, scanCrypto, buildDashboard, initializeJournal } = dependencies;
   app.get("/institutional-dashboard", requireAdmin, (_req, res) => {
     try { res.json({ success: true, dashboard: buildDashboard() }); }
     catch (error) { res.status(500).json({ success: false, error: error.message }); }
   });
   app.get("/signals", requireAdmin, (_req, res) => {
     const state = getState();
-    res.json({ lastScanAt: state.lastScanAt, signals: (state.lastSignals || []).map(mergeLiveQuote).filter(signal => candidateFeedDecision(signal).visible), skippedSymbols: state.skippedSymbols });
+    res.json({ lastScanAt: state.lastScanAt, signals: (state.lastSignals || []).map(mergeLiveQuote).filter(signal => candidateFeedDecision(signal, getConfig()).visible), skippedSymbols: state.skippedSymbols });
   });
   app.get("/crypto-signals", requireAdmin, async (_req, res) => {
     try {

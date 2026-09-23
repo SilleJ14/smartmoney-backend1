@@ -20,7 +20,7 @@ test(`actual server boots, serves stocks and crypto, and completes a scan withou
   const directory = await fs.mkdtemp(path.join(os.tmpdir(), 'smartmoney-isolated-server-'));
   const token = 'isolated-fixture-admin-not-a-real-credential';
   const autopilot = polygonFault === 'autopilot';
-  if (autopilot) await fs.writeFile(path.join(directory, 'runtime-config.json'), JSON.stringify({ autoTradingEnabled: true }));
+  await fs.writeFile(path.join(directory, 'runtime-config.json'), JSON.stringify({ maxStockPrice: 1000, ...(autopilot ? { autoTradingEnabled: true } : {}) }));
   const row = symbol => ({ symbol, price: 100, current: 100, assetClass: symbol.includes('/') ? 'crypto' : 'stock',
     approved: false, backendApproved: false, qualifiedToBuy: false, autoTradeApproved: false });
   await fs.writeFile(path.join(directory, 'engine-state.json'), JSON.stringify({
@@ -28,7 +28,7 @@ test(`actual server boots, serves stocks and crypto, and completes a scan withou
   }));
   // No inherited provider credentials, .env or production persistence directory.
   const env = { PATH: process.env.PATH, SystemRoot: process.env.SystemRoot, TEMP: directory, TMP: directory,
-    PORT: '0', DATA_DIR: directory, ADMIN_API_TOKEN: token, AUTO_TRADING_ENABLED: 'false', RENDER_MEMORY_LIMIT_MB: '512',
+    PORT: '0', DATA_DIR: directory, ADMIN_API_TOKEN: token, AUTO_TRADING_ENABLED: 'false', RENDER_MEMORY_LIMIT_MB: '512', MAX_STOCK_PRICE: '1000',
     REAL_CASH_TRADING_UNLOCKED: 'false', TRADING_MODE: 'smart', RUN_STARTUP_ENGINE_SCAN: 'true',
     ALPACA_LIVE_KEY: 'fixture', ALPACA_LIVE_SECRET: 'fixture', FINNHUB_API_KEY: 'fixture',
     ENABLE_POLYGON: polygonFault ? 'true' : 'false', POLYGON_API_KEY: 'fixture', SMARTMONEY_FIXTURE_POLYGON: polygonFault,

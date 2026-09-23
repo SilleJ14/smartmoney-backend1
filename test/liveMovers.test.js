@@ -1,6 +1,8 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import { buildLiveMovers } from "../market-data/liveMovers.js";
+import { buildLiveMovers as buildConfiguredLiveMovers } from "../market-data/liveMovers.js";
+// These scoring fixtures intentionally use prices above the default universe cap.
+const buildLiveMovers = options => buildConfiguredLiveMovers({ config: { maxStockPrice: 1000 }, ...options });
 
 const normalizeSymbol = (symbol) => String(symbol || "").toUpperCase();
 const isCrypto = (symbol) => symbol.includes("/") || symbol.endsWith("USD");

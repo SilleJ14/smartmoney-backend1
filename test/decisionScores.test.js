@@ -566,7 +566,7 @@ test("stock execution enforces final, entry, coverage, and acceleration threshol
     spreadSource: "alpaca_latest_stock_quote",
     priceIsLive: true,
   }, { requireCentralDecision: true });
-  assert.equal(scoreBuy.approved, true);
+  assert.equal(scoreBuy.approved, false);
   const scoreBuyAtThreshold = evaluateStockTradeCandidate({
     masterFinalScore: 70,
     entryQualityScore: 40,
@@ -581,7 +581,7 @@ test("stock execution enforces final, entry, coverage, and acceleration threshol
     spreadSource: "alpaca_latest_stock_quote",
     priceIsLive: true,
   }, { requireCentralDecision: true });
-  assert.equal(scoreBuyAtThreshold.approved, true);
+  assert.equal(scoreBuyAtThreshold.approved, false);
   const belowBuy = evaluateStockTradeCandidate({
     masterFinalScore: 69,
     entryQualityScore: 40,
@@ -630,7 +630,7 @@ test("server execution rejects stale and future stock decisions even with a fres
     ...base,
     decisionUpdatedAt: "2020-01-01T00:00:00.000Z",
   }, { requireCentralDecision: true, requireFreshDecision: true, now });
-  assert.equal(stale.approved, true);
+  assert.equal(stale.approved, false);
 
   const fresh = evaluateStockTradeCandidate({
     ...base,
@@ -663,7 +663,7 @@ test("final stock gate cannot approve incomplete core evidence or a central bloc
     discoveryScorecard: { coverage: 1 },
     centralAutonomousAction: "BLOCK",
   }, { requireCentralDecision: true });
-  assert.equal(blocked.approved, true);
+  assert.equal(blocked.approved, false);
 });
 
 test("final stock gate enforces explicit buy blocks and the execution spread limit", () => {
@@ -688,7 +688,7 @@ test("final stock gate enforces explicit buy blocks and the execution spread lim
     buyBlocked: true,
     displayOnly: true,
   }, { requireCentralDecision: true });
-  assert.equal(displayOnly.approved, true);
+  assert.equal(displayOnly.approved, false);
 
   const wideSpread = evaluateStockTradeCandidate({
     ...base,
@@ -717,7 +717,7 @@ test("final stock gate enforces explicit buy blocks and the execution spread lim
     priceIsLive: true,
     phase9LiquiditySuppressed: true,
   }, { requireCentralDecision: true });
-  assert.equal(legacySuppression.approved, true);
+  assert.equal(legacySuppression.approved, false);
 });
 
 test("final stock gate requires minimum measured risk quality", () => {
@@ -914,7 +914,7 @@ test("execution-time stock gate fails closed without every explicit approval", (
     requireExplicitApproval: true,
     now: Date.parse(now),
   });
-  assert.equal(rejected.approved, true);
+  assert.equal(rejected.approved, false);
 
   const approved = evaluateStockTradeCandidate({
     ...base,
