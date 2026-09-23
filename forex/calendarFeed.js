@@ -16,6 +16,7 @@ export function defaultCalendarSnapshot() {
 export function loadCalendarSnapshot(filePath) {
   if (!filePath) return defaultCalendarSnapshot();
   try {
+    if (fs.statSync(filePath).size > 2 * 1024 * 1024) return defaultCalendarSnapshot();
     const snapshot = JSON.parse(fs.readFileSync(filePath, "utf8"));
     return snapshot && Array.isArray(snapshot.events) ? snapshot : defaultCalendarSnapshot();
   } catch {
@@ -38,6 +39,16 @@ export function calendarForDecision(snapshot = defaultCalendarSnapshot(), { now 
   };
   const freshness = calendarAllowsEntry(base);
   if (!freshness.ok) return freshness;
+  if (snapshot.schemaVersion === 1 || snapshot.coveredFrom || snapshot.coveredThrough) {
+    const from = Date.parse(snapshot.coveredFrom || "");
+    const through = Date.parse(snapshot.coveredThrough || "");
+    const currencies = String(instrument || "").split(/[_/]/).filter(Boolean);
+    if (!Number.isFinite(from) || !Number.isFinite(through) || from > now - 3600000
+      || through < now + (FOREX_SPEC.maxHoldHours + 1) * 3600000
+      || !Array.isArray(snapshot.coveredCurrencies) || currencies.some(currency => !snapshot.coveredCurrencies.includes(currency))) {
+      return { ok: false, reason: "CALENDAR_UNAVAILABLE", detail: "CALENDAR_COVERAGE_GAP" };
+    }
+  }
   if (!Array.isArray(snapshot.events)) return { ok: false, reason: "CALENDAR_UNAVAILABLE" };
   const currencies = String(instrument || "").split(/[_/]/);
   for (const event of snapshot.events) {

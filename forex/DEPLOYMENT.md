@@ -1,8 +1,9 @@
 # Forex safety configuration
 
-The scanner is **practice analysis only**. It does not submit automatic orders;
-live OANDA orders remain blocked. A saved Auto preference does not authorize execution.
-Do not remove this boundary until the full practice order/reconciliation lifecycle is validated.
+Forex Autopilot authorizes continuation entries in the existing **practice-only**
+environment only after all setup, evidence, calendar, account and execution gates pass.
+Breakout–retest requires its separate strategy approval. Live OANDA orders remain blocked.
+See `../docs/forex-autopilot-entry-policy.md`; this is not a claim of strategy profitability.
 
 ## Persistent ledger
 
@@ -25,8 +26,38 @@ are retained; no migration or clearing of safety locks occurs automatically.
 
 ## Economic-calendar adapter
 
+The backend now defaults to Finnhub's `/calendar/economic` endpoint using the existing
+server-only `FINNHUB_API_KEY` through the `X-Finnhub-Token` header. No key is sent to
+the app. Provider calendar entitlement must be checked separately; 401/403 is an
+explicit `CALENDAR_ACCESS_DENIED` blocker, not an empty calendar.
+
+Refresh runs at startup and every five minutes, single-flight, with a ten-second
+timeout, bounded response size and error backoff. It requests yesterday through two
+days ahead, requires coverage of the holding horizon, and uses the request-start
+timestamp rather than making delayed responses appear newly observed.
+
+Offset/Z event timestamps work directly. Unzoned timestamps require an independently
+verified provider timezone contract and `FOREX_CALENDAR_TIMEZONE=UTC` if that contract
+confirms UTC. Without it they fail with `CALENDAR_TIMEZONE_UNVERIFIED`; do not assume
+the host timezone or set UTC simply to bypass this check.
+
+Low-impact non-central-bank events are excluded. Medium/high/unknown importance and
+central-bank announcements/speeches are retained. Unknown country mappings use `ALL`
+conservatively. Empty, partial, malformed, stale or failed responses block new entries.
+The latest calendar is rechecked after execution refresh and before order submission.
+Calendar failure does not disable existing-position protection.
+
+`/status` exposes `forexCalendar` health, error code, coverage dates and last-success
+time without credentials. This feed covers scheduled economic events, **not all
+unscheduled breaking news**. A valid response is provider-reported coverage, not proof
+that the provider omitted nothing. Live entitlement and timezone remain deployment
+verification items.
+
+### Legacy file adapter
+
 Set `FOREX_CALENDAR_PATH` to a JSON snapshot maintained by a trusted calendar adapter.
-No external provider subscription or credentials have been configured by this change.
+An existing path selects the file adapter unless `FOREX_CALENDAR_PROVIDER=finnhub`
+is explicitly selected. No subscription is purchased or credentials modified.
 The adapter must atomically replace the file, refresh within 15 minutes, and provide
 complete relevant event coverage (including the strategy's eight-hour holding horizon).
 Do not claim complete coverage for an empty, failed, truncated, or partial response.

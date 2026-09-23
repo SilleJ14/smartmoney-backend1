@@ -1,3 +1,5 @@
+import { protectionVerified } from "./protection.js";
+
 export function capitalSummaryContract(account = {}, freshness = {}) {
   return {
     accountId: account.id || null,
@@ -25,11 +27,20 @@ export function autoTradeLimitsContract({ configured, consumed, pending, remaini
 
 export function positionContract(trade = {}) {
   return {
+    symbol: String(trade.instrument || "").replace("_", "/"),
+    instrument: trade.instrument,
+    assetClass: "forex",
+    broker: "oanda",
+    status: Number(trade.currentUnits) !== 0 ? "OPEN" : "CLOSED",
+    qty: Math.abs(Number(trade.currentUnits)),
+    avg_entry_price: Number(trade.price),
+    current_price: trade.currentPrice ?? null,
+    unrealized_pl: Number(trade.unrealizedPL),
     quantity: trade.currentUnits,
     direction: Number(trade.currentUnits) > 0 ? "long" : Number(trade.currentUnits) < 0 ? "short" : "flat",
     entry: trade.price,
     valuation: trade.unrealizedPL,
-    protectionStatus: trade.stopLossOrder ? "VERIFIED" : "MISSING",
+    protectionStatus: protectionVerified(trade).ok ? "VERIFIED" : "MISSING",
     account: trade.accountId,
     brokerTradeId: trade.id,
   };

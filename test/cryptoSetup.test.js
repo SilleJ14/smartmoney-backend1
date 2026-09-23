@@ -7,8 +7,22 @@ import { calculateDynamicTradeAmount } from '../risk/positionSizing.js';
 import { cryptoSetupEvidence } from './fixtures/cryptoSetupFixture.js';
 import { createOrderService } from '../execution/orderService.js';
 import { buildCryptoDecisionScore, evaluateCryptoTradeCandidate } from '../scoring/componentScore.js';
+import { immutableBarHistory } from '../market-data/barSnapshot.js';
 const now = Date.parse('2026-09-10T18:00:01Z');
 const make = () => ({ symbol: 'BTC/USD', price: 100, ...cryptoSetupEvidence(100, now) });
+
+test('normalized immutable bars reuse data without caching freshness or mutable volume', () => {
+  const input = make().chartBars, frozen = immutableBarHistory(input);
+  const expected = completedCryptoBars(input, now);
+  assert.deepEqual(completedCryptoBars(frozen, now), expected);
+  const first = completedCryptoBars(frozen, now);
+  first[0].volume = -100;
+  assert.deepEqual(completedCryptoBars(frozen, now), expected, 'callers cannot mutate cached normalized rows');
+  assert.deepEqual(completedCryptoBars(frozen, now + 3600000), [], 'cached bars still expire');
+  assert.deepEqual(completedCryptoBars(frozen, now - 3600000), [], 'future bars remain invalid');
+  input[0].v = 999;
+  assert.deepEqual(completedCryptoBars(input, now), [], 'mutable alias conflicts are revalidated');
+});
 
 test('crypto retest supplies structure, volume, momentum, EMAs and explicit projected stop/target', () => {
   const setup = assessCryptoSetup(make(), { now });

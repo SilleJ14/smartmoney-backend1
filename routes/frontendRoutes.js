@@ -108,6 +108,8 @@ export function registerFrontendRoutes(app, dependencies) {
   });
 
   app.get("/frontend/signals", requireAdmin, async (req, res) => {
+    const startedAt = performance.now();
+    let mergedAt = startedAt, candidateCount = 0, mergeWorkMs = 0, delivery = null;
     try {
       const candidates = collectSignals(
         getState(),
@@ -115,15 +117,26 @@ export function registerFrontendRoutes(app, dependencies) {
         normalizeSymbol,
         true
       );
+      candidateCount = candidates.length;
       const signals = [];
+      let yieldAt = performance.now() + 100;
       for (let index = 0; index < candidates.length; index++) {
+        if (res.destroyed) return;
+        const rowStartedAt = performance.now();
         const signal = mergeLiveQuote(candidates[index]);
         if (candidateFeedDecision(signal, getConfig()).visible) signals.push(signal);
-        if (index % 4 === 3) await new Promise(resolve => setImmediate(resolve));
+        mergeWorkMs += performance.now() - rowStartedAt;
+        // Yield by CPU time, not every four tiny rows: fixed-count yields let
+        // repeated background jobs delay an otherwise short read indefinitely.
+        if (performance.now() >= yieldAt) {
+          await new Promise(resolve => setImmediate(resolve));
+          yieldAt = performance.now() + 100;
+        }
       }
       const approvedSignals = signals
         .filter(hasExplicitTradeApproval)
         .sort(compareCanonicalSignals);
+      mergedAt = performance.now();
       const displayLimit = Math.min(
         100,
         Math.max(10, Number(req.query.limit || 50))
@@ -132,7 +145,7 @@ export function registerFrontendRoutes(app, dependencies) {
       const watchSignals = displaySignals.filter(
         (signal) => !hasExplicitTradeApproval(signal)
       );
-      await sendChunkedJson(res, {
+      delivery = await sendChunkedJson(res, {
         success: true,
         count: displaySignals.length,
         approvedCount: approvedSignals.length,
@@ -141,11 +154,17 @@ export function registerFrontendRoutes(app, dependencies) {
         signals: displaySignals,
         approvedSignals: approvedSignals.slice(0, displayLimit),
         watchSignals,
-      }, { gzip: req.acceptsEncodings?.('gzip') === 'gzip' });
+      }, { gzip: req.acceptsEncodings?.('gzip') === 'gzip', bufferLimitBytes: 32 * 1024 * 1024 });
     } catch (err) {
       console.error("frontend signals error", err);
       if (res.headersSent) { res.destroy(); return; }
       res.status(500).json({ success: false, error: err.message });
+    } finally {
+      const elapsedMs = Math.round(performance.now() - startedAt);
+      if (elapsedMs >= 2000) console.warn('SIGNAL_DELIVERY_SLOW', {
+        candidateCount, mergeMs: Math.round(mergedAt - startedAt), mergeWorkMs: Math.round(mergeWorkMs), elapsedMs,
+        disconnected: res.destroyed === true, delivery,
+      });
     }
   });
 

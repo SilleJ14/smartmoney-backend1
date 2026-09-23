@@ -56,7 +56,9 @@ export function registerStatusRoutes(app, dependencies) {
 
   app.get("/status", requireAdmin, async (req, res) => {
     try {
-      const accountRefresh = await refreshAccountCache();
+      let accountRefresh;
+      try { accountRefresh = await refreshAccountCache(); }
+      catch { accountRefresh = { ok: false, stale: true, reason: "STOCK_CRYPTO_ACCOUNT_REFRESH_FAILED" }; }
       const latestStatus = getLatestStatus();
       const state = getState();
       const runtime = getRuntime();
@@ -78,6 +80,10 @@ export function registerStatusRoutes(app, dependencies) {
         tradingModeLocked: runtime.tradingModeLocked,
         autoTradingEnabled: runtime.autoTradingEnabled,
         forexAutoEnabled: runtime.forexAutoEnabled === true,
+        forexEmergencyStopActive: runtime.forexEmergencyStopActive === true,
+        forexPauseEntries: runtime.forexPauseEntries === true,
+        forexProtection: state.forexProtection || null,
+        forexCalendar: runtime.forexCalendarStatus || null,
         emergencyStopActive: runtime.emergencyStopActive,
         config: runtime.config || {},
         marketOpen: state.marketOpen,
@@ -129,8 +135,7 @@ export function registerStatusRoutes(app, dependencies) {
         quietDiscoveryAdvancedProof: buildProofReport(state.quietCandidateOutcomeState),
         account: latestStatus?.account || state.cachedAccount || null,
         risk: latestStatus?.risk || null,
-        forexEngine: latestStatus?.forexEngine || state.forexEngine || null,
-        forexAutoEnabled: runtime.forexAutoEnabled === true,
+        forexEngine: state.forexEngine || latestStatus?.forexEngine || null,
         statusAccountRefresh: accountRefresh,
         note: "Lightweight status. Use /status/full for full broker/account/order debug payload.",
       });
@@ -173,6 +178,11 @@ export function registerStatusRoutes(app, dependencies) {
         tradingModeLocked: runtime.tradingModeLocked,
         autoTradingEnabled: runtime.autoTradingEnabled,
         forexAutoEnabled: runtime.forexAutoEnabled === true,
+        forexEmergencyStopActive: runtime.forexEmergencyStopActive === true,
+        forexPauseEntries: runtime.forexPauseEntries === true,
+        forexProtection: state.forexProtection || null,
+        forexCalendar: runtime.forexCalendarStatus || null,
+        forexEngine: state.forexEngine || null,
         config,
         signals: mappedSignals(state.topSignals, state.lastSignals, mergeLiveQuote),
         stockSignals: mappedSignals(state.topStockSignals, state.lastStockSignals, mergeLiveQuote),

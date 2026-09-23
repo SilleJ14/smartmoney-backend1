@@ -11,17 +11,31 @@ function stamp(value) {
   const n = Number(value);
   return Number.isFinite(n) ? n < 1e10 ? n * 1000 : n : Date.parse(value);
 }
+const normalizedHistory = new WeakMap();
+function normalizeHistory(input) {
+  if (normalizedHistory.has(input)) return normalizedHistory.get(input);
+  const rows = [];
+  for (let i = 0; i < input.length; i++) {
+    const b = input[i], volume = normalizeCryptoVolume(b);
+    if (!volume) return null;
+    if (i < input.length - 240) continue;
+    rows.push({ time: stamp(b.time ?? b.t), open: Number(b.open ?? b.o),
+      high: Number(b.high ?? b.h), low: Number(b.low ?? b.l), close: Number(b.close ?? b.c),
+      volume: volume.volume, intervalMs: Number(b.intervalMs),
+      marketVolume: b.marketVolume == null ? null : Number(b.marketVolume),
+      marketVolumeSource: b.marketVolumeSource });
+  }
+  // Only detached, deeply frozen histories have stable field values. Mutable
+  // inputs must be re-read; freshness/completion checks below always run.
+  const frozen = value => !value || typeof value !== 'object' ||
+    Object.isFrozen(value) && Object.values(value).every(frozen);
+  if (frozen(input)) normalizedHistory.set(input, rows);
+  return rows;
+}
 export function completedCryptoBars(input, now = Date.now()) {
   if (!Array.isArray(input)) return [];
-  if (input.some(bar => !normalizeCryptoVolume(bar))) return [];
-  const rows = input.slice(-240).map(b => ({
-    time: stamp(b?.time ?? b?.t), open: Number(b?.open ?? b?.o),
-    high: Number(b?.high ?? b?.h), low: Number(b?.low ?? b?.l),
-    close: Number(b?.close ?? b?.c), volume: normalizeCryptoVolume(b).volume,
-    intervalMs: Number(b?.intervalMs),
-    marketVolume: b?.marketVolume == null ? null : Number(b.marketVolume),
-    marketVolumeSource: b?.marketVolumeSource,
-  }));
+  const rows = normalizeHistory(input);
+  if (!rows) return [];
   if (rows.length < 2 || rows.some((b, i) =>
     ![b.time, b.open, b.high, b.low, b.close, b.volume].every(Number.isFinite) ||
     b.low <= 0 || b.high < Math.max(b.open, b.close, b.low) || b.low > Math.min(b.open, b.close) ||

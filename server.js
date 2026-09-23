@@ -6,6 +6,7 @@ import { getApprovedTradeAmount } from "./scoring/approvedSizing.js";
 import { revalidateCandidate } from './scoring/revalidateCandidate.js';
 import { installCentralDecision } from './scoring/installCentralDecision.js';
 import { createDecisionSnapshot, canPublishDecision } from './scoring/decisionProvenance.js';
+import { createOutcomeFailureReporter } from './scoring/outcomeFailureReporter.js';
 import { barSnapshot } from './market-data/barSnapshot.js';
 import { evaluateScaleInEvidence } from './risk/scaleInEvidence.js';
 import { purchasePolicy, isDiscretionaryManualPurchase, executionEvidenceIssues, researchExecutionIssues } from './risk/evidencePolicy.js';
@@ -256,11 +257,13 @@ import {
 import { createCycleRunner } from "./engine/cycleRunner.js";
 import { createEngineCycle } from "./engine/createEngineCycle.js";
 import { FOREX_SPEC } from "./forex/forexSpec.js";
-import { loadCalendarSnapshot } from "./forex/calendarFeed.js";
+import { createEconomicCalendarProvider } from "./forex/economicCalendarProvider.js";
 import { createOandaClient } from "./forex/oandaClient.js";
 import { runForexEngineCycle } from "./forex/forexEngine.js";
 import { createForexStore } from "./forex/durableStore.js";
 import { resolveOandaEnv } from "./forex/oandaEnv.js";
+import { manageForexPositions } from "./forex/positionManager.js";
+import { createForexScheduler } from "./forex/scheduler.js";
 import { startServerLifecycle } from "./bootstrap/serverLifecycle.js";
 import { registerOperationalControlRoutes } from "./routes/operationalControlRoutes.js";
 import { registerSystemRoutes } from "./routes/systemRoutes.js";
@@ -1257,6 +1260,7 @@ processDiagnostics.setSnapshotReader(() => ({
 persistedEngineState = null;
 const persistSafetyState = createSafetyJournal(`${ENGINE_STATE_FILE}.safety.json`, engineState);
 const discoveryOutcomeStore = createDiscoveryOutcomeStore(path.resolve(DATA_DIR, 'discovery-outcomes'));
+const reportOutcomeFailure = createOutcomeFailureReporter(path.resolve(DATA_DIR, 'discovery-outcomes'));
 const candidateTraceStore = createCandidateTraceStore(path.resolve(DATA_DIR, 'candidate-traces'));
 let outcomeMigrationComplete = false;
 async function updateQuietCandidateOutcomes(previous = {}, candidates = [], prices = [], options = {}) {
@@ -1283,6 +1287,7 @@ async function updateQuietCandidateOutcomes(previous = {}, candidates = [], pric
     return { ...cache, trackingPolicy: durable.policy, dailySampleLimit: null,
       untrackedDiscoveriesThisUpdate: 0, durableTracking: durable, displayCacheOnly: true };
   } catch (error) {
+    reportOutcomeFailure({ candidates, prices, options: settings, error });
     engineState.fullPopulationOutcomeTracking = { ok: false, error: error.message, updatedAt: new Date().toISOString() };
     throw error;
   }
@@ -24237,26 +24242,50 @@ const { executeEngineCycleBody } = createEngineCycle({
     LIVE_ORDER_MAX_QUOTE_AGE_SECONDS,
     LIVE_ORDER_MAX_SPREAD_PERCENT,
   }),
-  runForexEngineCycle,
-  getForexEngineRuntime: () => {
+});
+const forexStore = createForexStore({ useFile: true, filePath: process.env.FOREX_LEDGER_PATH });
+const forexCalendarProvider = createEconomicCalendarProvider({
+  apiKey: FINNHUB_API_KEY,
+  provider: process.env.FOREX_CALENDAR_PROVIDER || (process.env.FOREX_CALENDAR_PATH ? "file" : "finnhub"),
+  filePath: process.env.FOREX_CALENDAR_PATH,
+  timezone: process.env.FOREX_CALENDAR_TIMEZONE || "",
+});
+let forexClient;
+let forexClientConfig;
+const forexInstanceId = `forex-${process.pid}-${Date.now()}`;
+function getForexEngineRuntime() {
     const oanda = resolveOandaEnv(process.env);
-    return {
-    client: createOandaClient({
+    const clientConfig = {
       accountId: runtimeConfig.oandaAccountId || oanda.accountId,
       token: runtimeConfig.oandaPracticeToken || oanda.token,
       baseUrl: oanda.baseUrl,
-    }),
+    };
+    if (!forexClient || Object.keys(clientConfig).some(key => clientConfig[key] !== forexClientConfig[key])) {
+      forexClient = createOandaClient(clientConfig);
+      forexClientConfig = clientConfig;
+    }
+    return {
+    client: forexClient,
+    instanceId: forexInstanceId,
     spec: FOREX_SPEC,
-    calendar: loadCalendarSnapshot(process.env.FOREX_CALENDAR_PATH),
-    getEntryPause: () => runtimeConfig.forexPauseEntries === true,
+    calendar: forexCalendarProvider.getSnapshot(),
+    getCalendar: () => forexCalendarProvider.getSnapshot(),
+    getEntryPause: () => runtimeConfig.forexPauseEntries === true || runtimeConfig.forexEmergencyStopActive === true,
+    getAutoEnabled: () => forexAutoEnabled === true && runtimeConfig.forexEmergencyStopActive !== true,
     forexAutoEnabled,
+    forexEmergencyStopActive: runtimeConfig.forexEmergencyStopActive === true,
     now: Date.now(),
-    store: createForexStore({
-      useFile: true,
-      filePath: process.env.FOREX_LEDGER_PATH,
-    }),
+    store: forexStore,
   };
+}
+const forexScheduler = createForexScheduler({
+  scan: async () => {
+    engineState.forexEngine = await runForexEngineCycle({ state: engineState.forexEngine || {}, ...getForexEngineRuntime() });
   },
+  protect: async () => {
+    engineState.forexProtection = await manageForexPositions(getForexEngineRuntime());
+  },
+  onError: (lane, error) => { engineState.forexLastError = { lane, message: String(error.message), at: new Date().toISOString() }; },
 });
 setInterval(() => {
   const lastProgressAt = Date.parse(engineState.lastHeartbeatAt || "");
@@ -28242,6 +28271,9 @@ function getLatestFrontendStatusSnapshot() {
     liveQuoteCacheCount: Object.keys(engineState.liveQuoteCache || {}).length,
     forexEngine: engineState.forexEngine || null,
     forexAutoEnabled,
+    forexEmergencyStopActive: runtimeConfig.forexEmergencyStopActive === true,
+    forexPauseEntries: runtimeConfig.forexPauseEntries === true,
+    forexProtection: engineState.forexProtection || null,
     institutionalDashboard: buildInstitutionalDashboardPayload(),
     autonomousTradingSystem: engineState.autonomousTradingSystemState || {},
     phase20AutonomousOrchestration: engineState.phase20AutonomousOrchestrationState || {},
@@ -31599,6 +31631,9 @@ const incrementalResearch = createIncrementalResearch({
 function startLiveScheduler() {
   if (liveSchedulerTimer) return engineState.liveSchedulerState;
   liveSchedulerTimer = setInterval(() => {
+    void runLiveScheduledTask('forexCalendar', 1000, () => forexCalendarProvider.refresh());
+    void runLiveScheduledTask('forexProtection', 5000, () => forexScheduler.protect());
+    void runLiveScheduledTask('forexDiscovery', 15000, () => forexScheduler.scan());
     void runLiveScheduledTask('refreshBrokerClock', 5000, () => getClock());
     void runLiveScheduledTask('refreshIndependentMarketRegime', 30000, () => refreshIndependentMarketRegime());
     void runLiveScheduledTask('refreshCandidateNews', 5000, async () => {
@@ -32964,10 +32999,13 @@ registerStatusRoutes(app, {
   requireAdmin,
   getState: () => engineState,
   getRuntime: () => ({
+    forexCalendarStatus: forexCalendarProvider.getStatus(),
     mode: TRADING_MODE,
     tradingModeLocked,
     autoTradingEnabled,
     forexAutoEnabled,
+    forexEmergencyStopActive: runtimeConfig.forexEmergencyStopActive === true,
+    forexPauseEntries: runtimeConfig.forexPauseEntries === true,
     emergencyStopActive,
     config: CONFIG,
   }),
@@ -33060,6 +33098,8 @@ registerOperationalControlRoutes(app, {
     emergencyStopActive,
     autoTradingEnabled,
     forexAutoEnabled,
+    forexEmergencyStopActive: runtimeConfig.forexEmergencyStopActive === true,
+    forexPauseEntries: runtimeConfig.forexPauseEntries === true,
     dailyLossLocked: engineState.dailyLossLocked,
     profitLocked: engineState.profitLocked,
   }),
@@ -33068,12 +33108,14 @@ registerOperationalControlRoutes(app, {
     const nextAutoTrading = typeof updates.autoTradingEnabled === "boolean" ? updates.autoTradingEnabled : autoTradingEnabled;
     const nextForexAuto = typeof updates.forexAutoEnabled === "boolean" ? updates.forexAutoEnabled : forexAutoEnabled;
     const nextForexPause = typeof updates.forexPauseEntries === "boolean" ? updates.forexPauseEntries : runtimeConfig.forexPauseEntries === true;
+    const nextForexStop = typeof updates.forexEmergencyStopActive === "boolean" ? updates.forexEmergencyStopActive : runtimeConfig.forexEmergencyStopActive === true;
     const saved = saveRuntimeConfig(CONFIG_FILE, {
       ...runtimeConfig,
       emergencyStopActive: nextEmergencyStop,
       autoTradingEnabled: nextAutoTrading,
       forexAutoEnabled: nextForexAuto,
       forexPauseEntries: nextForexPause,
+      forexEmergencyStopActive: nextForexStop,
       oandaAccountId: updates.oandaAccountId !== undefined ? updates.oandaAccountId : runtimeConfig.oandaAccountId,
       oandaPracticeToken: updates.oandaPracticeToken !== undefined ? updates.oandaPracticeToken : runtimeConfig.oandaPracticeToken,
     });
@@ -33081,7 +33123,7 @@ registerOperationalControlRoutes(app, {
     emergencyStopActive = nextEmergencyStop;
     autoTradingEnabled = nextAutoTrading;
     forexAutoEnabled = nextForexAuto;
-    return { emergencyStopActive, autoTradingEnabled, forexAutoEnabled, forexPauseEntries: nextForexPause };
+    return { emergencyStopActive, autoTradingEnabled, forexAutoEnabled, forexPauseEntries: nextForexPause, forexEmergencyStopActive: nextForexStop };
   },
   resetDailyLossLock: () => {
     const equity = Number(engineState.cachedAccount?.equity || 0);
@@ -33285,6 +33327,7 @@ startServerLifecycle({
   saveRenderMemory,
   checkRunnerResults: checkRunnerPredictionResults,
   startServices: [
+    () => forexCalendarProvider.refresh(),
     () => { if (process.env.ENABLE_ALPACA_CRYPTO_WEBSOCKET !== 'false') alpacaCryptoStream.start(); },
     startFinnhubStream,
     startLiveScheduler,

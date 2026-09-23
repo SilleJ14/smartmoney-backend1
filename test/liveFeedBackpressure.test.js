@@ -59,7 +59,10 @@ test('outcome queue stays bounded, reports overload, drains and accepts later wo
     const rejected = results.filter(result => result.status === 'rejected');
     assert.equal(rejected.length, 6);
     assert.ok(rejected.every(result => result.reason.code === 'OUTCOME_STORAGE_BACKPRESSURE'));
-    assert.deepEqual(store.getStatus(), { pending: 0, peakPending: 64, queueLimit: 64, rejected: 6, completed: 64, failed: 0 });
+    const { pendingBytes, peakPendingBytes, maxPendingBytes, ...jobStatus } = store.getStatus();
+    assert.deepEqual(jobStatus, { pending: 0, peakPending: 64, queueLimit: 64, rejected: 6, completed: 64, failed: 0 });
+    assert.equal(pendingBytes, 0);
+    assert.ok(peakPendingBytes > 0 && peakPendingBytes <= maxPendingBytes);
     await store.ingest([], [], { assetClass: 'crypto', dayKey: '2026-09-09' });
     assert.equal(store.getStatus().completed, 65);
     assert.equal(store.getStatus().pending, 0);

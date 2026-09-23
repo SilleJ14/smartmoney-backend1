@@ -6,9 +6,11 @@ import os from 'node:os';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 
-const soakMs = Math.max(0, Math.min(600000, Number(process.env.SMARTMONEY_SOAK_MS) || 0));
+// Long runs are explicit opt-in; ordinary test runs still use no soak.
+const soakMs = Math.max(0, Math.min(24 * 3600000, Number(process.env.SMARTMONEY_SOAK_MS) || 0));
 const heapMb = Number(process.env.SMARTMONEY_FIXTURE_HEAP_MB) || 192;
 const rssLimitMb = Number(process.env.SMARTMONEY_FIXTURE_RSS_LIMIT_MB) || 400;
+const memoryBudgetMb = Number(process.env.SMARTMONEY_FIXTURE_MEMORY_MB) || 512;
 const scenarios = process.env.SMARTMONEY_FIXTURE_POLYGON ? [process.env.SMARTMONEY_FIXTURE_POLYGON]
   : ['', 'healthy', 'stream-burst', 'oversized', 'stalled', 'unavailable', 'malformed', 'early-analysis', 'afterhours-analysis', 'crypto-setup', 'autopilot', 'candidate-recovery'];
 for (const polygonFault of scenarios) {
@@ -28,7 +30,7 @@ test(`actual server boots, serves stocks and crypto, and completes a scan withou
   }));
   // No inherited provider credentials, .env or production persistence directory.
   const env = { PATH: process.env.PATH, SystemRoot: process.env.SystemRoot, TEMP: directory, TMP: directory,
-    PORT: '0', DATA_DIR: directory, ADMIN_API_TOKEN: token, AUTO_TRADING_ENABLED: 'false', RENDER_MEMORY_LIMIT_MB: '512', MAX_STOCK_PRICE: '1000',
+    PORT: '0', DATA_DIR: directory, ADMIN_API_TOKEN: token, AUTO_TRADING_ENABLED: 'false', RENDER_MEMORY_LIMIT_MB: String(memoryBudgetMb), MAX_STOCK_PRICE: '1000',
     REAL_CASH_TRADING_UNLOCKED: 'false', TRADING_MODE: 'smart', RUN_STARTUP_ENGINE_SCAN: 'true',
     ALPACA_LIVE_KEY: 'fixture', ALPACA_LIVE_SECRET: 'fixture', FINNHUB_API_KEY: 'fixture',
     ENABLE_POLYGON: polygonFault ? 'true' : 'false', POLYGON_API_KEY: 'fixture', SMARTMONEY_FIXTURE_POLYGON: polygonFault,
@@ -38,6 +40,7 @@ test(`actual server boots, serves stocks and crypto, and completes a scan withou
     SMARTMONEY_FIXTURE_POPULATION: process.env.SMARTMONEY_FIXTURE_POPULATION || '',
     SMARTMONEY_FIXTURE_MARKET_OPEN: (earlyProbe && !afterhoursProbe) || polygonFault === 'candidate-recovery' ? 'true' : 'false',
     SMARTMONEY_FIXTURE_PROFILE: process.env.SMARTMONEY_FIXTURE_PROFILE || 'false',
+    SMARTMONEY_FIXTURE_PAYLOAD_PROFILE: process.env.SMARTMONEY_FIXTURE_PAYLOAD_PROFILE || 'false',
     SMARTMONEY_FIXTURE_HEAP_PROFILE: process.env.SMARTMONEY_FIXTURE_HEAP_PROFILE || 'false',
     MAX_SYMBOLS_TO_SCAN: fullLoad ? '60' : '3',
     MIN_SYMBOLS_NEEDED: '3', MAX_ASSETS_FALLBACK: '60',
@@ -51,6 +54,7 @@ test(`actual server boots, serves stocks and crypto, and completes a scan withou
   child.stdout.on('data', d => { log = (log + d).slice(-16000); });
   child.stderr.on('data', d => { log = (log + d).slice(-16000); });
   child.on('message', m => {
+    if (m.type === 'payload-profile') console.log('SERIALIZATION_PROFILE', JSON.stringify(m));
     if (m.type === 'heap-profile') console.log('HEAP_PROFILE', JSON.stringify(m));
     if (m.type === 'metrics') { metrics = m; peakRss = Math.max(peakRss, m.rss || 0); }
     if (m.type === 'unsafe-write') unsafe = true;
@@ -73,7 +77,8 @@ test(`actual server boots, serves stocks and crypto, and completes a scan withou
       let response;
       const requestStarted = performance.now();
       try {
-        response = await fetch(`http://127.0.0.1:${port}${route}`, { headers: { Authorization: `Bearer ${token}` }, signal: AbortSignal.timeout(3000) });
+        response = await fetch(`http://127.0.0.1:${port}${route}`, { headers: { Authorization: `Bearer ${token}`,
+          ...(process.env.SMARTMONEY_FIXTURE_IDENTITY === 'true' ? { 'Accept-Encoding': 'identity' } : {}) }, signal: AbortSignal.timeout(3000) });
         assert.equal(response.status, 200, `${route}: ${log}`);
         const body = await response.json();
         if (process.env.SMARTMONEY_PAYLOAD_PROFILE === 'true' && route === '/frontend/signals') {
@@ -84,10 +89,11 @@ test(`actual server boots, serves stocks and crypto, and completes a scan withou
         maxRequestMs = Math.max(maxRequestMs, performance.now() - requestStarted);
         return body;
       } catch (error) {
+        await new Promise(resolve => setTimeout(resolve, 3000));
         // Keep the original timeout a failure, but allow a blocked event loop to
         // emit its diagnostic profile before the test-only child is terminated.
         if (env.SMARTMONEY_FIXTURE_PROFILE === 'true') await new Promise(resolve => setTimeout(resolve, 5000));
-        throw new Error(`Request failed: ${route}; metrics=${JSON.stringify(metrics)}; profiles=${JSON.stringify(profiles)}\n${log.slice(-1000)}`, { cause: error });
+        throw new Error(`Request failed: ${route}; metrics=${JSON.stringify(metrics)}; profiles=${JSON.stringify(profiles)}\n${log.slice(-4000)}`, { cause: error });
       }
     };
     const initial = await read('/frontend/snapshot');
@@ -263,13 +269,21 @@ test(`actual server boots, serves stocks and crypto, and completes a scan withou
     }
     const soakDeadline = Date.now() + soakMs;
     let requests = 0;
+    let responseTimeouts = 0;
     const firstCycleAt = health.engine.lastSuccessfulCycleAt;
     let latestCycleAt = firstCycleAt;
     let outcomeStorage = health.outcomeStorage;
     let lastProgressAt = Date.now();
+    let heapWindowAt = Date.now(), heapWindowMin = Infinity;
+    const heapFloors = [];
     while (Date.now() < soakDeadline) {
       const sample = await read('/health');
-      assert.ok(sample.server.memory.limitMb <= 512, 'fixture guard must respect the real 512 MB budget');
+      heapWindowMin = Math.min(heapWindowMin, metrics.heapUsed || Infinity);
+      if (Date.now() - heapWindowAt >= 600000) {
+        heapFloors.push(Math.round(heapWindowMin / 1048576));
+        heapWindowAt = Date.now(); heapWindowMin = Infinity;
+      }
+      assert.ok(sample.server.memory.limitMb <= memoryBudgetMb, 'fixture guard must respect its configured container budget');
       latestCycleAt = sample.engine.lastSuccessfulCycleAt;
       outcomeStorage = sample.outcomeStorage;
       assert.equal(sample.engine.lastError, null, log);
@@ -281,20 +295,37 @@ test(`actual server boots, serves stocks and crypto, and completes a scan withou
       peakRss = Math.max(peakRss, metrics.rss || 0);
       assert.ok(peakRss < rssLimitMb * 1024 * 1024,
         `soak exceeded ${rssLimitMb} MB RSS: observed ${Math.round(peakRss / 1048576)} MB`);
-      await read('/frontend/signals');
+      try { await read(process.env.SMARTMONEY_MAX_FEED === 'true' ? '/frontend/signals?limit=100' : '/frontend/signals'); }
+      catch (error) {
+        // Keep measuring memory through the old 12.5-hour failure window, but
+        // NEVER turn response failures into a passing release result.
+        if (process.env.SMARTMONEY_CONTINUE_TIMEOUTS !== 'true' ||
+          !['TimeoutError', 'AbortError'].includes(error.cause?.name)) throw error;
+        responseTimeouts++;
+        console.log('SOAK_RESPONSE_TIMEOUT', JSON.stringify({ responseTimeouts,
+          at: new Date().toISOString(), rss: metrics.rss, heapUsed: metrics.heapUsed }));
+      }
       if (streamBurst && requests % 10 === 0) child.send({ type: 'finnhub-burst', count: 200, separateFrames: requests % 20 === 0 });
       requests++;
       if (Date.now() - lastProgressAt >= 60000) {
         lastProgressAt = Date.now();
-        console.log('SOAK_PROGRESS', JSON.stringify({ requests,
+        console.log('SOAK_PROGRESS', JSON.stringify({ requests, responseTimeouts,
           remainingSeconds: Math.max(0, Math.ceil((soakDeadline - Date.now()) / 1000)),
           peakRssMB: Math.round(peakRss / 1048576), maxEventLoopDelayMs: metrics.maxEventLoopDelayMs,
+          heapUsedMB: Math.round((metrics.heapUsed || 0) / 1048576), heapFloors,
           maxRequestMs: Math.round(maxRequestMs), deliveredBurstTrades,
           latestCycleAt, outcomeStorage, providerWrites: metrics.writes || 0 }));
       }
       await new Promise(resolve => setTimeout(resolve, 500));
     }
     if (soakMs >= 360000) assert.notEqual(latestCycleAt, firstCycleAt, 'soak never completed the second scheduled scan');
+    if (heapFloors.length >= 18) {
+      // Compare post-warmup and final hourly floors, not noisy GC peaks.
+      const warmFloor = Math.min(...heapFloors.slice(6, 12));
+      const finalFloor = Math.min(...heapFloors.slice(-6));
+      assert.ok(finalFloor <= warmFloor + 64,
+        `Retained heap grew by more than 64 MiB after warmup: ${JSON.stringify(heapFloors)}`);
+    }
     if (polygonFault === 'candidate-recovery' && soakMs >= 15000) {
       const recoveryHealth = await read('/health');
       for (const asset of ['stocks', 'crypto']) {
@@ -313,6 +344,7 @@ test(`actual server boots, serves stocks and crypto, and completes a scan withou
       outcomeStorage,
       stocks: health.candidates?.stocks, crypto: health.candidates?.crypto,
       ...(profileTotals.size ? { profileTotals: [...profileTotals].sort((a, b) => b[1] - a[1]).slice(0, 15) } : {}) }));
+    assert.equal(responseTimeouts, 0, 'Response timeouts remain a deployment blocker even if memory stays bounded');
   } finally {
     if (child.exitCode === null) {
       const exit = new Promise(resolve => child.once('exit', resolve));

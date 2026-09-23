@@ -67,11 +67,15 @@ test('process diagnostics rotate within budget and exclude arbitrary state and s
   const directory = fs.mkdtempSync(path.join(os.tmpdir(), 'smartmoney-diag-test-'));
   const processRef = Object.assign(new EventEmitter(), { pid: 1, env: {}, version: process.version,
     memoryUsage: () => ({ rss: 10 * 1048576, heapUsed: 1048576 }), uptime: () => 3 });
-  const diagnostics = installProcessDiagnostics({ directory, processRef, maxFileBytes: 4096, logger: { error() {} } });
+  const diagnostics = installProcessDiagnostics({ directory, processRef, maxFileBytes: 4096,
+    getHeapStatistics: () => ({ heap_size_limit: 1024 * 1048576 }), logger: { error() {} } });
   try {
     diagnostics.setSnapshotReader(() => ({ phase: 'STOCK_SCAN', running: true, stocks: 3, secret: 'PRIVATE' }));
     for (let i = 0; i < 100; i++) diagnostics.record('HEARTBEAT');
     diagnostics.record('UNCAUGHT_EXCEPTION', new Error('https://provider/?apiKey=PRIVATE'));
+    const latest = JSON.parse(fs.readFileSync(path.join(directory, 'process.jsonl'), 'utf8').trim().split('\n').at(-1));
+    assert.equal(latest.heapLimitMB, 1024);
+    assert.equal(latest.heapUsagePercent, 0.1);
     const files = fs.readdirSync(directory);
     assert.equal(files.length, 2);
     for (const file of files) {

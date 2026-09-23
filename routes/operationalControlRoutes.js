@@ -90,6 +90,9 @@ export function registerOperationalControlRoutes(app, dependencies) {
   });
 
   app.post("/forex-auto/on", requireAdmin, (_req, res) => {
+    if (getControlState().forexEmergencyStopActive === true) {
+      return res.status(423).json({ ok: false, error: "Release the forex emergency stop first." });
+    }
     const nextState = updateControlState({ forexAutoEnabled: true });
     saveEngineState("FOREX_AUTO_ENABLED");
     res.json({
@@ -109,6 +112,22 @@ export function registerOperationalControlRoutes(app, dependencies) {
       forexAutoEnabled: nextState.forexAutoEnabled === true,
       autoTradingEnabled: nextState.autoTradingEnabled,
     });
+  });
+
+  app.post("/forex-emergency-stop", requireAdmin, (_req, res) => {
+    const state = updateControlState({ forexEmergencyStopActive: true, forexAutoEnabled: false });
+    saveEngineState("FOREX_EMERGENCY_STOP_ENGAGED");
+    res.json({ ok: true, forexEmergencyStopActive: true, forexAutoEnabled: state.forexAutoEnabled,
+      message: "Forex entries stopped. Forex protection and exits remain available. Stocks/crypto unchanged." });
+  });
+  app.post("/forex-emergency-stop/release", requireAdmin, (req, res) => {
+    if (req.body?.confirmation !== "RELEASE FOREX EMERGENCY STOP") {
+      return res.status(400).json({ ok: false, error: "Exact confirmation phrase required: RELEASE FOREX EMERGENCY STOP" });
+    }
+    const state = updateControlState({ forexEmergencyStopActive: false });
+    saveEngineState("FOREX_EMERGENCY_STOP_RELEASED");
+    res.json({ ok: true, forexEmergencyStopActive: false, forexAutoEnabled: state.forexAutoEnabled,
+      message: "Forex stop released. Enable Forex Autopilot separately. Stocks/crypto unchanged." });
   });
 
   app.post("/forex-entries/pause", requireAdmin, (req, res) => {

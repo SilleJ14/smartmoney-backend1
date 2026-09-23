@@ -46,6 +46,7 @@ export function createOandaClient({
         "Accept-Datetime-Format": "RFC3339",
       },
       body: body ? JSON.stringify(body) : undefined,
+      signal: AbortSignal.timeout(10000),
     });
     const text = await response.text();
     let data = {};

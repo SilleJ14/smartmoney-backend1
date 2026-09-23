@@ -224,7 +224,9 @@ export function createEngineCycle(dependencies) {
       engineState.cryptoTradingStoppedForDay = false;
       const openingBellJustTriggered =
         engineState.lastMarketOpen === false && marketOpen === true;
-      if (openingBellJustTriggered) {
+      const openingMemoryGuard = openingBellJustTriggered && typeof getMemoryGuardState === 'function'
+        ? getMemoryGuardState() : null;
+      if (openingBellJustTriggered && !openingMemoryGuard?.shouldPauseHeavyWork) {
         engineState.openingBellTriggeredAt = Date.now();
         recordOrder("OPENING_BELL_TRIGGER_DETECTED", "MARKET", {
           openingBellTriggeredAt: new Date(

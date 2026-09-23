@@ -45,7 +45,7 @@ function breakoutQuality(candle, A, side) {
   return close <= high - 0.75 * range;
 }
 
-export function evaluateBreakoutRetest({ h1 = [], m15 = [], h4 = [], side = "buy" } = {}) {
+export function evaluateBreakoutRetest({ h1 = [], m15 = [], h4 = [], side = "buy", previous } = {}) {
   const hours = completed(h1);
   const minutes = completed(m15);
   if (hours.length < 23) {
@@ -53,16 +53,18 @@ export function evaluateBreakoutRetest({ h1 = [], m15 = [], h4 = [], side = "buy
   }
   const rangeStart = hours.length - 8;
   const range = hours.slice(rangeStart);
-  const A = atrBeforeWindow(hours, rangeStart, 14);
+  const prior = previous?.frozen?.rangeEnd && !["EXPIRED", "INVALIDATED", "ORDER_INTENT_CREATED"].includes(previous.state)
+    ? previous.frozen : null;
+  const A = prior?.A ?? atrBeforeWindow(hours, rangeStart, 14);
   if (!Number.isFinite(A) || A <= 0) {
     return { status: "NONE", stage: "DISCOVERED", reason: "ATR_UNAVAILABLE", strategyId: "FOREX_BREAKOUT_RETEST_V1" };
   }
-  const H = Math.max(...range.map((row) => num(row.h)));
-  const L = Math.min(...range.map((row) => num(row.l)));
+  const H = prior?.H ?? Math.max(...range.map((row) => num(row.h)));
+  const L = prior?.L ?? Math.min(...range.map((row) => num(row.l)));
   const firstOpen = num(range[0].o);
   const lastClose = num(range[7].c);
   const tight = H - L <= 2.5 * A && Math.abs(firstOpen - lastClose) <= 0.75 * A;
-  if (!tight) {
+  if (!prior && !tight) {
     return { status: "NONE", stage: "DISCOVERED", reason: "RANGE_NOT_TIGHT", strategyId: "FOREX_BREAKOUT_RETEST_V1", A };
   }
   if (side === "buy" && isFourHourDowntrend(h4)) {
@@ -73,26 +75,30 @@ export function evaluateBreakoutRetest({ h1 = [], m15 = [], h4 = [], side = "buy
   }
 
   const threshold = side === "buy" ? H + 0.10 * A : L - 0.10 * A;
-  const afterRange = minutes.slice(-8);
+  const end = Date.parse(prior?.rangeEnd || "") || Date.parse(range.at(-1).t) + 3600000;
+  if (!Number.isFinite(end)) return { status: "NONE", stage: "BLOCKED", reason: "CANDLE_TIMESTAMP_INVALID", strategyId: "FOREX_BREAKOUT_RETEST_V1" };
+  const rangeEnd = new Date(end).toISOString();
+  const afterRange = minutes.filter(row => Date.parse(row.t) >= Date.parse(rangeEnd));
+  const frozen = { H, L, A, side, rangeEnd };
+  if (afterRange.length > 32) return { status: "INVALIDATED", stage: "EXPIRED", reason: "ENTRY_EXPIRED", strategyId: "FOREX_BREAKOUT_RETEST_V1", frozen };
   let breakoutIndex = -1;
-  for (let index = 1; index < afterRange.length; index += 1) {
+  for (let index = 0; index < afterRange.length; index += 1) {
     const close = num(afterRange[index].c);
-    const prev = num(afterRange[index - 1].c);
+    const prev = index ? num(afterRange[index - 1].c) : side === "buy" ? H : L;
     const crossed = side === "buy" ? close >= threshold && prev < threshold : close <= threshold && prev > threshold;
     if (crossed && breakoutQuality(afterRange[index], A, side)) {
       breakoutIndex = index;
       break;
     }
   }
-  const frozen = { H, L, A, side };
   if (breakoutIndex < 0) {
     return { status: "CANDIDATE", stage: "WATCHING", reason: "RANGE_FROZEN", strategyId: "FOREX_BREAKOUT_RETEST_V1", frozen, passed: ["Range"], pending: ["Breakout"] };
   }
 
   const post = afterRange.slice(breakoutIndex);
   const failLow = side === "buy"
-    ? post.some((row) => num(row.l) < H - 0.15 * A)
-    : post.some((row) => num(row.h) > L + 0.15 * A);
+    ? post.slice(1).some((row) => num(row.l) < H - 0.15 * A)
+    : post.slice(1).some((row) => num(row.h) > L + 0.15 * A);
   if (failLow) {
     return { status: "INVALIDATED", stage: "INVALIDATED", reason: "RETEST_FAILED", strategyId: "FOREX_BREAKOUT_RETEST_V1", frozen };
   }
@@ -129,12 +135,12 @@ export function evaluateBreakoutRetest({ h1 = [], m15 = [], h4 = [], side = "buy
 
   const retestCandle = post[retestIndex];
   const renewWindow = post.slice(retestIndex + 1, retestIndex + 4);
-  const renewed = renewWindow.some((row) => (
+  const renewalIndex = renewWindow.findIndex((row) => (
     side === "buy"
       ? num(row.c) > num(retestCandle.h) + 0.05 * A
       : num(row.c) < num(retestCandle.l) - 0.05 * A
   ));
-  if (!renewed) {
+  if (renewalIndex < 0) {
     if (post.length > retestIndex + 3) {
       return { status: "INVALIDATED", stage: "EXPIRED", reason: "ENTRY_EXPIRED", strategyId: "FOREX_BREAKOUT_RETEST_V1", frozen };
     }
@@ -150,7 +156,8 @@ export function evaluateBreakoutRetest({ h1 = [], m15 = [], h4 = [], side = "buy
     };
   }
 
-  const sequence = post.slice(0, retestIndex + 1 + renewWindow.length);
+  const confirmation = renewWindow[renewalIndex];
+  const sequence = post.slice(0, retestIndex + 2 + renewalIndex);
   const stop = side === "buy"
     ? Math.min(...sequence.map((row) => num(row.l))) - 0.10 * A
     : Math.max(...sequence.map((row) => num(row.h))) + 0.10 * A;
@@ -158,6 +165,8 @@ export function evaluateBreakoutRetest({ h1 = [], m15 = [], h4 = [], side = "buy
     status: "CANDIDATE",
     stage: "WATCHING",
     reason: "RENEWED_MOVEMENT",
+    confirmedAt: new Date(Date.parse(confirmation.t) + 900000).toISOString(),
+    confirmationPrice: num(confirmation.c),
     strategyId: "FOREX_BREAKOUT_RETEST_V1",
     frozen,
     stop,

@@ -190,7 +190,7 @@ test("ai forex desk stays off Autopilot and mixes all three on All", frontendTes
   assert.match(aiBlock, /matchesOpportunityFilter\(row\.candidate, aiDecisionAssetFilter\)/);
 });
 
-test("settings forex engine stays off Autopilot and keeps OANDA practice keys local", frontendTestOptions, () => {
+test("settings forex controls are separate and display backend execution mode", frontendTestOptions, () => {
   const settingsBlock = frontendSource.slice(
     frontendSource.indexOf("const SettingsTab = () => {"),
     frontendSource.indexOf("const renderWelcomeScreen = () => {")
@@ -198,15 +198,23 @@ test("settings forex engine stays off Autopilot and keeps OANDA practice keys lo
   assert.match(settingsBlock, /Forex Engine/);
   assert.match(settingsBlock, /OANDA Practice Account ID/);
   assert.match(settingsBlock, /Forex Autopilot/);
-  assert.match(settingsBlock, /AUTOMATIC ORDERS DISABLED/);
-  assert.match(settingsBlock, /CLEAR AUTO REQUEST/);
+  assert.match(settingsBlock, /FOREX AUTOPILOT OFF/);
+  assert.match(settingsBlock, /FOREX AUTOPILOT ON/);
+  assert.match(settingsBlock, /FOREX EMERGENCY STOP/);
+  assert.match(settingsBlock, /forexEngineStatus\.executionMode/);
   assert.match(settingsBlock, /oandaForexPairList/);
   assert.doesNotMatch(settingsBlock, /OANDA practice desk/);
   assert.doesNotMatch(settingsBlock, /Live forex orders stay blocked/);
   assert.doesNotMatch(settingsBlock, /FOREX AUTO STAYS OFF/);
   assert.doesNotMatch(settingsBlock, /Live Orders/);
-  assert.match(settingsBlock, /disabled=\{!forexAutoTrading\}/);
-  assert.match(settingsBlock, /\/forex-auto\//);
+  assert.match(settingsBlock, /disabled=\{forexControlBusy \|\| forexEmergencyStop\}/);
+  assert.match(frontendSource, /\/forex-auto\//);
+  const homeControls = frontendSource.slice(frontendSource.indexOf("const PremiumControlDashboard ="), frontendSource.indexOf("const portfolioHeatScore ="));
+  assert.match(homeControls, /showForexDesk \? toggleForexAuto\(true\) : toggleAuto\(true\)/);
+  assert.match(homeControls, /showForexDesk \? toggleForexAuto\(false\) : toggleAuto\(false\)/);
+  assert.match(homeControls, /showForexDesk \? forexEmergencyStop : emergencyStopActive/);
+  const forexToggle = frontendSource.slice(frontendSource.indexOf("const toggleForexAuto ="), frontendSource.indexOf("const PremiumControlDashboard ="));
+  assert.doesNotMatch(forexToggle, /setAutoTrading\(|setEmergencyStopActive\(/);
   assert.match(frontendSource, /forexAutoEnabled/);
   assert.doesNotMatch(settingsBlock, /setAutoTrading\(true\)/);
   assert.match(frontendSource, /SMARTMONEY_OANDA_PRACTICE_TOKEN/);

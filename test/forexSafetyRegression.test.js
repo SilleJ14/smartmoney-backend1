@@ -134,7 +134,9 @@ test("engine fetches pending orders, advances replay cursor, and reports elapsed
   assert.equal(pendingCalls, 1);
   assert.equal(snapshot.quoteAgeSeconds, 3);
   assert.equal(snapshot.halt, "STALE_PRICE");
-  assert.equal(snapshot.executionMode, "ANALYSIS_ONLY");
+  // The existing practice-host mode label describes configuration, not
+  // permission to submit. Stale evidence must still deny authorization below.
+  assert.equal(snapshot.executionMode, "PRACTICE_ORDERS");
   assert.equal(snapshot.executionReady, false);
   assert.equal(snapshot.autoTradingAuthorized, false);
   await runForexEngineCycle(input);

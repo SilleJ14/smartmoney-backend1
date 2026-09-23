@@ -16,6 +16,8 @@ test("lightweight status carries the frontend trading and discovery contract", a
     quietCandidateOutcomeState: { observationCount: 4 },
     quietCandidateOutcomeLearning: { stock: { sampleCount: 2 } },
     boundedQuietDiscoveryState: { watchlistCount: 10 },
+    forexEngine: { lastCycleAt: "current", positions: [] },
+    forexProtection: { positionsChecked: 0 },
   };
   registerStatusRoutes(app, {
     requireAdmin: (_req, _res, next) => next(),
@@ -25,11 +27,16 @@ test("lightweight status carries the frontend trading and discovery contract", a
       tradingModeLocked: false,
       autoTradingEnabled: true,
       emergencyStopActive: false,
+      forexAutoEnabled: false,
+      forexEmergencyStopActive: true,
+      forexPauseEntries: true,
+      forexCalendarStatus: { qualityStatus: 'ERROR', error: 'CALENDAR_ACCESS_DENIED' },
       config: { minScoreToBuy: 78 },
     }),
-    refreshAccountCache: async () => ({ ok: true }),
+    refreshAccountCache: async () => { throw new Error("simulated Alpaca outage"); },
     getLatestStatus: () => ({
       signalCount: 1,
+      forexEngine: { lastCycleAt: "old" },
       stockSignalCount: 1,
       cryptoSignalCount: 0,
       topStockSignals: [{ symbol: "AAPL" }],
@@ -64,6 +71,12 @@ test("lightweight status carries the frontend trading and discovery contract", a
   await routes.get("/status")({}, response);
 
   assert.equal(response.body.ok, true);
+  assert.equal(response.body.forexEmergencyStopActive, true);
+  assert.equal(response.body.forexPauseEntries, true);
+  assert.equal(response.body.forexCalendar.error, 'CALENDAR_ACCESS_DENIED');
+  assert.equal(response.body.forexEngine.lastCycleAt, "current");
+  assert.equal(response.body.forexProtection.positionsChecked, 0);
+  assert.equal(response.body.statusAccountRefresh.stale, true);
   assert.equal(response.body.config.minScoreToBuy, 78);
   assert.equal(response.body.engineState.marketOpen, true);
   assert.equal(response.body.engineState.liveStarterBuyGateState.topApproved[0].symbol, "AAPL");

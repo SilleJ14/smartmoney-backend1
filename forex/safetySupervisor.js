@@ -49,12 +49,14 @@ export function createSafetySupervisor({ store, instanceId = "local" } = {}) {
       const accountId = accountSnapshot?.id;
       try {
         await store.commit((ledger) => {
-          if (!ledger.owner) {
-            ledger.owner = { instanceId, accountId, at: new Date().toISOString() };
+          if (!ledger.owner || Number(ledger.owner.expiresAt || 0) < Date.now()) {
+            ledger.owner = { instanceId, accountId, at: new Date().toISOString(), expiresAt: Date.now() + 60000 };
           } else if (ledger.owner.instanceId !== instanceId) {
             throw Object.assign(new Error("NOT_EXECUTION_OWNER"), { reason: "NOT_EXECUTION_OWNER" });
           }
+          ledger.owner.expiresAt = Date.now() + 60000;
           ingestTransactions(ledger, accountId, transactions);
+          ledger.openTradeIds = openTrades.map(trade => `${accountId}:${trade.id}`);
           if (historyLoaded) ledger.fillSchemaVersion = 1;
           missedOk = true;
           ledger.lastTransactionId[accountId] = Number(lastTransactionId || ledger.lastTransactionId[accountId] || 0);

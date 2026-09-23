@@ -2,6 +2,21 @@
 // Never contact a provider or submit an order from this fixture.
 import http from 'node:http';
 import { Session } from 'node:inspector';
+if (process.env.SMARTMONEY_FIXTURE_PAYLOAD_PROFILE === 'true') {
+  const stringify = JSON.stringify;
+  let reports = 0;
+  JSON.stringify = function(value, ...args) {
+    const result = stringify(value, ...args);
+    if (value?.symbol && result?.length > 100000 && reports++ < 8) {
+      const fields = Object.entries(value || {}).map(([key, item]) => [key, stringify(item)?.length || 0])
+        .sort((a,b) => b[1]-a[1]).slice(0, 6);
+      const candidate = value?.payload?.stockSignals?.[0] || value?.payload?.cryptoSignals?.[0] || value?.stockSignals?.[0] || value?.signals?.[0] || value;
+      process.send?.({ type: 'payload-profile', bytes: result.length, fields,
+        candidateFields: Object.entries(candidate || {}).map(([key, item]) => [key, stringify(item)?.length || 0]).sort((a,b) => b[1]-a[1]).slice(0, 8) });
+    }
+    return result;
+  };
+}
 if (process.env.SMARTMONEY_FIXTURE_HEAP_PROFILE === 'true') {
   const session = new Session(); session.connect();
   session.post('HeapProfiler.startSampling', { samplingInterval: 65536 });
@@ -173,7 +188,8 @@ setInterval(() => {
   const now = performance.now();
   maxEventLoopDelayMs = Math.max(maxEventLoopDelayMs, now - metricAt - 1000);
   metricAt = now;
-  process.send?.({ type: 'metrics', reads, writes, polygonReads, rss: process.memoryUsage().rss,
+  const memory = process.memoryUsage();
+  process.send?.({ type: 'metrics', reads, writes, polygonReads, rss: memory.rss, heapUsed: memory.heapUsed, external: memory.external,
     maxEventLoopDelayMs: Math.round(maxEventLoopDelayMs) });
 }, 1000).unref();
 await import('../server.js');

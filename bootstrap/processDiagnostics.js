@@ -1,10 +1,11 @@
 import fs from 'node:fs';
 import path from 'node:path';
+import v8 from 'node:v8';
 
 // Small, local, allowlisted records only: no quotes, accounts, URLs, credentials,
 // provider payloads or arbitrary exception messages. Fatal errors still terminate.
 export function installProcessDiagnostics({ directory, processRef = process, logger = console,
-  maxFileBytes = 128 * 1024, intervalMs = 15000 } = {}) {
+  maxFileBytes = 128 * 1024, intervalMs = 15000, getHeapStatistics = v8.getHeapStatistics } = {}) {
   const file = path.join(directory, 'process.jsonl');
   const previous = path.join(directory, 'process.previous.jsonl');
   const budget = Math.max(4096, Math.min(128 * 1024, Number(maxFileBytes) || 128 * 1024));
@@ -14,6 +15,7 @@ export function installProcessDiagnostics({ directory, processRef = process, log
   function record(event, error, exitCode) {
     try {
       const memory = processRef.memoryUsage();
+      const heapLimit = getHeapStatistics().heap_size_limit;
       const snapshot = getSnapshot() || {};
       const phase = typeof snapshot.phase === 'string' && /^[A-Z0-9_ -]{1,80}$/.test(snapshot.phase)
         ? snapshot.phase : null;
@@ -22,6 +24,9 @@ export function installProcessDiagnostics({ directory, processRef = process, log
         commit: /^[a-f0-9]{40}$/i.test(processRef.env?.RENDER_GIT_COMMIT || '') ? processRef.env.RENDER_GIT_COMMIT : null,
         node: processRef.version, uptimeSeconds: Math.round(processRef.uptime()),
         rssMB: Math.round(memory.rss / 1048576), heapMB: Math.round(memory.heapUsed / 1048576),
+        heapLimitMB: Math.round(heapLimit / 1048576),
+        heapUsagePercent: Number((100 * memory.heapUsed / heapLimit).toFixed(1)),
+        externalMB: Math.round((memory.external || 0) / 1048576),
         phase, running: snapshot.running === true,
         stocks: finite(snapshot.stocks), crypto: finite(snapshot.crypto),
         exitCode: finite(exitCode),

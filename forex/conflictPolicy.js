@@ -7,12 +7,14 @@ export function resolveStrategyConflict(candidates = []) {
     byPair.set(key, list);
   }
   for (const list of byPair.values()) {
-    const live = list.filter((row) => !["INVALIDATED", "EXPIRED", "BLOCKED"].includes(row.state));
+    // A range being watched in both directions is not two opposing trade signals.
+    const live = list.filter((row) => ["TRIGGER_CONFIRMED", "EXECUTION_ELIGIBLE"].includes(row.state));
     const sides = new Set(live.map((row) => row.side));
     if (sides.size > 1) {
       for (const row of live) {
         row.state = "BLOCKED";
         row.lastReason = "STRATEGY_CONFLICT";
+        row.blockers = [...(row.blockers || []), "STRATEGY_CONFLICT"];
         row.executionAuthorization = "None";
       }
     }

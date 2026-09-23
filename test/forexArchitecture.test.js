@@ -248,6 +248,8 @@ test("unknown order outcome keeps reservation and does not retry", async () => {
   const { createApprovalRegistry } = await import("../forex/approvalRegistry.js");
   const store = createMemoryStore({ treatAsDurable: true });
   const coordinator = createExecutionCoordinator({
+    // Unit test isolates broker timeout handling; real evidence refresh has dedicated integration tests.
+    refreshPlan: async (_adapter, _store, plan) => ({ ...plan, conversionFactor: 1 }),
     adapter: {
       liveHost: false,
       async createMarketOrder() {

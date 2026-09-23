@@ -2,7 +2,7 @@ import { FOREX_SPEC, FOREX_SPEC_VERSION, toDisplayPair } from "./forexSpec.js";
 import { performance } from "node:perf_hooks";
 import { FOREX_RISK_LIMITS, permittedUnits, sizingReference } from "./riskManager.js";
 import { canonicalAccountId, resolveAssetClass } from "./identity.js";
-import { createApprovalRegistry, mayAutoExecute } from "./approvalRegistry.js";
+import { createApprovalRegistry, automaticEntryPermission } from "./approvalRegistry.js";
 import { createCandidate, transitionCandidate } from "./candidateManager.js";
 import { createExecutionCoordinator } from "./executionCoordinator.js";
 import { createSafetySupervisor } from "./safetySupervisor.js";
@@ -14,9 +14,9 @@ import { inspectCandles } from "./candleIntegrity.js";
 import { forexMarketState, mustCloseBeforeEventOrWeekend } from "./sessionHours.js";
 import { spreadChecks } from "./spreadCost.js";
 import { clockHealth } from "./clockSync.js";
-import { mapInstrument, quoteConversionFactor } from "./instrumentSpecs.js";
+import { mapInstrument, quoteConversionFactor, lossConversion } from "./instrumentSpecs.js";
 import { resolveStrategyConflict, oneOpenPerPair } from "./conflictPolicy.js";
-import { chasedAway, plannedTarget, stopDistanceOk } from "./strategyExits.js";
+import { chasedAway, entryExpired, plannedTarget, stopDistanceOk } from "./strategyExits.js";
 import { defaultCalendarSnapshot, calendarForDecision } from "./calendarFeed.js";
 import { dailyLossState, drawdownLock, remainingDailyRiskPercent, updateEquityBaselines, openStopRisk } from "./accountRisk.js";
 import { operatingStatus } from "./monitoring.js";
@@ -38,17 +38,18 @@ function num(value) {
 }
 
 function mapCandles(payload, source) {
-  return (payload?.candles || []).map((candle) => ({
+  if (!Array.isArray(payload?.candles)) return null;
+  return payload.candles.map((candle) => candle && ({
     t: candle.time,
-    o: num(candle.mid?.o ?? candle.bid?.o),
-    h: num(candle.mid?.h ?? candle.bid?.h),
-    l: num(candle.mid?.l ?? candle.bid?.l),
-    c: num(candle.mid?.c ?? candle.bid?.c),
+    o: Number(candle.mid?.o ?? candle.bid?.o),
+    h: Number(candle.mid?.h ?? candle.bid?.h),
+    l: Number(candle.mid?.l ?? candle.bid?.l),
+    c: Number(candle.mid?.c ?? candle.bid?.c),
     bidH: num(candle.bid?.h),
     bidL: num(candle.bid?.l),
     askH: num(candle.ask?.h),
     askL: num(candle.ask?.l),
-    complete: candle.complete !== false,
+    complete: candle.complete,
     source,
     providerTimestamp: candle.time,
   }));
@@ -86,6 +87,9 @@ function toSignal(instrument, identity, quote, row, result, recovered) {
     forexState: frontendState(row.state),
     forexSide: row.side,
     reason: row.lastReason,
+    blockers: row.blockers || [],
+    firstDetectedAt: row.firstSeenAt || null,
+    confirmedAt: row.confirmedAt || null,
     system: result.strategyId,
     price: quote.mid,
     livePrice: quote.mid,
@@ -99,9 +103,9 @@ function toSignal(instrument, identity, quote, row, result, recovered) {
       forexSide: row.side,
       forexGates: {
         trend: (result.passed || []).length > 0,
-        setup: row.state !== "INVALIDATED",
+        setup: ["WATCHING", "TRIGGER_CONFIRMED", "EXECUTION_ELIGIBLE"].includes(row.state),
         entry: row.state === "EXECUTION_ELIGIBLE",
-        risk: recovered.executionReady === true,
+        risk: row.state === "EXECUTION_ELIGIBLE" && recovered.autoTradingAuthorized === true,
       },
     },
   };
@@ -128,6 +132,10 @@ export async function runForexEngineCycle({
   now = Date.now(),
   clockNow,
   getEntryPause,
+  getAutoEnabled,
+  getCalendar,
+  forexEmergencyStopActive = false,
+  registry: providedRegistry,
   durableStorageAvailable = false,
   store,
   calendar = defaultCalendarSnapshot(),
@@ -136,7 +144,8 @@ export async function runForexEngineCycle({
   const started = performance.now();
   const currentTime = clockNow || (() => now + performance.now() - started);
   const orderSubmissionEnabled = spec.practiceOrdersEnabled === true && client?.liveHost !== true;
-  const registry = state.registry || createApprovalRegistry();
+  const registry = providedRegistry || state.registry || createApprovalRegistry();
+  const autoRequested = () => (getAutoEnabled ? getAutoEnabled() === true : forexAutoEnabled === true);
   const ledgerStore = store || createForexStore({
     memory: !durableStorageAvailable,
     treatAsDurable: durableStorageAvailable === true,
@@ -145,6 +154,9 @@ export async function runForexEngineCycle({
   const coordinator = client ? createExecutionCoordinator({
     adapter: client,
     getEntryPause,
+    getAutoEnabled: autoRequested,
+    getCalendar,
+    nowFn: currentTime,
     registry,
     store: ledgerStore,
     instanceId,
@@ -153,6 +165,7 @@ export async function runForexEngineCycle({
   const snapshot = {
     specVersion: FOREX_SPEC_VERSION,
     forexAutoEnabled: forexAutoEnabled === true,
+    forexEmergencyStopActive,
     halt: "CLEAR",
     haltState: "CLEAR",
     session: "OANDA_PRACTICE",
@@ -173,7 +186,7 @@ export async function runForexEngineCycle({
     coordinatorBound: Boolean(coordinator),
     executionMode: orderSubmissionEnabled ? "PRACTICE_ORDERS" : "ANALYSIS_ONLY",
     executionNote: orderSubmissionEnabled
-      ? "Practice orders are on. Risk cap is 10% of the practice account. Live orders stay off."
+      ? "Forex Autopilot authorizes continuation practice entries subject to all safety gates. Breakout/retest requires separate approval. Live orders stay off."
       : "Practice analysis only — automatic order submission is disabled.",
     practiceRiskCapPercent: FOREX_RISK_LIMITS.plannedRiskPerTradePercent,
     calendarNote: calendarForDecision(calendar, { now }).ok ? "Calendar coverage current." : "Calendar unavailable or restricted — new forex entries blocked.",
@@ -223,6 +236,7 @@ export async function runForexEngineCycle({
     const tradesVerified = Array.isArray(tradesPayload?.trades);
     const openTrades = tradesPayload?.trades || [];
     const savedLedger = await ledgerStore.load();
+    if (!providedRegistry && savedLedger.strategyRegistry) Object.assign(registry, savedLedger.strategyRegistry);
     const lastCursor = String(savedLedger.lastTransactionId?.[snapshot.account.id] || 0);
     const baselineCursor = String(savedLedger.dayStart?.[snapshot.account.id]?.cursor || 0);
     const cursor = savedLedger.fillSchemaVersion === 1 ? (BigInt(lastCursor) < BigInt(baselineCursor) ? lastCursor : baselineCursor) : "0";
@@ -236,7 +250,7 @@ export async function runForexEngineCycle({
     snapshot.lastTransactionId = account.lastTransactionID;
     const instrumentPayload = typeof client.getInstruments === "function" ? await client.getInstruments() : { instruments: [] };
     const specs = new Map((instrumentPayload?.instruments || []).map((row) => [row.name, mapInstrument(row)]));
-    const pricesPayload = await client.getPrices(spec.scanInstruments);
+    const pricesPayload = await client.getPrices([...new Set([...spec.scanInstruments, ...openTrades.map(t => t.instrument)])]);
     const prices = (pricesPayload?.prices || []).map(mapPrice);
     const clock = clockHealth({ now: currentTime(), providerTimestamp: prices[0]?.time });
     const session = forexMarketState(now);
@@ -283,6 +297,21 @@ export async function runForexEngineCycle({
     const signalSources = [];
     const bestByInstrument = new Map();
 
+    // Fetch bounded history first, then one current quote batch. Earlier pairs no longer
+    // age while later history is downloaded. A failed pair doesn't erase other evidence.
+    const histories = new Map();
+    for (const instrument of spec.scanInstruments) {
+      try {
+        const rows = await Promise.all([
+          client.getCandles(instrument, { granularity: "H4", count: spec.h4Count, price: "MBA" }),
+          client.getCandles(instrument, { granularity: "H1", count: spec.h1Count, price: "MBA" }),
+          client.getCandles(instrument, { granularity: "M15", count: spec.m15Count, price: "MBA" }),
+        ]);
+        histories.set(instrument, rows);
+      } catch (error) { histories.set(instrument, { error: String(error.message || error) }); }
+    }
+    const refreshed = await client.getPrices(spec.scanInstruments);
+    const currentPrices = (refreshed?.prices || []).map(mapPrice);
     for (const instrument of spec.scanInstruments) {
       const assetClass = resolveAssetClass({ assetClass: "forex", broker: "oanda", instrumentId: instrument });
       const identity = canonicalAccountId({
@@ -292,18 +321,14 @@ export async function runForexEngineCycle({
         assetClass,
         instrumentId: instrument,
       });
-      const [h4, h1, m15] = await Promise.all([
-        client.getCandles(instrument, { granularity: "H4", count: spec.h4Count, price: "MBA" }),
-        client.getCandles(instrument, { granularity: "H1", count: spec.h1Count, price: "MBA" }),
-        client.getCandles(instrument, { granularity: "M15", count: spec.m15Count, price: "MBA" }),
-      ]);
-      const refreshed = await client.getPrices([instrument]);
-      const quote = (refreshed?.prices || []).map(mapPrice).find((row) => row.instrument === instrument) || {};
+      const history = histories.get(instrument);
+      const [h4, h1, m15] = Array.isArray(history) ? history : [];
+      const quote = currentPrices.find((row) => row.instrument === instrument) || {};
       const decisionNow = currentTime();
       const quoteEvidence = stampEvidence({ source: "oanda_pricing", instrument, account: snapshot.account.id,
         providerTimestamp: quote.time, payload: quote, now: decisionNow });
       const quoteIssues = validateQuote(quoteEvidence, { now: decisionNow, policy: quotePolicy });
-      const calendarGate = calendarForDecision(calendar, { now: decisionNow, instrument });
+      const calendarGate = calendarForDecision(getCalendar?.() || calendar, { now: decisionNow, instrument });
       const currentSession = forexMarketState(decisionNow);
       const snapshotBars = {
         h4: mapCandles(h4, "oanda_candles_h4"),
@@ -311,19 +336,35 @@ export async function runForexEngineCycle({
         m15: mapCandles(m15, "oanda_candles_m15"),
       };
       const candleIssues = [
-        ...inspectCandles(snapshotBars.h4, "H4").issues,
-        ...inspectCandles(snapshotBars.h1, "H1").issues,
-        ...inspectCandles(snapshotBars.m15, "M15").issues,
+        ...inspectCandles(snapshotBars.h4, "H4", { now: decisionNow }).issues,
+        ...inspectCandles(snapshotBars.h1, "H1", { now: decisionNow }).issues,
+        ...inspectCandles(snapshotBars.m15, "M15", { now: decisionNow }).issues,
       ];
       const holdOk = mustCloseBeforeEventOrWeekend({ now: decisionNow, maxHoldHours: spec.maxHoldHours });
       for (const side of ["buy", "sell"]) {
-        const results = [
-          evaluateBreakoutRetest({ ...snapshotBars, side }),
-          evaluateTrendContinuation({ ...snapshotBars, side }),
-        ];
+        const results = [ ["FOREX_BREAKOUT_RETEST_V1", evaluateBreakoutRetest], ["FOREX_TREND_CONTINUATION_V1", evaluateTrendContinuation] ].map(([strategyId, evaluate]) => {
+          const previous = savedLedger.candidates.find(c => c.identity === identity && c.strategyId === strategyId && c.side === side);
+          if (candleIssues.length) return { strategyId, status: "NONE", stage: "BLOCKED", reason: candleIssues[0], previous };
+          return { ...evaluate({ ...snapshotBars, side, previous: previous ? { ...previous, state: previous.strategyState || previous.state } : null }), previous };
+        });
         for (const result of results) {
-          if (result.status === "NONE") continue;
           const row = createCandidate({ identity, strategyId: result.strategyId, side, frozen: result.frozen });
+          row.firstSeenAt = new Date(decisionNow).toISOString();
+          const anchor = result.frozen?.rangeEnd || result.frozen?.pullbackStart || result.confirmedAt || result.previous?.setupAnchor;
+          row.setupAnchor = anchor;
+          row.strategyState = result.stage;
+          if (candleIssues.length && result.previous) {
+            row.frozen = result.previous.frozen;
+            row.setupAnchor = result.previous.setupAnchor;
+            row.firstSeenAt = result.previous.firstSeenAt;
+            row.strategyState = result.previous.strategyState;
+          }
+          row.confirmedAt = result.confirmedAt;
+          row.confirmationPrice = result.confirmationPrice;
+          if (anchor && anchor === result.previous?.setupAnchor) {
+            row.firstSeenAt = result.previous.firstSeenAt;
+            row.transitions = (result.previous.transitions || []).slice(-15);
+          }
           const entryQuote = side === "buy" ? quote.ask : quote.bid;
           const stop = result.stop;
           const target = stop ? plannedTarget({ side, entry: entryQuote, stop }) : null;
@@ -337,22 +378,27 @@ export async function runForexEngineCycle({
           }) : { ok: false, reason: "STOP_DISTANCE" };
           const chased = result.frozen && chasedAway({
             side,
-            confirmationPrice: result.frozen.H || result.frozen.reference,
+            confirmationPrice: result.confirmationPrice,
             currentPrice: entryQuote,
             A: result.frozen.A,
           });
-          const calendarOk = calendarGate.ok || (orderSubmissionEnabled && calendarGate.reason === "CALENDAR_UNAVAILABLE");
+          const calendarOk = calendarGate.ok;
           const dataOk = quoteIssues.length === 0 && candleIssues.length === 0 && currentSession.open && !currentSession.tooCloseToWeeklyClose && holdOk.ok && calendarOk;
           const practiceOrder = orderSubmissionEnabled && client.liveHost !== true;
-          const approved = mayAutoExecute(registry, result.strategyId, "FORWARD_PRACTICE") || practiceOrder;
+          const entryPermission = automaticEntryPermission(registry, result.strategyId, { autopilotEnabled: autoRequested() });
+          const approved = entryPermission.allowed;
+          const triggered = result.reason === "RENEWED_MOVEMENT" || result.reason === "ENTRY_TRIGGER";
+          const expired = triggered && (!result.confirmedAt || entryExpired({ confirmedAt: result.confirmedAt, now: decisionNow }));
           const executable = (result.reason === "RENEWED_MOVEMENT" || result.reason === "ENTRY_TRIGGER")
             && practiceOrder
             && approved
             && recovered.executionReady
+            && autoRequested() && !forexEmergencyStopActive && getEntryPause?.() !== true
             && dataOk
             && spread.ok
             && stopDistanceOk({ entry: entryQuote, stop, A: result.frozen?.A })
             && !chased
+            && !expired
             && !oneOpenPerPair(openTrades, instrument);
           let stage = executable ? "EXECUTION_ELIGIBLE" : result.stage;
           let reason = result.reason;
@@ -363,7 +409,25 @@ export async function runForexEngineCycle({
             reason = calendarGate.reason;
           }
           if (!dataOk) stage = "BLOCKED";
+          const blockers = [
+            ...quoteIssues, ...candleIssues,
+            ...(!currentSession.open ? [currentSession.reason] : []),
+            ...(!holdOk.ok ? [holdOk.reason] : []),
+            ...(!calendarOk ? [calendarGate.reason] : []),
+            ...(forexEmergencyStopActive ? ["FOREX_EMERGENCY_STOP"] : []),
+            ...(getEntryPause?.() === true ? ["ENTRIES_PAUSED"] : []),
+            ...(!autoRequested() ? ["FOREX_AUTOPILOT_OFF"] : []),
+            ...(!approved ? [entryPermission.reason] : []),
+            ...(!recovered.executionReady ? [recovered.halt || "EXECUTION_NOT_READY"] : []),
+            ...(triggered && !spread.ok ? [spread.reason] : []),
+            ...(triggered && !stopDistanceOk({ entry: entryQuote, stop, A: result.frozen?.A }) ? ["STOP_DISTANCE"] : []),
+            ...(triggered && chased ? ["CHASED_PRICE"] : []), ...(expired ? ["ENTRY_EXPIRED"] : []),
+            ...(oneOpenPerPair(openTrades, instrument) ? ["SCALE_IN_DISABLED"] : []),
+          ];
+          if (triggered && blockers.length) { stage = "BLOCKED"; reason = blockers[0]; }
           transitionCandidate(row, stage, reason, {
+            entryPermission,
+            blockers: [...new Set(blockers)],
             passed: result.passed,
             pending: executable ? [] : (result.pending || ["Strategy approval"]),
             executionAuthorization: executable ? "PRACTICE" : "None",
@@ -374,7 +438,7 @@ export async function runForexEngineCycle({
             entryQuote,
             target,
             specRow,
-            conversionFactor: side === "buy" ? quote.conversionBuy : quote.conversionSell,
+            conversionFactor: lossConversion(instrument, snapshot.account.currency, refreshed.homeConversions),
           });
           candidates.push(row);
           signalSources.push({ instrument, identity, quote, row, result, quoteEvidence });
@@ -416,7 +480,11 @@ export async function runForexEngineCycle({
     snapshot.recoveryReady = recovered.executionReady;
     snapshot.incidentLockActive = recovered.incidentLockActive || daily.locked || dd.locked;
     snapshot.pauseEntries = getEntryPause ? getEntryPause() === true : recovered.pauseEntries === true;
-    snapshot.halt = snapshot.quoteAgeSeconds == null || snapshot.quoteAgeSeconds < 0 || snapshot.quoteAgeSeconds > spec.quoteProviderMaxAgeSeconds
+    const anyFreshQuote = snapshot.signals.some(s => {
+      const age = (finishedAt - Date.parse(s.liveQuoteUpdatedAt)) / 1000;
+      return Number.isFinite(age) && age >= 0 && age <= spec.quoteProviderMaxAgeSeconds;
+    });
+    snapshot.halt = !anyFreshQuote
       ? "STALE_PRICE"
       : recovered.halt;
     snapshot.haltState = snapshot.halt;
@@ -428,14 +496,15 @@ export async function runForexEngineCycle({
       && !snapshot.incidentLockActive
       && !snapshot.pauseEntries
       && snapshot.halt !== "STALE_PRICE";
-    snapshot.autoTradingAuthorized = snapshot.executionReady;
+    snapshot.autoTradingAuthorized = snapshot.executionReady && autoRequested() && !forexEmergencyStopActive;
     snapshot.dailyLossRoomPercent = stopRisk.known && recovered.executionReady ? remainingDailyRiskPercent(daily) : 0;
     snapshot.openRiskPercent = stopRisk.percent;
     snapshot.openRiskKnown = stopRisk.known;
     snapshot.openRiskNote = "Estimated additional loss to current stops; excludes future fees, slippage and gaps.";
     snapshot.marginUsagePercent = snapshot.account.NAV > 0 ? snapshot.account.marginUsed / snapshot.account.NAV * 100 : null;
-    const practiceCandidate = snapshot.executionReady
-      ? candidates.find((row) => row.state === "EXECUTION_ELIGIBLE" && row.executionAuthorization === "PRACTICE" && row.stop)
+    const practiceCandidate = snapshot.autoTradingAuthorized
+      ? candidates.filter(row => row.state === "EXECUTION_ELIGIBLE" && row.executionAuthorization === "PRACTICE" && row.stop)
+        .sort((a,b) => (a.ask-a.bid)/Math.abs(a.entryQuote-a.stop) - (b.ask-b.bid)/Math.abs(b.entryQuote-b.stop))[0]
       : null;
     if (practiceCandidate && coordinator) {
       const equity = sizingReference({
@@ -448,7 +517,7 @@ export async function runForexEngineCycle({
         allowedRisk,
         worstEntry: practiceCandidate.entryQuote,
         stop: practiceCandidate.stop,
-        conversionFactor: practiceCandidate.conversionFactor || 1,
+        conversionFactor: practiceCandidate.conversionFactor,
         instrument: practiceCandidate.specRow || {},
       });
       const units = practiceCandidate.side === "sell" ? -unitsAbs : unitsAbs;
@@ -459,6 +528,7 @@ export async function runForexEngineCycle({
         executionReady: true,
         autoTradingAuthorized: true,
         strategyId: practiceCandidate.strategyId,
+        candidateId: `${practiceCandidate.identity}:${practiceCandidate.strategyId}:${practiceCandidate.side}:${practiceCandidate.setupAnchor}`,
         accountId: snapshot.account.id,
         instrumentId: practiceCandidate.instrument,
         instrument: practiceCandidate.specRow || {},
@@ -473,6 +543,8 @@ export async function runForexEngineCycle({
         bid: practiceCandidate.bid,
         ask: practiceCandidate.ask,
         A: practiceCandidate.frozen?.A,
+        confirmedAt: practiceCandidate.confirmedAt,
+        confirmationPrice: practiceCandidate.confirmationPrice,
         allowedRisk,
         remainingDailyRisk: snapshot.dailyLossRoomPercent,
         plannedRiskPercent: FOREX_RISK_LIMITS.plannedRiskPerTradePercent,
@@ -483,11 +555,30 @@ export async function runForexEngineCycle({
         now: finishedAt,
         marginAvailable: snapshot.account.marginAvailable,
         requiredMargin: 0,
-        conversionFactor: practiceCandidate.conversionFactor || 1,
-        clientRequestId: `${practiceCandidate.instrument}:${practiceCandidate.strategyId}:${practiceCandidate.side}`,
+        conversionFactor: practiceCandidate.conversionFactor,
+        clientRequestId: `${snapshot.account.id}:${practiceCandidate.instrument}:${practiceCandidate.strategyId}:${practiceCandidate.side}:${practiceCandidate.setupAnchor}`,
       }) : { ok: false, reason: "INSUFFICIENT_MARGIN" };
+      practiceCandidate.state = snapshot.lastPracticeOrder.ok ? "ORDER_INTENT_CREATED" : "BLOCKED";
+      if (snapshot.lastPracticeOrder.ok) practiceCandidate.strategyState = "ORDER_INTENT_CREATED";
+      practiceCandidate.lastReason = snapshot.lastPracticeOrder.state || snapshot.lastPracticeOrder.reason;
+      practiceCandidate.blockers = snapshot.lastPracticeOrder.ok ? [] : [snapshot.lastPracticeOrder.reason];
+      practiceCandidate.executionAuthorization = "None";
     }
-    snapshot.positions = openTrades.map((trade) => positionContract({ ...trade, accountId: snapshot.account.id }));
+    snapshot.signals = selectForexSignals(signalSources, bestByInstrument, recovered);
+    if (ledgerStore.isDurable?.()) {
+      await ledgerStore.commit(ledger => {
+        ledger.candidates = candidates.map(({ specRow, ...row }) => ({ ...row, transitions: row.transitions.slice(-16) }));
+        ledger.audits.push({ at: new Date(finishedAt).toISOString(), type: "CANDIDATE_CYCLE", candidates: candidates.map(c => ({ instrument: c.instrument, side: c.side, strategyId: c.strategyId, firstSeenAt: c.firstSeenAt, state: c.state, reason: c.lastReason, blockers: c.blockers, outcome: "UNKNOWN" })) });
+      });
+      const ledger = await ledgerStore.load();
+      snapshot.ledger = { specVersion: spec.version, tradeCount: (ledger.archivedFillCount || 0) + ledger.fills.filter(f => f.action === "CLOSED").length,
+        recordedFills: ledger.fills.length, outcomeStatus: "BROKER_RECONCILED", systems: {} };
+    }
+    snapshot.positions = openTrades.map((trade) => {
+      const quote = currentPrices.find(row => row.instrument === trade.instrument);
+      return positionContract({ ...trade, accountId: snapshot.account.id,
+        currentPrice: quote ? (Number(trade.currentUnits) > 0 ? quote.bid : quote.ask) : null });
+    });
     snapshot.capitalSummary = capitalSummaryContract(snapshot.account, { quoteAgeSeconds: snapshot.quoteAgeSeconds });
     snapshot.autoTradeLimits = autoTradeLimitsContract({
       configured: FOREX_RISK_LIMITS,
@@ -504,7 +595,6 @@ export async function runForexEngineCycle({
       incidentLockActive: snapshot.incidentLockActive,
       halt: snapshot.halt,
     });
-    snapshot.operating.label = "Practice orders on. Cap is 10% of the practice account. Live orders stay off.";
     snapshot.sessionState = session;
     snapshot.coordinatorBound = Boolean(coordinator);
   } catch (error) {
@@ -513,6 +603,12 @@ export async function runForexEngineCycle({
     snapshot.halt = error.halt || error.reason || "UNCERTAIN_ORDER";
     snapshot.haltState = snapshot.halt;
     snapshot.lastError = String(error.message || error);
+    if (ledgerStore.isDurable?.()) {
+      await ledgerStore.commit(ledger => ledger.audits.push({ at: new Date(currentTime()).toISOString(), type: "SCAN_FAILED",
+        instruments: spec.scanInstruments, reason: snapshot.lastError, outcome: "UNKNOWN" })).catch(recordError => {
+        snapshot.recordingError = String(recordError.message || recordError);
+      });
+    }
     snapshot.operating = operatingStatus({ connected: Boolean(snapshot.account), forexAutoEnabled, halt: snapshot.halt });
   }
   return snapshot;

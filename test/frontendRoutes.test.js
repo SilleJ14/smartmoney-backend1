@@ -1,6 +1,8 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 import { registerFrontendRoutes } from "../routes/frontendRoutes.js";
+import { Writable } from 'node:stream';
+import { gunzipSync } from 'node:zlib';
 
 function createHarness(overrides = {}) {
   const routes = new Map();
@@ -35,8 +37,27 @@ function createHarness(overrides = {}) {
     return response;
   };
 
-  return { invoke };
+  return { invoke, routes };
 }
+
+test('compressed feed keeps the full contract and revalidates again on every read', async()=>{
+  let revision=1,merges=0;
+  const api=createHarness({getState:()=>({lastStockSignals:[{symbol:'ABC',price:10,dayChangePercent:2,approved:false}]}),
+    mergeLiveQuote:row=>{merges++;return {...row,revision,approved:false,evidence:{reason:'WAIT',text:'x'.repeat(5000)}}}});
+  const plain=(await api.invoke('/frontend/signals')).body;
+  async function read(){
+    const chunks=[];
+    const res=new Writable({write(chunk,_encoding,done){chunks.push(chunk);done()}});
+    res.setHeader=()=>{};res.status=()=>res;res.json=()=>assert.fail('expected compressed delivery');
+    const finished=new Promise(resolve=>res.once('finish',resolve));
+    await api.routes.get('GET /frontend/signals')({query:{},acceptsEncodings:()=> 'gzip'},res);
+    await finished;return JSON.parse(gunzipSync(Buffer.concat(chunks)));
+  }
+  assert.deepEqual(await read(),plain);
+  revision=2;
+  const next=await read();assert.equal(next.signals[0].revision,2);assert.equal(next.approvedCount,0);
+  assert.equal(merges,3,'each request still rechecks current candidate evidence');
+});
 
 test('frontend signals include discovery-only early movers before full scoring', async () => {
   const api = createHarness({ getState: () => ({ liveEarlyMoverSymbols: ['AAPL'],

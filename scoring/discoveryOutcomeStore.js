@@ -1,14 +1,17 @@
 import fs from 'node:fs/promises';
 import path from 'node:path';
 import { createHash } from 'node:crypto';
+import { outcomeInput } from './outcomeInput.js';
 import { updateQuietCandidateOutcomes, normalizeOutcomeObservation, isOutcomeEvidenceQuarantined } from './quietCandidateOutcomeTracker.js';
 
 // Durable pages, not one ever-growing engine-state object. Completed pages are
 // retained for research; active pages are visited round-robin with bounded I/O.
-export function createDiscoveryOutcomeStore(directory, { pageBytes = 2 * 1024 * 1024, maxRows = 1000, maxActivePages = 32768 } = {}) {
+export function createDiscoveryOutcomeStore(directory, { pageBytes = 2 * 1024 * 1024, maxRows = 1000, maxActivePages = 32768,
+  maxPendingBytes = 8 * 1024 * 1024 } = {}) {
   let queue = Promise.resolve(), cursor = '', pending = 0;
   const queueLimit = 64;
   let peakPending = 0, rejected = 0, completed = 0, failed = 0;
+  let pendingBytes = 0, peakPendingBytes = 0;
   let indexed = false;
   const activePages = new Set();
   async function ensureIndex() {
@@ -23,18 +26,20 @@ export function createDiscoveryOutcomeStore(directory, { pageBytes = 2 * 1024 * 
     }
     indexed = true;
   }
-  const serial = work => {
-    if (pending >= queueLimit) {
+  const serial = (work, bytes = 0) => {
+    if (pending >= queueLimit || pendingBytes + bytes > maxPendingBytes) {
       rejected++;
       const error = new Error('Outcome storage queue full; retry required');
       error.code = 'OUTCOME_STORAGE_BACKPRESSURE';
       return Promise.reject(error);
     }
     pending++;
+    pendingBytes += bytes;
+    peakPendingBytes = Math.max(peakPendingBytes, pendingBytes);
     peakPending = Math.max(peakPending, pending);
     const job = queue.then(work).then(result => { completed++; return result; }, error => {
       failed++; throw error;
-    }).finally(() => { pending--; });
+    }).finally(() => { pending--; pendingBytes -= bytes; });
     queue = job.catch(() => {});
     return job;
   };
@@ -193,8 +198,14 @@ export function createDiscoveryOutcomeStore(directory, { pageBytes = 2 * 1024 * 
       }
     }
   }
-  return { getStatus: () => ({ pending, peakPending, queueLimit, rejected, completed, failed }),
-    ingest: (rows, prices, options) => serial(() => ingestNow(rows, prices, options)),
+  return { getStatus: () => ({ pending, peakPending, queueLimit, pendingBytes, peakPendingBytes, maxPendingBytes, rejected, completed, failed }),
+    ingest: (rows, prices, options) => {
+      try {
+        const input = { rows: rows.map(outcomeInput), prices: prices.map(outcomeInput), options: structuredClone(options) };
+        const bytes = Buffer.byteLength(JSON.stringify(input));
+        return serial(() => ingestNow(input.rows, input.prices, input.options), bytes);
+      } catch (error) { return Promise.reject(error); }
+    },
     importObservations: rows => serial(() => importNow(rows)),
     process: (fetchPrices, options) => serial(() => processNow(fetchPrices, options)),
     readPage: (asset, day, symbol) => serial(() => read(path.join(directory, filename(asset, day, symbol)))) };

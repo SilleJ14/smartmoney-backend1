@@ -51,6 +51,8 @@ export function canOpenRisk({ effect, remainingDailyRisk, plannedRisk, openPlusP
     return { ok: false, reason: "UNKNOWN_POSITION_EFFECT" };
   }
   if (!isOpeningRisk(effect)) return { ok: true };
+  if (![remainingDailyRisk, plannedRisk, openPlusPending, sameDirection].every(value => typeof value === "number" && Number.isFinite(value) && value >= 0)
+    || plannedRisk <= 0) return { ok: false, reason: "RISK_EVIDENCE_UNAVAILABLE" };
   if (plannedRisk > remainingDailyRisk) return { ok: false, reason: "RISK_BUDGET_EXHAUSTED" };
   if (openPlusPending + plannedRisk > limits.openPlusPendingPercent) return { ok: false, reason: "RISK_BUDGET_EXHAUSTED" };
   if (sameDirection + plannedRisk > limits.sameDirectionCurrencyPercent) return { ok: false, reason: "RISK_BUDGET_EXHAUSTED" };
