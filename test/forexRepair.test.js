@@ -189,6 +189,16 @@ test("an expired trigger and malformed provider bars never submit",async()=>{
   const bad=await fixture();bad.client.getCandles=async()=>({candles:[null,{complete:true,time:'bad',mid:{}}]});
   const result=await bad.run();assert.equal(bad.orders,0);assert.equal(result.lastError,null);assert.ok(result.candidates.every(c=>c.state==='BLOCKED'));
 });
+test("daily loss persists an Autotrade OFF callback and never submits",async()=>{
+  const f=await fixture();
+  await f.store.commit(l=>{l.dayStart.a={date:new Date(now).toISOString().slice(0,10),equity:1200,adjustedEquity:1200,cursor:'1'};});
+  let disabled=0;
+  const result=await runForexEngineCycle({client:f.client,store:f.store,now,clockNow:()=>now,forexAutoEnabled:true,
+    onDailyLossLock:()=>{disabled++;},calendar,registry:registry(),spec:{...FOREX_SPEC,scanInstruments:['EUR_USD']}});
+  assert.equal(disabled,1);assert.equal(result.dailyLossLocked,true);assert.equal(f.orders,0);
+  assert.equal((await f.store.load()).incidentLocks.a.reason,'DAILY_LOSS_LOCK');
+});
+
 test("calendar failure remains a blocker in practice mode",async()=>{
   const f=await fixture();const result=await runForexEngineCycle({client:f.client,store:f.store,now,clockNow:()=>now,forexAutoEnabled:true,registry:registry(),spec:{...FOREX_SPEC,scanInstruments:['EUR_USD']}});
   assert.equal(f.orders,0);assert.ok(result.candidates.some(c=>c.blockers.includes('CALENDAR_UNAVAILABLE')));

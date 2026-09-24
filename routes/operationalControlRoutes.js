@@ -90,6 +90,12 @@ export function registerOperationalControlRoutes(app, dependencies) {
   });
 
   app.post("/forex-auto/on", requireAdmin, (_req, res) => {
+    if (getControlState().forexSettingsSaving === true) {
+      return res.status(409).json({ ok: false, error: "Forex settings are saving. Try again afterward." });
+    }
+    if (getControlState().forexDailyLossLocked === true) {
+      return res.status(423).json({ ok: false, error: "Reset the forex daily-loss lock first." });
+    }
     if (getControlState().forexEmergencyStopActive === true) {
       return res.status(423).json({ ok: false, error: "Release the forex emergency stop first." });
     }
@@ -112,6 +118,14 @@ export function registerOperationalControlRoutes(app, dependencies) {
       forexAutoEnabled: nextState.forexAutoEnabled === true,
       autoTradingEnabled: nextState.autoTradingEnabled,
     });
+  });
+
+  app.post("/forex-settings", requireAdmin, async (req, res) => {
+    try {
+      if (!dependencies.saveForexSettings) throw new Error("Forex settings unavailable");
+      const state = await dependencies.saveForexSettings(req.body);
+      res.json({ ok: true, ...state });
+    } catch (error) { res.status(409).json({ ok: false, error: error.message }); }
   });
 
   app.post("/forex-emergency-stop", requireAdmin, (_req, res) => {

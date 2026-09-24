@@ -1,6 +1,7 @@
 import { FOREX_SPEC, FOREX_SPEC_VERSION, toDisplayPair } from "./forexSpec.js";
 import { performance } from "node:perf_hooks";
 import { forexDailyChange } from "./dailyChange.js";
+import { recordForexAccountHistory } from "./accountHistory.js";
 import { FOREX_RISK_LIMITS, permittedUnits, sizingReference } from "./riskManager.js";
 import { canonicalAccountId, resolveAssetClass } from "./identity.js";
 import { createApprovalRegistry, automaticEntryPermission } from "./approvalRegistry.js";
@@ -136,6 +137,7 @@ export async function runForexEngineCycle({
   getEntryPause,
   getAutoEnabled,
   getCalendar,
+  onDailyLossLock,
   forexEmergencyStopActive = false,
   registry: providedRegistry,
   durableStorageAvailable = false,
@@ -234,6 +236,10 @@ export async function runForexEngineCycle({
       openTradeCount: num(account.openTradeCount),
       lastTransactionID: account.lastTransactionID,
     };
+    // Display history remains available without granting durable trading authorization.
+    const displayLedger = { forexAccountHistory: state.accountHistory };
+    snapshot.accountHistory = { accountId: snapshot.account.id, currency: snapshot.account.currency,
+      basis: "OBSERVED_NAV", points: recordForexAccountHistory(displayLedger, snapshot.account, currentTime()) };
     const tradesPayload = typeof client.getOpenTrades === "function" ? await client.getOpenTrades() : null;
     const tradesVerified = Array.isArray(tradesPayload?.trades);
     const openTrades = tradesPayload?.trades || [];
@@ -272,6 +278,8 @@ export async function runForexEngineCycle({
       await ledgerStore.commit((ledger) => {
         const key = snapshot.account.id;
         Object.assign(snapshot, updateEquityBaselines(ledger, snapshot.account, transactions, now));
+        snapshot.accountHistory = { accountId: snapshot.account.id, currency: snapshot.account.currency,
+          basis: "OBSERVED_NAV", points: recordForexAccountHistory(ledger, snapshot.account, now) };
         snapshot.incidentLockActive = Boolean(ledger.incidentLocks[key]);
       });
     }
@@ -287,12 +295,16 @@ export async function runForexEngineCycle({
     const dd = drawdownLock({ peakEquity: snapshot.peakEquity ?? snapshot.account.NAV, equity: snapshot.account.NAV });
     if ((daily.locked || dd.locked) && ledgerStore.isDurable?.()) {
       await ledgerStore.commit((ledger) => {
-        ledger.incidentLocks[snapshot.account.id] = { reason: daily.reason || dd.reason, at: new Date(now).toISOString() };
+        if (daily.reason === "DAILY_LOSS_LOCK") ledger.dailyLoss[snapshot.account.id] = { locked: true, at: new Date(now).toISOString() };
+        // Do not overwrite a different incident: daily reset must never clear it.
+        ledger.incidentLocks[snapshot.account.id] ||= { reason: daily.reason || dd.reason, at: new Date(now).toISOString() };
       });
       recovered.incidentLockActive = true;
       recovered.executionReady = false;
       recovered.autoTradingAuthorized = false;
     }
+    snapshot.dailyLossLocked = daily.reason === "DAILY_LOSS_LOCK";
+    if (snapshot.dailyLossLocked) await onDailyLossLock?.();
 
     const quotePolicy = forexEvidencePolicy("forex", "order", "automatic");
     const candidates = [];

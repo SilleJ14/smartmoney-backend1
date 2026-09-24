@@ -34,6 +34,7 @@ export function resolveAutoTradingEnabled(config = {}, environmentValue) {
 }
 
 export function resolveForexAutoEnabled(config = {}, environmentValue) {
+  if (config.forexDailyLossLocked === true || config.forexEmergencyStopActive === true) return false;
   if (typeof config.forexAutoEnabled === "boolean") {
     return config.forexAutoEnabled;
   }

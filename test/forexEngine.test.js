@@ -89,6 +89,8 @@ test("practice cycle can scan when the client returns account prices and candles
   const snapshot = await runForexEngineCycle({ client, forexAutoEnabled: false, now });
   assert.equal(snapshot.halt, "CLEAR");
   assert.equal(snapshot.account.NAV, 5015);
+  assert.equal(snapshot.accountHistory.accountId, '101-001');
+  assert.equal(snapshot.accountHistory.points.at(-1).value, 5015);
   assert.equal(snapshot.signals.length, FOREX_SPEC.scanInstruments.length);
   assert.equal(snapshot.signals[0].assetClass, "forex");
   assert.equal(snapshot.executionReady, false);

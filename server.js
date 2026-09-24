@@ -260,6 +260,7 @@ import { FOREX_SPEC } from "./forex/forexSpec.js";
 import { createEconomicCalendarProvider } from "./forex/economicCalendarProvider.js";
 import { createOandaClient } from "./forex/oandaClient.js";
 import { runForexEngineCycle } from "./forex/forexEngine.js";
+import { resetForexDailyLoss, validateForexSettings } from "./forex/settingsControl.js";
 import { createForexStore } from "./forex/durableStore.js";
 import { resolveOandaEnv } from "./forex/oandaEnv.js";
 import { manageForexPositions } from "./forex/positionManager.js";
@@ -24253,6 +24254,15 @@ const forexCalendarProvider = createEconomicCalendarProvider({
 let forexClient;
 let forexClientConfig;
 const forexInstanceId = `forex-${process.pid}-${Date.now()}`;
+let forexSettingsSaving = false;
+let forexControlRevision = 0;
+function persistForexControls(updates) {
+  runtimeConfig = saveRuntimeConfig(CONFIG_FILE, { ...runtimeConfig, ...updates });
+  forexAutoEnabled = runtimeConfig.forexAutoEnabled === true;
+  forexControlRevision++;
+  return { forexAutoEnabled, forexEmergencyStopActive: runtimeConfig.forexEmergencyStopActive === true,
+    forexDailyLossLocked: runtimeConfig.forexDailyLossLocked === true };
+}
 function getForexEngineRuntime() {
     const oanda = resolveOandaEnv(process.env);
     const clientConfig = {
@@ -24271,7 +24281,13 @@ function getForexEngineRuntime() {
     calendar: forexCalendarProvider.getSnapshot(),
     getCalendar: () => forexCalendarProvider.getSnapshot(),
     getEntryPause: () => runtimeConfig.forexPauseEntries === true || runtimeConfig.forexEmergencyStopActive === true,
-    getAutoEnabled: () => forexAutoEnabled === true && runtimeConfig.forexEmergencyStopActive !== true,
+    getAutoEnabled: () => forexAutoEnabled === true && !forexSettingsSaving && runtimeConfig.forexDailyLossLocked !== true && runtimeConfig.forexEmergencyStopActive !== true,
+    onDailyLossLock: () => {
+      // Fail closed in memory even if the durable config write fails.
+      forexAutoEnabled = false;
+      if (runtimeConfig.forexDailyLossLocked === true && runtimeConfig.forexAutoEnabled === false) return;
+      persistForexControls({ forexAutoEnabled: false, forexDailyLossLocked: true });
+    },
     forexAutoEnabled,
     forexEmergencyStopActive: runtimeConfig.forexEmergencyStopActive === true,
     now: Date.now(),
@@ -28271,6 +28287,7 @@ function getLatestFrontendStatusSnapshot() {
     liveQuoteCacheCount: Object.keys(engineState.liveQuoteCache || {}).length,
     forexEngine: engineState.forexEngine || null,
     forexAutoEnabled,
+    forexDailyLossLocked: runtimeConfig.forexDailyLossLocked === true,
     forexEmergencyStopActive: runtimeConfig.forexEmergencyStopActive === true,
     forexPauseEntries: runtimeConfig.forexPauseEntries === true,
     forexProtection: engineState.forexProtection || null,
@@ -33094,12 +33111,30 @@ registerQuoteDiagnosticRoutes(app, {
 
 registerOperationalControlRoutes(app, {
   requireAdmin,
+  saveForexSettings: async (body) => {
+    if (forexSettingsSaving) throw new Error("Forex settings are already saving.");
+    const updates = validateForexSettings(body, runtimeConfig);
+    forexSettingsSaving = true;
+    try {
+      if (body.resetDailyLoss === true) {
+        // Persist OFF before resetting the separate ledger; a partial failure cannot enable entries.
+        persistForexControls({ forexAutoEnabled: false });
+        const revision = forexControlRevision;
+        await resetForexDailyLoss({ store: forexStore, client: getForexEngineRuntime().client });
+        if (revision !== forexControlRevision) throw new Error("Forex controls changed during reset. Review and save again.");
+        updates.forexDailyLossLocked = false;
+      }
+      return persistForexControls(updates);
+    } finally { forexSettingsSaving = false; }
+  },
   getControlState: () => ({
     emergencyStopActive,
     autoTradingEnabled,
     forexAutoEnabled,
     forexEmergencyStopActive: runtimeConfig.forexEmergencyStopActive === true,
     forexPauseEntries: runtimeConfig.forexPauseEntries === true,
+    forexDailyLossLocked: runtimeConfig.forexDailyLossLocked === true,
+    forexSettingsSaving,
     dailyLossLocked: engineState.dailyLossLocked,
     profitLocked: engineState.profitLocked,
   }),
@@ -33120,6 +33155,7 @@ registerOperationalControlRoutes(app, {
       oandaPracticeToken: updates.oandaPracticeToken !== undefined ? updates.oandaPracticeToken : runtimeConfig.oandaPracticeToken,
     });
     runtimeConfig = saved;
+    if (Object.keys(updates).some(key => key.startsWith("forex"))) forexControlRevision++;
     emergencyStopActive = nextEmergencyStop;
     autoTradingEnabled = nextAutoTrading;
     forexAutoEnabled = nextForexAuto;
