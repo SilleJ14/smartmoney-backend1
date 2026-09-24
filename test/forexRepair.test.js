@@ -117,6 +117,8 @@ test("eligible forex setup submits one mocked protected practice order",async()=
   const f=await fixture();const result=await f.run();
   assert.equal(f.orders,1,JSON.stringify(result.candidates));
   assert.equal(result.lastPracticeOrder.state,"FILLED");
+  assert.equal(result.signals[0].forexState,"ordered");
+  assert.equal(result.decisionDiagnostics.lastOrder.state,"FILLED");
   const ledger=await f.store.load();assert.equal(ledger.reservations[0].state,"CONSUMED");
   assert.ok(ledger.audits.some(r=>r.type==="CANDIDATE_CYCLE"));
 });

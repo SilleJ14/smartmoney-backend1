@@ -2,6 +2,7 @@ import { FOREX_SPEC, FOREX_SPEC_VERSION, toDisplayPair } from "./forexSpec.js";
 import { performance } from "node:perf_hooks";
 import { forexDailyChange } from "./dailyChange.js";
 import { recordForexAccountHistory } from "./accountHistory.js";
+import { forexDecisionDiagnostics, blockForexCandidates } from "./decisionDiagnostics.js";
 import { FOREX_RISK_LIMITS, permittedUnits, sizingReference } from "./riskManager.js";
 import { canonicalAccountId, resolveAssetClass } from "./identity.js";
 import { createApprovalRegistry, automaticEntryPermission } from "./approvalRegistry.js";
@@ -25,6 +26,7 @@ import { operatingStatus } from "./monitoring.js";
 import { capitalSummaryContract, autoTradeLimitsContract, positionContract } from "./reportingService.js";
 
 const STAGE_RANK = {
+  ORDER_INTENT_CREATED: 6,
   EXECUTION_ELIGIBLE: 5,
   TRIGGER_CONFIRMED: 4,
   WATCHING: 3,
@@ -73,6 +75,7 @@ function mapPrice(price) {
 }
 
 function frontendState(stage) {
+  if (stage === "ORDER_INTENT_CREATED") return "ordered";
   if (stage === "TRIGGER_CONFIRMED") return "trigger";
   if (stage === "EXECUTION_ELIGIBLE") return "ready";
   if (stage === "INVALIDATED" || stage === "EXPIRED" || stage === "BLOCKED") return "blocked";
@@ -89,6 +92,8 @@ function toSignal(instrument, identity, quote, row, result, recovered) {
     forexState: frontendState(row.state),
     forexSide: row.side,
     reason: row.lastReason,
+    pending: row.pending || [],
+    entryPermission: row.entryPermission || null,
     blockers: row.blockers || [],
     firstDetectedAt: row.firstSeenAt || null,
     confirmedAt: row.confirmedAt || null,
@@ -119,7 +124,10 @@ export function selectForexSignals(sources, fallbacks, recovered) {
   const grouped = new Map();
   for (const source of sources) {
     const previous = grouped.get(source.instrument);
-    if (!previous || (STAGE_RANK[source.row.state] || 0) > (STAGE_RANK[previous.row.state] || 0)) grouped.set(source.instrument, source);
+    // A triggered-but-blocked setup is more informative than an unrelated
+    // discovered direction. Never let it displace an executable/order result.
+    const rank = row => row.state === "BLOCKED" && row.confirmedAt ? 4 : (STAGE_RANK[row.state] || 0);
+    if (!previous || rank(source.row) > rank(previous.row)) grouped.set(source.instrument, source);
   }
   for (const [instrument, source] of grouped) {
     selected.set(instrument, toSignal(instrument, source.identity, source.quote, source.row, source.result, recovered));
@@ -200,6 +208,7 @@ export async function runForexEngineCycle({
     const recovered = await supervisor.recover({ credentialsOk: false, forexAutoEnabled });
     Object.assign(snapshot, recovered, { halt: "MISSING_CREDENTIALS", haltState: "MISSING_CREDENTIALS" });
     snapshot.operating = recovered.operating;
+    snapshot.decisionDiagnostics = forexDecisionDiagnostics(snapshot, spec.scanInstruments);
     return snapshot;
   }
   if (typeof client.resolveAccountId === "function" && !client.accountId) {
@@ -210,6 +219,7 @@ export async function runForexEngineCycle({
       snapshot.haltState = snapshot.halt;
       snapshot.lastError = String(error.message || error);
       snapshot.operating = operatingStatus({ connected: false, forexAutoEnabled, halt: snapshot.halt });
+      snapshot.decisionDiagnostics = forexDecisionDiagnostics(snapshot, spec.scanInstruments);
       return snapshot;
     }
   }
@@ -217,6 +227,7 @@ export async function runForexEngineCycle({
     snapshot.halt = "LIVE_BLOCKED";
     snapshot.haltState = "LIVE_BLOCKED";
     snapshot.operating = operatingStatus({ connected: true, forexAutoEnabled, halt: "LIVE_BLOCKED" });
+    snapshot.decisionDiagnostics = forexDecisionDiagnostics(snapshot, spec.scanInstruments);
     return snapshot;
   }
 
@@ -485,6 +496,7 @@ export async function runForexEngineCycle({
       if (issues.length) {
         source.row.state = "BLOCKED";
         source.row.lastReason = issues[0];
+        source.row.blockers = [...new Set([...(source.row.blockers || []), ...issues])];
         source.row.executionAuthorization = "None";
       }
     }
@@ -514,6 +526,18 @@ export async function runForexEngineCycle({
       && !snapshot.pauseEntries
       && snapshot.halt !== "STALE_PRICE";
     snapshot.autoTradingAuthorized = snapshot.executionReady && autoRequested() && !forexEmergencyStopActive;
+    snapshot.forexAutoEnabled = autoRequested();
+    blockForexCandidates(candidates, [
+      ...(!orderSubmissionEnabled ? ["ORDER_SUBMISSION_DISABLED"] : []),
+      ...(!stopRisk.known ? ["OPEN_RISK_UNKNOWN"] : []),
+      ...(daily.locked ? [daily.reason || "DAILY_LOSS_LOCK"] : []),
+      ...(dd.locked ? [dd.reason || "DRAWDOWN_LOCK"] : []),
+      ...(snapshot.incidentLockActive ? ["INCIDENT_LOCK"] : []),
+      ...(snapshot.pauseEntries ? ["ENTRIES_PAUSED"] : []),
+      ...(!recovered.executionReady ? [recovered.halt || "EXECUTION_NOT_READY"] : []),
+      ...(!autoRequested() ? ["FOREX_AUTOPILOT_OFF"] : []),
+      ...(forexEmergencyStopActive ? ["FOREX_EMERGENCY_STOP"] : []),
+    ]);
     snapshot.dailyLossRoomPercent = stopRisk.known && recovered.executionReady ? remainingDailyRiskPercent(daily) : 0;
     snapshot.openRiskPercent = stopRisk.percent;
     snapshot.openRiskKnown = stopRisk.known;
@@ -620,6 +644,13 @@ export async function runForexEngineCycle({
     snapshot.halt = error.halt || error.reason || "UNCERTAIN_ORDER";
     snapshot.haltState = snapshot.halt;
     snapshot.lastError = String(error.message || error);
+    blockForexCandidates(snapshot.candidates, [snapshot.halt]);
+    snapshot.signals = snapshot.signals.map(signal => ({ ...signal,
+      forexState: "blocked", reason: snapshot.halt,
+      blockers: [...new Set([...(signal.blockers || []), snapshot.halt])],
+      raw: { ...signal.raw, forexState: "blocked",
+        forexGates: { ...signal.raw?.forexGates, entry: false, risk: false } },
+    }));
     if (ledgerStore.isDurable?.()) {
       await ledgerStore.commit(ledger => ledger.audits.push({ at: new Date(currentTime()).toISOString(), type: "SCAN_FAILED",
         instruments: spec.scanInstruments, reason: snapshot.lastError, outcome: "UNKNOWN" })).catch(recordError => {
@@ -628,5 +659,6 @@ export async function runForexEngineCycle({
     }
     snapshot.operating = operatingStatus({ connected: Boolean(snapshot.account), forexAutoEnabled, halt: snapshot.halt });
   }
+  snapshot.decisionDiagnostics = forexDecisionDiagnostics(snapshot, spec.scanInstruments);
   return snapshot;
 }

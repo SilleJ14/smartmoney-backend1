@@ -24247,7 +24247,9 @@ const { executeEngineCycleBody } = createEngineCycle({
 const forexStore = createForexStore({ useFile: true, filePath: process.env.FOREX_LEDGER_PATH });
 const forexCalendarProvider = createEconomicCalendarProvider({
   apiKey: FINNHUB_API_KEY,
-  provider: process.env.FOREX_CALENDAR_PROVIDER || (process.env.FOREX_CALENDAR_PATH ? "file" : "finnhub"),
+  jblankedApiKey: process.env.JBLANKED_API_KEY,
+  store: forexStore,
+  provider: process.env.FOREX_CALENDAR_PROVIDER || (process.env.FOREX_CALENDAR_PATH ? "file" : process.env.JBLANKED_API_KEY ? "jblanked" : "finnhub"),
   filePath: process.env.FOREX_CALENDAR_PATH,
   timezone: process.env.FOREX_CALENDAR_TIMEZONE || "",
 });

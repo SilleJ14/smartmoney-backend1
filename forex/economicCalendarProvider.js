@@ -79,7 +79,27 @@ async function boundedJson(response) {
   catch { fail("CALENDAR_INVALID_RESPONSE"); }
 }
 
-export function createEconomicCalendarProvider({ apiKey, filePath, provider = filePath ? "file" : "finnhub",
+export function normalizeJBlankedCalendar(rows, requestedAt) {
+  if (!Array.isArray(rows)) fail("CALENDAR_INVALID_RESPONSE");
+  // The unfiltered Forex Factory week feed covers the current trading week only.
+  // Use a conservative UTC intersection of EST/EDT boundaries, never next week.
+  const sunday = new Date(requestedAt);
+  sunday.setUTCHours(0, 0, 0, 0);
+  sunday.setUTCDate(sunday.getUTCDate() - sunday.getUTCDay());
+  const from = sunday.toISOString().slice(0, 10);
+  const to = new Date(+sunday + 7 * DAY).toISOString().slice(0, 10);
+  const snapshot = normalizeEconomicCalendar({ economicCalendar: rows.map(row => ({
+    event: row?.Name, country: row?.Currency, impact: row?.Impact,
+    // JBlanked FAQ specifies GMT+3. Reject tentative/all-day/malformed times.
+    time: typeof row?.Date === "string" && /^\d{4}\.\d{2}\.\d{2} \d{2}:\d{2}:\d{2}$/.test(row.Date)
+      ? row.Date.replaceAll(".", "-").replace(" ", "T") + "+03:00" : null,
+  })) }, { from, to, requestedAt });
+  return { ...snapshot, source: "jblanked_forex_factory", coverageBasis: "PROVIDER_CURRENT_TRADING_WEEK",
+    coveredFrom: new Date(+sunday + 22 * 3600000).toISOString(),
+    coveredThrough: new Date(+sunday + 6 * DAY + 3 * 3600000 + 59 * MINUTE).toISOString() };
+}
+
+export function createEconomicCalendarProvider({ apiKey, jblankedApiKey, store, filePath, provider = filePath ? "file" : "finnhub",
   timezone = "", fetchImpl = globalThis.fetch, nowFn = Date.now, timeoutMs = 10000 } = {}) {
   let snapshot = defaultCalendarSnapshot();
   let pending = null;
@@ -93,6 +113,7 @@ export function createEconomicCalendarProvider({ apiKey, filePath, provider = fi
     return { provider, source: snapshot.source, qualityStatus: valid ? "VALID" : lastError ? "ERROR" : "MISSING_OR_STALE",
       coverageComplete: valid, refreshing: Boolean(pending), lastAttemptAt, lastSuccessAt: snapshot.refreshedAt,
       nextAttemptAt: new Date(nextAttemptAt).toISOString(), error: lastError,
+      limitation: provider === "jblanked" ? "Daily snapshot: one request per 24 hours; existing calendar freshness checks still apply." : null,
       coveredFrom: snapshot.coveredFrom || null, coveredThrough: snapshot.coveredThrough || null,
       eventCount: snapshot.events.length, receivedEventCount: snapshot.receivedEventCount ?? snapshot.events.length };
   };
@@ -103,6 +124,50 @@ export function createEconomicCalendarProvider({ apiKey, filePath, provider = fi
       if (provider === "file") {
         next = loadCalendarSnapshot(filePath);
         if (calendarForDecision(next, { now: requestedAt }).reason === "CALENDAR_UNAVAILABLE") fail("CALENDAR_FILE_UNAVAILABLE");
+      } else if (provider === "jblanked") {
+        if (!jblankedApiKey) fail("CALENDAR_MISSING_API_KEY");
+        if (!store?.isDurable()) fail("CALENDAR_DURABLE_CACHE_REQUIRED");
+        // Reserve the daily request durably BEFORE contacting the provider.
+        // Sharing the ledger serializes concurrent callers and survives restart.
+        const reservation = await store.commit(ledger => {
+          const previous = ledger.jblankedCalendar;
+          if (previous?.nextAttemptAt > requestedAt) return { cached: previous };
+          const record = { lastAttemptAt, nextAttemptAt: requestedAt + DAY,
+            snapshot: previous?.snapshot || null, error: "CALENDAR_REQUEST_UNRESOLVED" };
+          ledger.jblankedCalendar = record;
+          return { reserved: record };
+        });
+        const record = reservation.cached || reservation.reserved;
+        nextAttemptAt = record.nextAttemptAt;
+        lastAttemptAt = record.lastAttemptAt;
+        if (reservation.cached) {
+          snapshot = record.snapshot || defaultCalendarSnapshot();
+          lastError = record.error;
+          return status();
+        }
+        try {
+          const response = await fetchImpl("https://www.jblanked.com/news/api/forex-factory/calendar/week/", {
+            headers: { Authorization: `Api-Key ${jblankedApiKey}`, Accept: "application/json", "Content-Type": "application/json" },
+            signal: AbortSignal.timeout(timeoutMs), redirect: "error",
+          });
+          if (!response.ok) {
+            if (response.status === 429) {
+              const retry = response.headers.get("retry-after");
+              const until = /^\d+$/.test(retry || "") ? requestedAt + Number(retry) * 1000 : Date.parse(retry || "");
+              if (Number.isFinite(until)) nextAttemptAt = Math.max(nextAttemptAt, until);
+            }
+            await response.body?.cancel();
+            fail([401, 403].includes(response.status) ? "CALENDAR_ACCESS_DENIED"
+              : response.status === 429 ? "CALENDAR_RATE_LIMITED" : "CALENDAR_PROVIDER_FAILED");
+          }
+          next = normalizeJBlankedCalendar(await boundedJson(response), requestedAt);
+          await store.commit(ledger => { ledger.jblankedCalendar = { lastAttemptAt, nextAttemptAt, snapshot: next, error: null }; });
+        } catch (error) {
+          const code = error.calendarCode || "CALENDAR_FETCH_OR_STORAGE_FAILED";
+          try { await store.commit(ledger => { ledger.jblankedCalendar = { ...record, nextAttemptAt, error: code }; }); }
+          catch { fail("CALENDAR_CACHE_WRITE_FAILED"); }
+          fail(code);
+        }
       } else if (provider === "finnhub") {
         if (!apiKey) fail("CALENDAR_MISSING_API_KEY");
         const from = new Date(requestedAt - DAY).toISOString().slice(0,10);
@@ -123,7 +188,8 @@ export function createEconomicCalendarProvider({ apiKey, filePath, provider = fi
       } else fail("CALENDAR_PROVIDER_UNSUPPORTED");
       if (calendarForDecision(next, { now: nowFn() }).reason === "CALENDAR_UNAVAILABLE") fail("CALENDAR_STALE_RESPONSE");
       snapshot = Object.freeze({ ...next, events: Object.freeze(next.events.map(row => Object.freeze({ ...row }))) });
-      lastError = null; failures = 0; nextAttemptAt = nowFn() + (provider === "file" ? MINUTE : 5 * MINUTE);
+      lastError = null; failures = 0;
+      if (provider !== "jblanked") nextAttemptAt = nowFn() + (provider === "file" ? MINUTE : 5 * MINUTE);
     } catch (error) {
       lastError = error.calendarCode || (error.name === "TimeoutError" || error.name === "AbortError" ? "CALENDAR_TIMEOUT" : "CALENDAR_NETWORK_ERROR");
       failures++;
