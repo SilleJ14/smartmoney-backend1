@@ -18,7 +18,9 @@ export function stopDistanceOk({ entry, stop, A, min = FOREX_SPEC.stopDistanceMi
 }
 
 export function entryExpired({ confirmedAt, now = Date.now(), lifetimeSeconds = FOREX_SPEC.entryLifetimeSeconds }) {
-  return now - Date.parse(confirmedAt || 0) > lifetimeSeconds * 1000;
+  const confirmed = Date.parse(confirmedAt);
+  if (!Number.isFinite(confirmed) || !Number.isFinite(now) || !(lifetimeSeconds > 0)) return true;
+  return confirmed > now || now - confirmed > lifetimeSeconds * 1000;
 }
 
 export function chasedAway({ side, confirmationPrice, currentPrice, A, maxAtr = FOREX_SPEC.maxAdverseEntryAtr }) {

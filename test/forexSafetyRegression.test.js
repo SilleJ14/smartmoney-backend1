@@ -132,7 +132,7 @@ test("engine fetches pending orders, advances replay cursor, and reports elapsed
   const input = { client, store, now, clockNow: () => time, calendar, forexAutoEnabled: true, spec: { ...FOREX_SPEC, scanInstruments: ["EUR_USD"] } };
   const snapshot = await runForexEngineCycle(input);
   assert.equal(pendingCalls, 1);
-  assert.equal(snapshot.quoteAgeSeconds, 3);
+  assert.equal(snapshot.quoteAgeSeconds, 4); // Three strategy histories plus optional daily display history.
   assert.equal(snapshot.halt, "STALE_PRICE");
   // The existing practice-host mode label describes configuration, not
   // permission to submit. Stale evidence must still deny authorization below.

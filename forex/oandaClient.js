@@ -103,7 +103,7 @@ export function createOandaClient({
     async getCandles(instrument, { granularity = "M15", count = FOREX_SPEC.m15Count, price = "M" } = {}) {
       return request(
         "GET",
-        `/v3/instruments/${encodeURIComponent(instrument)}/candles?granularity=${encodeURIComponent(granularity)}&count=${encodeURIComponent(count)}&price=${encodeURIComponent(price)}`
+        `/v3/instruments/${encodeURIComponent(instrument)}/candles?granularity=${encodeURIComponent(granularity)}&count=${encodeURIComponent(count)}&price=${encodeURIComponent(price)}${granularity === "D" ? "&dailyAlignment=17&alignmentTimezone=America%2FNew_York" : ""}`
       );
     },
     async getInstruments() {

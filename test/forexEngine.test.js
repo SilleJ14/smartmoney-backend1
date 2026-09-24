@@ -16,7 +16,7 @@ function flatRange(count, price = 1.1) {
 }
 
 test("frozen forex spec does not share stock F or Alpaca auto", () => {
-  assert.equal(FOREX_SPEC.version, "fx-v1");
+  assert.equal(FOREX_SPEC.version, "fx-v1.1-balanced-entry");
   assert.equal(FOREX_SPEC.quoteProviderMaxAgeSeconds, 2);
   assert.equal(FOREX_SPEC.liveOrdersAuthorized, false);
   assert.equal(FOREX_SPEC.practiceOrdersEnabled, true);
@@ -78,7 +78,8 @@ test("practice cycle can scan when the client returns account prices and candles
         })),
       };
     },
-    async getCandles() {
+    async getCandles(instrument, { granularity }) {
+      if (granularity === "D") return { candles: [{ complete: true, time: "2026-09-20T21:00:00Z", mid: { c: "1.08345" } }] };
       return { candles };
     },
     async createMarketOrder() {
@@ -92,6 +93,18 @@ test("practice cycle can scan when the client returns account prices and candles
   assert.equal(snapshot.signals[0].assetClass, "forex");
   assert.equal(snapshot.executionReady, false);
   assert.ok(snapshot.quoteAgeSeconds <= 2);
+  assert.equal(snapshot.signals[0].changePercentMeasured, true);
+  assert.ok(Math.abs(snapshot.signals[0].sessionChangePercent) < 1e-10);
+  const originalCandles = client.getCandles;
+  client.getCandles = async (instrument, options) => {
+    if (options.granularity === "D") throw new Error("daily history unavailable");
+    return originalCandles(instrument, options);
+  };
+  const missingDaily = await runForexEngineCycle({ client, forexAutoEnabled: false, now });
+  assert.equal(missingDaily.signals.length, snapshot.signals.length);
+  assert.equal(missingDaily.signals[0].changePercentMeasured, false);
+  assert.equal(missingDaily.signals[0].sessionChangePercent, null);
+  assert.equal(missingDaily.halt, snapshot.halt);
 });
 
 test("forex engine cycle is independent of stock Autopilot in source", () => {

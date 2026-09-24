@@ -1,5 +1,6 @@
 import { FOREX_SPEC, FOREX_SPEC_VERSION, toDisplayPair } from "./forexSpec.js";
 import { performance } from "node:perf_hooks";
+import { forexDailyChange } from "./dailyChange.js";
 import { FOREX_RISK_LIMITS, permittedUnits, sizingReference } from "./riskManager.js";
 import { canonicalAccountId, resolveAssetClass } from "./identity.js";
 import { createApprovalRegistry, automaticEntryPermission } from "./approvalRegistry.js";
@@ -97,6 +98,7 @@ function toSignal(instrument, identity, quote, row, result, recovered) {
     bid: quote.bid,
     ask: quote.ask,
     liveQuoteUpdatedAt: quote.time,
+    ...quote.dailyChange,
     specVersion: FOREX_SPEC.version,
     raw: {
       forexState: frontendState(row.state),
@@ -306,6 +308,8 @@ export async function runForexEngineCycle({
           client.getCandles(instrument, { granularity: "H4", count: spec.h4Count, price: "MBA" }),
           client.getCandles(instrument, { granularity: "H1", count: spec.h1Count, price: "MBA" }),
           client.getCandles(instrument, { granularity: "M15", count: spec.m15Count, price: "MBA" }),
+          // Optional display evidence: failure must not discard strategy history.
+          Promise.resolve().then(() => client.getCandles(instrument, { granularity: "D", count: 5, price: "M" })).catch(() => null),
         ]);
         histories.set(instrument, rows);
       } catch (error) { histories.set(instrument, { error: String(error.message || error) }); }
@@ -322,8 +326,9 @@ export async function runForexEngineCycle({
         instrumentId: instrument,
       });
       const history = histories.get(instrument);
-      const [h4, h1, m15] = Array.isArray(history) ? history : [];
+      const [h4, h1, m15, daily] = Array.isArray(history) ? history : [];
       const quote = currentPrices.find((row) => row.instrument === instrument) || {};
+      quote.dailyChange = forexDailyChange(daily, quote);
       const decisionNow = currentTime();
       const quoteEvidence = stampEvidence({ source: "oanda_pricing", instrument, account: snapshot.account.id,
         providerTimestamp: quote.time, payload: quote, now: decisionNow });

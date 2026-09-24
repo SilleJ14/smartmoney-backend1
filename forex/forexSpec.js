@@ -1,4 +1,4 @@
-export const FOREX_SPEC_VERSION = "fx-v1";
+export const FOREX_SPEC_VERSION = "fx-v1.1-balanced-entry";
 
 export const FOREX_SPEC = Object.freeze({
   version: FOREX_SPEC_VERSION,
@@ -26,7 +26,7 @@ export const FOREX_SPEC = Object.freeze({
     "EUR_JPY",
     "GBP_JPY",
   ]),
-  entryLifetimeSeconds: 60,
+  entryLifetimeSeconds: 180,
   maxAdverseEntryAtr: 0.10,
   stopDistanceMinAtr: 0.25,
   stopDistanceMaxAtr: 1.5,

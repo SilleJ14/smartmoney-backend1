@@ -184,7 +184,7 @@ test("stale execution quote after a good scan prevents an order",async()=>{
   const result=await f.run();assert.equal(f.orders,0);assert.equal(result.lastPracticeOrder.reason,'QUOTE_STALE');
 });
 test("an expired trigger and malformed provider bars never submit",async()=>{
-  const f=await fixture();f.setTime(now+120000);const expired=await f.run();assert.equal(f.orders,0);
+  const f=await fixture();f.setTime(now+240000);const expired=await f.run();assert.equal(f.orders,0);
   assert.ok(expired.candidates.some(c=>c.blockers.includes('ENTRY_EXPIRED')));
   const bad=await fixture();bad.client.getCandles=async()=>({candles:[null,{complete:true,time:'bad',mid:{}}]});
   const result=await bad.run();assert.equal(bad.orders,0);assert.equal(result.lastError,null);assert.ok(result.candidates.every(c=>c.state==='BLOCKED'));
