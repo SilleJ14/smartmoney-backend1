@@ -65,6 +65,29 @@ test("a Tradier brokerage quote is tagged real-time consolidated and keeps bid a
   assert.equal(ranked.ranked[0].ask, 10.02);
 });
 
+test("a wide discovery spread stays on the sweep and the 1 percent rule stays on the buy", () => {
+  const quote = {
+    symbol: "WIDE",
+    provider: "TRADIER",
+    source: "tradier_stock_quote",
+    price: 10,
+    bid: 9.8,
+    ask: 10.2,
+    spreadPercent: 2.5,
+    spreadAvailable: true,
+    percentChange: 1,
+    percentChangeAvailable: true,
+  };
+  const ranked = rankTradierSweep([quote]);
+  assert.equal(ranked.ranked.length, 1);
+  assert.equal(ranked.ranked[0].symbol, "WIDE");
+  assert.equal(ranked.rejections.some((row) => row.reason === "SPREAD_TOO_WIDE_FOR_DISCOVERY"), false);
+  const buy = executionQuoteDecision({ provider: "TRADIER", feed: "CONSOLIDATED", ageMs: 1000, spreadPercent: 2.5 });
+  assert.equal(buy.satisfiesExecution, false);
+  assert.equal(buy.reason, "SPREAD_TOO_WIDE");
+  assert.equal(buy.changesFinalScore, false);
+});
+
 test("a missing Tradier quote stays unavailable and does not become a bad score", () => {
   const ranked = rankTradierSweep([{ symbol: "AAA", provider: "TRADIER", source: "tradier_stock_quote", price: null, bid: null, ask: null }]);
   assert.equal(ranked.ranked.length, 0);

@@ -96,13 +96,9 @@ export function rankTradierSweep(quotes = [], { volumeBaselines = {} } = {}) {
       rejections.push({ symbol, reason: "NO_TRADIER_QUOTE" });
       continue;
     }
-    const bid = quote.spreadAvailable === true ? finite(quote.bid) : finite(quote.bid);
-    const ask = quote.spreadAvailable === true ? finite(quote.ask) : finite(quote.ask);
+    const bid = finite(quote.bid);
+    const ask = finite(quote.ask);
     const spread = finite(quote.spreadPercent);
-    if (spread !== null && spread > 2) {
-      rejections.push({ symbol, reason: "SPREAD_TOO_WIDE_FOR_DISCOVERY" });
-      continue;
-    }
     const baseline = volumeBaselines[symbol];
     const volumeComparable = !baseline || !baseline.volumeScope || !quote.volumeScope || baseline.volumeScope === quote.volumeScope;
     const move = Math.abs(finite(quote.percentChange) || 0);
@@ -122,6 +118,7 @@ export function rankTradierSweep(quotes = [], { volumeBaselines = {} } = {}) {
       ask: ask !== null && ask > 0 ? ask : null,
       bidSizeShares: finite(quote.bidSizeShares),
       askSizeShares: finite(quote.askSizeShares),
+      spreadPercent: spread,
       volume: volumeComparable ? volume : null,
       volumeComparable,
       cheapMoveScore,
