@@ -34,10 +34,10 @@ export function resolveAutoTradingEnabled(config = {}, environmentValue) {
   if (typeof config.autoTradingEnabled === "boolean") {
     return config.autoTradingEnabled;
   }
-  if (environmentValue !== undefined) {
+  if (environmentValue !== undefined && String(environmentValue).trim() !== "") {
     return String(environmentValue).trim().toLowerCase() === "true";
   }
-  return false;
+  return true;
 }
 
 export function resolveForexAutoEnabled(config = {}, environmentValue) {

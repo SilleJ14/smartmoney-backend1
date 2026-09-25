@@ -21,4 +21,6 @@ test("persisted automation choice overrides the environment bootstrap default", 
   assert.equal(resolveAutoTradingEnabled({ autoTradingEnabled: false }, "true"), false);
   assert.equal(resolveAutoTradingEnabled({ autoTradingEnabled: true }, undefined), true);
   assert.equal(resolveAutoTradingEnabled({}, "true"), true);
+  assert.equal(resolveAutoTradingEnabled({}, undefined), true);
+  assert.equal(resolveAutoTradingEnabled({}, "false"), false);
 });

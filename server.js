@@ -955,8 +955,18 @@ const MAIN_SWING_SCAN_INTERVAL_MS =
 let autoTradingEnabled = resolveAutoTradingEnabled(runtimeConfig);
 let forexAutoEnabled = resolveConfiguredForexAuto(runtimeConfig, process.env.FOREX_AUTO_ENABLED);
 let emergencyStopActive =
-  runtimeConfig.emergencyStopActive ??
-  parseEnvBoolean("EMERGENCY_STOP_ACTIVE", true);
+  runtimeConfig.emergencyStopActive === true
+    ? true
+    : parseEnvBoolean("EMERGENCY_STOP_ACTIVE", false);
+if (typeof runtimeConfig.autoTradingEnabled !== "boolean") {
+  emergencyStopActive = false;
+  autoTradingEnabled = true;
+  runtimeConfig = saveRuntimeConfig(CONFIG_FILE, {
+    ...runtimeConfig,
+    emergencyStopActive: false,
+    autoTradingEnabled: true,
+  });
+}
 const AI_ORDER_PREFIX = "SM_AI";
 const LIVE_TRADE_LIMITS = Object.freeze({
   maxIntradayStockTradesPerDay: 2,
@@ -3190,6 +3200,7 @@ function buildBackendHealthPayload(clock = {}) {
       cryptoEntriesPaused: !autoTradingEnabled || emergencyStopActive || engineState.dailyLossLocked === true,
       pauseReason: emergencyStopActive ? 'EMERGENCY_STOP' : !autoTradingEnabled ? 'OWNER_DISABLED'
         : engineState.dailyLossLocked ? 'DAILY_LOSS_LOCK' : engineState.profitLocked ? 'PROFIT_LOCK' : null,
+      realCashTradingUnlocked: CONFIG.realCashTradingUnlocked === true,
       savedEnabled: typeof runtimeConfig.autoTradingEnabled === 'boolean' ? runtimeConfig.autoTradingEnabled : null,
       runtimeConfigPersisted: fs.existsSync(CONFIG_FILE),
       externalDataDirectoryConfigured: Boolean(path.resolve(DATA_DIR) !== path.resolve(process.cwd())),
