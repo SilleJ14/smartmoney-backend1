@@ -429,3 +429,41 @@ test("Apple login links only to the existing owner and supports private-email li
   fs.rmSync(directory, { recursive: true, force: true });
   fs.rmSync(directoryForPrivateEmail, { recursive: true, force: true });
 });
+
+test("a wiped user file still accepts the same owner password", () => {
+  const directory = fs.mkdtempSync(path.join(os.tmpdir(), "smartmoney-auth-stable-"));
+  const missing = path.join(directory, "gone", "users.json");
+  const routes = new Map();
+  const app = {
+    post(route, ...handlers) { routes.set(route, handlers.at(-1)); },
+    get() {},
+  };
+  const auth = createAdminAuth({
+    adminToken: "secret",
+    userFile: missing,
+    allowInitialSignup: false,
+    ownerEmail: "owner@example.com",
+    ownerPassword: "twelve-chars!",
+    now: () => 1000,
+  });
+  auth.registerRoutes(app);
+  const response = () => ({ status(code) { this.code = code; return this; }, json(body) { this.body = body; return this; } });
+  const login = response();
+  routes.get("/auth/login")({ headers: {}, ip: "1", body: { email: "owner@example.com", password: "twelve-chars!" } }, login);
+  assert.equal(login.body.ok, true);
+  fs.rmSync(path.dirname(missing), { recursive: true, force: true });
+  const again = new Map();
+  const restarted = createAdminAuth({
+    adminToken: "secret",
+    userFile: missing,
+    allowInitialSignup: false,
+    ownerEmail: "owner@example.com",
+    ownerPassword: "twelve-chars!",
+    now: () => 2000,
+  });
+  restarted.registerRoutes({ post(route, ...handlers) { again.set(route, handlers.at(-1)); }, get() {} });
+  const second = response();
+  again.get("/auth/login")({ headers: {}, ip: "1", body: { email: "owner@example.com", password: "twelve-chars!" } }, second);
+  assert.equal(second.body.ok, true);
+  fs.rmSync(directory, { recursive: true, force: true });
+});

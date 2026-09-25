@@ -119,6 +119,7 @@ function persistUsers(files, users) {
 }
 
 export function createAdminAuth({ adminToken, sessionSecret = "", userFile = "", durableUserFiles = [], usersSnapshot = "",
+  ownerEmail = "", ownerPassword = "",
   sessionTtlMs = 12 * 60 * 60 * 1000,
   allowInitialSignup = true,
   failureWindowMs = 15 * 60 * 1000, failureLimit = 20, ticketTtlMs = 30 * 1000,
@@ -129,6 +130,25 @@ export function createAdminAuth({ adminToken, sessionSecret = "", userFile = "",
   const failures = new Map(), tickets = new Map(), recoveryCodes = new Map(), recoveryRequests = new Map();
   const userFiles = resolveDurableUserFiles(userFile, durableUserFiles);
   let users = loadUsers(userFiles, usersSnapshot);
+  const stableOwnerEmail = normalizeIdentity(ownerEmail);
+  const stableOwnerPassword = String(ownerPassword || "");
+  const restoreStableOwner = (email, password) => {
+    if (users.length > 0) return null;
+    if (!/^\S+@\S+\.\S+$/.test(stableOwnerEmail) || stableOwnerPassword.length < 12) return null;
+    if (email !== stableOwnerEmail || password !== stableOwnerPassword) return null;
+    const passwordRecord = passwordDigest(stableOwnerPassword);
+    const user = {
+      id: `owner:${crypto.createHash("sha256").update(stableOwnerEmail).digest("hex")}`,
+      email: stableOwnerEmail,
+      name: "SmartMoney Owner",
+      salt: passwordRecord.salt,
+      passwordDigest: passwordRecord.digest,
+      createdAt: new Date(now()).toISOString(),
+    };
+    users = [user];
+    try { persistUsers(userFiles, users); } catch { /* the env password still logs in on the next deploy */ }
+    return user;
+  };
   if (users.length && userFiles.length) {
     try { persistUsers(userFiles, users); } catch { /* mirror into durable paths when they exist */ }
   }
@@ -263,6 +283,7 @@ export function createAdminAuth({ adminToken, sessionSecret = "", userFile = "",
     });
     app.post("/auth/login", (req, res) => {
       const email = normalizeIdentity(req.body?.email), password = String(req.body?.password || "");
+      restoreStableOwner(email, password);
       if (users.length === 0) {
         return res.status(503).json({
           ok: false,

@@ -419,7 +419,9 @@ const adminAuth = createAdminAuth({
   // Losing an ephemeral user file must never open ownership of the live broker
   // account to the first visitor after a deployment.
   allowInitialSignup: !process.env.RENDER,
-  recoveryOwnerEmail: process.env.RECOVERY_OWNER_EMAIL || "",
+  recoveryOwnerEmail: process.env.RECOVERY_OWNER_EMAIL || process.env.OWNER_EMAIL || "",
+  ownerEmail: process.env.RECOVERY_OWNER_EMAIL || process.env.OWNER_EMAIL || "",
+  ownerPassword: process.env.OWNER_PASSWORD || "",
   userFile: path.resolve(DATA_DIR, "users.json"),
   durableUserFiles: [process.env.AUTH_USERS_FILE, ...defaultDurableUserFiles()].filter(Boolean),
   usersSnapshot: process.env.AUTH_USERS_JSON || "",
@@ -3189,7 +3191,10 @@ function buildBackendHealthPayload(clock = {}) {
     ok: true,
     online: true,
     service: "SmartMoney Backend",
-    recovery: adminAuth.getRecoveryConfiguration(),
+    recovery: {
+      ...adminAuth.getRecoveryConfiguration(),
+      ownerPasswordConfigured: String(process.env.OWNER_PASSWORD || "").length >= 12,
+    },
     generatedAt: new Date().toISOString(),
     mode: TRADING_MODE,
     effectiveMode: engineState.effectiveMode,
