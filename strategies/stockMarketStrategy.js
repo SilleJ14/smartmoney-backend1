@@ -13,6 +13,7 @@ import { evaluateNewsReviewEligibility } from "../scoring/newsReviewEligibility.
 import { publishCurrentAnalyticalSnapshot } from "../scoring/analyticalSnapshot.js";
 import { buildLegacyVetoShadow } from "../scoring/decisionGateRegistry.js";
 import { parseFiniteNumber } from "../config/parseFiniteNumber.js";
+import { mergeSweepWithDeepScores } from "../discovery/stockRealtimePipeline.js";
 
 function attachCanonicalDiscovery(target, scorecard) {
   target.discoveryScorecard = scorecard;
@@ -102,6 +103,7 @@ export function createStockMarketStrategy(dependencies) {
     recordCandidateEvent = () => {},
     recordScanEvent = () => {},
     selectQueuedDeepSymbols = null,
+    runTradierQuoteSweep = null,
     onQueuedDeepScore = null,
     preferDeepEvidence = null,
     updateAdaptiveRunnerLearningState,
@@ -961,16 +963,22 @@ export function createStockMarketStrategy(dependencies) {
         : analysisOnly
           ? [...new Set(targetSymbols.map(normalizeSymbol).filter(Boolean))].slice(0, 4)
           : await getTopMovers();
+      let sweepPlan = null;
+      if (!explicitDeep && !analysisOnly && typeof runTradierQuoteSweep === "function") {
+        sweepPlan = await runTradierQuoteSweep(symbols);
+        if (sweepPlan?.funnel) engineState.stockDiscoveryFunnel = sweepPlan.funnel;
+      }
       const queuedSelection = !explicitDeep && !analysisOnly && typeof selectQueuedDeepSymbols === "function"
         ? selectQueuedDeepSymbols()
         : null;
+      const deepSymbols = Array.isArray(queuedSelection)
+        ? queuedSelection.map((item) => String(item?.symbol || item || "").trim().toUpperCase()).filter(Boolean)
+        : null;
       const limitedSymbols = explicitDeep
         ? symbols
-        : Array.isArray(queuedSelection)
-          ? queuedSelection
-          : analysisOnly
-            ? symbols
-            : narrowScanUniverse(symbols);
+        : analysisOnly
+          ? symbols
+          : deepSymbols || narrowScanUniverse(symbols);
       const selectedSymbols = new Set(limitedSymbols);
       const tracedSymbols = [...new Set([...limitedSymbols, ...symbols.slice(0, 300)])];
       recordScanEvent({ stage: 'SCAN_COVERAGE', cycle: scanCycleId, assetClass: 'stock',
@@ -2245,7 +2253,7 @@ export function createStockMarketStrategy(dependencies) {
         cycle: scanCycleId, stage: 'SCAN_SCORED',
         reasons: [...(signal.entryQualityScorecard?.gates || []), ...(signal.stockTradeEvidence?.reasons || [])],
       });
-      return finalResults
+      const deepSorted = finalResults
         .sort((a, b) => {
           const finalDifference =
             Number(b.stockDecisionScore || 0) -
@@ -2262,6 +2270,7 @@ export function createStockMarketStrategy(dependencies) {
           return Number(b.percentChange || 0) - Number(a.percentChange || 0);
         })
         .slice(0, CONFIG.maxSignalsToReturn);
+      return mergeSweepWithDeepScores(sweepPlan?.display || [], deepSorted);
     } finally {
       activeScanLocks.scanMarket = false;
     }

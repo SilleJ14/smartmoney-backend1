@@ -443,6 +443,15 @@ export function createMarketPriorityQueue({ workerCapacity = 4, streamCapacity =
     },
     noteTradierQuote,
     ingestRealtimeMover,
+    accumulateSweep({ cheapMovers = [], openPositionSymbols = [], nearBuySymbols = [], watchlistSymbols = [], now = Date.now() } = {}) {
+      const merged = new Map(lastCheap.map((row) => [symbolOf(row), row]));
+      for (const mover of cheapMovers) {
+        const symbol = symbolOf(mover);
+        if (symbol) merged.set(symbol, mover);
+      }
+      const capped = [...merged.values()].slice(-1500);
+      return sync({ cheapMovers: capped, openPositionSymbols, nearBuySymbols, watchlistSymbols, now });
+    },
     nextDeepJobs,
     finish,
     release,

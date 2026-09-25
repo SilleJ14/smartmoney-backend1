@@ -219,6 +219,13 @@ import {
   evaluateCryptoTradeCandidate,
 } from "./scoring/componentScore.js";
 import { liveCryptoPermission } from "./scoring/cryptoAnalyticalShadow.js";
+import {
+  buildStockDiscoveryFunnel,
+  filterStaticUniverse,
+  newsPromotion,
+  rankTradierSweep,
+  rotateSweep,
+} from "./discovery/stockRealtimePipeline.js";
 import { requireCanonicalOrder } from "./scoring/candidateFunnel.js";
 import {
   scoreValidatedFundamentals,
@@ -3232,6 +3239,7 @@ function buildBackendHealthPayload(clock = {}) {
       earlyMovers: Array.isArray(engineState.liveEarlyMoverSymbols) ? engineState.liveEarlyMoverSymbols.length : 0,
       lastSuccessfulCycleAt: engineState.lastSuccessfulCycleAt || null,
     },
+    stockUniverse: engineState.stockDiscoveryFunnel || null,
     outcomeWorker: engineState.fullPopulationOutcomeWorker ? {
       ok: engineState.fullPopulationOutcomeWorker.ok,
       updatedAt: engineState.fullPopulationOutcomeWorker.updatedAt,
@@ -14635,6 +14643,50 @@ function selectQueuedDeepSymbols() {
   publishDiscoveryQueue();
   return symbols;
 }
+async function runTradierQuoteSweep(universeSymbols = []) {
+  const filtered = filterStaticUniverse((Array.isArray(universeSymbols) ? universeSymbols : []).map((symbol) => ({ symbol })));
+  const slice = rotateSweep(filtered.symbols, Number(engineState.stockSweepCursor || 0));
+  engineState.stockSweepCursor = slice.nextCursor;
+  const quotes = slice.symbols.length ? await getLatestStockMarketQuotes(slice.symbols) : [];
+  const ranked = rankTradierSweep(quotes);
+  const monitors = discoveryMonitorContext();
+  const queueStatus = marketPriorityQueue.accumulateSweep({
+    cheapMovers: ranked.movers,
+    openPositionSymbols: monitors.openPositionSymbols,
+    nearBuySymbols: monitors.nearBuySymbols,
+    watchlistSymbols: monitors.watchlistSymbols,
+    now: Date.now(),
+  });
+  const streaming = typeof marketPriorityQueue.subscriptionSymbols === "function"
+    ? marketPriorityQueue.subscriptionSymbols()
+    : [];
+  const funnel = buildStockDiscoveryFunnel({
+    broadUniverseCount: filtered.broadUniverseCount,
+    staticFilterPassedCount: filtered.staticFilterPassedCount,
+    sweepRequested: slice.symbols.length,
+    tradierQuotes: quotes.length,
+    cheapCandidates: ranked.ranked.length,
+    streamingSymbols: streaming.length,
+    queueDepth: queueStatus?.queueDepth ?? queueStatus?.pending ?? ranked.ranked.length,
+    deepScored: 0,
+    rejections: [...filtered.rejections, ...ranked.rejections],
+  });
+  engineState.stockDiscoveryFunnel = funnel;
+  publishDiscoveryQueue();
+  return { display: ranked.display, funnel };
+}
+function promoteStockNews(event = {}) {
+  const decision = newsPromotion(event);
+  if (!decision.promote || !decision.symbol) return decision;
+  marketPriorityQueue.ingestRealtimeMover({
+    symbol: decision.symbol,
+    realtime: true,
+    measuredAt: event.measuredAt || new Date().toISOString(),
+    percentChange: event.percentChange,
+    volume: event.volume,
+  });
+  return decision;
+}
 const collectStockMarketQuotes = createStockQuoteBatch({
   primary: (symbols) => tradierMarketData.getLatestQuotes(symbols),
   fallback: getAlpacaLatestStockQuotes,
@@ -19178,6 +19230,15 @@ async function getTopMovers() {
   const newsWatchSymbols = collectNewsWatchSymbols(newsFeed.articles || [])
     .map(normalizeSymbol)
     .filter(isValidStockSymbol);
+  for (const symbol of newsWatchSymbols) {
+    promoteStockNews({
+      symbol,
+      headline: "market-news",
+      providerAvailable: true,
+      covered: true,
+      measuredAt: new Date().toISOString(),
+    });
+  }
   engineState.newsWatchState = {
     updatedAt: new Date().toISOString(),
     symbolCount: newsWatchSymbols.length,
@@ -19338,6 +19399,7 @@ function getBotEntryScores() {
 }
 const { calculateInstitutionalScores, attachStockWatchDecisionComponents, passesFilters, scoreStock, scanMarket, analyzeCandidates } = createStockMarketStrategy({
   selectQueuedDeepSymbols,
+  runTradierQuoteSweep,
   onQueuedDeepScore: (symbol, result) => {
     marketPriorityQueue.finish(symbol, result);
     publishDiscoveryQueue();
