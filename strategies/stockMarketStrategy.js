@@ -971,14 +971,14 @@ export function createStockMarketStrategy(dependencies) {
       const queuedSelection = !explicitDeep && !analysisOnly && typeof selectQueuedDeepSymbols === "function"
         ? selectQueuedDeepSymbols()
         : null;
-      const deepSymbols = Array.isArray(queuedSelection)
+      const queuedSymbols = Array.isArray(queuedSelection)
         ? queuedSelection.map((item) => String(item?.symbol || item || "").trim().toUpperCase()).filter(Boolean)
         : null;
       const limitedSymbols = explicitDeep
         ? symbols
         : analysisOnly
           ? symbols
-          : deepSymbols || narrowScanUniverse(symbols);
+          : queuedSymbols || narrowScanUniverse(symbols);
       const selectedSymbols = new Set(limitedSymbols);
       const tracedSymbols = [...new Set([...limitedSymbols, ...symbols.slice(0, 300)])];
       recordScanEvent({ stage: 'SCAN_COVERAGE', cycle: scanCycleId, assetClass: 'stock',
