@@ -3,7 +3,15 @@ import { isLiveQuoteSource } from "../live/liveQuoteCache.js";
 import { hasExplicitTradeApproval } from "./canonicalSignalRank.js";
 import { assessContinuationSetup } from './continuationSetup.js';
 import { classifyStockDiscoveryLane } from '../discovery/stockDiscoveryLanes.js';
+import { setupEntryBlock, setupStateFromSignal } from './setupStateClassifier.js';
 import { evidencePolicy, researchExecutionIssues } from '../risk/evidencePolicy.js';
+import { aggregateMeasuredComponents, buildMeasuredComponent, COMPONENT_PUBLISH_MINIMUM, computeAnalyticalBounds, evaluateEvidencePolicy, MEASURED_EVIDENCE_STALE_REASONS, STOCK_DECISION_EVIDENCE_POLICY } from './measuredComponent.js';
+import { scoreEntryFamilies } from './entryFamilies.js';
+import { buildExecutionEconomicsShadow } from './executionEconomics.js';
+import { buildCurrentAnalyticalSnapshot, selectDiscoveryInput } from './analyticalSnapshot.js';
+import { STOCK_EXECUTION_THRESHOLDS } from "./stockQualificationPolicy.js";
+
+export { STOCK_EXECUTION_THRESHOLDS };
 
 const clamp = (value) => Math.max(0, Math.min(100, Number(value) || 0));
 const newYorkDayFormatter = new Intl.DateTimeFormat("en-CA", {
@@ -57,12 +65,17 @@ export function resolveEntryQualityScorecard(signal = {}) {
 }
 
 function component(name, value, weight, source, available = true) {
-  const normalized = clamp(value);
+  const measured = available !== false
+    && value !== null
+    && value !== undefined
+    && value !== ""
+    && Number.isFinite(Number(value));
+  const normalized = measured ? clamp(value) : null;
   return {
     name,
     source,
-    available: Boolean(available),
-    value: Number(normalized.toFixed(2)),
+    available: measured,
+    value: normalized === null ? null : Number(normalized.toFixed(2)),
     weight,
     normalizedWeight: 0,
     effectiveWeight: 0,
@@ -83,11 +96,13 @@ function scorecard(stage, components, gates = []) {
       contribution: Number((item.value * normalizedWeight).toFixed(2)),
     };
   });
-  const score = clamp(normalizedComponents.reduce((sum, item) => sum + item.contribution, 0));
+  const score = available.length
+    ? clamp(normalizedComponents.reduce((sum, item) => sum + item.contribution, 0))
+    : null;
   return {
     stage,
-    score: Number(score.toFixed(2)),
-    rawScore: Number(score.toFixed(2)),
+    score: score === null ? null : Number(score.toFixed(2)),
+    rawScore: score === null ? null : Number(score.toFixed(2)),
     components: normalizedComponents,
     gates,
     coverage: Number((configuredWeight > 0 ? availableWeight / configuredWeight : 0).toFixed(2)),
@@ -100,6 +115,15 @@ function scorecard(stage, components, gates = []) {
 }
 
 function rescaleScorecard(card, nextScore, reason = 'EXISTING_POLICY_ADJUSTMENT') {
+  if (card.score === null || !Number.isFinite(Number(nextScore))) {
+    return {
+      ...card,
+      score: null,
+      scoreAdjustments: [...(card.scoreAdjustments || []), {
+        reason, before: card.score, requested: nextScore, after: null,
+      }],
+    };
+  }
   const score = clamp(nextScore);
   const scale = card.score > 0 ? score / card.score : 0;
   return {
@@ -196,21 +220,6 @@ export const STOCK_DECISION_WEIGHTS = Object.freeze({
   fundamentals: 0.08,
 });
 
-export const STOCK_EXECUTION_THRESHOLDS = Object.freeze({
-  watchlistScore: 60,
-  qualifiedScore: 70,
-  finalScore: 70,
-  strongScore: 78,
-  entryScore: 75,
-  entryCoverage: 0.8,
-  acceleratedFinalScore: 85,
-  acceleratedEntryScore: 82,
-  maxSpreadPercent: 1,
-  maxQuoteAgeSeconds: 5,
-  maxDecisionAgeSeconds: 300,
-  riskQualityScore: 55,
-});
-
 export function evaluateStockTradeCandidate(
   signal = {},
   {
@@ -224,16 +233,17 @@ export function evaluateStockTradeCandidate(
   } = {}
 ) {
   const canonicalFinalScore = firstFinite(
-    signal.masterFinalScore,
-    signal.finalAutonomousDecisionScore,
+    signal.currentAnalyticalScore,
     signal.stockDecisionScore,
-    signal.decisionScoreTelemetry?.scores?.decision
+    signal.decisionScoreTelemetry?.scores?.decision,
+    signal.masterFinalScore,
+    signal.finalAutonomousDecisionScore
   );
   const parsedFinalScore = Number(canonicalFinalScore);
   const finalScoreAvailable =
     signal.stockDecisionScoreAvailable !== false &&
     canonicalFinalScore !== undefined && Number.isFinite(parsedFinalScore);
-  const finalScore = finalScoreAvailable ? parsedFinalScore : 0;
+  const finalScore = finalScoreAvailable ? parsedFinalScore : null;
   const entryScore = Number(signal.entryQualityScore ?? signal.entryQualityScorecard?.score ?? 0);
   const entryCoverage = Number(signal.entryQualityScorecard?.coverage || 0);
   const decisionCoverage = Number(
@@ -380,21 +390,6 @@ export function evaluateStockTradeCandidate(
     signal.displayOnly === true ||
     signal.discoveryOnly === true ||
     signal.entryEvidenceBlocked === true ||
-    signal.phase14Suppressed === true ||
-    signal.phase7Suppressed === true ||
-    signal.phase7Reinforcement?.suppressEntry === true ||
-    signal.phase9LiquiditySuppressed === true ||
-    signal.phase11Suppressed === true ||
-    signal.phase12Suppressed === true ||
-    signal.phase13Suppressed === true ||
-    signal.phase15ExecutionBlocked === true ||
-    signal.phase15ExecutionDominance?.blockExecution === true ||
-    signal.unifiedInstitutionalOrchestrator?.shouldBlock === true ||
-    signal.phase59InstitutionalOrderFlow?.shouldBlock === true ||
-    signal.phase60AdaptiveExecution?.shouldBlockExecution === true ||
-    signal.phase61ProfitAggression?.shouldBlockAggression === true ||
-    signal.phase62MarketPersonality?.shouldPersonalityBlock === true ||
-    signal.phase63StrategyEvolution?.shouldStrategyBlock === true ||
     signal.phase6ScoringLayers?.hardReject === true ||
     [
       "BLOCK",
@@ -417,15 +412,15 @@ export function evaluateStockTradeCandidate(
     signal.shouldWaitForPullback === true;
   const reasons = [
     ...(requireCentralDecision && !structureOrScoreBuy ? researchExecutionIssues(signal,evidencePolicy('stock','order','automatic'), now) : []),
-    ...(!structureOrScoreBuy && !entryApproved ? ["ENTRY_NOT_APPROVED"] : []),
-    ...(!structureOrScoreBuy && entryScore < STOCK_EXECUTION_THRESHOLDS.entryScore ? ["ENTRY_SCORE_BELOW_75"] : []),
-    ...(!structureOrScoreBuy && entryCoverage < STOCK_EXECUTION_THRESHOLDS.entryCoverage ? ["ENTRY_COVERAGE_BELOW_80_PERCENT"] : []),
+    ...(!entryApproved ? ["ENTRY_NOT_APPROVED"] : []),
+    ...(entryCoverage < STOCK_EXECUTION_THRESHOLDS.entryCoverage ? ["ENTRY_COVERAGE_BELOW_80_PERCENT"] : []),
     ...(!structureOrScoreBuy && decisionCoverage < STOCK_EXECUTION_THRESHOLDS.entryCoverage ? ["DECISION_COVERAGE_BELOW_80_PERCENT"] : []),
     ...(!structureOrScoreBuy && discoveryCoverage < 0.65 ? ["DISCOVERY_COVERAGE_BELOW_65_PERCENT"] : []),
     ...(!structureOrScoreBuy && !coreEvidencePass ? ["CORE_EVIDENCE_FAILED"] : []),
     ...(!centralDecisionPass ? ["CENTRAL_DECISION_NOT_EXECUTABLE"] : []),
     ...(requireExplicitApproval && !explicitApproval ? ["EXPLICIT_APPROVAL_MISSING"] : []),
     ...(explicitBuyBlock ? ["EXPLICIT_BUY_BLOCK"] : []),
+    ...(setupEntryBlock(signal) ? [setupEntryBlock(signal)] : []),
     ...(!spreadAvailable ? ["SPREAD_UNAVAILABLE"] : []),
     ...(spreadTooWide ? ["SPREAD_ABOVE_EXECUTION_LIMIT"] : []),
     ...(!structureOrScoreBuy && !riskQualityAvailable ? ["RISK_QUALITY_UNAVAILABLE"] : []),
@@ -467,8 +462,8 @@ export function evaluateStockTradeCandidate(
         : []
     ),
     ...(blockingState ? ["BLOCKING_RISK_STATE"] : []),
-    ...(!continuationExecutable && !finalScoreAvailable ? ["FINAL_SCORE_INVALID"] : []),
-    ...(!continuationExecutable && finalScore < STOCK_EXECUTION_THRESHOLDS.finalScore ? ["FINAL_SCORE_BELOW_70"] : []),
+    ...(!finalScoreAvailable ? ["FINAL_SCORE_INVALID"] : []),
+    ...(finalScoreAvailable && finalScore < STOCK_EXECUTION_THRESHOLDS.finalScore ? ["FINAL_SCORE_BELOW_70"] : []),
   ];
   return {
     watchlistEligible:
@@ -481,7 +476,6 @@ export function evaluateStockTradeCandidate(
         : finalScore >= STOCK_EXECUTION_THRESHOLDS.qualifiedScore &&
       decisionCoverage >= STOCK_EXECUTION_THRESHOLDS.entryCoverage &&
       entryCoverage >= STOCK_EXECUTION_THRESHOLDS.entryCoverage &&
-      entryScore >= STOCK_EXECUTION_THRESHOLDS.entryScore &&
       entryApproved &&
       coreEvidencePass &&
       riskQualityPass &&
@@ -571,7 +565,6 @@ export function calculateEarlyDiscoveryScore(signal = {}) {
     signal.volumeSpikeRatio,
     confirmations.volumeSpikeRatio
   );
-  const percentChange = firstFinite(signal.percentChange, signal.changePercent);
   const participationBase = clamp(
     55 + (Number(relativeVolume || 0) - 0.5) * 30
   );
@@ -609,9 +602,7 @@ export function calculateEarlyDiscoveryScore(signal = {}) {
   const catalystBonus = catalystAvailable
     ? Math.max(0, Math.min(8, (clamp(catalyst) - 50) * 0.16))
     : 0;
-  let card = rescaleScorecard(rawCard, baseCard.score + catalystBonus, 'TECHNICAL_BASE_PLUS_CATALYST');
-  const positiveChange = Number(percentChange || 0);
-  const lateMoveCap = positiveChange >= 10 ? 55 : positiveChange >= 8 ? 64 : 100;
+  const card = rescaleScorecard(rawCard, baseCard.score + catalystBonus, 'TECHNICAL_BASE_PLUS_CATALYST');
   const extensionProfile = signal.multiHorizonExtension ||
     signal.extensionProfile ||
     signal.preMoverDiscovery?.extension ||
@@ -627,44 +618,35 @@ export function calculateEarlyDiscoveryScore(signal = {}) {
     extensionProfile !== null &&
     Number(extensionProfile?.coverage || 0) >= 1 &&
     Number(completedDailyBars || 0) >= 21;
-  const extensionAlreadyApplied = signal.extensionAdjusted === true ||
-    signal.preMoverDiscovery?.extensionAdjusted === true;
-  if (!extensionAlreadyApplied && Number(extensionProfile?.extensionPenalty || 0) > 0) {
-    card = rescaleScorecard(
-      card,
-      Math.max(0, card.score - Number(extensionProfile.extensionPenalty || 0)), 'EXTENSION_PENALTY'
-    );
-  }
-  const multiHorizonLateCap =
-    extensionProfile?.alreadyExtended === true || !canonicalExtensionEvidencePass
-      ? 55
-      : 100;
-  const effectiveLateCap = Math.min(lateMoveCap, multiHorizonLateCap);
+  const classification = setupStateFromSignal({
+    ...signal,
+    multiHorizonExtension: extensionProfile,
+    historyDays: completedDailyBars,
+    extensionCoverage: extensionProfile?.coverage,
+  });
   const buyScore = Number(card.score);
-  if (card.score > effectiveLateCap) {
-    card = rescaleScorecard(card, effectiveLateCap, 'EXISTING_DISCOVERY_CAP');
-  }
   card.gates = [...new Set([
     ...card.gates,
-    ...(lateMoveCap < 100 ? ["ALREADY_LOUD_MOVE"] : []),
-    ...(extensionProfile?.alreadyExtended === true
-      ? ["ALREADY_EXTENDED_MULTI_HORIZON"]
-      : []),
-    ...(!canonicalExtensionEvidencePass
-      ? ["MISSING_CANONICAL_MULTI_HORIZON_EVIDENCE"]
-      : []),
+    ...classification.reasons,
+    ...(!canonicalExtensionEvidencePass ? ["INSUFFICIENT_EXTENSION_HISTORY"] : []),
   ])];
   return {
     ...card,
     buyScore,
+    discoveryScore: buyScore,
     technicalBaseScore: baseCard.score,
     catalystBonus: Number(catalystBonus.toFixed(2)),
     extensionProfile,
     canonicalExtensionEvidencePass,
     completedValidDailyBars: Number(completedDailyBars || 0),
-    tier: effectiveLateCap < 72
-      ? "LATE_MOVE_NOT_DISCOVERY"
-      : card.score >= 85 && card.coverage >= 0.8
+    setupState: classification.state,
+    setupStateConfidence: classification.confidence,
+    setupStateReasons: classification.reasons,
+    setupEvidenceCoverage: classification.evidenceCoverage,
+    extensionEvidence: canonicalExtensionEvidencePass ? "KNOWN" : "UNKNOWN",
+    earlyEntryEligible: classification.earlyEntryEligible,
+    newLongEntryAllowed: classification.newLongEntryAllowed,
+    tier: card.score >= 85 && card.coverage >= 0.8
       ? "ELITE_DISCOVERY"
       : card.score >= 72 && card.coverage >= 0.65
         ? "STRONG_DISCOVERY"
@@ -699,13 +681,12 @@ export function calculateEntryQualityScore(signal = {}) {
   );
   const trendAvailable = [ema9, ema20, macd, macdSignal, rsiValue].every((value) => value !== undefined)
     && Number(technicalBarsFound || 0) >= 20;
-  const rsi = Number(rsiValue || 50);
-  const trendAlignment = clamp(
+  const trendAlignment = trendAvailable ? clamp(
     35 +
-    (Number(ema9 || 0) > Number(ema20 || 0) ? 30 : 0) +
-    (Number(macd || 0) > Number(macdSignal || 0) ? 20 : 0) +
-    (rsi >= 45 && rsi <= 72 ? 15 : rsi > 82 ? -25 : 0)
-  );
+    (Number(ema9) > Number(ema20) ? 30 : 0) +
+    (Number(macd) > Number(macdSignal) ? 20 : 0) +
+    (Number(rsiValue) >= 45 && Number(rsiValue) <= 72 ? 15 : Number(rsiValue) > 82 ? -25 : 0)
+  ) : null;
   const priceLocationAvailable = closeNearHigh !== undefined;
   const priceLocation = clamp(
     Number(closeNearHigh || 0) - Number(quality.vwapExtensionPenalty || 0) * 0.45 - Number(quality.candleRejectionRisk || 0) * 0.25
@@ -734,16 +715,18 @@ export function calculateEntryQualityScore(signal = {}) {
   const riskInputs = [
     firstFinite(quality.antiChaseRisk, signal.antiChaseRisk),
     firstFinite(quality.exhaustionRisk, signal.exhaustionRisk),
-    firstFinite(quality.spreadWideningRisk, signal.spreadWideningRisk),
   ].filter((value) => value !== undefined);
   const riskAvailable = riskInputs.length > 0;
-  const riskProtection = riskAvailable ? clamp(100 - Math.max(...riskInputs.map(Number))) : 0;
+  const riskProtection = riskAvailable ? clamp(100 - Math.max(...riskInputs.map(Number))) : null;
   const independentRisk = riskAvailable ? Math.max(...riskInputs.map(Number)) : 0;
   const extremeEntryRisk = independentRisk >= 80;
   const newsRiskRequired = signal.requireNewsRiskForEntry === true;
   const newsRiskUnavailable =
     newsRiskRequired && confirmations.newsRiskAvailable !== true;
-  const hardReject = quality.hardReject === true || confirmations.newsRisk === true || newsRiskUnavailable || signal.lateChaseRisk === true || extremeEntryRisk || spreadTooWide;
+  const setupState = signal.setupState || signal.discoveryScorecard?.setupState || null;
+  const extendedEntry = setupState === "EXTENDED";
+  const exhaustedEntry = setupState === "EXHAUSTED" || signal.runnerStage === "EXHAUSTION";
+  const hardReject = quality.hardReject === true || confirmations.newsRisk === true || signal.lateChaseRisk === true || extremeEntryRisk || exhaustedEntry;
   const components = [
     component("trendAlignment", trendAlignment, 0.23, "ema_macd_rsi", trendAvailable),
     component("priceLocation", priceLocation, 0.22, "close_vwap_rejection", priceLocationAvailable),
@@ -751,11 +734,12 @@ export function calculateEntryQualityScore(signal = {}) {
     component("liquidityExecution", liquidity, 0.18, `liquidity_and_${spreadEvidence.source}`, liquidity !== undefined && spreadEvidenceAvailable),
     component("riskProtection", riskProtection, 0.15, "max_independent_risk", riskAvailable),
   ];
-  const missingCriticalEvidence = components.filter((item) => !item.available).map((item) => item.name);
-  if (!spreadEvidenceAvailable) missingCriticalEvidence.push("spreadEvidence");
+  const missingCriticalEvidence = components.filter((item) => !item.available && item.name !== "liquidityExecution").map((item) => item.name);
   const gates = [
+    ...(exhaustedEntry ? ["EXHAUSTION"] : []),
+    ...(extendedEntry ? ["ENTRY_EXTENDED"] : []),
     ...(hardReject ? ["HARD_RISK_REJECT"] : []),
-    ...(newsRiskUnavailable ? ["NEWS_RISK_UNAVAILABLE"] : []),
+    ...(newsRiskUnavailable ? ["NEWS_UNKNOWN"] : []),
     ...(extremeEntryRisk ? ["EXTREME_ENTRY_RISK"] : []),
     ...(spreadTooWide ? ["SPREAD_ABOVE_EXECUTION_LIMIT"] : []),
     ...missingCriticalEvidence.map((name) => `MISSING_${name.replace(/([a-z])([A-Z])/g, "$1_$2").toUpperCase()}`),
@@ -777,21 +761,39 @@ export function calculateEntryQualityScore(signal = {}) {
     : 0;
   const spreadQualityScore = spreadEvidenceAvailable
     ? clamp(100 - (measuredSpread / Math.max(0.01, maxAllowedSpreadPercent)) * 100)
-    : 0;
-  const coverageAdjustedScore =
-    rawCard.score * Math.min(1, rawCard.coverage / 0.8) - spreadPenalty;
-  const card = rescaleScorecard(rawCard, hardReject ? Math.min(coverageAdjustedScore, 35) : coverageAdjustedScore,
-    hardReject ? 'COVERAGE_SPREAD_AND_HARD_REJECT_CAP' : 'COVERAGE_AND_SPREAD_PENALTY');
-  const approved = !hardReject && missingCriticalEvidence.length === 0 && card.coverage >= 0.8 && card.score >= 75;
+    : null;
+  const coverageAdjustedScore = rawCard.score;
+  const entryAdjustedScore = exhaustedEntry || hardReject
+    ? Math.min(coverageAdjustedScore ?? 35, 35)
+    : extendedEntry
+      ? Math.min(coverageAdjustedScore ?? 55, 55)
+      : coverageAdjustedScore;
+  const card = rescaleScorecard(rawCard, entryAdjustedScore,
+    exhaustedEntry || hardReject ? 'COVERAGE_AND_HARD_REJECT_CAP' : extendedEntry ? 'ENTRY_EXTENDED' : 'COVERAGE_ONLY');
+  const trendMeasured = components.some((item) => item.name === "trendAlignment" && item.available);
+  const setupMeasured = components.some((item) => item.name === "setupConfirmation" && item.available);
+  const legacyApproved = !hardReject && !extendedEntry && !exhaustedEntry && trendMeasured && setupMeasured && card.coverage >= 0.5 && card.score >= 75;
+  const entryFamilyShadow = scoreEntryFamilies(signal, {
+    oldEntry: card.score,
+    oldApproved: legacyApproved,
+    oldComponents: card.components,
+  });
+  const approved = entryFamilyShadow.entryApproved === true;
   return {
     ...card,
     approved,
+    entryFamilyShadow,
     newsRiskRequired,
     missingCriticalEvidence,
     spreadPercent: measuredSpread,
+    spreadTooWide,
     spreadSource: spreadEvidence.source,
-    spreadPenalty: Number(spreadPenalty.toFixed(2)),
-    spreadQualityScore: Number(spreadQualityScore.toFixed(2)),
+    spreadQualityScore: spreadQualityScore === null ? null : Number(spreadQualityScore.toFixed(2)),
+    executionEconomicsShadow: buildExecutionEconomicsShadow(signal, {
+      measuredSpread,
+      legacyPercentPenalty: spreadEvidenceAvailable ? spreadPenalty : null,
+    }),
+    newsEvidence: confirmations.newsRisk === true ? "NEGATIVE" : newsRiskUnavailable ? "UNKNOWN" : "PRESENT",
     tier: hardReject
       ? "BLOCKED"
       : missingCriticalEvidence.length > 0
@@ -855,9 +857,18 @@ export function calculateMultiDayContinuationScore(signal = {}, { now = Date.now
   const persistence = firstFinite(memory.persistenceScore, signal.persistenceScore);
   const support = firstFinite(memory.supportHoldingScore, signal.runnerHoldScore);
   const sessionEvidence = clamp(seenDays * 20);
-  const trendDurability = clamp(
-    45 + (confirmations.aboveVwap ? 20 : 0) + (Number(signal.technicals?.ema9 || 0) > Number(signal.technicals?.ema20 || 0) ? 20 : 0) + (confirmations.closeNearHigh ? 15 : 0)
-  );
+  const ema9 = firstFinite(signal.technicals?.ema9);
+  const ema20 = firstFinite(signal.technicals?.ema20);
+  const emaKnown = ema9 !== undefined && ema20 !== undefined;
+  const vwapKnown = typeof confirmations.aboveVwap === "boolean";
+  const closeKnown = confirmations.closeNearHigh === true || confirmations.closeNearHigh === false;
+  const trendKnown = emaKnown || vwapKnown || closeKnown;
+  const trendDurability = trendKnown ? clamp(
+    45
+    + (vwapKnown && confirmations.aboveVwap ? 20 : 0)
+    + (emaKnown && Number(ema9) > Number(ema20) ? 20 : 0)
+    + (closeKnown && confirmations.closeNearHigh ? 15 : 0)
+  ) : null;
   const exhaustion = Math.max(
     Number(signal.exhaustionRisk || signal.phase5SignalQuality?.exhaustionRisk || 0),
     Number(signal.lateChaseRisk ? 100 : 0),
@@ -867,11 +878,10 @@ export function calculateMultiDayContinuationScore(signal = {}, { now = Date.now
     component("observedPersistence", persistence, 0.3, "multiDayMemory.persistence", persistence !== undefined),
     component("supportRetention", support, 0.24, "multiDayMemory.support", support !== undefined),
     component("multiSessionEvidence", sessionEvidence, 0.18, "multiDayMemory.uniqueSeenDays", seenDays > 0),
-    component("trendDurability", trendDurability, 0.18, "trend_support"),
+    component("trendDurability", trendDurability, 0.18, "trend_support", trendKnown),
     component("exhaustionResistance", 100 - exhaustion, 0.1, "max_exhaustion_risk"),
   ];
-  const rawCard = scorecard("MULTI_DAY_CONTINUATION", components);
-  const card = rescaleScorecard(rawCard, rawCard.score * rawCard.coverage);
+  const card = scorecard("MULTI_DAY_CONTINUATION", components);
   return {
     ...card,
     observedSessions: seenDays,
@@ -965,33 +975,138 @@ export function buildStockDecisionScore(signal = {}) {
   const effectiveWeights = Object.fromEntries(
     Object.entries(learnedWeights).map(([name, value]) => [name, Number((value / learnedWeightTotal).toFixed(6))])
   );
-  const components = [
-    component("discovery", useContinuation ? continuationSetup.score : firstFinite(discovery.buyScore, discovery.score), effectiveWeights.discovery,
-      useContinuation ? 'measured_continuation_setup' : 'discoveryScorecard',
-      useContinuation
-        ? continuationSetup.available !== false && Number.isFinite(Number(continuationSetup.score))
-        : scorecardHasEvidence(discovery)),
-    component("entry", entry.score, effectiveWeights.entry, "entryQualityScorecard", scorecardHasEvidence(entry)),
-    component("marketContext", contextScore, effectiveWeights.marketContext, "macro_sector_context", contextScore !== undefined),
-    component("riskPortfolio", riskPortfolioScore, effectiveWeights.riskPortfolio, riskPortfolioSource, riskPortfolioScore !== undefined),
-    component("fundamentals", fundamentalScore, effectiveWeights.fundamentals, "validated_fundamentals", fundamentalDataValid && fundamentalScore !== undefined),
+  const selectedDiscovery = selectDiscoveryInput({
+    measuredContinuationEligible: useContinuation,
+    continuationScore: continuationSetup.score,
+    earlyBuyScore: discovery.buyScore,
+    earlyScore: discovery.score,
+  });
+  const discoveryScore = selectedDiscovery.score;
+  const discoveryMeasured = useContinuation
+    ? continuationSetup.available !== false && Number.isFinite(Number(continuationSetup.score))
+    : scorecardHasEvidence(discovery);
+  const entryMeasured = scorecardHasEvidence(entry);
+  const entryState = signal.setupState || signal.discoveryScorecard?.setupState || entry.setupState || null;
+  const entryHardCeiling = entryState === "EXHAUSTED"
+    || entry.gates?.includes("EXHAUSTION")
+    || entry.gates?.includes("HARD_RISK_REJECT")
+    || signal.confirmations?.newsRisk === true;
+  const entryUnreadCeiling = entryHardCeiling ? 35 : entryState === "EXTENDED" || entry.gates?.includes("ENTRY_EXTENDED") ? 55 : 100;
+  const entryCoverage = entryMeasured ? Number(entry.coverage ?? 1) : 0;
+  const entrySliceScore = !entryMeasured
+    ? null
+    : entryCoverage >= 0.999 || entryUnreadCeiling === 35
+      ? entry.score
+      : (entry.rawScore ?? entry.score);
+  const riskMeasured = riskPortfolioScore !== undefined;
+  const measuredComponents = [
+    buildMeasuredComponent({
+      componentName: "discovery",
+      score: discoveryMeasured ? discoveryScore : null,
+      coverage: discoveryMeasured ? Number(useContinuation ? continuationSetup.coverage ?? 1 : discovery.coverage ?? 1) : 0,
+      configuredWeight: effectiveWeights.discovery,
+      minimumCoverage: COMPONENT_PUBLISH_MINIMUM.discovery,
+      source: selectedDiscovery.source,
+      measuredInputs: discoveryMeasured ? ["DISCOVERY"] : [],
+      missingInputs: discoveryMeasured ? [] : ["DISCOVERY"],
+    }),
+    buildMeasuredComponent({
+      componentName: "entry",
+      score: entrySliceScore,
+      coverage: entryCoverage,
+      configuredWeight: effectiveWeights.entry,
+      minimumCoverage: COMPONENT_PUBLISH_MINIMUM.entry,
+      unreadCeiling: entryUnreadCeiling,
+      source: "entryQualityScorecard",
+      measuredInputs: entryMeasured ? ["ENTRY"] : [],
+      missingInputs: entryMeasured ? [] : ["ENTRY"],
+    }),
+    buildMeasuredComponent({
+      componentName: "marketContext",
+      score: contextScore ?? null,
+      coverage: contextScore !== undefined ? Number(signal.contextCoverage ?? 1) : 0,
+      configuredWeight: effectiveWeights.marketContext,
+      minimumCoverage: COMPONENT_PUBLISH_MINIMUM.marketContext,
+      source: "macro_sector_context",
+      measuredInputs: contextScore !== undefined ? ["MARKET_CONTEXT"] : [],
+      missingInputs: contextScore !== undefined ? [] : ["MARKET_CONTEXT"],
+    }),
+    buildMeasuredComponent({
+      componentName: "riskPortfolio",
+      score: riskMeasured ? riskPortfolioScore : null,
+      coverage: riskMeasured ? Number(signal.riskCoverage ?? 1) : 0,
+      configuredWeight: effectiveWeights.riskPortfolio,
+      minimumCoverage: COMPONENT_PUBLISH_MINIMUM.riskPortfolio,
+      source: riskPortfolioSource,
+      measuredInputs: riskMeasured ? ["RISK"] : [],
+      missingInputs: Array.isArray(signal.riskMissingInputs) ? signal.riskMissingInputs : (riskMeasured ? [] : ["RISK"]),
+    }),
+    buildMeasuredComponent({
+      componentName: "fundamentals",
+      score: fundamentalDataValid && fundamentalScore !== undefined ? fundamentalScore : null,
+      coverage: fundamentalDataValid && fundamentalScore !== undefined ? Number(signal.fundamentalCoverage ?? 1) : 0,
+      configuredWeight: effectiveWeights.fundamentals,
+      minimumCoverage: COMPONENT_PUBLISH_MINIMUM.fundamentals,
+      source: "validated_fundamentals",
+      measuredInputs: fundamentalDataValid && fundamentalScore !== undefined ? ["FUNDAMENTALS"] : [],
+      missingInputs: fundamentalDataValid && fundamentalScore !== undefined ? [] : ["FUNDAMENTALS"],
+    }),
   ];
-  const rawCard = scorecard("STOCK_DECISION", components);
-  // Score against the configured weights, treating unavailable evidence as
-  // zero contribution. Renormalizing only the available components can make a
-  // candidate stronger when weak evidence disappears, which is unsafe.
-  const coverageSafeScore = components.reduce(
-    (sum, item) => sum + (item.available ? item.value * item.weight : 0),
-    0
-  );
-  const missingEvidencePenalty = Math.max(
-    0,
-    Number((rawCard.score - coverageSafeScore).toFixed(2))
-  );
-  const card = rescaleScorecard(
-    rawCard,
-    coverageSafeScore, 'MISSING_COMPONENTS_ZERO_CONTRIBUTION'
-  );
+  const aggregated = aggregateMeasuredComponents(measuredComponents);
+  const evidencePolicyResult = evaluateEvidencePolicy(aggregated.evidenceBasis, STOCK_DECISION_EVIDENCE_POLICY, {
+    newsUnknown: signal.requireNewsRiskForEntry === true && signal.confirmations?.newsRiskAvailable !== true && signal.confirmations?.newsRisk !== true,
+  });
+  const staleReason = MEASURED_EVIDENCE_STALE_REASONS.includes(signal.staleReason)
+    ? signal.staleReason
+    : MEASURED_EVIDENCE_STALE_REASONS.includes(signal.rescoreReason) ? signal.rescoreReason : null;
+  const analyticalBounds = computeAnalyticalBounds({
+    components: measuredComponents,
+    requiredFinalScore: STOCK_EXECUTION_THRESHOLDS.finalScore,
+    entry: {
+      score: entrySliceScore,
+      coverage: entryCoverage,
+      unreadCeiling: entryUnreadCeiling,
+      required: STOCK_EXECUTION_THRESHOLDS.entryScore,
+    },
+    mandatoryEvidenceMissing: evidencePolicyResult.state === "PASS" ? [] : evidencePolicyResult.reasons,
+    evidenceStale: signal.evidenceStale === true || staleReason !== null,
+    staleReason,
+    alternateModels: signal.alternateSetupModels || [],
+  });
+  const measuredTotal = aggregated.measuredWeight;
+  const card = {
+    stage: "STOCK_DECISION",
+    score: aggregated.score,
+    rawScore: aggregated.score,
+    coverage: aggregated.coverage,
+    evidenceBasis: aggregated.evidenceBasis,
+    evidenceBasisVersion: aggregated.evidenceBasisVersion,
+    maximumPossibleF: analyticalBounds.maximumPossibleScore,
+    minimumPossibleF: analyticalBounds.minimumPossibleScore,
+    analyticalBounds,
+    gates: [],
+    scoreAdjustments: [],
+    missingComponents: aggregated.components.filter((item) => !item.componentPublishable).map((item) => item.componentName),
+    components: aggregated.components.map((item) => {
+      const effectiveWeight = item.componentPublishable && measuredTotal > 0 ? item.measuredWeight / measuredTotal : 0;
+      return {
+        name: item.componentName,
+        source: item.source,
+        available: item.componentPublishable,
+        value: item.componentScore,
+        weight: item.configuredWeight,
+        measuredWeight: item.measuredWeight,
+        normalizedWeight: Number(effectiveWeight.toFixed(4)),
+        effectiveWeight: Number(effectiveWeight.toFixed(4)),
+        contribution: item.contribution,
+        componentCoverage: item.componentCoverage,
+        componentPublishable: item.componentPublishable,
+        missingInputs: item.missingInputs,
+        measuredInputs: item.measuredInputs,
+        state: item.state,
+      };
+    }),
+  };
   const canonicalDiscoveryPass =
     useContinuation ||
     discovery.canonicalExtensionEvidencePass === true ||
@@ -1013,21 +1128,58 @@ export function buildStockDecisionScore(signal = {}) {
     ...card,
     coreEvidencePass: missingCriticalEvidence.length === 0,
     calculation: {
-      algorithm: 'CONFIGURED_WEIGHT_SUM_CLAMP_0_100_ROUNDED_2DP_V1',
-      components: components.map(item => ({ name: item.name, available: item.available,
-        value: item.value, weight: item.weight, contribution: item.available ? item.value * item.weight : 0 })),
-      unroundedScore: coverageSafeScore,
-      displayedContributionRoundingResidual: card.score - card.components.reduce((sum, item) => sum + item.contribution, 0),
+      algorithm: 'MEASURED_WEIGHT_NORMALIZED_V1',
+      components: card.components.map((item) => ({
+        name: item.name,
+        available: item.available,
+        value: item.value,
+        weight: item.weight,
+        measuredWeight: item.measuredWeight,
+        contribution: item.contribution,
+      })),
+      unroundedScore: aggregated.score,
+      displayedContributionRoundingResidual: (card.score ?? 0) - card.components.reduce((sum, item) => sum + item.contribution, 0),
     },
     analysisEvidencePass: missingCriticalEvidence.every(reason => reason === 'approvedEntry') &&
       (entry.missingCriticalEvidence || []).length === 0 &&
-      !entry.gates?.includes('NEWS_RISK_UNAVAILABLE'),
+      !entry.gates?.includes('HARD_RISK_REJECT'),
     missingCriticalEvidence,
-    missingEvidencePenalty,
+    missingEvidencePenalty: 0,
     canonicalDiscoveryPass,
     discoveryLane: useContinuation ? 'MEASURED_CONTINUATION' : classifiedLane,
     opportunityBasis: useContinuation ? 'MEASURED_CONTINUATION' : 'EARLY_DISCOVERY',
     continuationSetup,
+    currentAnalyticalSnapshot: buildCurrentAnalyticalSnapshot({
+      previous: signal.currentAnalyticalSnapshot,
+      components: Object.fromEntries(card.components.map((item) => [item.name, {
+        score: item.value,
+        source: item.name === "discovery" ? selectedDiscovery.source : item.source,
+        coverage: item.componentCoverage,
+        configuredWeight: item.weight,
+        measuredWeight: item.measuredWeight,
+        state: item.value === null ? "DATA_UNAVAILABLE" : "PASS",
+      }])),
+      weights: effectiveWeights,
+      F: card.score,
+      coverage: card.coverage,
+      configuredWeight: aggregated.configuredWeight,
+      measuredWeight: aggregated.measuredWeight,
+      minimumPossibleScore: analyticalBounds.minimumPossibleScore,
+      maximumPossibleScore: analyticalBounds.maximumPossibleScore,
+      setupState: discovery.setupState || signal.setupState || null,
+      setupModel: useContinuation ? "MEASURED_CONTINUATION" : (classifiedLane || "EARLY_DISCOVERY"),
+      marketData: signal.marketData || {
+        quote: signal.quoteProvenance || null,
+        intradayBars: signal.intradayBarProvenance || signal.barProvenance || null,
+        dailyBars: signal.dailyBarProvenance || null,
+      },
+      diagnostics: {
+        earlyDiscoveryScore: Number.isFinite(Number(discovery.score)) ? Number(discovery.score) : null,
+        continuationSetupScore: Number.isFinite(Number(continuationSetup.score)) ? Number(continuationSetup.score) : null,
+        runnerScore: Number.isFinite(Number(signal.runnerScore)) ? Number(signal.runnerScore) : null,
+        boostedLegacyScore: Number.isFinite(Number(signal.legacyCompositeScore)) ? Number(signal.legacyCompositeScore) : null,
+      },
+    }),
     effectiveWeights,
     reinforcementWeightsApplied: Object.keys(reinforcementWeights).length > 0,
     reinforcementLearningActive,
@@ -1052,10 +1204,17 @@ export function buildDecisionScoreTelemetry(signal = {}) {
     entry: _decisionEntry,
     ...decisionStage
   } = stockDecision;
+  const snapshot = stockDecision.currentAnalyticalSnapshot;
   return {
     version: 2,
     calculatedAt: new Date().toISOString(),
-    scores: { discovery: discovery.score, entry: entry.score, continuation: continuation.score, decision: stockDecision.score },
+    currentAnalyticalSnapshot: snapshot,
+    scores: {
+      discovery: snapshot?.components?.discovery?.score ?? null,
+      entry: snapshot?.components?.entry?.score ?? null,
+      continuation: continuation.score,
+      decision: snapshot?.F ?? stockDecision.score,
+    },
     stages: { discovery, entry, continuation, decision: decisionStage },
   };
 }

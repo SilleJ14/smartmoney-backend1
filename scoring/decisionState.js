@@ -1,13 +1,13 @@
 // Diagnostic projection only. Never used to mint an approval or order amount.
 import { STOCK_EXECUTION_THRESHOLDS } from './decisionScores.js';
-import { CRYPTO_MIN_FINAL_SCORE_TO_BUY } from './componentScore.js';
 export function decisionState(signal, evidence, gate, authorization, crypto = false) {
   const missing = evidence?.missingCriticalEvidence || [];
   const score = crypto ? signal.cryptoDecisionScore : signal.stockDecisionScore;
   const measured = typeof score === 'number' && Number.isFinite(score);
   const entry = signal.entryQualityScorecard;
-  const qualified = measured && evidence?.coreEvidencePass === true && score >= (crypto ? CRYPTO_MIN_FINAL_SCORE_TO_BUY : STOCK_EXECUTION_THRESHOLDS.finalScore) &&
-    (crypto || (entry?.approved === true && entry.score >= STOCK_EXECUTION_THRESHOLDS.entryScore && entry.coverage >= STOCK_EXECUTION_THRESHOLDS.entryCoverage));
+  const scorePass = crypto ? measured : score >= STOCK_EXECUTION_THRESHOLDS.finalScore;
+  const qualified = measured && evidence?.coreEvidencePass === true && scorePass &&
+    (crypto || (entry?.approved === true && entry.coverage >= STOCK_EXECUTION_THRESHOLDS.entryCoverage));
   const reasons = authorization.blockingReasons;
   const expired = reasons.some(r => /EXPIRED|STALE|REVALIDATION_REQUIRED/.test(r));
   const revoked = reasons.some(r => /REVOKED|POLICY_CHANGED/.test(r));

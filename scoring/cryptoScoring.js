@@ -7,6 +7,64 @@ export const CRYPTO_PROBE_WINDOW_DOLLAR_VOLUME = 10_000;
 export const CRYPTO_MIN_REPORTED_24H_DOLLAR_VOLUME = 1_000_000;
 export const CRYPTO_PROBE_REPORTED_24H_DOLLAR_VOLUME = 250_000;
 export const CRYPTO_MAX_ENTRY_SPREAD_PERCENT = 0.85;
+
+// Crypto score gates. Entry evidence is required. There is no numeric Entry
+// floor until crypto outcomes show that one adds information beyond F.
+export const CRYPTO_EXECUTION_THRESHOLDS = Object.freeze({
+  discoveryScore: 60,
+  finalScore: 65,
+  entryScore: null,
+  requireEntryEvidence: true,
+  requireValidSetup: true,
+});
+
+export function evaluateCryptoEntryEvidence(entryQualityScore, thresholds = CRYPTO_EXECUTION_THRESHOLDS) {
+  const available = entryQualityScore !== null
+    && entryQualityScore !== undefined
+    && entryQualityScore !== ""
+    && Number.isFinite(Number(entryQualityScore));
+  if (!available) {
+    return {
+      score: null,
+      state: "WAIT",
+      reason: "ENTRY_QUALITY_UNKNOWN",
+      entryQualityPass: false,
+    };
+  }
+  const score = Number(entryQualityScore);
+  const minimum = thresholds.entryScore;
+  const numericPass = minimum == null || score >= Number(minimum);
+  return {
+    score,
+    state: numericPass ? "PASS" : "REJECT",
+    reason: numericPass ? null : "ENTRY_SCORE_BELOW_POLICY",
+    entryQualityPass: numericPass,
+  };
+}
+
+export function evaluateCryptoAnalyticalQualification({
+  finalScore = null,
+  entryScore = null,
+  thresholds = CRYPTO_EXECUTION_THRESHOLDS,
+} = {}) {
+  const entry = evaluateCryptoEntryEvidence(entryScore, thresholds);
+  const finalMeasured = finalScore !== null && finalScore !== undefined && finalScore !== "" && Number.isFinite(Number(finalScore));
+  const finalValue = finalMeasured ? Number(finalScore) : null;
+  const finalPass = finalMeasured && finalValue >= thresholds.finalScore;
+  if (entry.state === "WAIT") {
+    return { state: "WAIT", reason: entry.reason, finalPass, entry };
+  }
+  if (!finalMeasured) {
+    return { state: "WAIT", reason: "FINAL_SCORE_UNKNOWN", finalPass: false, entry };
+  }
+  if (!finalPass) {
+    return { state: "REJECT", reason: "FINAL_SCORE_BELOW_POLICY", finalPass: false, entry };
+  }
+  if (!entry.entryQualityPass) {
+    return { state: "REJECT", reason: entry.reason, finalPass, entry };
+  }
+  return { state: "PASS", reason: null, finalPass: true, entry };
+}
 export const MAX_CRYPTO_CONTINUATION_SESSIONS = 8;
 export const MAX_CRYPTO_CONTINUATION_SYMBOLS = 100;
 export const CRYPTO_CONTINUATION_MAX_AGE_DAYS = 14;
@@ -417,6 +475,9 @@ export function calculateCryptoEntryQualityFromEvidence({
   const liquidityAvailable = liquidityEvidence.available === true;
   const liquidityMinimum = Math.max(1, Number(liquidityEvidence.minimum || 0));
   const dollarVolume = Math.max(0, Number(liquidityEvidence.dollarVolume || 0));
+  // Legacy input to crypto F until Problem #17. Execution economics no longer
+  // reads this curve. A quote at the 0.85% gate scores 20 here, which is a
+  // score mapping, not the cost of the intended order.
   const spreadQualityScore = spreadMeasured
     ? clampScore(
       100 -
@@ -432,15 +493,18 @@ export function calculateCryptoEntryQualityFromEvidence({
   const liquidityQualityScore = liquidityAvailable
     ? clampScore(20 + Math.min(80, liquidityRatio * 60))
     : null;
-  const available = spreadMeasured && liquidityAvailable;
-  const score = available
-    ? clampScore(
-      spreadQualityScore * 0.6 +
-      liquidityQualityScore * 0.4
-    )
-    : 0;
+  const coverage = (spreadMeasured ? 0.6 : 0) + (liquidityAvailable ? 0.4 : 0);
+  const measuredQuality = coverage > 0
+    ? (
+      (spreadMeasured ? spreadQualityScore * 0.6 : 0)
+      + (liquidityAvailable ? liquidityQualityScore * 0.4 : 0)
+    ) / coverage
+    : null;
+  const score = coverage >= 0.5 && measuredQuality !== null ? clampScore(measuredQuality) : null;
+  const available = score !== null;
   return {
-    score: Number(score.toFixed(2)),
+    score: score === null ? null : Number(score.toFixed(2)),
+    coverage: Number(coverage.toFixed(4)),
     available,
     spreadQualityScore:
       spreadQualityScore === null ? null : Number(spreadQualityScore.toFixed(2)),
@@ -575,13 +639,13 @@ export function calculateCryptoLiquidityFromBars(
     20 +
     (cleanBars.length >= 20 ? 20 : cleanBars.length >= 10 ? 12 : cleanBars.length >= 3 ? 6 : 0) +
     (baseVolumes.length >= 10 ? 20 : baseVolumes.length >= 3 ? 12 : baseVolumes.length > 0 ? 5 : 0) +
-    (volumeSpikeRatio >= 2 ? 15 : volumeSpikeRatio >= 1 ? 10 : volumeSpikeRatio > 0 ? 5 : 0) +
     (dollarVolume >= liquidityThresholds.minimum
       ? 20
       : dollarVolume >= liquidityThresholds.probeMinimum
         ? 10
         : 0)
   );
+  const momentumParticipation = classifyCryptoParticipation(volumeSpikeRatio);
 
   return {
     volume: Number(latestVolume.toFixed(2)),
@@ -609,6 +673,43 @@ export function calculateCryptoLiquidityFromBars(
     liquidityPass: dollarVolume >= liquidityThresholds.minimum,
     liquidityProbePass: dollarVolume >= liquidityThresholds.probeMinimum,
     volumeConfidenceScore: Number(volumeConfidenceScore.toFixed(2)),
+    momentumParticipation,
+  };
+}
+
+export function classifyCryptoParticipation(relativeVolume) {
+  if (relativeVolume === null || relativeVolume === undefined || relativeVolume === "" || !Number.isFinite(Number(relativeVolume))) {
+    return {
+      relativeVolume: null,
+      spikeDetected: false,
+      volumeAcceleration: "UNKNOWN",
+      state: "UNKNOWN",
+      affectsLiquidity: false,
+    };
+  }
+  const ratio = Number(relativeVolume);
+  const spikeDetected = ratio >= 2;
+  return {
+    relativeVolume: Number(ratio.toFixed(3)),
+    spikeDetected,
+    volumeAcceleration: "UNKNOWN",
+    state: spikeDetected ? "HIGH" : "NORMAL",
+    affectsLiquidity: false,
+  };
+}
+
+export function qualifiesCryptoLiquidity({
+  liquidityPass = false,
+  dollarVolumeKnown = true,
+} = {}) {
+  if (dollarVolumeKnown !== true) {
+    return { dollarVolumePass: false, state: "DATA_UNAVAILABLE", volumeSpikeUsed: false };
+  }
+  const dollarVolumePass = liquidityPass === true;
+  return {
+    dollarVolumePass,
+    state: dollarVolumePass ? "PASS" : "FAIL",
+    volumeSpikeUsed: false,
   };
 }
 
@@ -620,7 +721,9 @@ export function calculateCryptoSignalRealism(signal = {}) {
     signal.scannerScore,
     signal.score
   ) || 0;
-  const barsFound = Math.max(0, finiteNumber(signal.barsFound) || 0);
+  const declaredBars = finiteNumber(signal.barsFound);
+  const barsFound = declaredBars === undefined ? null : Math.max(0, declaredBars);
+  const barHistoryState = barsFound !== null && barsFound >= 10 ? "PASS" : "DATA_UNAVAILABLE";
   const bid = finiteNumber(signal.bid);
   const ask = finiteNumber(signal.ask);
   const price = positiveFiniteNumber(
@@ -672,13 +775,7 @@ export function calculateCryptoSignalRealism(signal = {}) {
   const isMajorCrypto = new Set(["BTC", "ETH", "SOL"]).has(baseAsset);
   const quietMarket = Math.abs(percentChange) <= 0.35;
 
-  const dataCoveragePenalty = barsFound >= 10
-    ? 0
-    : barsFound >= 3
-      ? 4
-      : barsFound > 0
-        ? 8
-        : 12;
+  const dataCoveragePenalty = 0;
   const spreadPenalty = !spreadAvailable
     ? 0
     : spreadPercent >= 0.75
@@ -698,7 +795,14 @@ export function calculateCryptoSignalRealism(signal = {}) {
   const executionQualityPenalty = Math.max(spreadPenalty, liquidityPenalty);
   const speculativePenalty = !isMajorCrypto && price > 0 && price < 0.01 ? 6 : 0;
   const penaltyComponents = [
-    { family: "dataCoverage", points: dataCoveragePenalty, available: barsFound > 0 },
+    {
+      family: "dataCoverage",
+      points: dataCoveragePenalty,
+      available: barHistoryState === "PASS",
+      state: barHistoryState,
+      value: barHistoryState === "PASS" ? barsFound : null,
+      reason: barHistoryState === "DATA_UNAVAILABLE" ? "INSUFFICIENT_BAR_HISTORY" : null,
+    },
     {
       family: "executionQuality",
       points: executionQualityPenalty,
@@ -712,13 +816,13 @@ export function calculateCryptoSignalRealism(signal = {}) {
     penaltyComponents.reduce((sum, component) => sum + component.points, 0)
   );
   const missingComponents = [
-    ...(barsFound > 0 ? [] : ["barHistory"]),
+    ...(barHistoryState === "PASS" ? [] : ["barHistory"]),
     ...(spreadAvailable ? [] : ["liveSpread"]),
     ...(dollarVolume > 0 ? [] : ["liquidity"]),
     ...(statisticalScore === undefined ? ["statisticalEdge"] : []),
   ];
   const entryBlockReasons = [
-    ...(barsFound >= 10 ? [] : ["INSUFFICIENT_BAR_HISTORY"]),
+    ...(barHistoryState === "PASS" ? [] : ["INSUFFICIENT_BAR_HISTORY"]),
     ...(spreadAvailable ? [] : ["MISSING_LIVE_SPREAD"]),
     ...(spreadAvailable && spreadPercent > CRYPTO_MAX_ENTRY_SPREAD_PERCENT
       ? ["SPREAD_TOO_WIDE"]
@@ -750,6 +854,8 @@ export function calculateCryptoSignalRealism(signal = {}) {
     liquidityMinimumDollarVolume: liquidityThresholds.minimum,
     liquidityProbeMinimumDollarVolume: liquidityThresholds.probeMinimum,
     barsFound,
+    barHistoryState,
+    technicalScore: barHistoryState === "PASS" ? Number(rawScore.toFixed(2)) : null,
     quietMarket,
     quietMarketPenalty: 0,
     missingStatisticalPenalty: 0,

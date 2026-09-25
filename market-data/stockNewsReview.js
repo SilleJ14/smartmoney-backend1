@@ -26,7 +26,12 @@ export function createStockNewsReview({ providers, now = Date.now, onEvidence = 
           if (raw.length && (!articles.length || articles.some(item => !Number.isFinite(item.datetime) || item.datetime * 1000 > now() + 5000))) {
             throw new Error('Malformed or future news evidence');
           }
-          const catalyst = calculateNewsCatalyst({ articles, dataAvailable: true, source: name, now: now() });
+          const catalyst = calculateNewsCatalyst({
+            articles, dataAvailable: true, source: name, now: now(),
+            coverageMode: "SYMBOL_SCOPED",
+            coverageReason: "SYMBOL_SCOPED_PROVIDER_RESULT",
+            sources: [name],
+          });
           const value = { available: true, risk: catalyst.riskDetected,
             reason: catalyst.riskDetected ? 'Risky news detected' : articles.length ? 'News checked; no major risk detected' : 'News checked; no headlines returned',
             headlines: catalyst.riskDetected ? catalyst.headlines.slice(0, 3) : [],

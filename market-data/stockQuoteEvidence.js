@@ -44,11 +44,12 @@ export function mergeLiveStockQuoteWithReference(
   const selectedSpread = useLiveSpread ? liveQuote : referenceSpreadMeasured ? referenceQuote : null;
   const bid = useLiveSpread ? liveBid : referenceSpreadMeasured ? referenceBid : null;
   const ask = useLiveSpread ? liveAsk : referenceSpreadMeasured ? referenceAsk : null;
-  const volume = Math.max(
-    0,
-    Number(liveQuote.volume || liveQuote.v || 0),
-    Number(referenceQuote.volume || referenceQuote.v || 0)
-  );
+  const liveScope = liveQuote.provenance?.volumeScope || null;
+  const referenceScope = referenceQuote.provenance?.volumeScope || null;
+  const mixedTape = Boolean(liveScope && referenceScope && liveScope !== referenceScope);
+  const volume = mixedTape
+    ? Math.max(0, Number((liveScope === "CONSOLIDATED" ? liveQuote.volume ?? liveQuote.v : referenceScope === "CONSOLIDATED" ? referenceQuote.volume ?? referenceQuote.v : liveQuote.volume ?? liveQuote.v) || 0))
+    : Math.max(0, Number(liveQuote.volume || liveQuote.v || 0), Number(referenceQuote.volume || referenceQuote.v || 0));
   const previousClose = finitePositive(
     referenceQuote.previousClose,
     referenceQuote.pc,
@@ -79,8 +80,22 @@ export function mergeLiveStockQuoteWithReference(
     referenceQuote.l,
     price,
   ].map(Number).filter((value) => Number.isFinite(value) && value > 0);
-  const high = highValues.length > 0 ? Math.max(...highValues) : null;
-  const low = lowValues.length > 0 ? Math.min(...lowValues) : null;
+  const ownedHigh = mixedTape
+    ? finitePositive(...(liveScope === "CONSOLIDATED"
+      ? [liveQuote.high, liveQuote.h]
+      : referenceScope === "CONSOLIDATED"
+        ? [referenceQuote.high, referenceQuote.h]
+        : [liveQuote.high, liveQuote.h]))
+    : null;
+  const ownedLow = mixedTape
+    ? finitePositive(...(liveScope === "CONSOLIDATED"
+      ? [liveQuote.low, liveQuote.l]
+      : referenceScope === "CONSOLIDATED"
+        ? [referenceQuote.low, referenceQuote.l]
+        : [liveQuote.low, liveQuote.l]))
+    : null;
+  const high = ownedHigh !== null ? ownedHigh : highValues.length > 0 ? Math.max(...highValues) : null;
+  const low = ownedLow !== null ? ownedLow : lowValues.length > 0 ? Math.min(...lowValues) : null;
   const measuredPercent = price !== null && previousClose !== null
     ? ((price - previousClose) / previousClose) * 100
     : null;

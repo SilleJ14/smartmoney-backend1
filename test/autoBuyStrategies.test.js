@@ -19,7 +19,7 @@ test("stock auto-buy resolves the canonical Final Decision score before the lega
     finalAutonomousDecisionScore: 82,
     masterFinalScore: 84,
     stockDecisionScoreAvailable: true,
-  }), 84);
+  }), 70);
 });
 
 test("canonical stock auto-buy requires explicit approvals and preserves safety blocks", () => {
@@ -59,11 +59,16 @@ test("canonical stock auto-buy requires explicit approvals and preserves safety 
     evaluateCanonicalStockAutoBuyEligibility(explicitlyApproved, 78).approved,
     true
   );
-  const suppressed = evaluateCanonicalStockAutoBuyEligibility({
+  const legacyPhase = evaluateCanonicalStockAutoBuyEligibility({
     ...explicitlyApproved,
     phase9LiquiditySuppressed: true,
   }, 78);
-  assert.equal(suppressed.approved, false);
+  assert.equal(legacyPhase.approved, true);
+  const blocked = evaluateCanonicalStockAutoBuyEligibility({
+    ...explicitlyApproved,
+    blockBuying: true,
+  }, 78);
+  assert.equal(blocked.approved, false);
 });
 
 test("canonical stock auto-buy still requires approval at Final Decision 70", () => {
@@ -260,7 +265,7 @@ test("crypto auto-buy fails closed without source-aware liquidity evidence", asy
   );
 });
 
-test("crypto auto-buy accepts Final Decision 65 with complete evidence and a narrow live quote", async () => {
+test("a legacy crypto score of 65 does not buy without the live analytical permission", async () => {
   let executionCalls = 0;
   const strategies = createAutoBuyStrategies({
     CONFIG: {
@@ -352,9 +357,5 @@ test("crypto auto-buy accepts Final Decision 65 with complete evidence and a nar
     },
   }]);
 
-  assert.equal(
-    executionCalls,
-    1,
-    "complete evidence must still reach execution when the live quote is narrow"
-  );
+  assert.equal(executionCalls, 0);
 });

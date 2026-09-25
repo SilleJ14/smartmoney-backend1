@@ -147,6 +147,9 @@ export function calculateNewsCatalyst({
   now = Date.now(),
   maxAgeHours = 72,
   source = "news_provider",
+  coverageMode = "SYMBOL_SCOPED",
+  coverageReason = null,
+  sources = [],
 } = {}) {
   const raw = [
     ...(Array.isArray(articles) ? articles : []),
@@ -213,11 +216,11 @@ export function calculateNewsCatalyst({
     (item) => item.positiveHits.length > 0 || item.dangerHits.length > 0
   );
   const catalystAvailable = Boolean(dataAvailable) && relevantEvidence.length > 0;
-  const riskDetected = dangerPoints >= 14;
+  const riskDetected = Boolean(dataAvailable) && dangerPoints >= 14;
   const catalystScore = catalystAvailable
     ? clamp(50 + Math.min(45, positivePoints) - Math.min(50, dangerPoints))
     : 0;
-  return {
+  const assessment = {
     source,
     dataAvailable: Boolean(dataAvailable),
     catalystAvailable,
@@ -257,5 +260,98 @@ export function calculateNewsCatalyst({
             : dataAvailable
               ? "NO_RELEVANT_FRESH_CATALYST"
               : "NEWS_DATA_UNAVAILABLE",
+  };
+  // Problem #42: coverage is separate from what the headlines said.
+  // A zero catalyst score is not a status.
+  assessment.newsEvidence = buildNewsEvidence(assessment, {
+    coverageMode,
+    coverageReason,
+    sources,
+    unusableArticles: assessment.undatedArticleCount,
+    now,
+    windowHours: maxAgeHours,
+  });
+  return assessment;
+}
+
+function buildNewsEvidence(assessment, {
+  coverageMode = "SYMBOL_SCOPED",
+  coverageReason = null,
+  sources = [],
+  unusableArticles = 0,
+  now = Date.now(),
+  windowHours = 72,
+} = {}) {
+  const checkedAt = new Date(now).toISOString();
+  const unknown = {
+    providerState: assessment.dataAvailable ? "AVAILABLE" : "UNAVAILABLE",
+    coverageState: assessment.dataAvailable ? "UNKNOWN" : "UNKNOWN",
+    coverageReason: assessment.dataAvailable ? coverageReason : "PROVIDER_UNAVAILABLE",
+    catalystState: "UNKNOWN",
+    catalystScore: null,
+    adverseState: "UNKNOWN",
+    adverseScore: null,
+    adverseSummary: null,
+    articlesRead: assessment.articleCount,
+    relevantArticles: assessment.relevantArticleCount,
+    unusableArticles,
+    windowHours,
+    oldestCheckedAt: assessment.publicationWindow?.oldestAt || null,
+    newestCheckedAt: assessment.publicationWindow?.newestAt || null,
+    checkedAt,
+    sources,
+  };
+  if (!assessment.dataAvailable) {
+    return { ...unknown, providerState: "UNAVAILABLE", coverageState: "UNKNOWN", coverageReason: "PROVIDER_UNAVAILABLE" };
+  }
+  if (coverageMode === "NOT_COVERED") {
+    return {
+      ...unknown,
+      providerState: "AVAILABLE",
+      coverageState: "NOT_COVERED",
+      coverageReason: coverageReason || "NO_SYMBOL_TAG",
+    };
+  }
+  if (assessment.recentArticleCount === 0 && unusableArticles > 0) {
+    return {
+      ...unknown,
+      providerState: "AVAILABLE",
+      coverageState: "PARTIAL",
+      coverageReason: "ARTICLE_TIMESTAMP_MISSING",
+    };
+  }
+  const adverseState = assessment.riskDetected ? "NEGATIVE" : "NONE_FOUND";
+  const catalystState = !assessment.catalystAvailable
+    ? "NONE_FOUND"
+    : assessment.catalystScore >= 82
+      ? "MAJOR_POSITIVE"
+      : assessment.positivePoints > 0
+        ? "POSITIVE"
+        : "NONE_FOUND";
+  const partial = unusableArticles > 0;
+  const measured = adverseState === "NEGATIVE" || catalystState === "POSITIVE" || catalystState === "MAJOR_POSITIVE";
+  return {
+    providerState: "AVAILABLE",
+    coverageState: partial ? "PARTIAL" : "COVERED",
+    coverageReason: partial
+      ? "ARTICLE_TIMESTAMP_MISSING"
+      : (coverageReason || (coverageMode === "SYMBOL_TAGGED" ? "SYMBOL_TAGGED_BY_PROVIDER" : "SYMBOL_SCOPED_PROVIDER_RESULT")),
+    catalystState: partial && !measured ? "UNKNOWN" : catalystState,
+    catalystScore: partial && !measured ? null : assessment.catalystScore,
+    adverseState: partial && !measured ? "UNKNOWN" : adverseState,
+    adverseScore: partial && !measured ? null : assessment.dangerPoints,
+    adverseSummary: adverseState === "NONE_FOUND" && !(partial && !measured)
+      ? "No adverse news found in monitored sources/window."
+      : adverseState === "NEGATIVE"
+        ? "Measured adverse news in monitored sources/window."
+        : null,
+    articlesRead: assessment.articleCount,
+    relevantArticles: assessment.relevantArticleCount,
+    unusableArticles,
+    windowHours,
+    oldestCheckedAt: assessment.publicationWindow?.oldestAt || null,
+    newestCheckedAt: assessment.publicationWindow?.newestAt || null,
+    checkedAt,
+    sources,
   };
 }

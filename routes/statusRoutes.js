@@ -101,6 +101,7 @@ export function registerStatusRoutes(app, dependencies) {
         liveQuoteStreamState: state.liveQuoteStreamState || null,
         polygonLiveStreamState: state.polygonLiveStreamState || null,
         liveEarlyMoverRefreshState: state.liveEarlyMoverRefreshState || null,
+        discoveryQueue: state.discoveryQueueDebug || null,
         signalCount: latestStatus.signalCount,
         stockSignalCount: latestStatus.stockSignalCount,
         cryptoSignalCount: latestStatus.cryptoSignalCount,

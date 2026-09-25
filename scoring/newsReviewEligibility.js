@@ -16,8 +16,11 @@ export function evaluateNewsReviewEligibility(quote = {}, quality = {}, enabled 
   if (quality.discoveryOnly === true || quote.blockBuying === true || quote.buyBlocked === true) {
     return { eligible: false, reason: 'EXISTING_BUY_BLOCK' };
   }
+  if (quote.confirmations?.newsRisk === true) {
+    return { eligible: false, reason: 'NEGATIVE_CATALYST' };
+  }
   const preview = calculateEntryQualityScore({ ...quote, requireNewsRiskForEntry: false });
-  if (preview.gates.includes('HARD_RISK_REJECT') || quote.setupRevalidationRequired === true) {
+  if (preview.gates.includes('HARD_RISK_REJECT')) {
     return { eligible: false, reason: 'INDEPENDENT_ENTRY_RISK' };
   }
   const entryShortlist = Number.isFinite(preview.score) && preview.score >= 60;

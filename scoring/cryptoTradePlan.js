@@ -1,5 +1,6 @@
 import { cryptoSetupGate } from './cryptoSetup.js';
 import { assessCryptoOrderLiquidity, assessCryptoTradeEconomics } from './cryptoOrderLiquidity.js';
+import { attachCryptoExecutionShadow } from './cryptoExecutionEconomics.js';
 
 export function evaluateCryptoTradePlan(signal, { now = Date.now(), notional, feePercentPerSide = .25, manual = false } = {}) {
   const liquidity = assessCryptoOrderLiquidity(signal.cryptoOrderbook, {
@@ -8,14 +9,19 @@ export function evaluateCryptoTradePlan(signal, { now = Date.now(), notional, fe
   const referencePrice = Number(signal.price ?? signal.current);
   const matchingPrice = liquidity.available && referencePrice > 0 &&
     Math.abs(liquidity.buyPrice / referencePrice - 1) * 100 <= .5;
+  const shadow = attachCryptoExecutionShadow(signal, { notional, now, orderType: "market" });
   // Manual entries bypass strategy signals, not execution liquidity or freshness.
   if (manual) return { approved: liquidity.approved && matchingPrice,
     reasons: [...liquidity.reasons, ...(liquidity.available && !matchingPrice ? ['CRYPTO_QUOTE_BOOK_PRICE_MISMATCH'] : [])],
-    liquidity, economics: null };
+    liquidity, economics: null,
+    cryptoExecutionEconomics: shadow.cryptoExecutionEconomics,
+    cryptoLiquidityGate: shadow.liquidityGate };
   const gate = cryptoSetupGate(signal, { now });
   const economics = assessCryptoTradeEconomics(gate.setup, liquidity);
   return { approved: gate.approved && liquidity.approved && economics.approved && matchingPrice,
     reasons: [...new Set([...gate.reasons, ...liquidity.reasons, ...economics.reasons,
       ...(liquidity.available && !matchingPrice ? ['CRYPTO_QUOTE_BOOK_PRICE_MISMATCH'] : [])])],
-    setup: gate.setup, btc: gate.btc, liquidity, economics };
+    setup: gate.setup, btc: gate.btc, liquidity, economics,
+    cryptoExecutionEconomics: shadow.cryptoExecutionEconomics,
+    cryptoLiquidityGate: shadow.liquidityGate };
 }

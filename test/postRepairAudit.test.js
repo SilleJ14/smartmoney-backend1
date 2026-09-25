@@ -135,7 +135,7 @@ test('calculated stock and crypto scores can pass the approval boundary with ris
   }
 });
 
-test("fresh 0.9% spread cannot reuse E90 approval when current E falls below 75", async () => {
+test("a 0.9% spread does not pull Entry under 75 or replace the authorized score", async () => {
   const signal = stock();
   assert.equal(evaluateStockTradeCandidate(signal, { requireCentralDecision: true, requireFreshDecision: true, requireExplicitApproval: true, now }).approved, true);
   const refresh = createStockExecutionQuoteRefresher({ normalizeSymbol: String,
@@ -143,34 +143,47 @@ test("fresh 0.9% spread cannot reuse E90 approval when current E falls below 75"
     updateQuoteCache: (_, q) => q });
   const [row] = await refresh([signal]);
   assert.ok(signal.entryQualityScore > 90);
-  assert.ok(row.entryQualityScore < 75);
-  assert.equal(evaluateStockTradeCandidate(row, { now }).approved, true);
+  assert.ok(row.entryQualityScore >= 75);
+  assert.equal(row.authorizedDecisionScore, signal.authorizedDecisionScore);
+  assert.equal(row.scoreVersion, signal.scoreVersion);
   assert.equal(row.decisionUpdatedAt, signal.decisionUpdatedAt);
 });
 
-test("valid refreshed stock remains eligible but refresh cannot promote its central F", async () => {
+test("a quote refresh can change the analytical score without promoting the authorized score", async () => {
   const signal = stock();
-  installCentralDecision(signal, { action: "ALLOW", finalDecisionScore: 99, stockDecisionEvidence: { coreEvidencePass: true } }, { now });
+  signal.fundamentalScore = 80;
+  signal.fundamentalDataValid = true;
+  signal.chartTimeframe = "5Min";
+  signal.chartBars = Array.from({ length: 24 }, (_, index) => ({
+    time: now - (24 - index) * 300000,
+    open: 100,
+    high: 100.2,
+    low: 99.8,
+    close: 100,
+  }));
+  installCentralDecision(signal, { action: "ALLOW", finalDecisionScore: 99, stockDecisionEvidence: { coreEvidencePass: true }, decisionRevision: 2 }, { now });
   const refresh = createStockExecutionQuoteRefresher({ normalizeSymbol: String,
     getLatestQuotes: async () => [signal], updateQuoteCache: (_, q) => q });
   const [row] = await refresh([signal]);
   assert.equal(row.executionEligibility.approved, true);
-  assert.equal(row.stockDecisionScore, 99);
+  assert.equal(row.authorizedDecisionScore, 99);
+  assert.equal(row.masterFinalScore, 99);
+  assert.equal(row.stockDecisionScore, row.currentAnalyticalScore);
+  assert.equal(row.scoreVersion, signal.scoreVersion);
   assert.equal(row.recommendedTradeAmount, 100);
 });
 
-test("quote deterioration can cross the F threshold even when current E still passes", async () => {
+test("a wider quote inside the 1% limit leaves the authorized score in place", async () => {
   const signal = stock();
-  installCentralDecision(signal, { action: "ALLOW", finalDecisionScore: 78, stockDecisionEvidence: { coreEvidencePass: true } }, { now });
+  installCentralDecision(signal, { action: "ALLOW", finalDecisionScore: 78, stockDecisionEvidence: { coreEvidencePass: true }, decisionRevision: 2 }, { now });
   const refresh = createStockExecutionQuoteRefresher({ normalizeSymbol: String,
     getLatestQuotes: async () => [{ ...signal, bid: 99.8, ask: 100.2, spreadPercent: 0.4 }], updateQuoteCache: (_, q) => q });
   const [row] = await refresh([signal]);
   assert.ok(row.entryQualityScore >= 75);
-  assert.ok(row.stockDecisionScore < 78);
-  assert.equal(
-    row.executionEligibility.approved,
-    Number(row.stockDecisionScore) >= 70
-  );
+  assert.equal(row.authorizedDecisionScore, 78);
+  assert.equal(row.masterFinalScore, 78);
+  assert.equal(row.scoreVersion, signal.scoreVersion);
+  assert.equal(row.centralReviewStatus, "NONE");
 });
 
 test("cached discovery calls admit every rotating window before consuming reviews", async () => {

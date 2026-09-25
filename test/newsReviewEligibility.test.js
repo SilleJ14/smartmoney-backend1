@@ -17,11 +17,12 @@ const fixture = () => ({
 test('missing news cannot prevent an otherwise strong Entry research shortlist', () => {
   const quote = fixture();
   const before = structuredClone(quote);
-  assert.equal(calculateEntryQualityScore(quote).score, 35);
+  const entry = calculateEntryQualityScore(quote);
+  assert.ok(entry.score > 35);
+  assert.equal(entry.approved, true);
+  assert.equal(entry.gates.includes('NEWS_RISK_UNAVAILABLE'), false);
   assert.equal(evaluateNewsReviewEligibility(quote).eligible, true);
   assert.deepEqual(quote, before);
-  assert.equal(calculateEntryQualityScore(quote).approved, false);
-  assert.ok(calculateEntryQualityScore(quote).gates.includes('NEWS_RISK_UNAVAILABLE'));
   quote.confirmations.newsRiskAvailable = true;
   quote.confirmations.newsRisk = false;
   assert.equal(calculateEntryQualityScore(quote).approved, true);
@@ -30,11 +31,15 @@ test('missing news cannot prevent an otherwise strong Entry research shortlist',
 test('research shortlist retains independent risk blocks, including actual adverse news', () => {
   for (const patch of [
     { confirmations: { ...fixture().confirmations, newsRisk: true } },
-    { lateChaseRisk: true }, { setupRevalidationRequired: true },
+    { lateChaseRisk: true },
     { phase5SignalQuality: { ...fixture().phase5SignalQuality, antiChaseRisk: 90 } },
-    { bid: 99, ask: 101, spreadPercent: 2 },
     { blockBuying: true }, { buyBlocked: true },
   ]) assert.equal(evaluateNewsReviewEligibility({ ...fixture(), discoveryScore: 90, ...patch }).eligible, false);
+  const wideSpread = evaluateNewsReviewEligibility({
+    ...fixture(), discoveryScore: 90, bid: 99, ask: 101, spreadPercent: 2,
+  });
+  assert.equal(wideSpread.eligible, true);
+  assert.equal(evaluateNewsReviewEligibility({ ...fixture(), discoveryScore: 90, rescoreStatus: "QUEUED" }).eligible, true);
 });
 
 test('shortlist remains selective and never returns a substitute execution score', () => {
@@ -50,5 +55,6 @@ test('a measured positive watch candidate gets risk research without lifting its
   const before = structuredClone(quote);
   assert.equal(evaluateNewsReviewEligibility(quote, { discoveryOnly: true }).eligible, true);
   assert.deepEqual(quote, before);
-  assert.equal(calculateEntryQualityScore(quote).approved, false);
+  assert.equal(quote.blockBuying, true);
+  assert.equal(calculateEntryQualityScore(quote).approved, true);
 });

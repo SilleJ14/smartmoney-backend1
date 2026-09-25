@@ -29,7 +29,10 @@ export function createStockQuoteBatch({ primary, fallback, normalizeSymbol, now 
     const bySymbol = new Map(rows.map((q) => [normalizeSymbol(q.symbol), q]));
     for (const q of extra) {
       const key = normalizeSymbol(q.symbol);
-      bySymbol.set(key, selectStockExecutionQuote(bySymbol.get(key), q, { now: now() }));
+      const existing = bySymbol.get(key);
+      const existingSource = String(existing?.liveQuoteSource || existing?.source || "");
+      if (existing && existingSource.includes("tradier")) continue;
+      bySymbol.set(key, selectStockExecutionQuote(existing, q, { now: now() }));
     }
     return [...bySymbol.values()].map((q) => {
       const e = getStockExecutionEvidenceFreshness(q, { now: now() });

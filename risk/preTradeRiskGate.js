@@ -85,7 +85,9 @@ export function evaluatePreTradeRisk({ order = {}, context = {}, options = {} } 
     if (quoteAgeSeconds > finiteNumber(context.maxQuoteAgeSeconds, 5)) {
       reasons.push(`Live quote stale: ${quoteAgeSeconds}s old`);
     }
-    if (spreadPercent > finiteNumber(context.maxSpreadPercent, 2.5)) {
+    if (context.maxSpreadPercent === undefined || context.maxSpreadPercent === null || context.maxSpreadPercent === "" || !Number.isFinite(Number(context.maxSpreadPercent))) {
+      reasons.push("POLICY_MISSING");
+    } else if (spreadPercent > Number(context.maxSpreadPercent)) {
       reasons.push(`Spread too wide: ${spreadPercent}%`);
     }
     if (context.requireLiveProvider && !context.liveProviderConnected) {

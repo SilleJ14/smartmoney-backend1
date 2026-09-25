@@ -92,9 +92,11 @@ test("multi-horizon extension demotes an asset that already ran", () => {
   });
 
   assert.equal(result.extension.alreadyExtended, true);
-  assert.ok(result.score <= 55);
-  assert.equal(result.tier, "LATE_CRYPTO_MOVE");
-  assert.ok(result.gates.includes("ALREADY_EXTENDED_MULTI_HORIZON"));
+  assert.equal(result.score, result.rawScore);
+  assert.equal(result.setupState, "EXTENDED");
+  assert.equal(result.newLongEntryAllowed, true);
+  assert.notEqual(result.tier, "LATE_CRYPTO_MOVE");
+  assert.equal(result.gates.includes("ALREADY_EXTENDED_MULTI_HORIZON"), false);
   assert.ok(result.extension.extensionPenalty <= 45);
   assert.equal(result.extension.penaltyMethod, "MAX_CORRELATED_HORIZON_ONLY");
 });

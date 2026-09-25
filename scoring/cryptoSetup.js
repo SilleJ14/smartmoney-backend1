@@ -1,10 +1,12 @@
-// Versioned research rules, not calibrated probabilities. Price/volume trend
-// families are scored once; EMAs and derivatives are supporting telemetry only.
+// Problem #40: V4 route labels used to imply several strategies. Qualification
+// was one checklist. Each pattern is now evaluated on its own evidence.
+// BTC, chase, spread, and the order book are not part of setup identity.
 import { normalizeCryptoVolume } from '../market-data/normalizeCryptoVolume.js';
 import { barSnapshot } from '../market-data/barSnapshot.js';
+import { assessCryptoSetupModels } from './cryptoSetupModels.js';
+import { buildBtcRegime, buildBtcRegimeOutcome } from './btcRegime.js';
 export const CRYPTO_SETUP_MODEL = 'CRYPTO_SETUP_V1';
 const finite = x => x !== null && x !== '' && Number.isFinite(Number(x));
-const clamp = x => Math.max(0, Math.min(100, x));
 const mean = rows => rows.reduce((s, n) => s + n, 0) / Math.max(1, rows.length);
 function stamp(value) {
   if (value == null || value === '') return NaN;
@@ -61,84 +63,107 @@ function ema(values, period) {
 }
 export function assessBtcContext(bars, { now = Date.now() } = {}) {
   const rows = completedCryptoBars(bars, now);
-  if (rows.length < 20) return { available: false, block: false, reason: 'BTC_CONTEXT_UNAVAILABLE', bars: [] };
+  if (rows.length < 20) return { available: false, block: false, reason: 'BTC_CONTEXT_UNAVAILABLE',
+    oneHourReturn: null, below20BarAverage: null, bars: [] };
   const last = rows.at(-1), reference = rows.find(b => b.time >= last.time - 3600000) || rows[0];
   const changePercent = (last.close / reference.close - 1) * 100;
   const volatilityPercent = mean(rows.slice(-12).map(b => (b.high - b.low) / b.close * 100));
   const trend = ema(rows.map(b => b.close), 20);
-  const block = changePercent <= -3 && last.close < trend;
+  const below20BarAverage = last.close < trend;
+  const block = changePercent <= -3 && below20BarAverage;
   return { available: true, block, reason: block ? 'BTC_SHARP_DECLINE' : 'BTC_CONTEXT_ACCEPTABLE',
-    changePercent, windowMinutes: (last.time - reference.time) / 60000, volatilityPercent,
-    belowEma20: last.close < trend, barUpdatedAt: new Date(last.time + last.intervalMs).toISOString(),
+    changePercent, oneHourReturn: changePercent, below20BarAverage,
+    windowMinutes: (last.time - reference.time) / 60000, volatilityPercent,
+    belowEma20: below20BarAverage, barUpdatedAt: new Date(last.time + last.intervalMs).toISOString(),
     // Keep enough source evidence to recheck freshness on the final order path.
     bars: rows.slice(-24) };
 }
 export function assessCryptoSetup(signal = {}, { now = Date.now() } = {}) {
   const rows = completedCryptoBars(signal.chartBars || [], now);
+  const price = Number(signal.price ?? signal.current);
   const base = { model: CRYPTO_SETUP_MODEL, available: false, eligible: false, score: null,
     inputBarSnapshotId: barSnapshot(signal.chartBars).id,
     derivatives: { openInterest: { available: false, required: false }, funding: { available: false, required: false } } };
-  if (rows.length < 24) return { ...base, reasons: ['CRYPTO_SETUP_HISTORY_UNAVAILABLE'] };
-  const last = rows.at(-1), price = Number(signal.price ?? signal.current);
-  if (!(price > 0) || !Number.isFinite(price)) return { ...base, reasons: ['CRYPTO_SETUP_PRICE_UNAVAILABLE'] };
-  const recent = rows.slice(-3), prior = rows.slice(-23, -3);
-  const resistance = Math.max(...prior.map(b => b.high));
-  const atr = mean(rows.slice(-14).map((b, i) => {
-    const prev = rows[rows.length - 15 + i]?.close ?? b.open;
-    return Math.max(b.high - b.low, Math.abs(b.high - prev), Math.abs(b.low - prev));
-  }));
-  const tolerance = Math.max(atr * .25, resistance * .001);
-  const breakout = last.close > Math.max(...rows.slice(-21, -1).map(b => b.high));
-  const priorBreak = recent.slice(0, -1).some(b => b.close > resistance);
-  const retest = priorBreak && recent.slice(1).some(b => b.low <= resistance + tolerance && b.low >= resistance - tolerance) &&
-    last.close > resistance && last.close > recent.at(-2).close;
-  // Local swing pivots, not a requirement that every candle is higher.
-  const highs = [], lows = [];
-  for (let i = Math.max(1, rows.length - 24); i < rows.length - 1; i++) {
-    if (rows[i].high > rows[i - 1].high && rows[i].high >= rows[i + 1].high) highs.push(rows[i].high);
-    if (rows[i].low < rows[i - 1].low && rows[i].low <= rows[i + 1].low) lows.push(rows[i].low);
-  }
-  const higherHighs = highs.length >= 2 && highs.at(-1) > highs.at(-2);
-  const higherLows = lows.length >= 2 && lows.at(-1) > lows.at(-2);
-  const marketVolumeAvailable = [...prior, ...recent].every(b => b.marketVolumeSource === 'alpaca_kraken_research_bars' &&
-    Number.isFinite(b.marketVolume) && b.marketVolume >= 0);
-  const participation = b => marketVolumeAvailable ? b.marketVolume : b.volume;
-  const baselineDollars = mean(prior.map(b => participation(b) * b.close));
-  const volumeRatio = baselineDollars > 0 ? mean(recent.map(b => participation(b) * b.close)) / baselineDollars : 0;
-  const volumeConfirmed = volumeRatio >= 1.3 && participation(last) > 0;
-  const roc = (last.close / rows.at(-4).close - 1) * 100;
-  const priorRoc = (rows.at(-4).close / rows.at(-7).close - 1) * 100;
-  const stopPrice = Math.min(...rows.slice(-5).map(b => b.low)) - atr * .1;
-  const riskPercent = (price - stopPrice) / price * 100;
-  const extensionAtr = atr > 0 ? (price - resistance) / atr : Infinity;
-  const overheated = riskPercent > 4 || extensionAtr > 3 || price > last.close + atr;
-  const closes = rows.map(b => b.close), ema20 = ema(closes, 20), ema50 = ema(closes, 50), ema200 = ema(closes, 200);
-  const route = retest ? 'RETEST_CONTINUATION' : breakout ? 'BREAKOUT' : 'DEVELOPING_EARLY';
-  // Measured-range projection is an explicit estimate, never an observed future price.
-  const range = resistance - Math.min(...prior.map(b => b.low));
+  if (!rows.length) return { ...base, reasons: ['CRYPTO_SETUP_HISTORY_UNAVAILABLE'] };
+  if (!(price > 0)) return { ...base, reasons: ['CRYPTO_SETUP_PRICE_UNAVAILABLE'] };
+  const assessment = assessCryptoSetupModels(rows, price);
+  const selected = assessment.selectedSetup ? assessment.candidates[assessment.selectedSetup] : null;
+  const last = rows.at(-1);
+  const closes = rows.map((bar) => bar.close);
+  const ema20 = ema(closes, 20);
+  const ema50 = ema(closes, 50);
+  const ema200 = ema(closes, 200);
+  const prior = rows.slice(-23, -3);
+  const resistance = prior.length ? Math.max(...prior.map((bar) => bar.high)) : last.high;
+  const range = prior.length ? resistance - Math.min(...prior.map((bar) => bar.low)) : 0;
   const targetPrice = resistance + range;
-  const reasons = [
-    ...(!(breakout || retest) ? ['CRYPTO_ENTRY_TRIGGER_NOT_CONFIRMED'] : []),
-    ...(!(higherLows || retest) ? ['CRYPTO_SUPPORT_STRUCTURE_NOT_CONFIRMED'] : []),
-    ...(!volumeConfirmed ? ['CRYPTO_TRADED_VOLUME_NOT_CONFIRMED'] : []),
-    ...(roc <= 0 || price < last.close - tolerance ? ['CRYPTO_MOMENTUM_NOT_CONFIRMED'] : []),
-    ...(overheated ? ['CRYPTO_SETUP_OVEREXTENDED'] : []),
-    ...(!(stopPrice > 0 && riskPercent > 0 && targetPrice > price) ? ['CRYPTO_STOP_TARGET_INVALID'] : []),
-  ];
-  const score = clamp(((higherHighs ? 1 : 0) + (higherLows ? 1 : 0) + (breakout || retest ? 1 : 0)) / 3 * 50 +
-    Math.min(25, volumeRatio / 2 * 25) + (roc > 0 && !overheated ? 25 : 0));
-  return { ...base, available: true, eligible: reasons.length === 0, score, reasons, route,
-    assessedAt: new Date(now).toISOString(), barUpdatedAt: new Date(last.time + last.intervalMs).toISOString(),
-    timeframeMinutes: last.intervalMs / 60000, barsFound: rows.length, price, resistance, stopPrice, targetPrice,
-    targetBasis: 'MEASURED_RANGE_PROJECTION_NOT_GUARANTEED', riskPercent, volumeRatio, volumeConfirmed,
-    volumeSource: marketVolumeAvailable ? 'alpaca_kraken_research_bars' : 'execution_venue_bars',
-    higherHighs, higherLows, breakout, retest, momentum: { roc, priorRoc, accelerating: roc > priorRoc, extensionAtr, overheated },
-    ema: { ema20, ema50, ema200, fullAlignment: ema200 !== null && price > ema20 && ema20 > ema50 && ema50 > ema200, required: false } };
+  const breakout = assessment.candidates.BREAKOUT;
+  const retest = assessment.candidates.RETEST;
+  const reasons = assessment.exhausted
+    ? ["EXHAUSTION"]
+    : selected
+      ? selected.reasons.filter((reason) => reason === "TARGET_REASSESSMENT_REQUIRED")
+      : ["NO_VALID_CRYPTO_SETUP"];
+  return {
+    ...base,
+    available: Object.values(assessment.candidates).some((candidate) => candidate.state !== "DATA_UNAVAILABLE"),
+    eligible: Boolean(selected) && !assessment.exhausted,
+    score: selected?.score ?? null,
+    reasons,
+    route: selected ? assessment.selectedSetup : "DEVELOPING_EARLY",
+    cryptoSetupAssessment: assessment,
+    entryTiming: assessment.entryTiming,
+    assessedAt: new Date(now).toISOString(),
+    barUpdatedAt: new Date(last.time + last.intervalMs).toISOString(),
+    timeframeMinutes: last.intervalMs / 60000,
+    barsFound: rows.length,
+    price,
+    resistance,
+    stopPrice: assessment.stopPrice,
+    targetPrice,
+    targetBasis: "MEASURED_RANGE_PROJECTION_NOT_GUARANTEED",
+    targetReassessment: selected?.targetReassessment === true,
+    volumeConfirmed: breakout?.requiredEvidence?.breakBarVolume === "PASS",
+    volumeRatio: breakout?.volumeRatio ?? null,
+    higherHighs: assessment.higherHighs,
+    higherLows: assessment.higherLows,
+    breakout: breakout?.state === "PASS",
+    retest: retest?.state === "PASS",
+    ema: {
+      ema20,
+      ema50,
+      ema200,
+      fullAlignment: ema200 !== null && price > ema20 && ema20 > ema50 && ema50 > ema200,
+      required: false,
+    },
+  };
 }
 
 export function cryptoSetupGate(signal, { now = Date.now() } = {}) {
   const setup = assessCryptoSetup(signal, { now });
-  const btc = assessBtcContext(signal.btcMarketContext?.bars || [], { now });
-  const reasons = [...setup.reasons, ...(!btc.available ? ['BTC_CONTEXT_UNAVAILABLE'] : btc.block ? [btc.reason] : [])];
-  return { approved: reasons.length === 0, reasons, setup, btc };
+  const rawBtc = signal.btcMarketContext?.bars || (Array.isArray(signal.btcMarketContext) ? signal.btcMarketContext : []);
+  const btc = assessBtcContext(rawBtc, { now });
+  const btcRegime = buildBtcRegime(btc);
+  const marketRegime = !btc.available
+    ? { state: "DATA_UNAVAILABLE", reason: "BTC_CONTEXT_UNAVAILABLE", sizeMultiplier: null }
+    : btc.block
+      ? { state: "PASS_WITH_CONSTRAINT", reason: "BTC_SHARP_DECLINE", sizeMultiplier: null }
+      : { state: "PASS", reason: btc.reason, sizeMultiplier: null };
+  return {
+    approved: setup.eligible === true,
+    reasons: setup.eligible ? setup.reasons.filter((reason) => reason !== "TARGET_REASSESSMENT_REQUIRED") : setup.reasons,
+    setup,
+    btc,
+    btcRegime,
+    btcRegimeOutcome: buildBtcRegimeOutcome({
+      symbol: signal.symbol,
+      btcRegime,
+      cryptoSetup: setup,
+      cryptoDecisionScore: signal.cryptoDecisionScore,
+      cryptoAnalyticalShadow: signal.cryptoAnalyticalShadow,
+      legacyCryptoF: signal.cryptoAnalyticalShadow?.legacyCryptoF,
+    }, { proposedSize: signal.finalApprovedTradeAmount ?? signal.intendedNotional ?? null, recordedAt: new Date(now).toISOString() }),
+    marketRegime,
+    entryTiming: setup.entryTiming,
+  };
 }

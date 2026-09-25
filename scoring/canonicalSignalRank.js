@@ -40,6 +40,7 @@ export function getCanonicalFinalScore(signal = {}) {
   if (isCryptoSignal(signal)) {
     if (signal.cryptoDecisionScoreAvailable === false) return null;
     const score = finite(
+      signal.currentAnalyticalScore ??
       signal.cryptoDecisionScore ??
       signal.masterFinalScore ??
       signal.finalAutonomousDecisionScore ??
@@ -58,10 +59,11 @@ export function getCanonicalFinalScore(signal = {}) {
 
   if (signal.stockDecisionScoreAvailable === false) return null;
   const score = finite(
-    signal.masterFinalScore ??
-    signal.finalAutonomousDecisionScore ??
+    signal.currentAnalyticalScore ??
     signal.stockDecisionScore ??
-    signal.decisionScoreTelemetry?.scores?.decision
+    signal.decisionScoreTelemetry?.scores?.decision ??
+    signal.masterFinalScore ??
+    signal.finalAutonomousDecisionScore
   );
   const evidence = signal.stockDecisionEvidence ||
     signal.centralAutonomousDecisionCore?.stockDecisionEvidence ||

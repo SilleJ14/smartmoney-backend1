@@ -82,12 +82,15 @@ export async function runBoundedCryptoQuietDiscovery({
         dailyBars: historyToDailyBars(history),
         now,
       });
-      if (Number(scorecard.score || 0) < 58) continue;
-      if (scorecard.extension?.alreadyExtended === true) continue;
+      if (Number(scorecard.score || 0) < 58 && scorecard.setupState !== "EXTENDED" && scorecard.setupState !== "EXHAUSTED") continue;
       ranked.push({
         symbol,
         assetClass: "crypto",
-        candidateSource: "EARLY_DISCOVERY",
+        candidateSource: scorecard.setupState === "EARLY" ? "EARLY_DISCOVERY" : "SETUP_STATE",
+        setupState: scorecard.setupState,
+        earlyEntryEligible: scorecard.earlyEntryEligible === true,
+        newLongEntryAllowed: scorecard.newLongEntryAllowed !== false,
+        extensionEvidence: scorecard.extensionEvidence,
         current: Number(history.at(-1)?.c || 0),
         cryptoDiscoveryScore: Number(scorecard.score || 0),
         cryptoDiscoveryTier: scorecard.tier,
@@ -98,6 +101,8 @@ export async function runBoundedCryptoQuietDiscovery({
           coverage: scorecard.coverage,
           components: scorecard.components,
           extension: scorecard.extension,
+          setupState: scorecard.setupState,
+          extensionEvidence: scorecard.extensionEvidence,
           gates: scorecard.gates,
           dataQuality: scorecard.dataQuality,
         },

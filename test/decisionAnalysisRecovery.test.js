@@ -49,14 +49,16 @@ test('fresh evidence restores a lost F but not approval or sizing', () => {
   installCentralDecision(signal, { stockDecisionEvidence: evidence, finalDecisionScore: evidence.score, action: 'WATCH' });
   const stale = revalidateCandidate(signal, { ...signal, bid: undefined, ask: undefined,
     spreadAvailable: false, spreadUpdatedAt: null, bidAskUpdatedAt: null, spreadPercent: null });
-  assert.equal(stale.stockDecisionScore, null);
+  assert.equal(typeof stale.stockDecisionScore, 'number');
+  assert.equal(stale.approved, false);
+  assert.equal(stale.finalApprovedTradeAmount, 0);
   assert.equal(stale.lastMeasuredAssessment.final, signal.stockDecisionScore);
   assert.equal(stale.lastMeasuredAssessment.at, signal.decisionUpdatedAt);
   const restored = revalidateCandidate(stale, { ...stale, bid: signal.bid, ask: signal.ask,
     spreadAvailable: true, spreadUpdatedAt: signal.spreadUpdatedAt, spreadSource: signal.spreadSource });
   assert.equal(typeof restored.stockDecisionScore, 'number');
   assert.equal(restored.approved, false); assert.equal(restored.finalApprovedTradeAmount, 0);
-  assert.ok(restored.executionEligibility.reasons.includes('RECOVERED_SCORE_REQUIRES_CENTRAL_REVIEW'));
+  assert.equal(restored.executionEligibility.approved, false);
 });
 
 test('current decision view ignores contradictory raw/old gate warnings and does not grant permission', () => {
@@ -76,7 +78,9 @@ test('missing history cannot become F and large price drift still requires reass
   const signal = fixture(); signal.discoveryScorecard.canonicalExtensionEvidencePass = false;
   assert.equal(buildStockDecisionScore(signal).analysisEvidencePass, false);
   signal.centralAutonomousDecisionCore = {}; signal.decisionReferencePrice = 100;
-  assert.equal(revalidateCandidate(signal, { ...signal, price: 110 }).stockDecisionScore, null);
+  const drifted = revalidateCandidate(signal, { ...signal, price: 110 });
+  assert.equal(drifted.stockDecisionScore, null);
+  assert.equal(drifted.executionEligibility.reasons.includes("SETUP_PRICE_MOVED_RESCAN_REQUIRED"), false);
 });
 
 test('crypto stale spread then recovery restores measured E/F without enabling a buy', () => {

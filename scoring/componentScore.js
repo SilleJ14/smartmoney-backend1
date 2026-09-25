@@ -1,4 +1,5 @@
 import {
+  CRYPTO_EXECUTION_THRESHOLDS,
   CRYPTO_MAX_ENTRY_SPREAD_PERCENT,
   calculateCryptoEntryQualityFromEvidence,
   getUniqueCryptoSessionDays,
@@ -10,6 +11,10 @@ import { cryptoSetupGate } from './cryptoSetup.js';
 import { evaluateCryptoTradePlan } from './cryptoTradePlan.js';
 import { getApprovedTradeAmount, isSizingRevoked } from './approvedSizing.js';
 import { evidencePolicy, researchExecutionIssues } from '../risk/evidencePolicy.js';
+import { setupEntryBlock } from './setupStateClassifier.js';
+import { aggregateMeasuredComponents, buildMeasuredComponent, COMPONENT_PUBLISH_MINIMUM, computeAnalyticalBounds, evaluateEvidencePolicy, CRYPTO_DECISION_EVIDENCE_POLICY } from './measuredComponent.js';
+import { buildCryptoAnalyticalShadow, liveCryptoPermission } from './cryptoAnalyticalShadow.js';
+import { CRYPTO_BREADTH_RANGE } from './cryptoContext.js';
 
 // Immediate-entry F uses independent discovery, execution and context evidence.
 // Multi-day continuation remains separate telemetry (and an acceleration gate),
@@ -23,7 +28,7 @@ export const CRYPTO_DECISION_WEIGHTS = Object.freeze({
 });
 export const CRYPTO_MIN_DECISION_COVERAGE = 0.8;
 export const CRYPTO_MAX_DECISION_QUOTE_AGE_SECONDS = 5;
-export const CRYPTO_MIN_FINAL_SCORE_TO_BUY = 65;
+export const CRYPTO_MIN_FINAL_SCORE_TO_BUY = CRYPTO_EXECUTION_THRESHOLDS.finalScore;
 
 function finiteNumber(...values) {
   for (const value of values) {
@@ -44,6 +49,12 @@ function positiveFiniteNumber(...values) {
 
 function clampScore(value) {
   return Math.max(0, Math.min(100, Number(value) || 0));
+}
+
+function newsAdverseNegative(news) {
+  if (!news) return false;
+  if (news.newsEvidence?.adverseState) return news.newsEvidence.adverseState === "NEGATIVE";
+  return news.riskDetected === true;
 }
 
 function resolveComponent(candidates = []) {
@@ -221,6 +232,7 @@ export function buildCryptoDecisionScore(
   const entryQuality = {
     value: measuredEntryQuality.score,
     available: measuredEntryQuality.available && spreadFresh,
+    coverage: measuredEntryQuality.available && spreadFresh ? measuredEntryQuality.coverage : 0,
     source: measuredEntryQuality.available && spreadFresh
       ? `measured_spread+${liquidity.source}`
       : "unavailable_entry_evidence",
@@ -282,11 +294,62 @@ export function buildCryptoDecisionScore(
       weight: CRYPTO_DECISION_WEIGHTS.strategyEvolution,
     },
   ];
-  const weighted = calculateAvailableWeightedScore(components, {
-    // Missing evidence contributes zero instead of increasing the weight of
-    // the remaining components. Absence must never improve a final score.
-    normalizeMissing: false,
+  const discoveryCoverage = !discovery.available
+    ? 0
+    : continuationEntry
+      ? 1
+      : Number(signal.cryptoDiscoveryScorecard?.coverage ?? 1);
+  const discoveryUnreadCeiling = signal.newsCatalyst?.riskDetected === true ? 35 : 100;
+  const measuredComponents = components.map((component) => buildMeasuredComponent({
+    componentName: component.name,
+    score: component.available ? component.value : null,
+    coverage: component.name === "base"
+      ? discoveryCoverage
+      : component.available ? Number(component.coverage ?? 1) : 0,
+    configuredWeight: component.weight,
+    minimumCoverage: COMPONENT_PUBLISH_MINIMUM[component.name] ?? 0.5,
+    unreadCeiling: component.name === "base"
+      ? discoveryUnreadCeiling
+      : component.name === "strategyEvolution"
+        ? CRYPTO_BREADTH_RANGE.maximumMeasuredScore
+        : 100,
+    unreadFloor: component.name === "strategyEvolution" ? CRYPTO_BREADTH_RANGE.minimumMeasuredScore : 0,
+    source: component.source,
+    measuredInputs: component.available ? [component.name] : [],
+    missingInputs: component.available ? [] : [component.name],
+  }));
+  const measuredDecision = aggregateMeasuredComponents(measuredComponents);
+  const cryptoPolicy = evaluateEvidencePolicy(measuredDecision.evidenceBasis, CRYPTO_DECISION_EVIDENCE_POLICY, {
+    newsUnknown: signal.newsCatalystRequired === true && signal.newsCatalyst?.available !== true && signal.newsCatalyst?.riskDetected !== true,
   });
+  const analyticalBounds = computeAnalyticalBounds({
+    components: measuredComponents,
+    requiredFinalScore: CRYPTO_MIN_FINAL_SCORE_TO_BUY,
+    mandatoryEvidenceMissing: cryptoPolicy.state === "PASS" ? [] : cryptoPolicy.reasons,
+    alternateModels: signal.alternateSetupModels || [],
+  });
+  const weighted = {
+    score: measuredDecision.score,
+    coverage: measuredDecision.coverage,
+    availableScoringWeight: measuredDecision.measuredWeight,
+    totalConfiguredWeight: measuredDecision.configuredWeight,
+    coverageAlgorithm: "MEASURED_WEIGHT_NORMALIZED_V1",
+    missingComponents: measuredDecision.components
+      .filter((component) => !component.componentPublishable)
+      .map((component) => component.componentName),
+    components: components.map((component) => {
+      const measured = measuredDecision.components.find((item) => item.componentName === component.name);
+      return {
+        ...component,
+        available: measured?.componentPublishable === true,
+        value: measured?.componentPublishable ? measured.componentScore : null,
+        normalizedWeight: measuredDecision.measuredWeight > 0
+          ? Number((measured.measuredWeight / measuredDecision.measuredWeight).toFixed(4))
+          : 0,
+        contribution: measured?.contribution ?? 0,
+      };
+    }),
+  };
   const componentsWithSemantics = weighted.components.map((component) => ({
     ...component,
     semanticName:
@@ -301,11 +364,14 @@ export function buildCryptoDecisionScore(
       ? []
       : ["discoveryCoverage"]),
     ...(discoveryFresh ? [] : ["freshDiscoveryScorecard"]),
-    ...(signal.cryptoDiscoveryScorecard?.extension?.alreadyExtended === true && !continuationEntry
+    ...(signal.cryptoDiscoveryScorecard?.extension?.alreadyExtended === true
+      && !continuationEntry
+      && !["BREAKOUT", "RETEST", "CONTINUATION", "EARLY", "EXTENDED", "EXHAUSTED"].includes(
+        signal.setupState || signal.cryptoDiscoveryScorecard?.setupState
+      )
       ? ["multiHorizonExtension"]
       : []),
-    ...(signal.newsCatalyst?.riskDetected === true ? ["negativeNewsRisk"] : []),
-    ...(signal.newsCatalyst?.dataAvailable === true ? [] : ["newsRiskCoverage"]),
+    ...(newsAdverseNegative(signal.newsCatalyst) ? ["negativeNewsRisk"] : []),
     ...(barsFound >= 10 ? [] : ["barHistory"]),
     ...(spread.measured ? [] : ["liveSpread"]),
     ...(spread.measured && !spreadFresh ? ["freshLiveSpread"] : []),
@@ -325,11 +391,42 @@ export function buildCryptoDecisionScore(
     (signal.scoringModelVersion !== 'SMARTMONEY_CRYPTO_DECISION_V4' || setupGate.approved);
   const measuredRejections = new Set(['multiHorizonExtension', 'negativeNewsRisk', 'acceptableSpread', 'minimumLiquidity']);
   const analysisEvidencePass = uniqueMissingCriticalEvidence.every(reason => measuredRejections.has(reason));
+  const cryptoAnalyticalShadow = buildCryptoAnalyticalShadow({
+    signal,
+    now,
+    legacyCryptoF: weighted.score,
+    legacyCoverage: weighted.coverage,
+    discovery: {
+      score: discovery.available ? discovery.value : null,
+      available: discovery.available === true,
+      coverage: discovery.available ? discoveryCoverage : 0,
+    },
+    context: {
+      score: context.available ? context.value : null,
+      available: context.available === true,
+      coverage: context.available ? 1 : 0,
+    },
+    quote: {
+      fresh: quoteFresh,
+      ageSeconds: quoteAgeSeconds,
+      sourceApproved: quoteSourceApproved,
+      priceIsLive: signal.priceIsLive === true,
+    },
+    spread: { ...spread, fresh: spreadFresh },
+    notional: signal.intendedNotional ?? signal.finalApprovedTradeAmount ?? signal.recommendedTradeAmount ?? null,
+    maxQuoteAgeSeconds: effectiveMaxQuoteAgeSeconds,
+    runnerWeight: CRYPTO_DECISION_WEIGHTS.runner,
+  });
 
   return {
     model: CRYPTO_DECISION_MODEL,
     score: weighted.score,
     coverage: weighted.coverage,
+    evidenceBasis: measuredDecision.evidenceBasis,
+    evidenceBasisVersion: measuredDecision.evidenceBasisVersion,
+    maximumPossibleF: analyticalBounds.maximumPossibleScore,
+    minimumPossibleF: analyticalBounds.minimumPossibleScore,
+    analyticalBounds,
     availableScoringWeight: weighted.availableScoringWeight,
     totalConfiguredWeight: weighted.totalConfiguredWeight,
     coverageAlgorithm: weighted.coverageAlgorithm,
@@ -354,6 +451,7 @@ export function buildCryptoDecisionScore(
       ? "FINAL"
       : analysisEvidencePass ? 'FINAL_ANALYSIS_NOT_APPROVED' : "PROVISIONAL_INCOMPLETE_EVIDENCE",
     minimumDecisionCoverage: CRYPTO_MIN_DECISION_COVERAGE,
+    cryptoAnalyticalShadow,
     quoteFreshness: {
       timestamp: Number.isFinite(quoteTimestamp)
         ? new Date(quoteTimestamp).toISOString()
@@ -405,27 +503,12 @@ export function evaluateCryptoTradeCandidate(
   const evidence = buildCryptoDecisionScore(signal, { now, maxDiscoveryAgeMinutes });
   const centralEvidence = signal.centralAutonomousDecisionCore
     ?.cryptoDecisionEvidence;
-  const resolvedScore = finiteNumber(
-    signal.cryptoDecisionScore,
-    signal.masterFinalScore,
-    signal.finalAutonomousDecisionScore
-  );
   const liveScore = Number(evidence.score);
-  const scoreAvailable =
-    Number.isFinite(liveScore) && evidence.coreEvidencePass === true;
-  const minBuyScore = Number(minimumScore || 0);
-  const canonicalAvailable =
-    signal.cryptoDecisionScoreAvailable !== false &&
-    Number.isFinite(Number(resolvedScore));
-  // Current evidence may veto a stored score; a cached high F is not permission.
-  const scoreTriggeredBuy = scoreAvailable && liveScore >= minBuyScore
-    && canonicalAvailable && Number(resolvedScore) >= minBuyScore;
-  const quoteReady =
-    evidence.quoteFreshness?.fresh === true &&
-    evidence.spreadFreshness?.fresh === true &&
-    evidence.spread?.measured === true &&
-    evidence.spread?.pass === true;
-  const score = Number.isFinite(liveScore) ? liveScore : 0;
+  const livePermission = liveCryptoPermission(evidence.cryptoAnalyticalShadow);
+  const scoreAvailable = livePermission.score !== null;
+  // Discovery-only F, then execution, breadth, and size. Legacy 65 is not this gate.
+  const scoreTriggeredBuy = livePermission.allowed;
+  const score = livePermission.score;
   const decisionTime = Date.parse(String(signal.decisionUpdatedAt ||
     signal.centralAutonomousDecisionCore?.updatedAt || ""));
   const decisionFresh = Number.isFinite(decisionTime) && decisionTime <= Number(now) + 5000 &&
@@ -438,32 +521,37 @@ export function evaluateCryptoTradeCandidate(
     ...(signal.scoringModelVersion === 'SMARTMONEY_CRYPTO_DECISION_V4' && getApprovedTradeAmount(signal) > 0
       ? evaluateCryptoTradePlan(signal, { now, notional: getApprovedTradeAmount(signal) }).reasons : []),
     ...(isSizingRevoked(signal) ? ['SIZING_REVOKED'] : []),
+    ...(setupEntryBlock(signal) ? [setupEntryBlock(signal)] : []),
     ...(signal.blockBuying === true ? ['BUYING_BLOCKED'] : []),
     ...(signal.displayOnly === true ? ['DISPLAY_ONLY'] : []),
     ...(signal.centralCoreHardBlock === true ? ['CENTRAL_HARD_BLOCK'] : []),
+    ...(signal.confirmations?.fakeBreakout === true ? ['FAKE_BREAKOUT'] : []),
+    ...(signal.riskDecision?.state === 'REJECT' ? (signal.riskDecision.reasons || ['RISK_REJECT']) : []),
     ...(signal.finalSizingReconciliation?.finalBlocked === true ? ['SIZING_BLOCKED'] : []),
     ...(signal.globalRiskOffDefense?.shouldBlock === true ? ['GLOBAL_RISK_OFF'] : []),
     ...(signal.shouldWaitForPullback === true ? ['WAIT_FOR_PULLBACK'] : []),
     ...(signal.finalMasterDecisionProfile?.suppressEntry === true ? ['ENTRY_SUPPRESSED'] : []),
     ...(requireFreshDecision && !decisionFresh ? ["CENTRAL_DECISION_EXPIRED_OR_UNDATED"] : []),
-    ...(signal.setupRevalidationRequired === true ? ["SETUP_PRICE_MOVED_RESCAN_REQUIRED"] : []),
+    ...(signal.executionWaitReason === "QUOTE_UNAVAILABLE" ? ["QUOTE_UNAVAILABLE"] : []),
+    ...(signal.evidenceWaitReason === "PRICE_EVIDENCE_UNAVAILABLE" ? ["PRICE_EVIDENCE_UNAVAILABLE"] : []),
+    ...(signal.rescoreStatus === "QUEUED" || signal.rescoreStatus === "RUNNING" ? ["SETUP_CHANGED_REASSESSMENT_PENDING"] : []),
     ...(requireCentralDecision && !["ALLOW", "ALLOW_REDUCED_SIZE", "ACCELERATE_CAPITAL"].includes(centralAction)
       ? ["CENTRAL_DECISION_NOT_APPROVED"] : []),
-    ...(requireCentralDecision && centralEvidence?.coreEvidencePass !== true
+    ...(requireCentralDecision && centralEvidence?.cryptoAnalyticalShadow == null && centralEvidence?.coreEvidencePass !== true
       ? [centralEvidence ? "CENTRAL_CRYPTO_EVIDENCE_FAILED" : "MISSING_CENTRAL_CRYPTO_EVIDENCE"] : []),
-    ...(evidence.coreEvidencePass ? [] : evidence.missingCriticalEvidence),
     ...(requireExplicitApproval && signal.qualifiedToBuy !== true ? ["NOT_QUALIFIED_TO_BUY"] : []),
     ...(requireExplicitApproval && signal.autoTradeApproved !== true ? ["AUTO_TRADE_NOT_APPROVED"] : []),
     ...(requireExplicitApproval && signal.approved !== true ? ["FINAL_APPROVAL_MISSING"] : []),
     ...(requireExplicitApproval && signal.backendApproved !== true ? ["BACKEND_APPROVAL_MISSING"] : []),
-    ...(scoreTriggeredBuy || scoreAvailable || canonicalAvailable ? [] : ["DECISION_SCORE_INVALID"]),
-    ...(scoreTriggeredBuy ? [] : ["DECISION_SCORE_BELOW_THRESHOLD"]),
-    ...(quoteReady ? [] : ["CRYPTO_QUOTE_OR_SPREAD_NOT_FRESH"]),
+    ...(scoreTriggeredBuy ? [] : livePermission.reasons),
   ];
   return {
     approved: reasons.length === 0,
     score,
+    legacyScore: Number.isFinite(liveScore) ? liveScore : null,
     minimumScore: Number(minimumScore || 0),
+    inheritsLegacyThreshold: false,
+    livePermission,
     scoreAvailable,
     reasons: [...new Set(reasons)],
     evidence,

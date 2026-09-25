@@ -1,3 +1,5 @@
+import { normalizeTradierRestBook } from "../market-data/normalizedQuote.js";
+
 // Market-data only. No account, order or trading endpoints belong in this adapter.
 const LIVE_BASE = "https://api.tradier.com/v1";
 const MAX_SYMBOLS = 120;
@@ -37,6 +39,7 @@ export function normalizeTradierQuote(raw = {}, { now = Date.now(), sandbox = fa
     percentChangeAvailable: previousClose !== null,
     percentChangeReferencePrice: previousClose, percentChangeSource: source,
     bid: spreadAvailable ? bid : 0, ask: spreadAvailable ? ask : 0,
+    ...normalizeTradierRestBook(raw, iso(spreadTime)),
     bidUpdatedAt: iso(bidTime), askUpdatedAt: iso(askTime),
     spreadAvailable, spreadPercent: spreadAvailable ? ((ask - bid) / ((ask + bid) / 2)) * 100 : null,
     spreadUpdatedAt: spreadAvailable ? iso(spreadTime) : null,

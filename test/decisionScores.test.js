@@ -34,7 +34,8 @@ test("quiet pre-move evidence outranks an already-loud sparse mover", () => {
   assert.ok(quiet.score >= 72);
   assert.ok(["STRONG_DISCOVERY", "ELITE_DISCOVERY"].includes(quiet.tier));
   assert.ok(loudAndSparse.score < 40);
-  assert.equal(loudAndSparse.tier, "LATE_MOVE_NOT_DISCOVERY");
+  assert.equal(loudAndSparse.tier, "LOW_DISCOVERY");
+  assert.equal(loudAndSparse.extensionEvidence, "UNKNOWN");
 });
 
 test("stock discovery without canonical multi-horizon evidence stays watch-only", () => {
@@ -43,9 +44,14 @@ test("stock discovery without canonical multi-horizon evidence stays watch-only"
     preMoveScore: 95,
     catalystScore: 90,
   });
-  assert.equal(result.score, 55);
+  assert.notEqual(result.score, 55);
+  assert.ok(result.score > 72);
+  assert.equal(result.buyScore, result.score);
   assert.equal(result.canonicalExtensionEvidencePass, false);
-  assert.equal(result.tier, "LATE_MOVE_NOT_DISCOVERY");
+  assert.equal(result.extensionEvidence, "UNKNOWN");
+  assert.ok(["EARLY", "UNKNOWN"].includes(result.setupState));
+  assert.equal(result.tier === "LATE_MOVE_NOT_DISCOVERY", false);
+  assert.ok(result.gates.includes("INSUFFICIENT_EXTENSION_HISTORY"));
 });
 
 test("stock technical discovery is not reduced when no catalyst is available", () => {
@@ -89,10 +95,12 @@ test("a fully populated already-loud mover cannot be labeled early discovery", (
     preMoveScore: 90,
     catalystScore: 90,
   });
-  assert.equal(loud.score, 55);
-  assert.ok(loud.buyScore > 70);
-  assert.equal(loud.tier, "LATE_MOVE_NOT_DISCOVERY");
-  assert.ok(loud.gates.includes("ALREADY_LOUD_MOVE"));
+  assert.ok(loud.score > 72);
+  assert.equal(loud.buyScore, loud.score);
+  assert.equal(loud.earlyEntryEligible, false);
+  assert.notEqual(loud.setupState, "EARLY");
+  assert.equal(loud.tier === "LATE_MOVE_NOT_DISCOVERY", false);
+  assert.equal(loud.gates.includes("ALREADY_LOUD_MOVE"), false);
 });
 
 test("already-loud discovery can still raise F for auto-buy", () => {
@@ -134,7 +142,7 @@ test("entry approval fails closed when execution evidence is missing", () => {
   assert.ok(sparse.missingComponents.includes("priceLocation"));
 });
 
-test("explicitly unavailable news-risk data blocks stock entry but not discovery", () => {
+test("unavailable news does not lower discovery or entry", () => {
   const signal = {
     ...canonicalDiscoveryEvidence,
     percentChange: 0.3,
@@ -162,8 +170,9 @@ test("explicitly unavailable news-risk data blocks stock entry but not discovery
   const entry = calculateEntryQualityScore(signal);
 
   assert.ok(discovery.score >= 65);
-  assert.equal(entry.approved, false);
-  assert.ok(entry.gates.includes("NEWS_RISK_UNAVAILABLE"));
+  assert.equal(entry.approved, true);
+  assert.equal(entry.gates.includes("NEWS_RISK_UNAVAILABLE"), false);
+  assert.equal(entry.newsRiskRequired, true);
 });
 
 test("news availability only hard-blocks Entry when the production risk check is required", () => {
@@ -193,15 +202,15 @@ test("news availability only hard-blocks Entry when the production risk check is
   assert.equal(entry.approved, true);
 });
 
-test("entry approval requires a measured stock spread and enough technical bars", () => {
+test("entry approval depends on the setup, not the live spread", () => {
   const base = {
     confirmations: { aboveVwap: true, closeNearHighPercent: 82, fakeBreakout: false },
     technicals: { ema9: 11, ema20: 10, macd: 2, macdSignal: 1, rsi: 60 },
     phase5SignalQuality: { liquidityStabilityScore: 85, antiChaseRisk: 15, exhaustionRisk: 15, spreadWideningRisk: 10, breakoutRetestConfirmation: true },
   };
   const missingSpread = calculateEntryQualityScore({ ...base, technicalBarsFound: 30 });
-  assert.equal(missingSpread.approved, false);
-  assert.ok(missingSpread.gates.includes("MISSING_SPREAD_EVIDENCE"));
+  assert.equal(missingSpread.approved, true);
+  assert.equal(missingSpread.gates.includes("MISSING_SPREAD_EVIDENCE"), false);
   const tooFewBars = calculateEntryQualityScore({ ...base, bid: 10, ask: 10.01, technicalBarsFound: 10 });
   assert.equal(tooFewBars.approved, false);
   assert.ok(tooFewBars.missingComponents.includes("trendAlignment"));
@@ -213,19 +222,23 @@ test("entry approval requires a measured stock spread and enough technical bars"
     ask: 10.04,
     technicalBarsFound: 30,
   });
-  assert.ok(costlyButBelowLimit.score < complete.score);
-  assert.ok(costlyButBelowLimit.spreadPenalty > complete.spreadPenalty);
+  assert.equal(costlyButBelowLimit.score, complete.score);
+  assert.equal(costlyButBelowLimit.spreadPenalty, undefined);
+  assert.equal(costlyButBelowLimit.executionEconomicsShadow.legacyPercentPenalty.role, "SHADOW_ONLY");
+  assert.ok(costlyButBelowLimit.executionEconomicsShadow.legacyPercentPenalty.value > complete.executionEconomicsShadow.legacyPercentPenalty.value);
+  assert.equal(costlyButBelowLimit.spreadTooWide, false);
 
-  const staleCachedSpread = calculateEntryQualityScore({
+  const wideSpread = calculateEntryQualityScore({
     ...base,
     spreadPercent: 0.1,
     bid: 10,
     ask: 10.5,
     technicalBarsFound: 30,
   });
-  assert.equal(staleCachedSpread.approved, false);
-  assert.equal(staleCachedSpread.spreadSource, "signal_bid_ask");
-  assert.ok(staleCachedSpread.gates.includes("SPREAD_ABOVE_EXECUTION_LIMIT"));
+  assert.equal(wideSpread.approved, true);
+  assert.equal(wideSpread.spreadTooWide, true);
+  assert.equal(wideSpread.spreadSource, "signal_bid_ask");
+  assert.equal(wideSpread.score, complete.score);
 });
 
 test("extreme independent entry risk blocks an otherwise strong setup", () => {
@@ -252,7 +265,7 @@ test("multi-day continuation requires observed multi-session evidence", () => {
   const strong = calculateMultiDayContinuationScore({ multiDayAccumulation: { persistenceScore: 88, supportHoldingScore: 85, seenDays: ["2026-08-17", "2026-08-18", "2026-08-19", "2026-08-20"] }, confirmations: { aboveVwap: true, closeNearHigh: true }, technicals: { ema9: 12, ema20: 10 } }, { now: Date.parse("2026-08-21T15:00:00Z") });
   const newMover = calculateMultiDayContinuationScore({ percentChange: 30, volumeRatio: 8, confirmations: { aboveVwap: true }, technicals: { ema9: 12, ema20: 10 } });
   assert.ok(strong.score >= 75);
-  assert.ok(newMover.score < strong.score);
+  assert.equal(newMover.tier, "INTRADAY_ONLY");
   assert.ok(newMover.missingComponents.includes("observedPersistence"));
 });
 
@@ -303,12 +316,14 @@ test("decision telemetry exposes every component value, weight, and contribution
   for (const stage of Object.values(telemetry.stages)) {
     assert.ok(stage.components.length > 0);
     for (const item of stage.components) {
-      assert.equal(typeof item.value, "number");
+      if (item.available) assert.equal(typeof item.value, "number");
+      else assert.equal(item.value, null);
       assert.equal(typeof item.weight, "number");
       assert.equal(typeof item.contribution, "number");
       assert.equal(typeof item.source, "string");
       assert.equal(typeof item.effectiveWeight, "number");
-      assert.ok(Math.abs(item.value * item.effectiveWeight - item.contribution) <= 0.06);
+      if (item.available) assert.ok(Math.abs(item.value * item.effectiveWeight - item.contribution) <= 0.06);
+      else assert.equal(item.contribution, 0);
     }
     const contributionTotal = stage.components.reduce((sum, item) => sum + item.contribution, 0);
     assert.ok(Math.abs(contributionTotal - stage.score) <= 0.05);
@@ -337,7 +352,7 @@ test("stock final decision uses independent score families and requires entry ev
   assert.equal(incomplete.coreEvidencePass, false);
 });
 
-test("missing optional stock evidence cannot improve the final score", () => {
+test("missing fundamentals stays unknown and the measured decision renormalizes", () => {
   const complete = buildStockDecisionScore({
     discoveryScorecard: { score: 80, coverage: 1 },
     entryQualityScorecard: { score: 80, coverage: 1, approved: true },
@@ -352,8 +367,14 @@ test("missing optional stock evidence cannot improve the final score", () => {
     contextScore: 70,
     riskPortfolioScore: 70,
   });
-  assert.ok(missingFundamentals.score < complete.score);
-  assert.ok(missingFundamentals.missingEvidencePenalty > 0);
+  const fundamentals = missingFundamentals.components.find((item) => item.name === "fundamentals");
+  assert.equal(fundamentals.value, null);
+  assert.equal(fundamentals.available, false);
+  assert.equal(missingFundamentals.score, 78.04);
+  assert.equal(missingFundamentals.coverage, 0.92);
+  assert.equal(missingFundamentals.evidenceBasis.fundamentals, "UNKNOWN");
+  assert.ok(missingFundamentals.score > complete.score);
+  assert.equal(complete.score, 77.4);
 });
 
 test("watch names fill E when a live bid/ask arrives on an incomplete entry card", () => {
@@ -397,7 +418,10 @@ test("scoring context, risk, and fundamentals on a watch name lifts F without ch
     fundamentalScore: 70,
     fundamentalDataValid: true,
   });
-  assert.ok(watched.score > discoveryOnly.score);
+  assert.equal(discoveryOnly.score, 80);
+  assert.equal(discoveryOnly.coverage, 0.32);
+  assert.equal(watched.score, 77.4);
+  assert.equal(watched.coverage, 1);
   assert.equal(watched.components.find((item) => item.name === "marketContext").available, true);
   assert.equal(watched.components.find((item) => item.name === "riskPortfolio").available, true);
   assert.equal(watched.components.find((item) => item.name === "fundamentals").available, true);

@@ -33,6 +33,7 @@ export function assessContinuationSetup(signal = {}, { now = Date.now() } = {}) 
     ...(!higherLow ? ['CONTINUATION_HIGHER_LOW_NOT_CONFIRMED'] : []),
     ...(!reclaim ? ['CONTINUATION_RECLAIM_NOT_CONFIRMED'] : []),
     ...(volumeAcceleration < 1.3 ? ['CONTINUATION_VOLUME_NOT_CONFIRMED'] : []),
+    // Legacy eligibility band only. The pullback matrix uses depth versus this stock's ATR.
     ...(pullbackPercent < 0.5 || pullbackPercent > 6 ? ['CONTINUATION_PULLBACK_NOT_CONTROLLED'] : []),
     ...(riskPercent <= 0 || riskPercent > 3 || rewardRisk < 1.5 ? ['CONTINUATION_REWARD_RISK_INSUFFICIENT'] : []),
   ];

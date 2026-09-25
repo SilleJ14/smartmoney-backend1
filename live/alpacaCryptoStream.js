@@ -38,13 +38,20 @@ export function createAlpacaCryptoStream({ WebSocket, key, secret, getSymbols, o
     state.connected = false; state.authenticated = false;
     try { old?.close(); } catch { /* already closed */ }
   }
-  function ingestQuote(symbol, bid, ask, at, source) {
+  function ingestQuote(symbol, bid, ask, at, source, book = {}) {
     if (!Number.isFinite(at) || at > now() + 5000 || !Number.isFinite(bid) || !Number.isFinite(ask) || bid <= 0 || ask < bid) return;
     const stamp = new Date(at).toISOString();
     onQuote(symbol, { symbol, price: (bid + ask) / 2, bid, ask,
       spreadAvailable: true, source, liveQuoteSource: source,
       spreadSource: source, liveQuoteUpdatedAt: stamp, spreadUpdatedAt: stamp,
-      bidAskUpdatedAt: stamp, assetClass: 'crypto', priceIsLive: now() - at <= 5000 });
+      bidAskUpdatedAt: stamp, assetClass: 'crypto', priceIsLive: now() - at <= 5000,
+      bidPrice: bid, askPrice: ask,
+      bidSizeRaw: Number.isFinite(Number(book.bidSize)) ? Number(book.bidSize) : null,
+      askSizeRaw: Number.isFinite(Number(book.askSize)) ? Number(book.askSize) : null,
+      bidSizeShares: Number.isFinite(Number(book.bidSize)) ? Number(book.bidSize) : null,
+      askSizeShares: Number.isFinite(Number(book.askSize)) ? Number(book.askSize) : null,
+      sizeUnit: book.bidSize == null && book.askSize == null ? null : 'base_units',
+      provider: 'alpaca', feed: source, quoteTimestamp: stamp });
     state.quotes++; state.lastQuoteAt = stamp;
   }
   function connect() {
@@ -81,8 +88,11 @@ export function createAlpacaCryptoStream({ WebSocket, key, secret, getSymbols, o
           }
           const wanted = subscribed.has(q.S) || desired().includes(q.S);
           if (!authenticated || !wanted) continue;
-          if (q.T === 'q') ingestQuote(q.S, Number(q.bp), Number(q.ap), Date.parse(q.t), 'alpaca_crypto_ws');
-          if (q.T === 'o') ingestQuote(q.S, firstBookPrice(q.b), firstBookPrice(q.a), Date.parse(q.t), 'alpaca_crypto_orderbook');
+          if (q.T === 'q') ingestQuote(q.S, Number(q.bp), Number(q.ap), Date.parse(q.t), 'alpaca_crypto_ws', { bidSize: q.bs, askSize: q.as });
+          if (q.T === 'o') ingestQuote(q.S, firstBookPrice(q.b), firstBookPrice(q.a), Date.parse(q.t), 'alpaca_crypto_orderbook', {
+            bidSize: Array.isArray(q.b) ? q.b[0]?.s : null,
+            askSize: Array.isArray(q.a) ? q.a[0]?.s : null,
+          });
         }
       } catch { state.errorCode = 'INVALID_MESSAGE_OR_CALLBACK'; }
     });

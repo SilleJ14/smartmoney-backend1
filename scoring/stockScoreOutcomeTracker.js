@@ -7,8 +7,11 @@ import { validateQuietLearning } from './quietLearningValidation.js';
 
 const ET_TIME_ZONE = "America/New_York";
 const DEFAULT_MAX_OBSERVATIONS = 500;
-const DEFAULT_MAX_NEW_PER_CYCLE = 25;
+const DEFAULT_MAX_NEW_PER_CYCLE = Number.MAX_SAFE_INTEGER;
 const HORIZONS = Object.freeze([
+  ["fiveMinute", 5 * 60 * 1000],
+  ["fifteenMinute", 15 * 60 * 1000],
+  ["thirtyMinute", 30 * 60 * 1000],
   ["oneHour", 60 * 60 * 1000],
   ["close", null],
   ["oneDay", null],
@@ -75,6 +78,9 @@ function nextMarketCloseTarget(timestampMs) {
 function buildTargets(timestampMs) {
   const parts = getEtParts(timestampMs);
   return {
+    fiveMinute: timestampMs + 5 * 60 * 1000,
+    fifteenMinute: timestampMs + 15 * 60 * 1000,
+    thirtyMinute: timestampMs + 30 * 60 * 1000,
     oneHour: timestampMs + 60 * 60 * 1000,
     close: nextMarketCloseTarget(timestampMs),
     oneDay: etLocalToUtcMs(addUsStockMarketSessionDays(parts, 1)),
@@ -100,33 +106,107 @@ function resolvePrice(signal = {}) {
 }
 
 function resolveScore(signal = {}) {
-  const value = Number(
-    signal.masterFinalScore ??
-    signal.finalAutonomousDecisionScore ??
+  const raw = signal.currentAnalyticalScore ??
     signal.stockDecisionScore ??
-    signal.score ??
-    0
-  );
-  return Number.isFinite(value) ? Math.max(0, Math.min(100, value)) : 0;
+    signal.decisionScoreTelemetry?.scores?.decision ??
+    null;
+  if (raw === null || raw === undefined || raw === "") return null;
+  const value = Number(raw);
+  return Number.isFinite(value) ? Math.max(0, Math.min(100, value)) : null;
 }
 
-function resolveScoreBand(signal, score) {
-  if (signal.finalStockExecutionGate?.approved === true) return "AUTO";
-  if (
-    signal.qualifiedCandidate === true ||
-    (
-      score >= 72 &&
-      signal.entryQualityScorecard?.approved === true &&
-      Number(signal.entryQualityScorecard?.coverage || 0) >= 0.8
-    )
-  ) return "QUALIFIED";
-  if (signal.watchlistEligible === true || score >= 60) return "WATCH";
-  return "RESEARCH";
+export function measurePricePath(baselinePrice, prints = [], { spreadPercent = null } = {}) {
+  const baseline = Number(baselinePrice);
+  const usable = Array.isArray(prints)
+    ? prints.filter((print) => Number(print?.price) > 0)
+    : [];
+  if (!(baseline > 0) || usable.length === 0) {
+    return {
+      maximumFavorableExcursion: null,
+      maximumAdverseExcursion: null,
+      timeToPeakMs: null,
+      hitPlus3: null,
+      hitPlus5: null,
+      hitPlus10: null,
+      hitMinus2: null,
+      hitMinus5: null,
+      spreadPercent: Number.isFinite(Number(spreadPercent)) ? Number(spreadPercent) : null,
+      netResultPercent: null,
+    };
+  }
+  let peak = baseline;
+  let trough = baseline;
+  let peakAt = Number(usable[0].at);
+  for (const print of usable) {
+    const price = Number(print.price);
+    if (price > peak) {
+      peak = price;
+      peakAt = Number(print.at);
+    }
+    if (price < trough) trough = price;
+  }
+  const favorable = ((peak - baseline) / baseline) * 100;
+  const adverse = ((trough - baseline) / baseline) * 100;
+  const last = Number(usable[usable.length - 1].price);
+  const rawReturn = ((last - baseline) / baseline) * 100;
+  const spread = Number(spreadPercent);
+  const spreadKnown = Number.isFinite(spread);
+  return {
+    maximumFavorableExcursion: round(favorable, 4),
+    maximumAdverseExcursion: round(adverse, 4),
+    timeToPeakMs: Number.isFinite(peakAt) && Number.isFinite(Number(usable[0].at))
+      ? peakAt - Number(usable[0].at)
+      : null,
+    hitPlus3: favorable >= 3,
+    hitPlus5: favorable >= 5,
+    hitPlus10: favorable >= 10,
+    hitMinus2: adverse <= -2,
+    hitMinus5: adverse <= -5,
+    spreadPercent: spreadKnown ? spread : null,
+    netResultPercent: spreadKnown ? round(rawReturn - spread, 4) : null,
+  };
+}
+
+export function finalScoreBucket(score) {
+  if (score === null || !Number.isFinite(Number(score))) return "F_UNKNOWN";
+  const value = Number(score);
+  if (value >= 85) return "F85+";
+  if (value >= 80) return "F80-84";
+  if (value >= 75) return "F75-79";
+  if (value >= 70) return "F70-74";
+  if (value >= 65) return "F65-69";
+  if (value >= 60) return "F60-64";
+  if (value >= 55) return "F55-59";
+  if (value >= 50) return "F50-54";
+  return "F_BELOW_50";
+}
+
+function resolveScoreBand(_signal, score) {
+  return finalScoreBucket(score);
 }
 
 function round(value, digits = 4) {
   const factor = 10 ** digits;
   return Math.round(Number(value || 0) * factor) / factor;
+}
+
+function measuredPathFields(baselinePrice, signal = {}) {
+  const measured = measurePricePath(baselinePrice, signal.pricePath, {
+    spreadPercent: signal.measuredSpreadPercent ?? signal.spreadPercent,
+  });
+  return {
+    maximumFavorableExcursion: measured.maximumFavorableExcursion,
+    maximumAdverseExcursion: measured.maximumAdverseExcursion,
+    timeToPeakMs: measured.timeToPeakMs,
+    hitPlus3: measured.hitPlus3,
+    hitPlus5: measured.hitPlus5,
+    hitPlus10: measured.hitPlus10,
+    hitMinus2: measured.hitMinus2,
+    hitMinus5: measured.hitMinus5,
+    spreadAdjustedReturn: measured.netResultPercent,
+    netResultPercent: measured.netResultPercent,
+    retunesThreshold: false,
+  };
 }
 
 function optionalScore(value) {
@@ -310,7 +390,7 @@ export function updateStockScoreOutcomes(
       price > 0 &&
       !existingKeys.has(`${symbol}:${observedDay}`)
     )
-    .sort((a, b) => b.score - a.score)
+    .sort((a, b) => Number(b.signal?.buyable === true) - Number(a.signal?.buyable === true) || (b.score ?? -1) - (a.score ?? -1))
     .slice(0, Math.max(0, Number(maxNewPerCycle || 0)));
 
   for (const { signal, symbol, price, score } of newCandidates) {
@@ -323,10 +403,17 @@ export function updateStockScoreOutcomes(
       estimatedRoundTripCostPercent: 0.25,
       baselinePrice: round(price, 6),
       scoreBand: resolveScoreBand(signal, score),
-      finalScore: round(score, 2),
-      discoveryScore: round(signal.discoveryScore || signal.discoveryScorecard?.score || 0, 2),
-      entryScore: round(signal.entryQualityScore || signal.entryQualityScorecard?.score || 0, 2),
-      continuationScore: round(signal.multiDayContinuationScore || signal.continuationScorecard?.score || 0, 2),
+      finalScore: score === null ? null : round(score, 2),
+      rejected: signal.buyable !== true,
+      blocker: signal.buyBlockReason || signal.funnel?.blocker || null,
+      discoveryScore: optionalScore(signal.discoveryScore ?? signal.discoveryScorecard?.score),
+      entryScore: optionalScore(signal.entryQualityScore ?? signal.entryQualityScorecard?.score),
+      maximumPossibleF: optionalScore(signal.maximumPossibleF),
+      decisionCoverage: optionalScore(signal.decisionCoverage),
+      firstSeenAt: signal.firstSeenAt || null,
+      ...measuredPathFields(price, signal),
+      retunesThreshold: false,
+      continuationScore: optionalScore(signal.multiDayContinuationScore ?? signal.continuationScorecard?.score),
       componentScores: decisionComponentScores(signal),
       componentWeights: signal.decisionScoreTelemetry?.stages?.decision?.effectiveWeights || signal.stockDecisionEvidence?.effectiveWeights || {},
       targets: buildTargets(now),

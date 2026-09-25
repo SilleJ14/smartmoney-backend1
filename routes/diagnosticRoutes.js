@@ -36,6 +36,7 @@ export function buildTelemetry(state, freshness) {
       intradayStockEntriesToday: 0,
       positionIntents: {},
     },
+    discoveryQueue: state.discoveryQueueDebug || null,
     boundedQuietDiscovery: quietDiscovery
       ? {
         ...quietDiscovery,

@@ -1,3 +1,5 @@
+import { parseFiniteNumber } from "./parseFiniteNumber.js";
+
 export function sanitizeRuntimeConfig(config = {}) {
   const safe = { ...config };
   if (safe.minStockPrice !== undefined) {
@@ -12,7 +14,12 @@ export function sanitizeRuntimeConfig(config = {}) {
       : Math.max(floor, 50);
   }
   if (safe.minScoreToBuy !== undefined) {
-    safe.minScoreToBuy = Math.max(70, Number(safe.minScoreToBuy || 70));
+    const preference = parseFiniteNumber(safe.minScoreToBuy, 70);
+    safe.automationMinimumPreference = preference;
+    safe.minScoreToBuy = Math.max(70, preference);
+  }
+  if (safe.minScanVolume !== undefined) {
+    safe.minScanVolume = Math.max(0, parseFiniteNumber(safe.minScanVolume, 300000));
   }
   return safe;
 }

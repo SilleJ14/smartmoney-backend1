@@ -1,3 +1,5 @@
+import { setupStateFromSignal } from "./setupStateClassifier.js";
+
 const clamp = (value) => Math.max(0, Math.min(100, Number(value) || 0));
 
 const average = (values = []) => values.length > 0
@@ -296,6 +298,72 @@ function calculateAwakeningScore(intradayBars = []) {
   };
 }
 
+export const CRYPTO_MIN_DISCOVERY_SCORE = 60;
+export const CRYPTO_QUIET_DISCOVERY_SCORE = 58;
+export const CRYPTO_MIN_TREND_STRUCTURE_SCORE = 55;
+
+export function qualifyCryptoDiscovery({
+  score = null,
+  extensionEvidence = "UNKNOWN",
+  negativeNews = false,
+  structureScore = null,
+} = {}) {
+  const measured = score !== null && score !== undefined && score !== "" && Number.isFinite(Number(score));
+  const numericScore = measured ? Number(score) : null;
+  const scorePass = measured && numericScore >= CRYPTO_MIN_DISCOVERY_SCORE;
+  const extensionComplete = extensionEvidence === "KNOWN" || extensionEvidence === "PASS";
+  const structureMeasured = structureScore !== null && structureScore !== undefined && structureScore !== "" && Number.isFinite(Number(structureScore));
+  const extension = {
+    state: extensionComplete ? "PASS" : "DATA_UNAVAILABLE",
+    reason: extensionComplete ? null : "INCOMPLETE_MULTI_HORIZON_EXTENSION_EVIDENCE",
+  };
+  const structure = structureMeasured
+    ? {
+      score: Number(structureScore),
+      state: Number(structureScore) >= CRYPTO_MIN_TREND_STRUCTURE_SCORE ? "PASS" : "REJECT",
+    }
+    : { score: null, state: "DATA_UNAVAILABLE" };
+  let qualificationState = "PASS";
+  let qualificationReason = null;
+  if (negativeNews) {
+    qualificationState = "REJECT";
+    qualificationReason = "CONFIRMED_NEGATIVE_NEWS";
+  } else if (!measured) {
+    qualificationState = "WAIT";
+    qualificationReason = "INSUFFICIENT_DISCOVERY_HISTORY";
+  } else if (!scorePass) {
+    qualificationState = "REJECT";
+    qualificationReason = "DISCOVERY_SCORE_BELOW_60";
+  } else if (structureMeasured && structure.state === "REJECT") {
+    qualificationState = "REJECT";
+    qualificationReason = "TREND_STRUCTURE_BELOW_55";
+  } else if (!structureMeasured) {
+    qualificationState = "WAIT";
+    qualificationReason = "TREND_STRUCTURE_UNKNOWN";
+  } else if (!extensionComplete) {
+    qualificationState = "WAIT";
+    qualificationReason = "INCOMPLETE_MULTI_HORIZON_EXTENSION_EVIDENCE";
+  }
+  return {
+    score: numericScore,
+    scoreState: !measured ? "DATA_UNAVAILABLE" : scorePass && !negativeNews ? "PASS" : "REJECT",
+    scoreThreshold: CRYPTO_MIN_DISCOVERY_SCORE,
+    scorePass: scorePass && !negativeNews,
+    extensionEvidence: extension,
+    structure,
+    qualificationState,
+    qualificationReason,
+  };
+}
+
+export function quietDiscoveryDecision(score) {
+  if (score === null || score === undefined || score === "" || !Number.isFinite(Number(score))) {
+    return { state: "WAIT", reason: "INSUFFICIENT_DISCOVERY_HISTORY", compared: false };
+  }
+  if (Number(score) >= CRYPTO_QUIET_DISCOVERY_SCORE) return { state: "PASS", reason: null, compared: true };
+  return { state: "REJECT", reason: "QUIET_DISCOVERY_BELOW_58", compared: true };
+}
+
 export function calculateCryptoEarlyDiscoveryScore({
   symbol = "",
   dailyBars = [],
@@ -393,25 +461,55 @@ export function calculateCryptoEarlyDiscoveryScore({
   // Missing news reduces evidence coverage, not technical discovery quality.
   // A fresh positive catalyst can add a small bounded bonus; it cannot create
   // a candidate without the underlying quiet technical setup.
-  let score = clamp(combinedRawScore - extension.extensionPenalty);
-  if (extension.alreadyExtended) score = Math.min(score, 55);
+  // Extension is evidence for the setup state. It does not cap discovery quality.
+  // Fewer than five recent and five baseline daily bars means D itself is unknown.
+  const discoveryMeasurable = dailyEvidenceAvailable;
+  let score = null;
+  let scoreState = "DATA_UNAVAILABLE";
+  if (discoveryMeasurable) {
+    score = clamp(combinedRawScore);
+    if (newsCatalyst?.riskDetected === true) {
+      score = Math.min(score, 35);
+      scoreState = "REJECT";
+    } else {
+      scoreState = score >= CRYPTO_MIN_DISCOVERY_SCORE ? "PASS" : "REJECT";
+    }
+  }
+  const classification = setupStateFromSignal({
+    symbol,
+    price,
+    dailyBars: daily,
+    extension,
+    historyDays: daily.length,
+    extensionCoverage: extension.coverage,
+    compressionScore,
+    higherLowCount,
+    percentChange: threeDayChange,
+  });
   const gates = [
     ...(daily.length >= 21 ? [] : ["INSUFFICIENT_COMPLETED_DAILY_HISTORY"]),
-    ...(extension.coverage >= 1 ? [] : ["INCOMPLETE_MULTI_HORIZON_EXTENSION_EVIDENCE"]),
-    ...(extension.alreadyExtended ? ["ALREADY_EXTENDED_MULTI_HORIZON"] : []),
+    ...(extension.coverage >= 1 ? [] : ["INCOMPLETE_MULTI_HORIZON_EXTENSION_EVIDENCE", "INSUFFICIENT_EXTENSION_HISTORY"]),
     ...(newsCatalyst?.riskDetected === true ? ["NEGATIVE_NEWS_RISK"] : []),
+    ...classification.reasons,
     ...dailyInspected.reasons,
   ];
-  if (daily.length < 21 || extension.coverage < 1) score = Math.min(score, 55);
-  if (newsCatalyst?.riskDetected === true) score = Math.min(score, 35);
+  const extensionKnown = daily.length >= 21 && extension.coverage >= 1;
+  const qualification = qualifyCryptoDiscovery({
+    score,
+    extensionEvidence: extensionKnown ? "KNOWN" : "UNKNOWN",
+    negativeNews: newsCatalyst?.riskDetected === true,
+    structureScore: discoveryMeasurable ? structureScore : null,
+  });
   return {
     stage: "CRYPTO_EARLY_DISCOVERY",
     candidateSource: "EARLY_DISCOVERY",
     calculatedAt: new Date(now).toISOString(),
     symbol,
-    score: Number(score.toFixed(2)),
-    rawScore: Number(combinedRawScore.toFixed(2)),
-    technicalScore: technicalScored.rawScore,
+    score: score === null ? null : Number(score.toFixed(2)),
+    scoreState,
+    scorePass: qualification.scorePass,
+    rawScore: discoveryMeasurable ? Number(combinedRawScore.toFixed(2)) : null,
+    technicalScore: discoveryMeasurable ? technicalScored.rawScore : null,
     catalystBonus: Number(catalystBonus.toFixed(2)),
     coverage: scored.coverage,
     components: scored.components,
@@ -419,6 +517,12 @@ export function calculateCryptoEarlyDiscoveryScore({
     learningApplied: scored.learningApplied,
     learningSampleCount: scored.learningSampleCount,
     extension,
+    setupState: classification.state,
+    setupStateConfidence: classification.confidence,
+    setupStateReasons: classification.reasons,
+    extensionEvidence: daily.length >= 21 && extension.coverage >= 1 ? "KNOWN" : "UNKNOWN",
+    earlyEntryEligible: classification.earlyEntryEligible,
+    newLongEntryAllowed: classification.newLongEntryAllowed,
     dataQuality: {
       suppliedDailyBars: Array.isArray(dailyBars) ? dailyBars.length : 0,
       completedValidDailyBars: daily.length,
@@ -442,14 +546,15 @@ export function calculateCryptoEarlyDiscoveryScore({
       earlyVolumeAwakeningRatio: awakening.volumeRatio,
       threeDayChange: Number(threeDayChange.toFixed(3)),
     },
-    tier: score >= 82 && scored.coverage >= 0.8 && extension.coverage >= 1
+    cryptoDiscovery: qualification,
+    tier: score === null
+      ? "WAIT_FOR_EVIDENCE"
+      : score >= 82 && scored.coverage >= 0.8 && extension.coverage >= 1
       ? "ELITE_CRYPTO_PRE_MOVER"
       : score >= 70 && scored.coverage >= 0.65 && extension.coverage >= 1
         ? "STRONG_CRYPTO_PRE_MOVER"
         : score >= 58 && scored.coverage >= 0.5
           ? "DEVELOPING_CRYPTO_PRE_MOVER"
-          : extension.alreadyExtended
-            ? "LATE_CRYPTO_MOVE"
-            : "LOW_CRYPTO_DISCOVERY",
+          : "LOW_CRYPTO_DISCOVERY",
   };
 }

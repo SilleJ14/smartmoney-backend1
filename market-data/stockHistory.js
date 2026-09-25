@@ -1,3 +1,5 @@
+import { stockFeedProvenance } from "./feedContract.js";
+
 export function stockHistoryRequest(timeframe = '5Min', count = 30) {
   const daily = timeframe === '1Day';
   const minutes = Number(String(timeframe).match(/^([0-9]+)Min$/)?.[1]);
@@ -54,14 +56,20 @@ export function createStockHistory({ polygon, alpaca, now = Date.now, onEvidence
       }
       // Never discard useful Polygon history just because fallback failed or
       // returned fewer bars. Never splice providers with different adjustments.
-      onEvidence({ symbol, timeframe, requested: spec.limit, completed: best.length,
-        source, errors, checkedAt: new Date(now()).toISOString(),
-        newestBarAt: best.length ? new Date(best.at(-1).t).toISOString() : null });
+      const provenance = source === "polygon"
+        ? stockFeedProvenance({ provider: "MASSIVE", feed: "CONSOLIDATED", timeframe })
+        : source === "alpaca"
+          ? stockFeedProvenance({ provider: "ALPACA", feed: "IEX", timeframe })
+          : null;
+      const stamped = provenance ? best.map((bar) => ({ ...bar, provenance })) : best;
+      onEvidence({ symbol, timeframe, requested: spec.limit, completed: stamped.length,
+        source: provenance?.provider || source, feed: provenance?.feed || null, errors, checkedAt: new Date(now()).toISOString(),
+        newestBarAt: stamped.length ? new Date(stamped.at(-1).t).toISOString() : null });
       const ttl = best.length >= spec.limit ? (spec.daily ? 1800000 : 45000) : 15000;
       cache.delete(key);
       if (cache.size >= maxEntries) cache.delete(cache.keys().next().value);
-      cache.set(key, { bars: best, expiresAt: now() + ttl });
-      return best;
+      cache.set(key, { bars: stamped, expiresAt: now() + ttl });
+      return stamped;
     })().finally(() => pending.delete(key));
     pending.set(key, job);
     return job;

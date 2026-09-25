@@ -39,7 +39,7 @@ test('scoring classifies continuation without an explicit discoveryLane flag', (
   assert.equal(evidence.opportunityBasis, 'MEASURED_CONTINUATION');
   assert.equal(evidence.canonicalDiscoveryPass, true);
 });
-test('a measured continuation can execute below F 78 when structure, spread, and quote pass', () => {
+test('a measured continuation still has to clear the stock final score and entry gate', () => {
   const now = new Date().toISOString();
   const setup = assessContinuationSetup(fixture());
   const gate = evaluateStockTradeCandidate({
@@ -62,7 +62,9 @@ test('a measured continuation can execute below F 78 when structure, spread, and
     priceIsLive: true,
     decisionUpdatedAt: now,
   }, { requireCentralDecision: true, requireFreshDecision: true, requireExplicitApproval: false });
-  assert.equal(gate.approved, true);
-  assert.equal(gate.qualifiedCandidate, true);
-  assert.ok(!gate.reasons.includes('FINAL_SCORE_BELOW_70'));
+  assert.equal(setup.eligible, true);
+  assert.equal(gate.approved, false);
+  assert.equal(gate.qualifiedCandidate, false);
+  assert.ok(gate.reasons.includes('FINAL_SCORE_BELOW_70'));
+  assert.ok(gate.reasons.includes('ENTRY_NOT_APPROVED'));
 });

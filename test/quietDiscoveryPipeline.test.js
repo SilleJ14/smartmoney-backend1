@@ -44,7 +44,10 @@ test("stock quiet discovery cannot qualify strongly without complete 20-day exte
     "INCOMPLETE_MULTI_HORIZON_EXTENSION_EVIDENCE"
   ));
   assert.equal(features.discoveryTier, "INSUFFICIENT_EXTENSION_EVIDENCE");
-  assert.ok(features.preMoveScore <= 55);
+  assert.equal(features.extensionEvidence, "UNKNOWN");
+  assert.equal(features.preMoveScore, features.rawPreMoveScore);
+  assert.equal(features.discoveryTier === "LATE_MOVE_NOT_DISCOVERY", false);
+  assert.ok(features.discoveryScorecard.gates.includes("INSUFFICIENT_EXTENSION_HISTORY"));
 });
 
 test("quiet discovery sorts, deduplicates, and rejects malformed daily candles", () => {
@@ -86,10 +89,14 @@ test("disk store prunes history and pipeline excludes already-loud movers", asyn
     }
     assert.equal(store.stats().fileCount, 12);
     const currentRows = rowsForDay(20);
-    currentRows.find((item) => item.T === "LOUD").c *= 1.12;
+    const loud = currentRows.find((item) => item.T === "LOUD");
+    loud.c *= 1.12;
+    loud.h = Math.max(loud.h, loud.c);
+    loud.l = Math.min(loud.l, loud.o, loud.c);
     const result = await runBoundedQuietDiscovery({ groupedResults: currentRows, dateKey: "2026-07-21", featureStore: store, budgets: { maxUniverse: 10, historyDays: 20, minAverageDollarVolume: 1, watchlistSize: 5 } });
-    assert.ok(result.watchlist.some((item) => item.symbol === "QUIET"));
+    assert.ok(result.discoveryCandidates.some((item) => item.symbol === "QUIET"));
     assert.ok(!result.watchlist.some((item) => item.symbol === "LOUD"));
+    assert.ok(result.setupHandoff.some((item) => item.symbol === "LOUD"));
     assert.ok(result.resourceUsage.store.bytes <= 1024 * 1024);
   } finally {
     fs.rmSync(directory, { recursive: true, force: true });

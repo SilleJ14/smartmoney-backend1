@@ -3,6 +3,9 @@ import { getCanonicalFinalScore } from "./canonicalSignalRank.js";
 import { calculateDynamicTradeAmount } from "../risk/positionSizing.js";
 import { availableBuyingPower } from "../risk/brokerEvidence.js";
 import { outstandingOrderNotional } from "../risk/orderRiskReservations.js";
+import { buildStockOpportunityLayers, finalizeStockOpportunityLayers } from "./opportunityLayers.js";
+import { resolveScoreState } from "./analyticalAuthorization.js";
+import { evaluateSetupDrift } from "./setupDrift.js";
 
 // Fresh F>=70 plus a live 5s stock book can receive a new size. This does not
 // inherit an old approval or loosen the 5s / 1% execution window.
@@ -14,6 +17,7 @@ export function attachStockExecutableAllocation(signal = {}, {
   reservations = {},
   dailyStartEquity,
 } = {}) {
+  Object.assign(signal, evaluateSetupDrift(signal, { now }));
   const eligibility = evaluateStockTradeCandidate(signal, {
     requireCentralDecision: true,
     requireFreshDecision: true,
@@ -27,7 +31,16 @@ export function attachStockExecutableAllocation(signal = {}, {
     eligibility.reasons = [...(eligibility.reasons || []), "REAL_CASH_TRADING_LOCKED"];
   }
   signal.executionEligibility = eligibility;
-  if (!eligibility.approved) {
+  const layers = buildStockOpportunityLayers(signal, {
+    eligibility,
+    config,
+    requiredF: STOCK_EXECUTION_THRESHOLDS.finalScore,
+  });
+  const sizingPositions = Array.isArray(positions) ? positions : [];
+  const canSize = layers.analyticalPass && layers.C.state === "PASS" && layers.R.state === "PASS";
+  if (!canSize) {
+    const report = finalizeStockOpportunityLayers(layers, 0, resolveScoreState(signal, STOCK_EXECUTION_THRESHOLDS.finalScore));
+    signal.opportunityLayers = report;
     Object.assign(signal, {
       approved: false,
       backendApproved: false,
@@ -38,7 +51,6 @@ export function attachStockExecutableAllocation(signal = {}, {
     });
     return signal;
   }
-  const sizingPositions = Array.isArray(positions) ? positions : [];
   const reserved = Object.values(reservations || {}).reduce(
     (sum, entry) => sum + outstandingOrderNotional(entry, sizingPositions),
     0
@@ -65,23 +77,25 @@ export function attachStockExecutableAllocation(signal = {}, {
   const minAmount = Number(config.minAutonomousTradeAmount || 25);
   const amount = bounded >= minAmount ? Math.floor(bounded * 100) / 100 : 0;
   if (!signal.decisionUpdatedAt) signal.decisionUpdatedAt = new Date(now).toISOString();
+  const report = finalizeStockOpportunityLayers(layers, amount, resolveScoreState(signal, STOCK_EXECUTION_THRESHOLDS.finalScore));
+  signal.opportunityLayers = report;
+  const approvedAmount = report.buyable ? report.S.amount : 0;
   signal.sizingDecisionUpdatedAt = signal.decisionUpdatedAt;
-  signal.finalApprovedTradeAmount = amount;
-  signal.finalTradeAmount = amount;
-  signal.recommendedTradeAmount = amount;
-  signal.displayTradeAmount = amount;
+  signal.finalApprovedTradeAmount = approvedAmount;
+  signal.finalTradeAmount = approvedAmount;
+  signal.recommendedTradeAmount = approvedAmount;
+  signal.displayTradeAmount = approvedAmount;
   signal.finalSizingReconciliation = {
-    finalTradeAmount: amount,
-    finalBlocked: amount <= 0,
+    finalTradeAmount: approvedAmount,
+    finalBlocked: report.buyable !== true,
     basis: "STOCK_F70_LIVE_QUOTE",
   };
-  const executable = amount >= 1;
   Object.assign(signal, {
-    approved: executable,
-    backendApproved: executable,
-    autoTradeApproved: executable,
-    qualifiedToBuy: executable,
-    buyableNow: executable,
+    approved: report.buyable,
+    backendApproved: report.buyable,
+    autoTradeApproved: report.buyable,
+    qualifiedToBuy: report.buyable,
+    buyableNow: report.buyable,
   });
   return signal;
 }

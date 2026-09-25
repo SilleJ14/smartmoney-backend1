@@ -1,6 +1,8 @@
 import { calculateMultiHorizonExtension } from "../scoring/earlyDiscovery.js";
+import { setupStateFromSignal } from "../scoring/setupStateClassifier.js";
 import { providerDailyBar, providerDailyBarMatchesSession } from "./providerDailyBar.js";
 import { missingUsStockMarketSessionDays } from "../utils/usMarketCalendar.js";
+import { allocateEvidenceSlots, resolveEvidenceBudget } from "./evidencePriority.js";
 
 const clamp = (value) => Math.max(0, Math.min(100, Number(value) || 0));
 const avg = (values) => values.length ? values.reduce((sum, value) => sum + Number(value || 0), 0) / values.length : 0;
@@ -186,14 +188,25 @@ export function calculateQuietPreMoveFeatures(history = [], { learning = null, n
     assetClass: "stock",
     now,
   });
-  let preMoveScore = clamp(rawPreMoveScore - extension.extensionPenalty);
-  if (extension.alreadyExtended) preMoveScore = Math.min(preMoveScore, 55);
+  const preMoveScore = clamp(rawPreMoveScore);
   const fullExtensionEvidence = history.length >= 21 && extension.coverage >= 1;
-  if (!fullExtensionEvidence) preMoveScore = Math.min(preMoveScore, 55);
+  const classification = setupStateFromSignal({
+    price: latest.c,
+    current: latest.c,
+    percentChange: dayChangePercent,
+    dayChangePercent,
+    historyDays: history.length,
+    compressionScore,
+    higherLowCount,
+    extension,
+    extensionCoverage: extension.coverage,
+    volume: latest.v,
+    history,
+  });
   const extensionGates = [
     ...(history.length >= 21 ? [] : ["INSUFFICIENT_COMPLETED_DAILY_HISTORY"]),
-    ...(extension.coverage >= 1 ? [] : ["INCOMPLETE_MULTI_HORIZON_EXTENSION_EVIDENCE"]),
-    ...(extension.alreadyExtended ? ["ALREADY_EXTENDED_MULTI_HORIZON"] : []),
+    ...(extension.coverage >= 1 ? [] : ["INCOMPLETE_MULTI_HORIZON_EXTENSION_EVIDENCE", "INSUFFICIENT_EXTENSION_HISTORY"]),
+    ...classification.reasons,
   ];
   return {
     symbol: latest.s,
@@ -205,9 +218,13 @@ export function calculateQuietPreMoveFeatures(history = [], { learning = null, n
     preMoveScore: Number(preMoveScore.toFixed(2)),
     rawPreMoveScore: Number(rawPreMoveScore.toFixed(2)),
     discoveryScore: Number(preMoveScore.toFixed(2)),
-    discoveryTier: extension.alreadyExtended
-      ? "LATE_MOVE_NOT_DISCOVERY"
-      : !fullExtensionEvidence
+    setupState: classification.state,
+    setupStateConfidence: classification.confidence,
+    setupStateReasons: classification.reasons,
+    extensionEvidence: fullExtensionEvidence ? "KNOWN" : "UNKNOWN",
+    earlyEntryEligible: classification.earlyEntryEligible,
+    newLongEntryAllowed: classification.newLongEntryAllowed,
+    discoveryTier: !fullExtensionEvidence
         ? "INSUFFICIENT_EXTENSION_EVIDENCE"
       : preMoveScore >= 82
         ? "ELITE_DISCOVERY"
@@ -281,7 +298,6 @@ export async function runBoundedQuietDiscovery({ groupedResults = [], dateKey, f
       if (history.at(-1)?.d !== dateKey) continue;
       const features = calculateQuietPreMoveFeatures(history, { learning, now: now() });
       if (!features) continue;
-      if (Math.abs(features.dayChangePercent) > config.maxCurrentMovePercent) continue;
       if (history.at(-1).c < config.minPrice || history.at(-1).c > Number(config.maxPrice || 50) || features.averageDollarVolume < config.minAverageDollarVolume) continue;
       stageA.push(features);
     }
@@ -291,9 +307,25 @@ export async function runBoundedQuietDiscovery({ groupedResults = [], dateKey, f
     }
     await new Promise((resolve) => setImmediate(resolve));
   }
-  stageA.sort((a, b) => b.preMoveScore - a.preMoveScore);
-  const deepCandidates = stageA.slice(0, config.deepCandidates);
-  const watchlist = deepCandidates.slice(0, config.watchlistSize);
+  const earlyStage = [];
+  const setupHandoff = [];
+  for (const features of stageA) {
+    const overQuietMove = Math.abs(features.dayChangePercent) > config.maxCurrentMovePercent;
+    const earlyLane = !overQuietMove && (features.setupState === "EARLY" || features.setupState === "UNKNOWN");
+    if (earlyLane) earlyStage.push(features);
+    else setupHandoff.push(features);
+  }
+  earlyStage.sort((a, b) => b.preMoveScore - a.preMoveScore);
+  setupHandoff.sort((a, b) => b.preMoveScore - a.preMoveScore);
+  const deepCandidates = earlyStage.slice(0, config.deepCandidates);
+  const budget = resolveEvidenceBudget({
+    watchlistSlots: config.watchlistSize,
+    liveSlots: config.liveSymbols,
+    memoryPressure: memoryBudgetExceeded,
+  });
+  const allocation = allocateEvidenceSlots(deepCandidates, { ...budget, now: now() });
+  const admittedAt = {};
+  for (const symbol of allocation.liveSymbols) admittedAt[symbol] = now();
   return {
     ok: memoryBudgetExceeded !== true,
     partial: memoryBudgetExceeded === true,
@@ -307,10 +339,14 @@ export async function runBoundedQuietDiscovery({ groupedResults = [], dateKey, f
     bootstrapAttempted: bootstrapSymbols.length,
     eligibleCount: stageA.length,
     deepCandidateCount: deepCandidates.length,
-    watchlistCount: watchlist.length,
-    liveSymbols: watchlist.slice(0, config.liveSymbols).map((item) => item.symbol),
+    watchlistCount: allocation.watchlist.length,
+    cachedFeatures: deepCandidates,
+    setupHandoff,
+    evidenceAdmittedAt: admittedAt,
+    authorizationCandidates: allocation.authorizationCandidates,
+    liveSymbols: allocation.liveSymbols,
     historicalWarmupRemaining: [...read.histories.values()].filter((rows) => rows.length < 21).length,
-    watchlist,
+    watchlist: allocation.watchlist,
     discoveryCandidates: stageA,
     trackingPopulation: { eligible: stageA.length, policy: "ALL_ELIGIBLE_DISCOVERIES_BOUNDED_RETENTION" },
     budgets: config,

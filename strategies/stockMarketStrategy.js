@@ -10,6 +10,19 @@ import {
 import { classifyStockDiscoveryLane } from "../discovery/stockDiscoveryLanes.js";
 import { normalizeSignalScoreCollection } from "../scoring/signalScoreCompleteness.js";
 import { evaluateNewsReviewEligibility } from "../scoring/newsReviewEligibility.js";
+import { publishCurrentAnalyticalSnapshot } from "../scoring/analyticalSnapshot.js";
+import { buildLegacyVetoShadow } from "../scoring/decisionGateRegistry.js";
+import { parseFiniteNumber } from "../config/parseFiniteNumber.js";
+
+function attachCanonicalDiscovery(target, scorecard) {
+  target.discoveryScorecard = scorecard;
+  target.earlyDiscoveryScore = scorecard.score;
+  target.discoveryTier = scorecard.tier;
+  target.setupState = scorecard.setupState;
+  target.earlyEntryEligible = scorecard.earlyEntryEligible === true;
+  target.newLongEntryAllowed = scorecard.newLongEntryAllowed !== false;
+  target.extensionEvidence = scorecard.extensionEvidence;
+}
 
 export function createStockMarketStrategy(dependencies) {
   const {
@@ -88,6 +101,9 @@ export function createStockMarketStrategy(dependencies) {
     recordSkippedSymbol,
     recordCandidateEvent = () => {},
     recordScanEvent = () => {},
+    selectQueuedDeepSymbols = null,
+    onQueuedDeepScore = null,
+    preferDeepEvidence = null,
     updateAdaptiveRunnerLearningState,
     updateAutonomousCapitalRotationState,
     updateAutonomousMarketIntelligenceState,
@@ -158,10 +174,10 @@ export function createStockMarketStrategy(dependencies) {
       (momentum > 25 ? (premarketContinuationRelief ? 5 : 15) : 0) -
       (volumeRatio !== null && volumeRatio < 0.8 ? 10 : 0)
     );
-    const blendedRiskScore = clampScore(
-      riskScore * 0.55 +
-      advancedRisk.institutionalRiskScore * 0.45
-    );
+    const institutionalRiskMeasured = Number.isFinite(Number(advancedRisk.institutionalRiskScore));
+    const blendedRiskScore = institutionalRiskMeasured
+      ? clampScore(riskScore * 0.55 + Number(advancedRisk.institutionalRiskScore) * 0.45)
+      : null;
     const statisticalScore = edge.statisticalEdgeScore;
     const regime = detectMarketRegime();
     const macroScore = regime.available === false ? null : clampScore(
@@ -234,6 +250,7 @@ export function createStockMarketStrategy(dependencies) {
       fundamentalBlendScore,
       reinforcementWeights: blend.reinforcementWeights,
       contextScore: blend.contextScore,
+      contextCoverage: blend.contextCoverage,
       marketContextAvailable: regime.available !== false,
       marketContextEvidence: regime,
       reinforcementLearningActive:
@@ -343,6 +360,8 @@ export function createStockMarketStrategy(dependencies) {
       sectorLeadershipScore: sector.sectorLeadershipScore,
       sectorRole: sector.sectorRole,
       riskPortfolioScore: blend.riskPortfolioScore,
+      riskCoverage: blend.riskCoverage,
+      riskMissingInputs: advancedRisk.missingInputs || [],
       institutionalScore,
       aiConfidence: institutionalScore,
       riskLevel: getRiskLevel(riskScore),
@@ -366,13 +385,19 @@ export function createStockMarketStrategy(dependencies) {
     q.portfolioScore = institutional.portfolioScore;
     q.portfolioConstructionScore = institutional.portfolioConstructionScore;
     q.riskPortfolioScore = institutional.riskPortfolioScore;
+    q.riskCoverage = institutional.riskCoverage;
+    q.riskMissingInputs = institutional.riskMissingInputs;
+    q.contextCoverage = institutional.contextCoverage;
     q.fundamentalScore = institutional.fundamentalScore;
     q.fundamentalDataValid = institutional.fundamentalDataValid === true;
-    q.fundamentalBlendScore = institutional.fundamentalBlendScore;
+    q.fundamentalBlendScore = Number.isFinite(Number(institutional.fundamentalBlendScore))
+      ? institutional.fundamentalBlendScore
+      : null;
     q.fundamentalValidation = institutional.fundamentalValidation;
     q.dcfValuationScore = institutional.dcfValuationScore;
     if (shouldRefreshEntryQualityScorecard(q)) {
       q.entryQualityScorecard = calculateEntryQualityScore(q);
+      q.entryFamilyShadow = q.entryQualityScorecard.entryFamilyShadow || null;
       q.entryQualityScore = q.entryQualityScorecard.score;
     }
     return q;
@@ -441,7 +466,7 @@ export function createStockMarketStrategy(dependencies) {
     // admits measured, liquid, positively structured stocks for full D/E/F
     // evaluation; it does not bypass any execution or sizing gate.
     const discoveryLane = classifyStockDiscoveryLane(q, {
-      minScanVolume: Number(CONFIG.minScanVolume || 300000),
+      minScanVolume: parseFiniteNumber(CONFIG.minScanVolume, 300000),
     });
     const normalStrongLane = discoveryLane.normalStrong || discoveryLane.continuationLane;
     q.continuationSetup = discoveryLane.continuation;
@@ -473,7 +498,7 @@ export function createStockMarketStrategy(dependencies) {
       percentChange <= Number(CONFIG.maxPercentChange || 300) &&
       (
         relativeVolume >= 2 ||
-        volume >= Number(CONFIG.minScanVolume || 300000) * 2 ||
+        volume >= parseFiniteNumber(CONFIG.minScanVolume, 300000) * 2 ||
         q.confirmations?.volumeSpike === true ||
         q.explosiveMoveCandidate === true ||
         q.parabolicRunnerCandidate === true
@@ -718,19 +743,20 @@ export function createStockMarketStrategy(dependencies) {
       score -= 25;
     }
     if (q.technicals) {
-      const rsi = Number(q.technicals.rsi || 0);
-      const ema9 = Number(q.technicals.ema9 || 0);
-      const ema20 = Number(q.technicals.ema20 || 0);
-      const macd = Number(q.technicals.macd || 0);
-      const macdSignal = Number(q.technicals.macdSignal || 0);
-      if (rsi >= 45 && rsi <= 70) score += 12;
-      else if (rsi > 70 && rsi <= 80) score += 5;
-      else if (rsi > 80) score -= 10;
-      else if (rsi < 35) score -= 10;
-      if (ema9 > ema20) score += 12;
-      if (q.current > ema9 && ema9 > ema20) score += 10;
-      if (macd > macdSignal) score += 12;
-      if (macd > 0 && macdSignal > 0) score += 6;
+      const known = (value) => value !== null && value !== undefined && value !== "" && Number.isFinite(Number(value));
+      const rsi = known(q.technicals.rsi) ? Number(q.technicals.rsi) : null;
+      const ema9 = known(q.technicals.ema9) ? Number(q.technicals.ema9) : null;
+      const ema20 = known(q.technicals.ema20) ? Number(q.technicals.ema20) : null;
+      const macd = known(q.technicals.macd) ? Number(q.technicals.macd) : null;
+      const macdSignal = known(q.technicals.macdSignal) ? Number(q.technicals.macdSignal) : null;
+      if (rsi !== null && rsi >= 45 && rsi <= 70) score += 12;
+      else if (rsi !== null && rsi > 70 && rsi <= 80) score += 5;
+      else if (rsi !== null && rsi > 80) score -= 10;
+      else if (rsi !== null && rsi < 35) score -= 10;
+      if (ema9 !== null && ema20 !== null && ema9 > ema20) score += 12;
+      if (ema9 !== null && ema20 !== null && q.current > ema9 && ema9 > ema20) score += 10;
+      if (macd !== null && macdSignal !== null && macd > macdSignal) score += 12;
+      if (macd !== null && macdSignal !== null && macd > 0 && macdSignal > 0) score += 6;
     }
     // FIX-D: pull preMoveScore from memory into scoreStock for real-time boost
     const preMoverMem = engineState.preMoverDiscoveryMemory?.[normalizeSymbol(q.symbol || "")];
@@ -854,10 +880,9 @@ export function createStockMarketStrategy(dependencies) {
     score + Number(phase6ScoringLayers.scoreAdjustment || 0)
   );
     q.legacyCompositeScore = legacyCompositeScore;
-    q.discoveryScorecard = calculateEarlyDiscoveryScore(q);
-    q.discoveryScore = q.discoveryScorecard.score;
-    q.discoveryTier = q.discoveryScorecard.tier;
+    attachCanonicalDiscovery(q, calculateEarlyDiscoveryScore(q));
     q.entryQualityScorecard = calculateEntryQualityScore(q);
+    q.entryFamilyShadow = q.entryQualityScorecard.entryFamilyShadow || null;
     q.entryQualityScore = q.entryQualityScorecard.score;
     const separatedEntryApproval = q.entryQualityScorecard.tier === "BLOCKED"
       ? "BLOCK"
@@ -888,11 +913,6 @@ export function createStockMarketStrategy(dependencies) {
           : "Late chase risk");
   
       score = Math.min(score, 35);
-  
-      if (q.parabolicRunnerCandidate === true || q.explosiveMoveCandidate === true) {
-        q.discoveryScore = Math.max(Number(q.discoveryScore || 0), 82);
-        q.discoveryTier = "DISCOVERY_ONLY_PARABOLIC_RUNNER";
-      }
     } else if (q.runnerStage === "MATURE") {
       score = Math.min(score, 84);
     } else if (q.runnerStage === "WATCHING") {
@@ -903,12 +923,13 @@ export function createStockMarketStrategy(dependencies) {
     q.entryQualityScore = q.entryScore;
     attachStockWatchDecisionComponents(q);
     q.decisionScoreTelemetry = buildDecisionScoreTelemetry(q);
+    publishCurrentAnalyticalSnapshot(q);
     return q.entryScore;
   
   }
   
   let activeAnalysis = null;
-  async function scanMarket({ analysisOnly = false, targetSymbols = [] } = {}) {
+  async function scanMarket({ analysisOnly = false, targetSymbols = [], deepSymbols = null } = {}) {
     if (!analysisOnly && activeAnalysis) await activeAnalysis;
     if (activeScanLocks.scanMarket) {
       console.warn("scanMarket skipped: scan already running");
@@ -934,8 +955,22 @@ export function createStockMarketStrategy(dependencies) {
         "NEW_STOCK_SCAN_STARTED_KEEP_LAST_GOOD_DASHBOARD";
       engineState.lastStockScanPreservedDashboardAt =
         new Date().toISOString();
-      const symbols = analysisOnly ? [...new Set(targetSymbols.map(normalizeSymbol).filter(Boolean))].slice(0, 4) : await getTopMovers();
-      const limitedSymbols = analysisOnly ? symbols : narrowScanUniverse(symbols);
+      const explicitDeep = Array.isArray(deepSymbols);
+      const symbols = explicitDeep
+        ? [...new Set(deepSymbols.map(normalizeSymbol).filter(Boolean))]
+        : analysisOnly
+          ? [...new Set(targetSymbols.map(normalizeSymbol).filter(Boolean))].slice(0, 4)
+          : await getTopMovers();
+      const queuedSelection = !explicitDeep && !analysisOnly && typeof selectQueuedDeepSymbols === "function"
+        ? selectQueuedDeepSymbols()
+        : null;
+      const limitedSymbols = explicitDeep
+        ? symbols
+        : Array.isArray(queuedSelection)
+          ? queuedSelection
+          : analysisOnly
+            ? symbols
+            : narrowScanUniverse(symbols);
       const selectedSymbols = new Set(limitedSymbols);
       const tracedSymbols = [...new Set([...limitedSymbols, ...symbols.slice(0, 300)])];
       recordScanEvent({ stage: 'SCAN_COVERAGE', cycle: scanCycleId, assetClass: 'stock',
@@ -954,8 +989,13 @@ export function createStockMarketStrategy(dependencies) {
       let processedSymbols = 0;
       let memoryAbort = false;
       const rawResults = await processBatches(limitedSymbols, batchSize, async (symbol) => {
+        const deepScoreStartedAt = Date.now();
+        let deepScored = false;
         processedSymbols += 1;
-        if (memoryAbort) return null;
+        if (memoryAbort) {
+          onQueuedDeepScore?.(symbol, { durationMs: Date.now() - deepScoreStartedAt, scored: false });
+          return null;
+        }
         if (typeof getMemoryGuardState === "function") {
           const memoryGuard = getMemoryGuardState();
           engineState.memoryGuardState = {
@@ -966,6 +1006,7 @@ export function createStockMarketStrategy(dependencies) {
             memoryAbort = true;
             engineState.lastEngineStopReason = "MEMORY_GUARD_STOCK_SCAN_ABORTED";
             recordSkippedSymbol(symbol, "MEMORY_GUARD_STOCK_SCAN_ABORTED");
+            onQueuedDeepScore?.(symbol, { durationMs: Date.now() - deepScoreStartedAt, scored: false });
             return null;
           }
         }
@@ -988,6 +1029,9 @@ export function createStockMarketStrategy(dependencies) {
             symbol,
             assetCheck.asset || {}
           );
+          if (quote && typeof preferDeepEvidence === "function") {
+            Object.assign(quote, preferDeepEvidence(symbol, quote) || {});
+          }
           if (!quote || typeof quote !== "object") {
             recordSkippedSymbol(
               symbol,
@@ -1105,13 +1149,6 @@ export function createStockMarketStrategy(dependencies) {
               includeNews: true,
               baseConfirmations: quote.confirmations,
             });
-            if (quote.confirmations.newsRisk === true) {
-              quote.blockBuying = true;
-              quote.buyBlocked = true;
-              quote.discoveryOnly = true;
-              quote.buyBlockReason =
-                `News risk: ${quote.confirmations.newsRiskReason}`;
-            }
             score = scoreStock(quote);
           } else if (CONFIG.enableAdvancedFilters && quote.confirmations?.newsRiskAvailable !== true) {
             quote.confirmations = {
@@ -1120,10 +1157,6 @@ export function createStockMarketStrategy(dependencies) {
               newsRiskReason: "News review deferred: candidate did not reach Entry shortlist",
               newsCacheStatus: "deferred",
             };
-            quote.blockBuying = true;
-            quote.buyBlocked = true;
-            quote.discoveryOnly = true;
-            quote.buyBlockReason ||= "Entry shortlist not reached";
           }
           const statisticalEdge = quote.statisticalEdge || null;
           const statisticalScore = Number(quote.statisticalScore || 0);
@@ -1183,7 +1216,7 @@ export function createStockMarketStrategy(dependencies) {
             ...quote,
             score: institutional.institutionalScore,
             legacyMomentumScore: score,
-            discoveryScore: Number(quote.discoveryScore || 0),
+            discoveryScore: quote.currentAnalyticalSnapshot?.components?.discovery?.score ?? null,
             discoveryTier: quote.discoveryTier || "LOW_DISCOVERY",
             discoveryScorecard: quote.discoveryScorecard || null,
             entryScore: Number(quote.entryScore || score || 0),
@@ -1193,8 +1226,9 @@ export function createStockMarketStrategy(dependencies) {
             decisionScoreTelemetry: quote.decisionScoreTelemetry || null,
             momentumScore:
               institutional.momentumScore || score,
-            fundamentalBlendScore:
-              institutional.fundamentalBlendScore || 0,
+            fundamentalBlendScore: Number.isFinite(Number(institutional.fundamentalBlendScore))
+              ? institutional.fundamentalBlendScore
+              : null,
             reinforcementWeights:
               institutional.reinforcementWeights ||
               engineState.reinforcementWeightState?.weights ||
@@ -1260,6 +1294,7 @@ export function createStockMarketStrategy(dependencies) {
           engineState.previousSignalApprovals[
             normalizeSymbol(quote.symbol)
           ] = currentApproval;
+          deepScored = true;
           return {
             ...quote,
             scanCycleId,
@@ -1270,8 +1305,9 @@ export function createStockMarketStrategy(dependencies) {
             legacyMomentumScore: score,
             momentumScore:
               institutional.momentumScore || score,
-            fundamentalBlendScore:
-              institutional.fundamentalBlendScore || 0,
+            fundamentalBlendScore: Number.isFinite(Number(institutional.fundamentalBlendScore))
+              ? institutional.fundamentalBlendScore
+              : null,
             reinforcementWeights:
               institutional.reinforcementWeights ||
               engineState.reinforcementWeightState?.weights ||
@@ -1352,6 +1388,8 @@ export function createStockMarketStrategy(dependencies) {
         } catch (err) {
           recordSkippedSymbol(symbol, err.message);
           return null;
+        } finally {
+          onQueuedDeepScore?.(symbol, { durationMs: Date.now() - deepScoreStartedAt, scored: deepScored });
         }
       });
       if (memoryAbort) {
@@ -1504,10 +1542,9 @@ export function createStockMarketStrategy(dependencies) {
           }
         }
         // Build telemetry only after all persisted discovery evidence is attached.
-        signal.discoveryScorecard = calculateEarlyDiscoveryScore(signal);
-        signal.discoveryScore = signal.discoveryScorecard.score;
-        signal.discoveryTier = signal.discoveryScorecard.tier;
+        attachCanonicalDiscovery(signal, calculateEarlyDiscoveryScore(signal));
         signal.decisionScoreTelemetry = buildDecisionScoreTelemetry(signal);
+        publishCurrentAnalyticalSnapshot(signal);
       }
       if (analysisOnly) {
         // A bounded research pass shares the real evidence pipeline but cannot
@@ -1667,7 +1704,6 @@ export function createStockMarketStrategy(dependencies) {
         signal.executionDominanceScore =
           phase15ExecutionDominance.executionDominanceScore;
         if (phase15ExecutionDominance.blockExecution) {
-          signal.qualifiedToBuy = false;
           signal.phase15ExecutionBlocked = true;
           signal.phase15ExecutionBlockReason =
             phase15ExecutionDominance.reason;
@@ -1912,13 +1948,11 @@ export function createStockMarketStrategy(dependencies) {
               score: signal.score,
               phase9LiquidityIntelligence,
               reason:
-                "Phase 9 blocked entry because liquidity quality is weak.",
+                "Phase 9 would have blocked entry because liquidity quality is weak.",
             }
           );
-          continue;
         }
         if (phase7Reinforcement.suppressEntry) {
-          signal.qualifiedToBuy = false;
           signal.phase7Suppressed = true;
           signal.phase7SuppressionReason = phase7Reinforcement.reason;
         }
@@ -1953,7 +1987,6 @@ export function createStockMarketStrategy(dependencies) {
           phase9LiquidityIntelligence.liquidityLabel === "WEAK_LIQUIDITY_TRAP" &&
           Number(signal.score || 0) < 82
         ) {
-          signal.qualifiedToBuy = false;
           signal.phase9LiquiditySuppressed = true;
           signal.phase9SuppressionReason =
             phase9LiquidityIntelligence.reason;
@@ -2027,7 +2060,6 @@ export function createStockMarketStrategy(dependencies) {
           );
         }
         if (phase11MetaStrategy.suppressByMetaStrategy) {
-          signal.qualifiedToBuy = false;
           signal.phase11Suppressed = true;
           signal.phase11SuppressionReason =
             phase11MetaStrategy.reason;
@@ -2061,7 +2093,6 @@ export function createStockMarketStrategy(dependencies) {
           );
         }
         if (phase12MacroCorrelation.suppressByMacroCorrelation) {
-          signal.qualifiedToBuy = false;
           signal.phase12Suppressed = true;
           signal.phase12SuppressionReason =
             phase12MacroCorrelation.reason;
@@ -2094,7 +2125,6 @@ export function createStockMarketStrategy(dependencies) {
           );
         }
         if (phase13HedgeFundBrain.suppressByHedgeFundBrain) {
-          signal.qualifiedToBuy = false;
           signal.phase13Suppressed = true;
           signal.phase13SuppressionReason =
             phase13HedgeFundBrain.reason;
@@ -2118,7 +2148,6 @@ export function createStockMarketStrategy(dependencies) {
         signal.eliteConsensus =
           phase14Governor.eliteConsensus;
         if (phase14Governor.suppressByGovernor) {
-          signal.qualifiedToBuy = false;
           signal.phase14Suppressed = true;
           signal.phase14SuppressionReason =
             phase14Governor.reason;
@@ -2163,21 +2192,36 @@ export function createStockMarketStrategy(dependencies) {
       // Keep liveness responsive between complete scoring passes.
       await yieldToEventLoop();
       for (const signal of results) {
+        signal.legacySignalScore = Number.isFinite(Number(signal.score))
+          ? Number(Number(signal.score).toFixed(2))
+          : null;
         signal.stockOutcomeLearning =
           engineState.stockScoreOutcomeLearning || null;
-        signal.discoveryScorecard = calculateEarlyDiscoveryScore(signal);
-        signal.discoveryScore = signal.discoveryScorecard.score;
-        signal.discoveryTier = signal.discoveryScorecard.tier;
+        attachCanonicalDiscovery(signal, calculateEarlyDiscoveryScore(signal));
         signal.entryQualityScorecard = calculateEntryQualityScore(signal);
+        signal.entryFamilyShadow = signal.entryQualityScorecard.entryFamilyShadow || null;
         signal.entryQualityScore = signal.entryQualityScorecard.score;
         signal.entryScore = signal.entryQualityScore;
         signal.continuationScorecard = calculateMultiDayContinuationScore(signal);
         signal.multiDayContinuationScore = signal.continuationScorecard.score;
         signal.multiDayContinuationTier = signal.continuationScorecard.tier;
         signal.decisionScoreTelemetry = buildDecisionScoreTelemetry(signal);
+        publishCurrentAnalyticalSnapshot(signal);
         signal.stockDecisionScore = signal.decisionScoreTelemetry.scores.decision;
+        signal.currentAnalyticalScore = signal.decisionScoreTelemetry.scores.decision;
         signal.decisionScoreCoverage = signal.decisionScoreTelemetry.stages.decision.coverage;
-        const stockTradeEvidence = evaluateStockTradeCandidate(signal);
+        signal.decisionCoverage = signal.decisionScoreTelemetry.stages.decision.coverage;
+        signal.evidenceBasis = signal.decisionScoreTelemetry.stages.decision.evidenceBasis;
+        signal.evidenceBasisVersion = signal.decisionScoreTelemetry.stages.decision.evidenceBasisVersion;
+        signal.maximumPossibleF = signal.decisionScoreTelemetry.stages.decision.maximumPossibleF;
+        signal.minimumPossibleF = signal.decisionScoreTelemetry.stages.decision.minimumPossibleF;
+        signal.analyticalBounds = signal.decisionScoreTelemetry.stages.decision.analyticalBounds || null;
+        signal.remainingScoreDelta = signal.analyticalBounds?.remainingScoreDelta ?? null;
+        const stockTradeEvidence = evaluateStockTradeCandidate(signal, signal.centralAutonomousDecisionCore ? {
+          requireCentralDecision: true,
+          requireFreshDecision: true,
+          requireExplicitApproval: true,
+        } : {});
         signal.stockTradeEvidence = stockTradeEvidence;
         signal.watchlistEligible = stockTradeEvidence.watchlistEligible;
         signal.qualifiedCandidate = stockTradeEvidence.qualifiedCandidate;
@@ -2190,6 +2234,7 @@ export function createStockMarketStrategy(dependencies) {
             ...stockTradeEvidence.reasons,
           ].join(", ") || "ENTRY_SCORE_BELOW_75";
         }
+        signal.legacyVetoShadow = buildLegacyVetoShadow(signal);
       }
       const finalResults = normalizeSignalScoreCollection(results);
       const scoredSymbols = new Set(finalResults.map(signal => signal.symbol));

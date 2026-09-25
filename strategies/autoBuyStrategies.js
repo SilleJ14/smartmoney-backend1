@@ -2,11 +2,11 @@ import { getApprovedTradeAmount, isSizingRevoked } from "../scoring/approvedSizi
 import {
   CRYPTO_MAX_ENTRY_SPREAD_PERCENT,
 } from "../scoring/cryptoScoring.js";
-import {
-  CRYPTO_MIN_FINAL_SCORE_TO_BUY,
-  evaluateCryptoTradeCandidate,
-} from "../scoring/componentScore.js";
+import { evaluateCryptoTradeCandidate } from "../scoring/componentScore.js";
+import { liveCryptoPermission } from "../scoring/cryptoAnalyticalShadow.js";
+import { applyLiveBtcSize } from "../scoring/btcRegime.js";
 import { evaluateStockTradeCandidate, STOCK_EXECUTION_THRESHOLDS } from "../scoring/decisionScores.js";
+import { classifyStockMarketStress } from "../scoring/stockQualificationPolicy.js";
 import {
   getCanonicalFinalScore,
   hasExplicitTradeApproval,
@@ -246,29 +246,27 @@ export function createAutoBuyStrategies(dependencies) {
     }
     const frozenOpenSlots = openSlots;
     if (typeof refreshStockExecutionQuotes === "function") signals = await refreshStockExecutionQuotes(signals);
-    const effectiveBuyThreshold = getEffectiveBuyThreshold(signals);
-    const adaptiveMinScoreToBuy = Math.max(
-      78,
-      effectiveBuyThreshold,
-      Number(CONFIG.minScoreToBuy || 70),
-      Number(engineState.selfOptimizationState?.adaptiveMinScoreToBuy || 0)
-    );
+    const canonicalBuyScore = STOCK_EXECUTION_THRESHOLDS.finalScore;
+    const marketStressRisk = classifyStockMarketStress({
+      marketStress: Number(engineState.marketStressLevel || 0),
+      crashBlock: engineState.marketCrashProtectionState?.shouldBlockNewTrades === true,
+      macroBlock: engineState.macroRiskState?.shouldBlockNewTrades === true,
+    });
     engineState.effectiveBuyThreshold = {
       updatedAt: new Date().toISOString(),
-      hardFloor: 78,
+      requiredF: canonicalBuyScore,
+      movesRequiredF: false,
+      marketStress: marketStressRisk,
       configMinScoreToBuy: CONFIG.minScoreToBuy,
-      effectiveBuyScore: adaptiveMinScoreToBuy,
-      reason:
-        adaptiveMinScoreToBuy > 78
-          ? "Buy threshold raised above 78 by risk/adaptive conditions."
-          : "Stock hard floor active. Buy threshold cannot go below 78.",
+      effectiveBuyScore: canonicalBuyScore,
+      reason: "Canonical stock qualification stays at F70. Market stress changes risk and size, not F.",
     };
     const frozenApprovedSignals = signals
       .filter(
         (signal) => {
           const eligibility = evaluateCanonicalStockAutoBuyEligibility(
             signal,
-            adaptiveMinScoreToBuy
+            canonicalBuyScore
           );
           return eligibility.approved;
         }
@@ -294,27 +292,24 @@ export function createAutoBuyStrategies(dependencies) {
       .filter((signal) => {
         const symbol = normalizeSymbol(signal.symbol);
         const score = resolveCanonicalStockDecisionScore(signal);
-        const adaptiveMinScore = Number(
-          engineState.selfOptimizationState?.adaptiveMinScoreToBuy ||
-          CONFIG.minScoreToBuy
-        );
         const executionApproved = executableSymbols.has(symbol);
         const normalQualified = evaluateCanonicalStockAutoBuyEligibility(
           signal,
-          0
+          canonicalBuyScore
         ).approved;
         return (
           normalQualified ||
           (
             executionApproved &&
-            score >= adaptiveMinScore &&
+            score >= canonicalBuyScore &&
             signal.confirmations?.fakeBreakout !== true &&
             engineState.phase21AutonomousBrainState?.shouldBlockNewTrades !== true &&
             engineState.phase20AutonomousOrchestrationState?.shouldBlockNewTrades !== true
           )
         );
       })
-      .filter((signal) => resolveCanonicalStockDecisionScore(signal) >= adaptiveMinScoreToBuy)
+      .filter((signal) => resolveCanonicalStockDecisionScore(signal) >= canonicalBuyScore)
+      .filter(() => marketStressRisk.R.state !== "REJECT" && marketStressRisk.R.state !== "WAIT")
       .filter((signal) => {
         const symbol = normalizeSymbol(signal.symbol);
         const lastSold = engineState.lastSoldAt[symbol] || 0;
@@ -535,9 +530,11 @@ export function createAutoBuyStrategies(dependencies) {
             portfolioManagerReason:
               "AI_PORTFOLIO_MANAGER_UNAVAILABLE",
           };
-      const baseTradeAmount =
-        Number(portfolioManager.recommendedTradeAmount || 0) ||
-        provisionalTradeAmount;
+      const stressMultiplier = Number(marketStressRisk?.S?.multiplier ?? 1);
+      const baseTradeAmount = Number((
+        (Number(portfolioManager.recommendedTradeAmount || 0) || provisionalTradeAmount) *
+        (Number.isFinite(stressMultiplier) ? stressMultiplier : 1)
+      ).toFixed(2));
       if (
         institutionalExecutionPlan.executionMode ===
         "AVOID_WEAK_EXECUTION"
@@ -1049,8 +1046,6 @@ export function createAutoBuyStrategies(dependencies) {
         calculateFinalMasterDecisionProfile(candidate);
       candidate.finalMasterDecisionProfile =
         finalMasterDecisionProfile;
-      candidate.masterFinalScore =
-        finalMasterDecisionProfile.finalScore;
       candidate.masterFinalSizingMultiplier =
         finalMasterDecisionProfile.finalSizingMultiplier;
       candidate.masterExecutionDecision =
@@ -1366,22 +1361,18 @@ export function createAutoBuyStrategies(dependencies) {
     else if (bestCandidateScore >= 85) scoreMultiplier = 0.7;
     else if (bestCandidateScore >= 75) scoreMultiplier = 0.55;
     const tradeAmount = baseTradeAmount * scoreMultiplier;
-    const effectiveCryptoBuyThreshold = CRYPTO_MIN_FINAL_SCORE_TO_BUY;
+    const cryptoPermissionFor = (signal) => liveCryptoPermission(
+      signal?.cryptoAnalyticalShadow
+      || signal?.centralAutonomousDecisionCore?.cryptoDecisionEvidence?.cryptoAnalyticalShadow
+    );
     if (tradeAmount < 1) {
       recordFailedOrder("AUTO_CRYPTO_BUY_SKIPPED", "CRYPTO", "Not enough budget");
       return;
     }
     const buyCandidates = signals
       .filter((s) => {
-        const score = getCryptoDecisionScore(s);
-        const spread = getMeasuredCryptoSpread(s);
         const completeEntryEvidence = hasCompleteCryptoEntryEvidence(s);
-        return (
-          completeEntryEvidence &&
-          score >= effectiveCryptoBuyThreshold &&
-          spread !== null &&
-          spread <= CRYPTO_MAX_ENTRY_SPREAD_PERCENT
-        );
+        return completeEntryEvidence && cryptoPermissionFor(s).allowed;
       })
       .filter((s) => {
         const sym = normalizeSymbol(s.symbol);
@@ -1427,28 +1418,19 @@ export function createAutoBuyStrategies(dependencies) {
         });
         continue;
       }
-      const cryptoOrchestratorGate =
-        cryptoDecisionScore >= effectiveCryptoBuyThreshold
-          ? { allowed: true }
-          : passesInstitutionalOrchestratorBuyGate({
-          ...crypto,
-          assetClass: "crypto",
-          asset_class: "crypto",
-        });
+      const cryptoPermission = cryptoPermissionFor(crypto);
+      const cryptoOrchestratorGate = cryptoPermission.allowed
+        ? { allowed: true }
+        : { allowed: false, reason: cryptoPermission.reasons[0] || "CRYPTO_LIVE_PERMISSION_FAILED" };
       if (!cryptoOrchestratorGate.allowed) {
         recordOrder("CRYPTO_SKIPPED_ORCHESTRATOR", symbol, {
           reason: cryptoOrchestratorGate.reason,
         });
         continue;
       }
-      const cryptoParliamentGate =
-        cryptoDecisionScore >= effectiveCryptoBuyThreshold
-          ? { allowed: true, multiplier: 1 }
-          : passesAutonomousParliamentGate({
-          ...crypto,
-          assetClass: "crypto",
-          asset_class: "crypto",
-        });
+      const cryptoParliamentGate = cryptoPermission.allowed
+        ? { allowed: true, multiplier: 1 }
+        : { allowed: false, reason: cryptoPermission.reasons[0] || "CRYPTO_LIVE_PERMISSION_FAILED" };
       if (!cryptoParliamentGate.allowed) {
         recordOrder("CRYPTO_SKIPPED_PARLIAMENT", symbol, {
           reason: cryptoParliamentGate.reason,
@@ -1505,10 +1487,7 @@ export function createAutoBuyStrategies(dependencies) {
           finalMasterDecisionProfile.executionDecision;
         crypto.finalExitProfile =
           finalMasterDecisionProfile.finalExitProfile;
-        if (
-          finalMasterDecisionProfile.suppressEntry &&
-          cryptoDecisionScore < effectiveCryptoBuyThreshold
-        ) {
+        if (finalMasterDecisionProfile.suppressEntry && cryptoPermission.allowed !== true) {
           recordOrder(
             "AUTO_CRYPTO_BUY_SKIPPED_FINAL_MASTER_DECISION",
             symbol,
@@ -1573,6 +1552,15 @@ export function createAutoBuyStrategies(dependencies) {
               ? minCryptoTradeAmount
               : 0;
         }
+        const breadthMultiplier = Number(
+          (crypto.cryptoAnalyticalShadow
+            || crypto.centralAutonomousDecisionCore?.cryptoDecisionEvidence?.cryptoAnalyticalShadow
+          )?.S?.regimeMultiplier
+        );
+        if (breadthMultiplier > 0 && breadthMultiplier < 1) {
+          finalTradeAmount = Number((finalTradeAmount * breadthMultiplier).toFixed(2));
+        }
+        finalTradeAmount = applyLiveBtcSize(finalTradeAmount, crypto.btcRegime).amount;
         crypto.finalApprovedTradeAmount = Number(finalTradeAmount || 0);
         crypto.finalTradeAmount = Number(finalTradeAmount || 0);
         crypto.displayTradeAmount = Number(finalTradeAmount || crypto.displayTradeAmount || 0);

@@ -1,4 +1,5 @@
 import { assessContinuationSetup } from '../scoring/continuationSetup.js';
+import { setupStateFromSignal } from '../scoring/setupStateClassifier.js';
 function finite(value) {
   const parsed = Number(value);
   return Number.isFinite(parsed) ? parsed : 0;
@@ -41,13 +42,30 @@ export function classifyStockDiscoveryLane(
       volume >= Number(minScanVolume || 300_000) * 2
     );
   const continuation = assessContinuationSetup(candidate);
-  const continuationLane = percentChange > 0 && volume >= Number(minScanVolume || 300000) && continuation.eligible;
+  const setup = candidate.setupState ? { state: candidate.setupState } : setupStateFromSignal(candidate);
+  const continuationLane = setup.state === "RETEST"
+    || setup.state === "CONTINUATION"
+    || (
+      setup.state !== "EXTENDED"
+      && setup.state !== "EXHAUSTED"
+      && percentChange > 0
+      && volume >= Number(minScanVolume || 300000)
+      && continuation.eligible
+    );
+  const lane = !continuationLane && setup.state === "BREAKOUT"
+    ? "BREAKOUT"
+    : continuationLane
+      ? "MEASURED_CONTINUATION"
+      : normalStrong
+        ? "NORMAL_STRONG"
+        : "EXPLOSIVE_RUNNER";
 
   return {
-    lane: continuationLane ? 'MEASURED_CONTINUATION' : normalStrong ? "NORMAL_STRONG" : "EXPLOSIVE_RUNNER",
+    lane,
     normalStrong,
     continuationLane,
     continuation,
+    setupState: setup.state,
     evidence: {
       volume,
       relativeVolume,

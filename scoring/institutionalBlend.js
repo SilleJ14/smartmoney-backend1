@@ -44,41 +44,91 @@ function resolveEffectiveGroupWeights(reinforcementWeights = {}) {
   );
 }
 
+function finiteScore(value) {
+  const score = Number(value);
+  return Number.isFinite(score) ? score : null;
+}
+
+function measuredAverage(parts, clampScore) {
+  const measured = parts.filter((part) => finiteScore(part.score) !== null);
+  const weight = measured.reduce((sum, part) => sum + part.weight, 0);
+  if (!weight) return { score: null, coverage: 0 };
+  const configured = parts.reduce((sum, part) => sum + part.weight, 0);
+  return {
+    score: clampScore(measured.reduce((sum, part) => sum + part.score * part.weight, 0) / weight),
+    coverage: configured > 0 ? weight / configured : 0,
+  };
+}
+
 export function calculateInstitutionalBlend(input = {}, { clampScore }) {
   const weights = { ...DEFAULT_REINFORCEMENT_WEIGHTS, ...(input.reinforcementWeights || {}) };
   const effectiveGroupWeights = resolveEffectiveGroupWeights(weights);
-  const momentumScore = clampScore(
+  const momentumKnown = finiteScore(input.momentum) !== null || finiteScore(input.volumeRatio) !== null;
+  const momentumScore = momentumKnown ? clampScore(
     50 + Number(input.momentum || 0) * 1.5 + Number(input.volumeRatio || 0) * 8 -
     (Number(input.momentum || 0) > 35 ? (input.premarketContinuationRelief ? 5 : 15) : 0)
-  );
-  const fundamentalBlendScore = clampScore(
-    Number(input.fundamentalScore || 0) * 0.45 +
-    Number(input.dcfValuationScore || 0) * 0.2 +
-    Number(input.earningsScore || 0) * 0.15 +
-    Number(input.moatScore || 0) * 0.12 +
-    Number(input.dividendScore || 0) * 0.04 +
-    Number(input.harvardDividendScore || 0) * 0.04
-  );
+  ) : null;
+  const fundamentalDataValid = input.fundamentalDataValid === true;
+  const fundamentalBlend = fundamentalDataValid ? measuredAverage([
+    { score: finiteScore(input.fundamentalScore), weight: 0.45 },
+    { score: finiteScore(input.dcfValuationScore), weight: 0.2 },
+    { score: finiteScore(input.earningsScore), weight: 0.15 },
+    { score: finiteScore(input.moatScore), weight: 0.12 },
+    { score: finiteScore(input.dividendScore), weight: 0.04 },
+    { score: finiteScore(input.harvardDividendScore), weight: 0.04 },
+  ], clampScore) : { score: null, coverage: 0 };
+  const fundamentalBlendScore = fundamentalBlend.score;
   // Correlated momentum, technical, and statistical observations form one evidence
   // family. Risk and portfolio fit form another. This prevents a single market move
   // or liquidity fact from earning several independent full-weight votes.
-  const marketEvidenceScore = clampScore(
-    momentumScore * 0.4 + Number(input.technicalScore || 0) * 0.35 + Number(input.statisticalScore || 0) * 0.25
-  );
-  const contextAvailable = input.macroScore != null && Number.isFinite(Number(input.macroScore));
-  const contextScore = contextAvailable ? clampScore(Number(input.macroScore) * 0.7 + Number(input.sectorScore || 0) * 0.3) : null;
-  const riskPortfolioScore = clampScore(Number(input.blendedRiskScore || 0) * 0.7 + Number(input.portfolioScore || 0) * 0.3);
-  const fundamentalDataValid = input.fundamentalDataValid === true;
+  const marketEvidence = measuredAverage([
+    { score: momentumScore, weight: 0.4 },
+    { score: finiteScore(input.technicalScore), weight: 0.35 },
+    { score: finiteScore(input.statisticalScore), weight: 0.25 },
+  ], clampScore);
+  const marketEvidenceScore = marketEvidence.score;
+  const macroKnown = finiteScore(input.macroScore) !== null;
+  const sectorKnown = finiteScore(input.sectorScore) !== null;
+  const contextBlend = macroKnown || sectorKnown ? measuredAverage([
+    { score: finiteScore(input.macroScore), weight: 0.7 },
+    { score: finiteScore(input.sectorScore), weight: 0.3 },
+  ], clampScore) : { score: null, coverage: 0 };
+  const contextScore = contextBlend.score;
+  const contextAvailable = contextScore !== null;
+  const riskBlend = measuredAverage([
+    { score: finiteScore(input.blendedRiskScore), weight: 0.7 },
+    { score: finiteScore(input.portfolioScore), weight: 0.3 },
+  ], clampScore);
+  const riskPortfolioScore = riskBlend.score;
   const groups = [
-    { name: "marketEvidence", score: marketEvidenceScore, weight: effectiveGroupWeights.marketEvidence, available: true },
-    { name: "fundamentals", score: fundamentalBlendScore, weight: effectiveGroupWeights.fundamentals, available: fundamentalDataValid },
+    { name: "marketEvidence", score: marketEvidenceScore, weight: effectiveGroupWeights.marketEvidence, available: marketEvidenceScore !== null },
+    { name: "fundamentals", score: fundamentalBlendScore, weight: effectiveGroupWeights.fundamentals, available: fundamentalDataValid && fundamentalBlendScore !== null },
     { name: "marketContext", score: contextScore, weight: effectiveGroupWeights.marketContext, available: contextAvailable },
-    { name: "riskAndPortfolio", score: riskPortfolioScore, weight: effectiveGroupWeights.riskAndPortfolio, available: true },
+    { name: "riskAndPortfolio", score: riskPortfolioScore, weight: effectiveGroupWeights.riskAndPortfolio, available: riskPortfolioScore !== null },
   ];
   const availableWeight = groups.filter((group) => group.available).reduce((sum, group) => sum + group.weight, 0);
-  const institutionalScore = clampScore(groups.filter((group) => group.available).reduce((sum, group) => sum + group.score * group.weight, 0) / availableWeight);
-  const componentTelemetry = groups.map((group) => ({ ...group, contribution: group.available ? Number(((group.score * group.weight) / availableWeight).toFixed(2)) : 0 }));
-  return { momentumScore, marketEvidenceScore, fundamentalBlendScore, contextScore, riskPortfolioScore, fundamentalDataValid, institutionalScore, reinforcementWeights: weights, effectiveGroupWeights, componentTelemetry };
+  const institutionalScore = availableWeight > 0
+    ? clampScore(groups.filter((group) => group.available).reduce((sum, group) => sum + group.score * group.weight, 0) / availableWeight)
+    : null;
+  const componentTelemetry = groups.map((group) => ({
+    ...group,
+    contribution: group.available && availableWeight > 0 ? Number(((group.score * group.weight) / availableWeight).toFixed(2)) : 0,
+  }));
+  return {
+    momentumScore,
+    marketEvidenceScore,
+    fundamentalBlendScore,
+    fundamentalCoverage: fundamentalBlend.coverage,
+    contextScore,
+    contextCoverage: contextBlend.coverage,
+    riskPortfolioScore,
+    riskCoverage: riskBlend.coverage,
+    fundamentalDataValid,
+    institutionalScore,
+    reinforcementWeights: weights,
+    effectiveGroupWeights,
+    componentTelemetry,
+  };
 }
 
 export function evaluateInstitutionalApproval(input = {}) {

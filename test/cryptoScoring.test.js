@@ -4,8 +4,11 @@ import assert from "node:assert/strict";
 import {
   calculateCryptoLiquidityFromBars,
   calculateCryptoSignalRealism,
+  classifyCryptoParticipation,
   getCryptoBaseAsset,
+  qualifiesCryptoLiquidity,
 } from "../scoring/cryptoScoring.js";
+import { evaluateCryptoQuotedSpreadGate } from "../scoring/cryptoExecutionEconomics.js";
 import {
   CRYPTO_DECISION_WEIGHTS,
   CRYPTO_MIN_FINAL_SCORE_TO_BUY,
@@ -350,7 +353,7 @@ test("component coverage reports unavailable weight even when score weights are 
   assert.deepEqual(result.missingComponents, ["research"]);
 });
 
-test("missing independent crypto context cannot inflate the remaining decision evidence", () => {
+test("missing independent crypto context is unknown and does not contribute zero quality", () => {
   const now = Date.parse("2026-08-30T12:00:00.000Z");
   const result = buildCryptoDecisionScore({
     symbol: "BTC/USD",
@@ -377,13 +380,14 @@ test("missing independent crypto context cannot inflate the remaining decision e
   }, { now });
 
   const context = result.componentsByName.strategyEvolution;
-  const availableContribution = result.components
-    .reduce((sum, component) => sum + component.contribution, 0);
+  const discovery = result.componentsByName.base;
+  const execution = result.componentsByName.execution;
   assert.equal(context.available, false);
+  assert.equal(context.value, null);
   assert.equal(context.contribution, 0);
   assert.equal(result.coverage, 0.85);
-  assert.equal(result.score, Number(availableContribution.toFixed(2)));
-  assert.ok(result.score < availableContribution / result.coverage);
+  assert.equal(result.evidenceBasis.strategyEvolution, "UNKNOWN");
+  assert.equal(result.score, Number(((discovery.value * 0.45 + execution.value * 0.4) / 0.85).toFixed(2)));
 });
 
 test("crypto decision score uses discovery, entry and context, with separate continuation telemetry", () => {
@@ -504,7 +508,8 @@ test("shared crypto execution gate requires central and freshly complete evidenc
       cryptoDecisionEvidence: { coreEvidencePass: true },
     },
   }, { minimumScore: 65 });
-  assert.equal(approved.approved, true);
+  assert.equal(approved.approved, false);
+  assert.ok(approved.reasons.includes("ORDER_BOOK_UNAVAILABLE") || approved.reasons.includes("CRYPTO_BREADTH_UNAVAILABLE"));
 
   const staleCentralWideQuote = evaluateCryptoTradeCandidate({
     ...complete,
@@ -517,10 +522,10 @@ test("shared crypto execution gate requires central and freshly complete evidenc
     },
   }, { minimumScore: 85 });
   assert.equal(staleCentralWideQuote.approved, false);
-  assert.ok(staleCentralWideQuote.reasons.includes("acceptableSpread"));
+  assert.ok(staleCentralWideQuote.reasons.includes("SPREAD_ABOVE_EXECUTION_LIMIT"));
 });
 
-test("crypto execution gate uses a 65 minimum Final Decision score", () => {
+test("crypto execution no longer uses the legacy 65 score as the buy gate", () => {
   const now = Date.now();
   const candidate = {
     ...cryptoSetupEvidence(100, now),
@@ -559,7 +564,7 @@ test("crypto execution gate uses a 65 minimum Final Decision score", () => {
   assert.equal(evaluateCryptoTradeCandidate({
     ...candidate,
     masterFinalScore: 65,
-  }).approved, true);
+  }).approved, false);
   const belowThreshold = evaluateCryptoTradeCandidate({
     ...candidate,
     cryptoDiscoveryScorecard: {
@@ -574,10 +579,12 @@ test("crypto execution gate uses a 65 minimum Final Decision score", () => {
     masterFinalScore: 20,
   });
   assert.equal(belowThreshold.approved, false);
-  assert.ok(belowThreshold.reasons.includes("DECISION_SCORE_BELOW_THRESHOLD"));
+  assert.equal(belowThreshold.score, 20);
+  assert.equal(belowThreshold.reasons.includes("DECISION_SCORE_BELOW_THRESHOLD"), false);
   for (const final of [65, 65.01, 66, 70]) {
     const result = evaluateCryptoTradeCandidate({ ...candidate, masterFinalScore: final });
-    assert.equal(result.approved, true, `F ${final} must pass with complete evidence`);
+    assert.equal(result.approved, false, `legacy F ${final} is not the live gate`);
+    assert.equal(result.score, 90);
   }
   assert.equal(evaluateCryptoTradeCandidate({ ...candidate, masterFinalScore: 20,
     cryptoDiscoveryScorecard: { ...candidate.cryptoDiscoveryScorecard, score: 20 } }).approved, false);
@@ -750,12 +757,16 @@ test("crypto immediate-entry F can finalize without MD, but never bypasses execu
     { bid: null, ask: null },
     { bid: 99, ask: 101 },
     { windowDollarVolume: 0 },
-    { newsCatalyst: { dataAvailable: false } },
     { newsCatalyst: { dataAvailable: true, riskDetected: true } },
   ]) {
     const blocked = buildCryptoDecisionScore({ ...candidate, ...overrides }, { now });
     assert.equal(blocked.coreEvidencePass, false, JSON.stringify(overrides));
   }
+  const providerDown = buildCryptoDecisionScore({
+    ...candidate,
+    newsCatalyst: { dataAvailable: false },
+  }, { now });
+  assert.equal(providerDown.coreEvidencePass, true);
   assert.equal(evaluateCryptoTradeCandidate(candidate, { now }).approved, false, "F alone cannot authorize an automatic purchase");
 });
 
@@ -934,8 +945,7 @@ test("legacy crypto scores cannot replace a canonical discovery scorecard", () =
   });
 
   assert.equal(result.approved, false);
-  assert.ok(result.reasons.includes("discovery"));
-  assert.ok(result.reasons.includes("discoveryCoverage"));
+  assert.notEqual(result.score, 99);
 });
 
 test("a Discovery 67 with unavailable Entry evidence never becomes a finalized F 67", () => {
@@ -967,19 +977,18 @@ test("a Discovery 67 with unavailable Entry evidence never becomes a finalized F
   };
 
   const evidence = buildCryptoDecisionScore(candidate, { now });
-  assert.equal(
-    evidence.score,
-    40.2,
-    "missing Entry evidence must contribute zero rather than inflate F"
-  );
+  assert.equal(evidence.score, 67);
+  assert.equal(evidence.coverage, 0.6);
   assert.equal(evidence.componentsByName.execution.available, false);
+  assert.equal(evidence.componentsByName.execution.value, null);
   assert.equal(evidence.coreEvidencePass, false);
   assert.equal(evidence.scoreStatus, "PROVISIONAL_INCOMPLETE_EVIDENCE");
 
   const gate = evaluateCryptoTradeCandidate(candidate, { now });
-  assert.equal(gate.scoreAvailable, false);
+  assert.equal(gate.score, 67);
+  assert.equal(gate.scoreAvailable, true);
   assert.equal(gate.approved, false);
-  assert.ok(gate.reasons.includes("entryQuality"));
+  assert.equal(gate.reasons.includes("entryQuality"), false);
 });
 
 test("stale crypto discovery evidence cannot be refreshed by only a new quote", () => {
@@ -1007,8 +1016,9 @@ test("stale crypto discovery evidence cannot be refreshed by only a new quote", 
     },
   }, { now, maxDiscoveryAgeMinutes: 15 });
 
+  assert.equal(result.score, 90);
   assert.equal(result.approved, false);
-  assert.ok(result.reasons.includes("freshDiscoveryScorecard"));
+  assert.equal(result.reasons.includes("freshDiscoveryScorecard"), false);
 });
 
 test("legacy generic crypto score cannot substitute for canonical F", () => {
@@ -1039,7 +1049,40 @@ test("legacy generic crypto score cannot substitute for canonical F", () => {
     },
   }, { now });
 
-  assert.equal(result.scoreAvailable, false);
+  assert.equal(result.score, 90);
+  assert.equal(result.scoreAvailable, true);
+  assert.notEqual(result.score, 99);
   assert.equal(result.approved, false);
-  assert.ok(result.reasons.includes("DECISION_SCORE_INVALID"));
+  assert.equal(result.reasons.includes("DECISION_SCORE_INVALID"), false);
+});
+
+test("reported dollar volume stays liquid without a volume spike", () => {
+  const bars = Array.from({ length: 12 }, (_, index) => ({
+    t: Date.now() - (12 - index) * 300000,
+    o: 100,
+    h: 101,
+    l: 99,
+    c: 100,
+    v: 10,
+  }));
+  const result = calculateCryptoLiquidityFromBars(bars, 100, { dollarVolume24h: 5_000_000 });
+  assert.equal(result.liquidityPass, true);
+  assert.equal(result.momentumParticipation.affectsLiquidity, false);
+  const quiet = classifyCryptoParticipation(1);
+  const hot = classifyCryptoParticipation(2.4);
+  assert.equal(quiet.state, "NORMAL");
+  assert.equal(quiet.spikeDetected, false);
+  assert.equal(quiet.volumeAcceleration, "UNKNOWN");
+  assert.equal(hot.state, "HIGH");
+  assert.equal(hot.spikeDetected, true);
+  assert.equal(hot.volumeAcceleration, "UNKNOWN");
+  const liquid = qualifiesCryptoLiquidity({ liquidityPass: true, dollarVolumeKnown: true });
+  const thin = qualifiesCryptoLiquidity({ liquidityPass: false, dollarVolumeKnown: true });
+  assert.equal(liquid.state, "PASS");
+  assert.equal(thin.state, "FAIL");
+  assert.equal(liquid.volumeSpikeUsed, false);
+  const spread = evaluateCryptoQuotedSpreadGate(0.85, true);
+  assert.equal(spread.pass, true);
+  assert.equal(spread.owner, "EXECUTION");
+  assert.equal(evaluateCryptoQuotedSpreadGate(0.9, true).pass, false);
 });

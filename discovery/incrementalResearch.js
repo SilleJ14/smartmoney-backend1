@@ -1,5 +1,7 @@
 // Quote-driven research, not order authorization. Never renew the age of the
 // underlying bars/catalyst evidence when recalculating from a newer quote.
+
+import { evidencePriority } from "./evidencePriority.js";
 export function researchEvidenceTime(row = {}) {
   return Date.parse(row.researchEvidenceAt || row.analysisUpdatedAt || row.scoreAssessmentUpdatedAt || row.decisionUpdatedAt || '');
 }
@@ -9,11 +11,15 @@ export function canReuseResearch(row = {}, now = Date.now()) {
   return Number.isFinite(at) && now >= at && now - at < 120000 &&
     Math.floor(at / 300000) === Math.floor(now / 300000) &&
     Array.isArray(row.chartBars) && row.chartBars.length >= 24 &&
-    Boolean(row.centralAutonomousDecisionCore) && !row.rawEarlyMover && row.setupRevalidationRequired !== true;
+    Boolean(row.centralAutonomousDecisionCore) && !row.rawEarlyMover && !rescorePending(row);
+}
+
+function rescorePending(row = {}) {
+  return row.rescoreStatus === "QUEUED" || row.rescoreStatus === "RUNNING" || row.setupRevalidationRequired === true;
 }
 
 export function needsCandidateResearch(row, now = Date.now()) {
-  return !canReuseResearch(row, now) || row.setupRevalidationRequired === true;
+  return !canReuseResearch(row, now) || rescorePending(row);
 }
 
 export function freshIncrementalResearch(rows = [], now = Date.now()) {
@@ -34,8 +40,9 @@ export function incrementalResearchForState(state, now = Date.now()) {
 }
 
 export function createIncrementalResearch({ review, publish, canRun = () => true,
-  accepts = () => true, now = Date.now, capacity = 120, batchSize = 4 }) {
+  accepts = () => true, now = Date.now, capacity = 120, batchSize = 4, onAuthorization = () => {} }) {
   const reviewed = new Map();
+  const handedOff = new Map();
   let running = false;
   const status = { completedBatches: 0, reviewed: 0, failures: 0, lastDurationMs: null, lastCompletedAt: null };
   function run(candidates = []) {
@@ -49,11 +56,36 @@ export function createIncrementalResearch({ review, publish, canRun = () => true
         latest.set(row.symbol, row);
       }
     }
-    const selected = [...latest.values()].filter(row => !protectedSymbols.has(row.symbol) &&
-      canReuseResearch(row, startedAt) && (!reviewed.has(row.symbol) || startedAt - reviewed.get(row.symbol) >= 5000))
-      .sort((a, b) => (reviewed.get(a.symbol) ?? -Infinity) - (reviewed.get(b.symbol) ?? -Infinity))
-      .slice(0, batchSize);
-    if (!selected.length) return { skipped: true };
+    const pool = [];
+    const authorization = [];
+    for (const row of latest.values()) {
+      if (protectedSymbols.has(row.symbol)) continue;
+      const score = evidencePriority(row, { now: startedAt });
+      if (score.authorizationRequired) {
+        const token = String(score.currentF);
+        if (handedOff.get(row.symbol) !== token) {
+          handedOff.set(row.symbol, token);
+          authorization.push(row);
+        }
+        continue;
+      }
+      if (!canReuseResearch(row, startedAt) || (reviewed.has(row.symbol) && startedAt - reviewed.get(row.symbol) < 5000)) continue;
+      pool.push({ row, priority: score.priority });
+    }
+    if (authorization.length) {
+      try { onAuthorization(authorization); } catch { status.failures += 1; }
+    }
+    const selected = pool
+      .sort((a, b) => {
+        const gap = b.priority - a.priority;
+        if (gap !== 0 && Number.isFinite(gap)) return gap;
+        const age = (reviewed.get(a.row.symbol) ?? -Infinity) - (reviewed.get(b.row.symbol) ?? -Infinity);
+        if (Number.isFinite(age) && age !== 0) return age;
+        return String(a.row.symbol).localeCompare(String(b.row.symbol));
+      })
+      .slice(0, batchSize)
+      .map((item) => item.row);
+    if (!selected.length) return { skipped: true, authorization: authorization.length };
     running = true;
     try {
       const rows = selected.map(row => {
@@ -80,7 +112,7 @@ export function createIncrementalResearch({ review, publish, canRun = () => true
       publish(rows);
       Object.assign(status, { completedBatches: status.completedBatches + 1, reviewed: status.reviewed + rows.length,
         lastCompletedAt: new Date(startedAt).toISOString(), lastDurationMs: now() - startedAt });
-      return { reviewed: rows.length };
+      return { reviewed: rows.length, authorization: authorization.length };
     } catch {
       status.failures += 1;
       return { failed: true };

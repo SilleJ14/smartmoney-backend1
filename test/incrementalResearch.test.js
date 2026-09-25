@@ -33,7 +33,8 @@ test('bounded fair batches serve stocks AND crypto with per-symbol revisit limit
   assert.equal(worker.run(rows).reviewed, 2);
   assert.equal(worker.run(rows).skipped, true);
   now += 5000; assert.equal(worker.run(rows).reviewed, 4);
-  assert.deepEqual(output[0], ['AAPL', 'MSFT', 'BTC/USD', 'ETH/USD']);
+  assert.deepEqual(output[0], ['AAPL', 'BTC/USD', 'ETH/USD', 'GDS']);
+  assert.deepEqual(output[1].sort(), ['MSFT', 'SOL/USD']);
   assert.equal(worker.getStatus().tracked, 6);
 });
 

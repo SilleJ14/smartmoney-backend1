@@ -1,4 +1,4 @@
-import { CRYPTO_MIN_FINAL_SCORE_TO_BUY } from "../scoring/componentScore.js";
+import { liveCryptoPermission } from "../scoring/cryptoAnalyticalShadow.js";
 import { applyCrossAssetCryptoContext } from "../scoring/cryptoContext.js";
 import {
   compareCanonicalSignals,
@@ -7,6 +7,7 @@ import {
 } from "../scoring/canonicalSignalRank.js";
 import { normalizeSignalScoreCollection } from "../scoring/signalScoreCompleteness.js";
 import { installCentralDecision } from "../scoring/installCentralDecision.js";
+import { applyMasterConsumption } from "../scoring/downstreamScoreBoundary.js";
 import { attachCryptoExecutableAllocation } from '../scoring/cryptoExecutableAllocation.js';
 import { attachStockExecutableAllocation } from '../scoring/stockExecutableAllocation.js';
 import { refreshCycleSubscriptions } from './refreshCycleSubscriptions.js';
@@ -1339,27 +1340,21 @@ export function createEngineCycle(dependencies) {
             decision.provisionalCryptoDecisionScore;
         }
         matchingSignal.centralAutonomousAction = decision.action;
+        matchingSignal.riskDecision = decision.riskDecision || matchingSignal.riskDecision || null;
         const finalMasterDecisionProfile =
           calculateFinalMasterDecisionProfile(matchingSignal);
+        const consumedMaster = applyMasterConsumption(matchingSignal, {
+          ...finalMasterDecisionProfile,
+          riskDecision: matchingSignal.riskDecision,
+        });
         matchingSignal.finalMasterDecisionProfile =
-          finalMasterDecisionProfile;
-        matchingSignal.masterFinalScore =
-          finalMasterDecisionProfile.finalScore;
-        if (!cryptoSignals.includes(matchingSignal)) {
-          // `stockDecisionScore` is the public F score. Keep it synchronized
-          // with the final master decision instead of leaving the earlier
-          // pre-final central score in this field.
-          matchingSignal.stockDecisionScore =
-            finalMasterDecisionProfile.finalScore;
-        }
+          consumedMaster.finalMasterDecisionProfile;
         matchingSignal.masterFinalSizingMultiplier =
           finalMasterDecisionProfile.finalSizingMultiplier;
         matchingSignal.masterExecutionDecision =
           finalMasterDecisionProfile.executionDecision;
         matchingSignal.finalExitProfile =
           finalMasterDecisionProfile.finalExitProfile;
-        matchingSignal.score =
-          finalMasterDecisionProfile.finalScore;
         matchingSignal.allocationMultiplier = Number(
           (
             Number(matchingSignal.allocationMultiplier || 1) *
@@ -1685,13 +1680,11 @@ export function createEngineCycle(dependencies) {
           },
         };
         const cryptoLiquidityPass = cryptoRealism.liquidityPass === true;
-        const decisionScore = Number(signal.cryptoDecisionScore ?? 0);
-        signal.qualifiedToBuy =
-          signal.qualifiedToBuy === true &&
-          cryptoLiquidityPass &&
-          cryptoRealism.spreadAvailable === true &&
-          Number(cryptoRealism.barsFound || 0) >= 10 &&
-          decisionScore >= CRYPTO_MIN_FINAL_SCORE_TO_BUY;
+        const cryptoLive = liveCryptoPermission(
+          signal.cryptoAnalyticalShadow
+          || signal.centralAutonomousDecisionCore?.cryptoDecisionEvidence?.cryptoAnalyticalShadow
+        );
+        signal.qualifiedToBuy = signal.qualifiedToBuy === true && cryptoLive.allowed;
         if (!cryptoLiquidityPass || cryptoRealism.spreadAvailable !== true) {
           signal.autoTradeApproved = false;
           signal.approved = false;
@@ -2768,7 +2761,7 @@ export function createEngineCycle(dependencies) {
         stockSignals,
         {
           now: outcomeNow,
-          maxSymbols: 20,
+          maxSymbols: 500,
           lastAttemptBySymbol: priorFollowupState.lastAttemptBySymbol,
         }
       );
@@ -2871,7 +2864,10 @@ export function createEngineCycle(dependencies) {
       const approvedCryptoSignals = cryptoSignals.filter(
         (signal) => signal.executionEligibility?.approved === true
           && hasExplicitTradeApproval(signal)
-          && getCanonicalFinalScore(signal) >= CRYPTO_MIN_FINAL_SCORE_TO_BUY
+          && liveCryptoPermission(
+            signal.cryptoAnalyticalShadow
+            || signal.centralAutonomousDecisionCore?.cryptoDecisionEvidence?.cryptoAnalyticalShadow
+          ).allowed
       );
       effectiveMode = selectSmartTradingMode({
         selectedMode: TRADING_MODE,

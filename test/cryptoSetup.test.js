@@ -27,7 +27,7 @@ test('normalized immutable bars reuse data without caching freshness or mutable 
 test('crypto retest supplies structure, volume, momentum, EMAs and explicit projected stop/target', () => {
   const setup = assessCryptoSetup(make(), { now });
   assert.equal(setup.eligible, true, JSON.stringify(setup));
-  assert.equal(setup.route, 'RETEST_CONTINUATION');
+  assert.equal(setup.route, 'RETEST');
   assert.equal(setup.volumeConfirmed, true);
   assert.equal(setup.ema.required, false);
   assert.ok(setup.ema.ema200 > 0);
@@ -38,10 +38,13 @@ test('crypto retest supplies structure, volume, momentum, EMAs and explicit proj
   assert.equal(assessCryptoSetup(short, { now }).ema.ema200, null);
   assert.equal(assessCryptoSetup(short, { now }).eligible, true, 'EMA200 missing is not an entry blocker');
 });
-test('zero-volume price moves, falling momentum and excessive extension cannot trigger crypto entry', () => {
+test('zero-volume breakouts fail their own volume rule, a chased price keeps the setup, and a price below the stop does not', () => {
   const zero = make(); zero.chartBars.forEach(b => { b.volume = 0; });
-  assert.ok(assessCryptoSetup(zero, { now }).reasons.includes('CRYPTO_TRADED_VOLUME_NOT_CONFIRMED'));
-  assert.equal(assessCryptoSetup({ ...make(), price: 110 }, { now }).eligible, false);
+  const quiet = assessCryptoSetup(zero, { now });
+  assert.equal(quiet.cryptoSetupAssessment.candidates.BREAKOUT.requiredEvidence.breakBarVolume, 'REJECT');
+  const chased = assessCryptoSetup({ ...make(), price: 110 }, { now });
+  assert.equal(chased.entryTiming, 'CHASED');
+  assert.equal(chased.eligible, true);
   assert.equal(assessCryptoSetup({ ...make(), price: 95 }, { now }).eligible, false);
 });
 test('a confirmed breakout is a separate entry route and does not require a retest', () => {
@@ -65,11 +68,14 @@ test('crypto history rejects malformed, future, gapped and stale observations; i
   }
   const s = make(); s.chartBars.push({ ...s.chartBars.at(-1), time: now - 1000 });
   assert.equal(completedCryptoBars(s.chartBars, now).length, 220, 'unfinished candle excluded; completed evidence is unchanged');
-  assert.equal(assessCryptoSetup({ ...make(), chartBars: make().chartBars.slice(-12) }, { now }).available, false);
+  const shortHistory = assessCryptoSetup({ ...make(), chartBars: make().chartBars.slice(-12) }, { now });
+  assert.equal(shortHistory.cryptoSetupAssessment.candidates.BREAKOUT.state, 'DATA_UNAVAILABLE');
 });
-test('BTC context is independent, small red moves are not crashes, unavailable context blocks orders', () => {
+test('BTC context is independent, small red moves are not crashes, missing BTC does not erase the setup', () => {
   const s = make(); assert.equal(cryptoSetupGate(s, { now }).approved, true);
-  assert.equal(cryptoSetupGate({ ...s, btcMarketContext: null }, { now }).approved, false);
+  const missingBtc = cryptoSetupGate({ ...s, btcMarketContext: null }, { now });
+  assert.equal(missingBtc.approved, true);
+  assert.equal(missingBtc.marketRegime.state, 'DATA_UNAVAILABLE');
   const bars = s.chartBars.slice(-24).map((b, i) => { const p = 100 - i * .4; return { ...b, open: p, close: p, high: p + .1, low: p - .1 }; });
   assert.equal(assessBtcContext(bars, { now }).block, true);
   const mild = bars.map((b, i) => { const p = 100 - i * .005; return { ...b, open: p, close: p, high: p + .01, low: p - .01 }; });
@@ -130,10 +136,12 @@ test('continuation opportunity can replace low early-D in F without changing D o
     liveQuoteSource: 'alpaca_crypto_latest', liveQuoteUpdatedAt: new Date(now).toISOString(), priceIsLive: true,
     newsCatalyst: { dataAvailable: true, riskDetected: false } };
   const result = buildCryptoDecisionScore(s, { now });
-  assert.equal(result.opportunityBasis, 'RETEST_CONTINUATION');
+  assert.equal(result.opportunityBasis, 'RETEST');
   assert.equal(result.earlyDiscovery.value, 55);
   assert.equal(result.componentsByName.base.value, result.setup.score);
   assert.equal(result.coreEvidencePass, true, JSON.stringify(result.missingCriticalEvidence));
   assert.equal(evaluateCryptoTradeCandidate(s, { now }).approved, false, 'F does not replace central authorization');
-  assert.equal(buildCryptoDecisionScore({ ...s, newsCatalyst: { dataAvailable: false } }, { now }).coreEvidencePass, false);
+  const providerDown = buildCryptoDecisionScore({ ...s, newsCatalyst: { dataAvailable: false, riskDetected: false } }, { now });
+  assert.equal(providerDown.componentsByName.base.value, result.componentsByName.base.value);
+  assert.equal(providerDown.missingCriticalEvidence.includes("newsRiskCoverage"), false);
 });

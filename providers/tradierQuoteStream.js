@@ -1,4 +1,5 @@
 import { normalizeTradierQuote } from './tradierMarketData.js';
+import { normalizeTradierPrint, normalizeTradierStreamBook } from '../market-data/normalizedQuote.js';
 import { readBoundedResponseJson, cancelResponseBody } from '../utils/boundedResponse.js';
 
 // One market-data session per server. Never submits orders or logs credentials.
@@ -15,7 +16,7 @@ export function createTradierQuoteStream({ apiKey, WebSocketImpl, onQuote,
     status = { ...status, connected: false, error: reason, retryAt };
   };
   const subscribe = () => socket?.send(JSON.stringify({ symbols, sessionid: session,
-    filter: ['quote'], linebreak: true, validOnly: true }));
+    filter: ['quote', 'trade', 'timesale'], linebreak: true, validOnly: true }));
   async function refresh(requested = []) {
     const next = [...new Set(requested.map(s => String(s).trim().toUpperCase()))]
       .filter(s => /^[A-Z][A-Z0-9.-]{0,9}$/.test(s)).slice(0, 120).sort();
@@ -68,10 +69,28 @@ export function createTradierQuoteStream({ apiKey, WebSocketImpl, onQuote,
             try {
               const event = JSON.parse(line);
               if (event.error) { fail('STREAM_PROVIDER_ERROR'); return; }
-              if (event.type !== 'quote' || !symbols.includes(event.symbol)) continue;
-              const quote = normalizeTradierQuote({ ...event, type: 'stock',
-                bid_date: event.biddate, ask_date: event.askdate }, { now: now() });
+              if (!symbols.includes(event.symbol)) continue;
+              const quote = event.type === 'quote'
+                ? normalizeTradierQuote({ ...event, type: 'stock',
+                  bid_date: event.biddate, ask_date: event.askdate }, { now: now() })
+                : event.type === 'trade' || event.type === 'timesale'
+                  ? normalizeTradierPrint(event)
+                  : null;
               if (!quote) continue;
+              if (event.type === 'quote') Object.assign(quote, normalizeTradierStreamBook(event, quote.liveQuoteUpdatedAt));
+              if (event.type !== 'quote') {
+                quote.symbol = event.symbol;
+                quote.eventType = 'trade';
+                quote.price = quote.lastTradePrice;
+                quote.current = quote.lastTradePrice;
+                quote.liveQuoteUpdatedAt = quote.lastTradeTimestamp;
+                quote.quoteFetchedAt = quote.lastTradeTimestamp;
+                quote.source = 'tradier_stock_quote';
+                quote.liveQuoteSource = 'tradier_stock_quote';
+                quote.priceIsLive = quote.lastTradeTimestamp
+                  ? now() - Date.parse(quote.lastTradeTimestamp) <= 5000
+                  : false;
+              }
               // Preserve the independent provider times, not the packet arrival time.
               onQuote(quote);
               failures = 0;

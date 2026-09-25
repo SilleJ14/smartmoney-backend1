@@ -14,6 +14,8 @@ function liveStock(now = Date.now(), extras = {}) {
     stockDecisionScore: 70,
     stockDecisionScoreAvailable: true,
     masterFinalScore: 70,
+    entryQualityScore: 80,
+    entryQualityScorecard: { approved: true, score: 80, coverage: 1 },
     current: 100,
     price: 100,
     bid: 99.95,
@@ -25,7 +27,14 @@ function liveStock(now = Date.now(), extras = {}) {
     spreadSource: "tradier_stock_quote",
     spreadAvailable: true,
     decisionUpdatedAt: iso,
-    chartBars: Array.from({ length: 24 }, () => ({ c: 100 })),
+    chartTimeframe: "5Min",
+    chartBars: Array.from({ length: 24 }, (_, index) => ({
+      time: now - (24 - index) * 300000,
+      open: 100,
+      high: 100.05,
+      low: 99.95,
+      close: 100,
+    })),
     centralAutonomousDecisionCore: { updatedAt: iso, action: "ALLOW" },
     researchEvidenceAt: iso,
     ...extras,
@@ -74,6 +83,67 @@ test("a locked live account cannot receive automatic stock approval or sizing", 
   assert.ok(sized.executionEligibility.reasons.includes("REAL_CASH_TRADING_LOCKED"));
 });
 
+test("a stale quote keeps a strong F and blocks buyable on execution", () => {
+  const now = Date.now();
+  const staleAt = new Date(now - 8400).toISOString();
+  const sized = attachStockExecutableAllocation(liveStock(now, {
+    liveQuoteUpdatedAt: staleAt,
+    spreadUpdatedAt: staleAt,
+    decisionUpdatedAt: staleAt,
+  }), { now, account, positions: [], config });
+  assert.equal(sized.opportunityLayers.F, 70);
+  assert.equal(sized.opportunityLayers.analyticalPass, true);
+  assert.equal(sized.opportunityLayers.X.state, "EXECUTION_NOT_READY");
+  assert.equal(sized.opportunityLayers.X.reasons.includes("QUOTE_STALE"), true);
+  assert.ok(sized.opportunityLayers.S.amount >= 25);
+  assert.equal(sized.opportunityLayers.buyable, false);
+  assert.equal(sized.opportunityLayers.blockedBy, "X");
+  assert.equal(sized.buyableNow, false);
+  assert.equal(sized.finalApprovedTradeAmount, 0);
+});
+
+test("missing mandatory news waits on evidence and does not fail F", () => {
+  const now = Date.now();
+  const sized = attachStockExecutableAllocation(liveStock(now, {
+    requireNewsRiskForEntry: true,
+    confirmations: { newsRiskAvailable: false },
+  }), { now, account, positions: [], config });
+  assert.equal(sized.opportunityLayers.F, 70);
+  assert.equal(sized.opportunityLayers.C.state, "DATA_UNAVAILABLE");
+  assert.equal(sized.opportunityLayers.C.news.state, "NEWS_UNAVAILABLE");
+  assert.equal(sized.opportunityLayers.blockedBy, "C");
+  assert.equal(sized.buyableNow, false);
+});
+
+test("negative news fails evidence only when that strategy requires the news check", () => {
+  const now = Date.now();
+  const required = attachStockExecutableAllocation(liveStock(now, {
+    requireNewsRiskForEntry: true,
+    confirmations: { newsRisk: true, newsRiskAvailable: true },
+  }), { now, account, positions: [], config });
+  assert.equal(required.opportunityLayers.C.state, "REJECT");
+  assert.equal(required.opportunityLayers.C.news.state, "NEGATIVE_CATALYST");
+  assert.equal(required.opportunityLayers.F, 70);
+  const optional = attachStockExecutableAllocation(liveStock(now, {
+    requireNewsRiskForEntry: false,
+    confirmations: { newsRisk: true, newsRiskAvailable: true },
+  }), { now, account, positions: [], config });
+  assert.equal(optional.opportunityLayers.C.state, "PASS");
+  assert.equal(optional.opportunityLayers.C.news.state, "NEGATIVE_CATALYST");
+});
+
+test("portfolio exposure blocks risk without changing F", () => {
+  const now = Date.now();
+  const sized = attachStockExecutableAllocation(liveStock(now, {
+    portfolioAction: "REDUCE_RISK",
+  }), { now, account, positions: [], config });
+  assert.equal(sized.opportunityLayers.F, 70);
+  assert.equal(sized.opportunityLayers.R.state, "REJECT");
+  assert.equal(sized.opportunityLayers.R.reasons.includes("PORTFOLIO_EXPOSURE_LIMIT"), true);
+  assert.equal(sized.opportunityLayers.blockedBy, "R");
+  assert.equal(sized.buyableNow, false);
+});
+
 test("stock F 69 is not buyable", () => {
   const now = Date.now();
   const sized = attachStockExecutableAllocation(liveStock(now, {
@@ -91,7 +161,7 @@ test("incremental research keeps a live stock size instead of wiping it", () => 
     review: (row) => attachStockExecutableAllocation(row, { now, account, positions: [], config }),
     publish: (rows) => published.push(...rows),
   });
-  const result = research.run([liveStock(now)]);
+  const result = research.run([liveStock(now, { authorizedDecisionValid: true })]);
   assert.equal(result.reviewed, 1);
   assert.equal(published[0].buyableNow, true);
   assert.ok(published[0].finalApprovedTradeAmount >= 25);

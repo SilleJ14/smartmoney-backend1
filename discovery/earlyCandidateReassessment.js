@@ -1,4 +1,7 @@
-// Bounded FIFO research: new names get a turn without waiting for a whole scan.
+// Bounded research queue. A higher-priority arrival replaces the lowest occupant
+// when the queue is full. Equal priority does not thrash an occupant.
+
+import { evidencePriority } from "./evidencePriority.js";
 export function freshEarlyAssessments(rows = [], now = Date.now()) {
   return (Array.isArray(rows) ? rows : []).slice(-60).filter(row => {
     const age = now - Date.parse(row.analysisUpdatedAt || '');
@@ -11,14 +14,22 @@ export function createEarlyCandidateReassessment({ analyze, publish, trace = () 
   const queue = new Map(), reviewed = new Map(), events = new Map();
   let running = null, lastStartedAt = -Infinity;
   const status = { completedBatches: 0, failures: 0, lastScored: 0, lastCompletedAt: null, lastDurationMs: null,
-    deferredByCapacity: 0, maxObservedQueueWaitMs: 0, lastQueueWaitMs: null };
+    deferredByCapacity: 0, evictedByPriority: 0, maxObservedQueueWaitMs: 0, lastQueueWaitMs: null };
+  function queueRank(candidate) {
+    const explicit = Math.max(0, Math.min(3, Number(candidate?.reassessmentPriority) || 0));
+    if (!candidate || typeof candidate !== "object") return explicit;
+    const evidence = evidencePriority(candidate, { now: now() });
+    const measured = evidence.currentF !== null || evidence.currentD > 0;
+    const base = measured ? evidence.priority : explicit;
+    return explicit >= 3 ? base + 1000 : base;
+  }
   function enqueue(candidates) {
     for (const candidate of candidates.slice(0, capacity * 2)) {
       const symbol = String(candidate?.symbol || candidate || '').toUpperCase();
       if (!acceptsSymbol(symbol)) continue;
       const event = typeof candidate?.reassessmentEvent === 'string' ? candidate.reassessmentEvent.slice(0, 160) : null;
       const changed = event && event !== events.get(symbol);
-      const priority = Math.max(0, Math.min(3, Number(candidate?.reassessmentPriority) || 0));
+      const priority = queueRank(candidate);
       if (queue.has(symbol)) {
         const pending = queue.get(symbol);
         pending.priority = Math.max(pending.priority, priority);
@@ -27,7 +38,23 @@ export function createEarlyCandidateReassessment({ analyze, publish, trace = () 
       // New material evidence may bypass the normal cooldown, but not a burst
       // bound of five seconds. Identical events never bypass it.
       if (reviewed.has(symbol) && now() - reviewed.get(symbol) < (changed ? 5000 : retryMs)) continue;
-      if (queue.size >= capacity) { status.deferredByCapacity++; trace({ symbol, stage: 'EARLY_ANALYSIS_DEFERRED', reasons: ['QUEUE_CAPACITY'] }); continue; }
+      if (queue.size >= capacity) {
+        let victim = null;
+        for (const [queuedSymbol, pending] of queue) {
+          if (!victim || pending.priority < victim.priority || (pending.priority === victim.priority && pending.at >= victim.at)) {
+            victim = { symbol: queuedSymbol, priority: pending.priority, at: pending.at };
+          }
+        }
+        if (victim && priority > victim.priority) {
+          queue.delete(victim.symbol);
+          status.evictedByPriority += 1;
+          trace({ symbol: victim.symbol, stage: 'EARLY_ANALYSIS_EVICTED', reasons: ['HIGHER_PRIORITY_ARRIVAL'] });
+        } else {
+          status.deferredByCapacity++;
+          trace({ symbol, stage: 'EARLY_ANALYSIS_DEFERRED', reasons: ['QUEUE_CAPACITY'] });
+          continue;
+        }
+      }
       if (event) events.set(symbol, event);
       while (events.size > capacity) events.delete(events.keys().next().value);
       queue.set(symbol, { at: now(), priority }); trace({ symbol, stage: 'EARLY_ANALYSIS_QUEUED', trigger: event });
