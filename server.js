@@ -3266,6 +3266,23 @@ function buildBackendHealthPayload(clock = {}) {
       earlyMovers: Array.isArray(engineState.liveEarlyMoverSymbols) ? engineState.liveEarlyMoverSymbols.length : 0,
       lastSuccessfulCycleAt: engineState.lastSuccessfulCycleAt || null,
     },
+    forex: {
+      autoEnabled: forexAutoEnabled === true,
+      signalCount: Array.isArray(engineState.forexEngine?.signals) ? engineState.forexEngine.signals.length : 0,
+      candidateCount: Array.isArray(engineState.forexEngine?.candidates) ? engineState.forexEngine.candidates.length : 0,
+      halt: engineState.forexEngine?.halt || "NOT_STARTED",
+      lastError: engineState.forexEngine?.lastError || engineState.forexLastError?.message || null,
+      lastCycleAt: engineState.forexEngine?.lastCycleAt || null,
+      calendar: forexCalendarProvider?.getStatus?.() || null,
+      ledger: {
+        available: forexStore?.available === true,
+        durable: forexStore?.isDurable?.() === true,
+      },
+      calendarStore: {
+        available: forexCalendarStore?.available === true,
+        durable: forexCalendarStore?.isDurable?.() === true,
+      },
+    },
     stockUniverse: engineState.stockDiscoveryFunnel || null,
     outcomeWorker: engineState.fullPopulationOutcomeWorker ? {
       ok: engineState.fullPopulationOutcomeWorker.ok,
@@ -24397,6 +24414,12 @@ const forexStore = createForexStore({
   filePath: process.env.FOREX_LEDGER_PATH,
   persistentRoot: forexPersistentRoot,
 });
+const forexCalendarStore = createForexStore({
+  useFile: true,
+  filePath: process.env.FOREX_CALENDAR_CACHE_PATH ||
+    (forexPersistentRoot ? path.join(forexPersistentRoot, "forex-calendar-cache.json") : undefined),
+  persistentRoot: forexPersistentRoot,
+});
 const forexDataQualityMonitor = createForexDataQualityMonitor();
 const forexProviderContext = createForexProviderContextService({
   fredApiKey: process.env.FRED_API_KEY,
@@ -24428,7 +24451,7 @@ if (forexPersistentRoot) {
 const forexCalendarProvider = createEconomicCalendarProvider({
   apiKey: FINNHUB_API_KEY,
   jblankedApiKey: process.env.JBLANKED_API_KEY,
-  store: forexStore,
+  store: forexCalendarStore,
   provider: process.env.FOREX_CALENDAR_PROVIDER || (process.env.FOREX_CALENDAR_PATH ? "file" : "jblanked"),
   filePath: process.env.FOREX_CALENDAR_PATH,
   jblankedRefreshMs: Number(process.env.JBLANKED_REFRESH_MS) || 5 * 60 * 1000,

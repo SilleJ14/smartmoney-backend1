@@ -194,6 +194,39 @@ function toSignal(instrument, identity, quote, row, result, recovered) {
   };
 }
 
+function publishUnavailableForexUniverse(snapshot, instruments = []) {
+  if (snapshot.signals.length) return snapshot;
+  const reason = snapshot.halt && snapshot.halt !== "CLEAR"
+    ? snapshot.halt
+    : snapshot.lastError
+      ? "SCAN_FAILED"
+      : "FOREX_DATA_UNAVAILABLE";
+  snapshot.signals = instruments.map((instrument) => ({
+    symbol: toDisplayPair(instrument),
+    instrument,
+    assetClass: "forex",
+    forexState: "blocked",
+    forexSide: null,
+    reason,
+    blockers: [reason],
+    price: null,
+    livePrice: null,
+    displayPrice: null,
+    bid: null,
+    ask: null,
+    liveQuoteUpdatedAt: null,
+    forexOpportunityScore: null,
+    forexProbability: null,
+    forexExpectedValueR: null,
+    forexDecision: { action: "WAIT", decision: "WAIT", reason },
+    raw: {
+      forexState: "blocked",
+      forexGates: { trend: false, setup: false, entry: false, risk: false },
+    },
+  }));
+  return snapshot;
+}
+
 export function selectForexSignals(sources, fallbacks, recovered) {
   const selected = new Map(fallbacks);
   const grouped = new Map();
@@ -290,6 +323,7 @@ export async function runForexEngineCycle({
     const recovered = await supervisor.recover({ credentialsOk: false, forexAutoEnabled });
     Object.assign(snapshot, recovered, { halt: "MISSING_CREDENTIALS", haltState: "MISSING_CREDENTIALS" });
     snapshot.operating = recovered.operating;
+    publishUnavailableForexUniverse(snapshot, spec.scanInstruments);
     snapshot.decisionDiagnostics = forexDecisionDiagnostics(snapshot, spec.scanInstruments);
     return snapshot;
   }
@@ -297,6 +331,7 @@ export async function runForexEngineCycle({
     snapshot.halt = "LIVE_BLOCKED";
     snapshot.haltState = "LIVE_BLOCKED";
     snapshot.operating = operatingStatus({ connected: false, forexAutoEnabled, halt: "LIVE_BLOCKED" });
+    publishUnavailableForexUniverse(snapshot, spec.scanInstruments);
     snapshot.decisionDiagnostics = forexDecisionDiagnostics(snapshot, spec.scanInstruments);
     return snapshot;
   }
@@ -308,6 +343,7 @@ export async function runForexEngineCycle({
       snapshot.haltState = snapshot.halt;
       snapshot.lastError = String(error.message || error);
       snapshot.operating = operatingStatus({ connected: false, forexAutoEnabled, halt: snapshot.halt });
+      publishUnavailableForexUniverse(snapshot, spec.scanInstruments);
       snapshot.decisionDiagnostics = forexDecisionDiagnostics(snapshot, spec.scanInstruments);
       return snapshot;
     }
@@ -1009,6 +1045,7 @@ export async function runForexEngineCycle({
     }
     snapshot.operating = operatingStatus({ connected: Boolean(snapshot.account), forexAutoEnabled, halt: snapshot.halt });
   }
+  publishUnavailableForexUniverse(snapshot, spec.scanInstruments);
   snapshot.decisionDiagnostics = forexDecisionDiagnostics(snapshot, spec.scanInstruments);
   snapshot.dataQuality = dataQualityMonitor?.snapshot?.() || null;
   snapshot.journal = journal?.health?.() || {

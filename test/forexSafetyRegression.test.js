@@ -60,6 +60,50 @@ test("file durability requires explicit containment in persistent root and seria
   assert.deepEqual((await createFileStore({ filePath, persistentRoot: dir }).load()).audits, ["one", "two"]);
 });
 
+test("persistent ledger reclaims an expired lock from a replaced Render instance", async (t) => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), "forex-stale-lock-"));
+  t.after(() => fs.rmSync(dir, { recursive: true, force: true }));
+  const filePath = path.join(dir, "ledger.json");
+  const nowAt = Date.parse("2026-10-02T09:00:00.000Z");
+  const store = createFileStore({ filePath, persistentRoot: dir, staleLockMs: 1000, now: () => nowAt });
+  fs.writeFileSync(`${filePath}.lock`, JSON.stringify({
+    pid: 42,
+    host: "retired-render-instance",
+    acquiredAt: new Date(nowAt - 2000).toISOString(),
+  }));
+  await store.commit((ledger) => ledger.audits.push("recovered"));
+  assert.deepEqual((await store.load()).audits, ["recovered"]);
+  assert.equal(fs.existsSync(`${filePath}.lock`), false);
+});
+
+test("persistent ledger does not steal a fresh lock from another instance", async (t) => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), "forex-fresh-lock-"));
+  t.after(() => fs.rmSync(dir, { recursive: true, force: true }));
+  const filePath = path.join(dir, "ledger.json");
+  const nowAt = Date.parse("2026-10-02T09:00:00.000Z");
+  const store = createFileStore({ filePath, persistentRoot: dir, staleLockMs: 1000, now: () => nowAt });
+  fs.writeFileSync(`${filePath}.lock`, JSON.stringify({
+    pid: 42,
+    host: "active-render-instance",
+    acquiredAt: new Date(nowAt - 500).toISOString(),
+  }));
+  await assert.rejects(store.commit((ledger) => ledger.audits.push("unsafe")), /FOREX_LEDGER_LOCKED/);
+  assert.deepEqual((await store.load()).audits, []);
+});
+
+test("forex publishes its configured universe when credentials are unavailable", async () => {
+  const spec = { ...FOREX_SPEC, scanInstruments: ["EUR_USD", "GBP_USD"] };
+  const snapshot = await runForexEngineCycle({
+    client: { token: "", liveHost: false },
+    store: createMemoryStore({ treatAsDurable: true }),
+    spec,
+    now,
+  });
+  assert.equal(snapshot.halt, "MISSING_CREDENTIALS");
+  assert.deepEqual(snapshot.signals.map((row) => row.symbol), ["EUR/USD", "GBP/USD"]);
+  assert.ok(snapshot.signals.every((row) => row.forexState === "blocked" && row.price === null));
+});
+
 test("daily baseline rolls at UTC midnight and transfers are applied exactly once", () => {
   const ledger = emptyLedger();
   const account = { id: "a", NAV: 1000, lastTransactionID: "1" };

@@ -33,7 +33,10 @@ test("missing OANDA credentials halt the forex engine without touching Autopilot
   assert.equal(snapshot.halt, "MISSING_CREDENTIALS");
   assert.equal(snapshot.forexAutoEnabled, true);
   assert.equal(snapshot.executionReady, false);
-  assert.equal(snapshot.signals.length, 0);
+  assert.equal(snapshot.signals.length, FOREX_SPEC.scanInstruments.length);
+  assert.ok(snapshot.signals.every((row) =>
+    row.forexState === "blocked" && row.reason === "MISSING_CREDENTIALS" && row.price === null
+  ));
 });
 
 test("live OANDA host cannot place forex orders", async () => {

@@ -3,6 +3,33 @@ import path from "node:path";
 import os from "node:os";
 
 const queues = new Map();
+const DEFAULT_STALE_LOCK_MS = 2 * 60 * 1000;
+
+function lockAgeMs(lockPath, owner, now) {
+  const acquiredAt = Date.parse(String(owner?.acquiredAt || ""));
+  if (Number.isFinite(acquiredAt)) return Math.max(0, now - acquiredAt);
+  try { return Math.max(0, now - fs.statSync(lockPath).mtimeMs); }
+  catch { return Infinity; }
+}
+
+export function reclaimableForexLock({
+  lockPath,
+  owner,
+  now = Date.now(),
+  hostname = os.hostname(),
+  staleLockMs = DEFAULT_STALE_LOCK_MS,
+  processAlive = (pid) => {
+    try { process.kill(pid, 0); return true; }
+    catch (error) { return error.code !== "ESRCH"; }
+  },
+} = {}) {
+  const ageMs = lockAgeMs(lockPath, owner, now);
+  if (owner?.host === hostname && Number.isInteger(owner?.pid) && owner.pid > 0) {
+    return !processAlive(owner.pid);
+  }
+  return ageMs >= staleLockMs;
+}
+
 export function compactForexLedger(ledger, archive) {
   const trim = (key, limit) => {
     if (ledger[key].length <= limit) return;
@@ -111,7 +138,12 @@ export function createMemoryStore({ treatAsDurable = false } = {}) {
   };
 }
 
-export function createFileStore({ filePath, persistentRoot } = {}) {
+export function createFileStore({
+  filePath,
+  persistentRoot,
+  staleLockMs = DEFAULT_STALE_LOCK_MS,
+  now = Date.now,
+} = {}) {
   const resolved = path.resolve(filePath || path.join(process.cwd(), "data", "forex-ledger.json"));
   let available = true;
 
@@ -175,19 +207,23 @@ export function createFileStore({ filePath, persistentRoot } = {}) {
         let lock;
         try { lock = fs.openSync(lockPath, "wx"); }
         catch {
-          // Reclaim only a provably dead process on this host. Unknown owners fail closed.
           try {
-            const owner = JSON.parse(fs.readFileSync(lockPath, "utf8"));
-            if (owner.host !== os.hostname() || !Number.isInteger(owner.pid) || owner.pid <= 0) throw new Error("UNKNOWN_OWNER");
-            let dead = false;
-            try { process.kill(owner.pid, 0); } catch (error) { dead = error.code === "ESRCH"; }
-            if (!dead) throw new Error("ACTIVE_OWNER");
+            let owner = null;
+            try { owner = JSON.parse(fs.readFileSync(lockPath, "utf8")); }
+            catch { /* an interrupted lock write is reclaimable only after its lease expires */ }
+            if (!reclaimableForexLock({ lockPath, owner, now: now(), staleLockMs })) {
+              throw new Error("ACTIVE_OWNER");
+            }
             fs.unlinkSync(lockPath);
             lock = fs.openSync(lockPath, "wx");
           } catch { throw new Error("FOREX_LEDGER_LOCKED"); }
         }
         try {
-          fs.writeFileSync(lock, JSON.stringify({ pid: process.pid, host: os.hostname() }));
+          fs.writeFileSync(lock, JSON.stringify({
+            pid: process.pid,
+            host: os.hostname(),
+            acquiredAt: new Date(now()).toISOString(),
+          }));
           fs.fsyncSync(lock);
           const next = read();
           const result = await mutator(next);
@@ -224,6 +260,8 @@ export function createForexStore(options = {}) {
     return createFileStore({
       filePath: filePath || path.join(os.tmpdir(), "smartmoney-forex-ledger.json"),
       persistentRoot: options.persistentRoot || process.env.FOREX_PERSISTENT_ROOT,
+      staleLockMs: options.staleLockMs,
+      now: options.now,
     });
   }
   return createMemoryStore({ treatAsDurable: false });

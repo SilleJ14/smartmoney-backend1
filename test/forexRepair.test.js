@@ -187,6 +187,9 @@ test("forex protection can run while independent discovery is blocked",async()=>
   const server=fs.readFileSync(new URL('../server.js',import.meta.url),'utf8');
   const runtime=server.slice(server.indexOf('function getForexEngineRuntime'),server.indexOf('const forexScheduler'));
   assert.doesNotMatch(runtime,/\bemergencyStopActive\b|\bautoTradingEnabled\b/);
+  assert.match(server, /const forexCalendarStore = createForexStore/);
+  assert.match(server, /store: forexCalendarStore/);
+  assert.match(server, /calendarStore:\s*\{/);
 });
 test("missing forex protection closes verified exposure with Autopilot off",async()=>{
   const f=await fixture();f.setAuto(false);let closed=0;
