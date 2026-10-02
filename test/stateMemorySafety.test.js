@@ -275,15 +275,15 @@ test("loader backs up migratable state and archives state above the hard budget"
 
 test("memory guard pauses heavy work before the configured hard limit", () => {
   const normal = buildMemoryGuardSnapshot(
-    { rss: 500 * 1024 * 1024, heapUsed: 300, heapTotal: 400, external: 0 },
+    { rss: 400 * 1024 * 1024, heapUsed: 300, heapTotal: 400, external: 0 },
     { limitMb: 2048, softRatio: 0.72, hardRatio: 0.85, heapLimitMb: 1024 }
   );
   const elevated = buildMemoryGuardSnapshot(
-    { rss: 1600 * 1024 * 1024, heapUsed: 300, heapTotal: 400, external: 0 },
+    { rss: 500 * 1024 * 1024, heapUsed: 300, heapTotal: 400, external: 0 },
     { limitMb: 2048, softRatio: 0.72, hardRatio: 0.85, heapLimitMb: 1024 }
   );
   const critical = buildMemoryGuardSnapshot(
-    { rss: 1800 * 1024 * 1024, heapUsed: 300, heapTotal: 400, external: 0 },
+    { rss: 650 * 1024 * 1024, heapUsed: 300, heapTotal: 400, external: 0 },
     { limitMb: 2048, softRatio: 0.72, hardRatio: 0.85, heapLimitMb: 1024 }
   );
 

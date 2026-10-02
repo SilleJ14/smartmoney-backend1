@@ -22,6 +22,9 @@ export function detectMemoryBudget({ configured = process.env.RENDER_MEMORY_LIMI
     ?? { limitMb: 512, limitSource: 'conservative-fallback' };
 }
 const detectedBudget = detectMemoryBudget();
+// 0.8 decimal GB of total RSS, not merely the JavaScript heap. This is an
+// admission-control target; only the host/container can enforce a hard cap.
+export const PROCESS_RSS_TARGET_BYTES = 800_000_000;
 
 export function buildMemoryGuardSnapshot(
   memory = process.memoryUsage(),
@@ -36,11 +39,13 @@ export function buildMemoryGuardSnapshot(
     heapLimitMb,
   } = {}
 ) {
-  const safeLimitMb = positive(limitMb) ?? detectedBudget.limitMb;
-  softRatio = positive(softRatio) && softRatio < 1 ? softRatio : 0.60;
+  const containerLimitMb = positive(limitMb) ?? detectedBudget.limitMb;
+  const safeLimitMb = Math.min(containerLimitMb, PROCESS_RSS_TARGET_BYTES / 1048576);
+  softRatio = positive(softRatio) && softRatio < 1 ? Math.min(softRatio, 0.60) : 0.60;
   hardRatio = positive(hardRatio) && hardRatio > softRatio && hardRatio < 1
     ? hardRatio
     : Math.max(0.75, (softRatio + 1) / 2);
+  hardRatio = Math.min(hardRatio, 0.75);
   heapSoftRatio = positive(heapSoftRatio) && heapSoftRatio < 1 ? heapSoftRatio : 0.5;
   heapHardRatio = positive(heapHardRatio) && heapHardRatio > heapSoftRatio && heapHardRatio < 1
     ? heapHardRatio
@@ -67,6 +72,9 @@ export function buildMemoryGuardSnapshot(
     heapTotalMb,
     externalMb,
     limitMb: safeLimitMb,
+    containerLimitMb,
+    targetRssBytes: PROCESS_RSS_TARGET_BYTES,
+    hardCapEnforced: false,
     limitSource: limitMb === detectedBudget.limitMb ? detectedBudget.limitSource : 'explicit',
     heapLimitMb: heapLimit,
     heapUsagePercent: Number((heapRatio * 100).toFixed(1)),

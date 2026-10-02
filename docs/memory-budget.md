@@ -1,5 +1,19 @@
 # Backend memory budget
 
+## October 2, 2026: 0.8 GB target
+
+The RSS working budget is the smaller of the container limit and 800,000,000
+bytes (0.8 decimal GB / 762.94 MiB). Heavy discovery pauses at 60% of that
+budget and reports critical pressure at 75%, leaving headroom for in-flight
+work and position protection. Environment ratio overrides cannot move these
+thresholds later. Smaller containers retain their smaller budget.
+
+Health distinguishes `containerLimitMb` from effective `limitMb` and reports
+`hardCapEnforced: false`. Admission control cannot guarantee maximum RSS.
+The release-load test uses the production 192 MiB old-space setting and fails
+at 800,000,000 bytes RSS instead of the previous 1536 MiB ceiling.
+These changes do not deploy or change platform settings.
+
 `npm start` runs Node with `--max-old-space-size=192 --max-semi-space-size=16`.
 These bound old-space and young-generation allocation space, not total process
 RSS. Buffers, native allocations, code and other heap

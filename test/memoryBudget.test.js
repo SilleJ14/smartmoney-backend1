@@ -3,6 +3,16 @@ import assert from 'node:assert/strict';
 import { detectMemoryBudget, buildMemoryGuardSnapshot } from '../state/memoryGuard.js';
 
 const missing = () => { throw new Error('unavailable'); };
+test('2 GB hosts throttle before the 0.8 GB RSS target even with loose ratios', () => {
+  const status = buildMemoryGuardSnapshot({ rss: 610_000_000, heapUsed: 20_000_000 },
+    { limitMb: 2048, heapLimitMb: 256, softRatio: .95, hardRatio: .99 });
+  assert.equal(status.containerLimitMb, 2048);
+  assert.equal(status.targetRssBytes, 800_000_000);
+  assert.equal(status.limitMb * 1048576, 800_000_000);
+  assert.equal(status.pressure, 'critical');
+  assert.equal(status.shouldPauseHeavyWork, true);
+  assert.equal(status.hardCapEnforced, false);
+});
 test('container limit wins over an erroneously configured 2 GB budget', () => {
   const budget = detectMemoryBudget({ configured: 2048, constrained: 0,
     read: path => path.endsWith('memory.max') ? String(512 * 1048576) : 'max' });
