@@ -100,14 +100,19 @@ export function applyTradeTickWithoutClearingAlpacaBook(previous = {}, incoming 
 
 export function selectAlpacaCryptoStreamSymbols({
   symbols = [],
+  supportedSymbols = null,
   quotes = {},
   scores = {},
   heldSymbols = [],
   pinnedSymbols = [],
+  prioritySymbols = ["BTC/USD", "ETH/USD", "SOL/USD"],
   limit = 120,
   now = Date.now(),
   maxAgeSeconds = 5,
 } = {}) {
+  const supported = Array.isArray(supportedSymbols)
+    ? new Set(supportedSymbols.map((symbol) => String(symbol || "").toUpperCase()))
+    : null;
   const held = new Set(
     (Array.isArray(heldSymbols) ? heldSymbols : [])
       .map((symbol) => String(symbol || "").toUpperCase())
@@ -117,6 +122,7 @@ export function selectAlpacaCryptoStreamSymbols({
     (Array.isArray(symbols) ? symbols : [])
       .map((symbol) => String(symbol || "").toUpperCase())
       .filter((symbol) => /^[A-Z0-9]+\/USD$/.test(symbol))
+      .filter((symbol) => !supported || supported.has(symbol))
   )];
   const ranked = [...unique].sort((left, right) => {
     const heldGap = Number(held.has(right)) - Number(held.has(left));
@@ -134,6 +140,11 @@ export function selectAlpacaCryptoStreamSymbols({
       .map((symbol) => String(symbol || "").toUpperCase())
       .filter((symbol) => unique.includes(symbol))
   )];
+  const priority = [...new Set(
+    (Array.isArray(prioritySymbols) ? prioritySymbols : [])
+      .map((symbol) => String(symbol || "").toUpperCase())
+      .filter((symbol) => unique.includes(symbol))
+  )];
   const selected = [];
   const seen = new Set();
   const add = (symbol) => {
@@ -141,16 +152,20 @@ export function selectAlpacaCryptoStreamSymbols({
     seen.add(symbol);
     selected.push(symbol);
   };
-  // Held names and the current socket set stay put. Ranking only fills empty
-  // slots so a stale book does not unsubscribe a live coin every few seconds.
+  // Protect positions and core market context first. Keep only a bounded part
+  // of the old socket set pinned so higher-ranked executable setups can enter.
   for (const symbol of unique.filter((symbol) => held.has(symbol))) add(symbol);
-  for (const symbol of pinned) add(symbol);
+  for (const symbol of priority) add(symbol);
+  const rankedReserve = Math.min(Math.max(1, Math.ceil(cap / 2)), Math.max(0, cap - selected.length));
+  const pinnedLimit = Math.max(0, cap - selected.length - rankedReserve);
+  for (const symbol of pinned.slice(0, pinnedLimit)) add(symbol);
   for (const symbol of ranked) add(symbol);
   return selected;
 }
 
 export function selectCryptoRestQuoteBatch({
   symbols = [],
+  supportedSymbols = null,
   streamSymbols = [],
   quotes = {},
   batchSize = CRYPTO_REST_QUOTE_BATCH_SIZE,
@@ -159,9 +174,13 @@ export function selectCryptoRestQuoteBatch({
   maxAgeSeconds = 5,
   streamConnected = true,
 } = {}) {
+  const supported = Array.isArray(supportedSymbols)
+    ? new Set(supportedSymbols.map((symbol) => String(symbol || "").toUpperCase()))
+    : null;
   const needRest = (Array.isArray(symbols) ? symbols : [])
     .map((symbol) => String(symbol || "").toUpperCase())
     .filter((symbol) => /^[A-Z0-9]+\/USD$/.test(symbol))
+    .filter((symbol) => !supported || supported.has(symbol))
     .filter((symbol, index, rows) => rows.indexOf(symbol) === index)
     .filter((symbol) => !cryptoQuoteHasFreshAlpacaBook(quotes[symbol], { now, maxAgeSeconds }));
   const size = Math.max(1, Number(batchSize) || CRYPTO_REST_QUOTE_BATCH_SIZE);

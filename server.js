@@ -18207,6 +18207,9 @@ function computeTechnicals(bars = []) {
   };
 }
 let cryptoAssetUniverseCache = { at: 0, symbols: [] };
+function getAlpacaExecutableCryptoSymbols() {
+  return resolveCryptoAssetUniverse({ cached: cryptoAssetUniverseCache.symbols });
+}
 async function getCryptoAssets() {
   try {
     const assets = await alpacaTradingRequest(
@@ -24427,6 +24430,7 @@ const forexCalendarProvider = createEconomicCalendarProvider({
   store: forexStore,
   provider: process.env.FOREX_CALENDAR_PROVIDER || (process.env.FOREX_CALENDAR_PATH ? "file" : "jblanked"),
   filePath: process.env.FOREX_CALENDAR_PATH,
+  jblankedRefreshMs: Number(process.env.JBLANKED_REFRESH_MS) || 5 * 60 * 1000,
   timezone: process.env.FOREX_CALENDAR_TIMEZONE || "",
 });
 const forexStreams = createOandaStreamSupervisor({
@@ -32476,6 +32480,7 @@ async function refreshActiveCandidateQuotes(symbols = []) {
   const streamStatus = engineState.alpacaCryptoStreamState || {};
   const restBatch = selectCryptoRestQuoteBatch({
     symbols: staleCrypto,
+    supportedSymbols: getAlpacaExecutableCryptoSymbols(),
     streamSymbols: streamStatus.subscribedSymbols || [],
     quotes: engineState.liveQuoteCache || {},
     cursor: cryptoRestQuoteRefreshCursor,
@@ -33759,6 +33764,7 @@ alpacaCryptoStream = createAlpacaCryptoStream({
       ...(engineState.lastCryptoSignals || []).map((item) => item.symbol),
       ...(engineState.topCryptoSignals || []).map((item) => item.symbol),
     ].map((symbol) => normalizeSymbol(symbol)),
+    supportedSymbols: getAlpacaExecutableCryptoSymbols(),
     quotes: engineState.liveQuoteCache || {},
     scores: Object.fromEntries(
       [...(engineState.lastCryptoSignals || []), ...(engineState.topCryptoSignals || [])]

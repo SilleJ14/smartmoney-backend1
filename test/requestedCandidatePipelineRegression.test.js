@@ -103,6 +103,7 @@ test("fresh trade ticks cannot starve independent bid-ask refreshes", () => {
   assert.match(refreshBlock, /getSpreadAgeSeconds/);
   assert.match(refreshBlock, /isFreshMeasuredSpread/);
   assert.match(refreshBlock, /selectCryptoRestQuoteBatch/);
+  assert.match(refreshBlock, /supportedSymbols: getAlpacaExecutableCryptoSymbols\(\)/);
   assert.match(refreshBlock, /isAlpacaCryptoExecutionSource/);
   assert.match(refreshBlock, /alpacaCryptoBook/);
   assert.doesNotMatch(refreshBlock, /incomingTimestamp < currentTimestamp/);
@@ -152,6 +153,7 @@ test("fresh trade ticks cannot starve independent bid-ask refreshes", () => {
     serverSource.indexOf("startServerLifecycle({")
   );
   assert.match(streamBlock, /selectAlpacaCryptoStreamSymbols/);
+  assert.match(streamBlock, /supportedSymbols: getAlpacaExecutableCryptoSymbols\(\)/);
   assert.match(streamBlock, /heldSymbols:/);
   assert.match(streamBlock, /pinnedSymbols:/);
   assert.doesNotMatch(streamBlock, /alpacaCryptoStream\?\.getStatus\(\)/);

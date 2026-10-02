@@ -132,7 +132,10 @@ export function normalizeJBlankedCalendar(rows, requestedAt) {
 }
 
 export function createEconomicCalendarProvider({ apiKey, jblankedApiKey, store, filePath, provider = filePath ? "file" : "jblanked",
-  timezone = "", fetchImpl = globalThis.fetch, nowFn = Date.now, timeoutMs = 10000 } = {}) {
+  jblankedRefreshMs = DAY, timezone = "", fetchImpl = globalThis.fetch, nowFn = Date.now, timeoutMs = 10000 } = {}) {
+  const jblankedIntervalMs = Number.isFinite(Number(jblankedRefreshMs))
+    ? Math.min(DAY, Math.max(MINUTE, Number(jblankedRefreshMs)))
+    : DAY;
   let snapshot = defaultCalendarSnapshot();
   let pending = null;
   let nextAttemptAt = 0;
@@ -145,7 +148,9 @@ export function createEconomicCalendarProvider({ apiKey, jblankedApiKey, store, 
     return { provider, source: snapshot.source, qualityStatus: valid ? "VALID" : lastError ? "ERROR" : "MISSING_OR_STALE",
       coverageComplete: valid, refreshing: Boolean(pending), lastAttemptAt, lastSuccessAt: snapshot.refreshedAt,
       nextAttemptAt: new Date(nextAttemptAt).toISOString(), error: lastError,
-      limitation: provider === "jblanked" ? "Daily snapshot: one request per 24 hours; existing calendar freshness checks still apply." : null,
+      limitation: provider === "jblanked"
+        ? `Durable refresh interval: ${Math.round(jblankedIntervalMs / MINUTE)} minutes; provider entitlement must permit this frequency.`
+        : null,
       coveredFrom: snapshot.coveredFrom || null, coveredThrough: snapshot.coveredThrough || null,
       eventCount: snapshot.events.length, receivedEventCount: snapshot.receivedEventCount ?? snapshot.events.length };
   };
@@ -159,12 +164,20 @@ export function createEconomicCalendarProvider({ apiKey, jblankedApiKey, store, 
       } else if (provider === "jblanked") {
         if (!jblankedApiKey) fail("CALENDAR_MISSING_API_KEY");
         if (!store?.isDurable()) fail("CALENDAR_DURABLE_CACHE_REQUIRED");
-        // Reserve the daily request durably BEFORE contacting the provider.
+        // Reserve the entitled request durably BEFORE contacting the provider.
         // Sharing the ledger serializes concurrent callers and survives restart.
         const reservation = await store.commit(ledger => {
           const previous = ledger.jblankedCalendar;
-          if (previous?.nextAttemptAt > requestedAt) return { cached: previous };
-          const record = { lastAttemptAt, nextAttemptAt: requestedAt + DAY,
+          const previousAttempt = Date.parse(previous?.lastAttemptAt || "");
+          const entitledNextAttempt = Number.isFinite(previousAttempt)
+            ? previousAttempt + jblankedIntervalMs
+            : Number(previous?.nextAttemptAt);
+          const effectiveNextAttempt = Math.min(Number(previous?.nextAttemptAt), entitledNextAttempt);
+          if (Number.isFinite(effectiveNextAttempt) && effectiveNextAttempt > requestedAt) {
+            return { cached: { ...previous, nextAttemptAt: effectiveNextAttempt, intervalMs: jblankedIntervalMs } };
+          }
+          const record = { lastAttemptAt, nextAttemptAt: requestedAt + jblankedIntervalMs,
+            intervalMs: jblankedIntervalMs,
             snapshot: previous?.snapshot || null, error: "CALENDAR_REQUEST_UNRESOLVED" };
           ledger.jblankedCalendar = record;
           return { reserved: record };
@@ -193,7 +206,9 @@ export function createEconomicCalendarProvider({ apiKey, jblankedApiKey, store, 
               : response.status === 429 ? "CALENDAR_RATE_LIMITED" : "CALENDAR_PROVIDER_FAILED");
           }
           next = normalizeJBlankedCalendar(await boundedJson(response), requestedAt);
-          await store.commit(ledger => { ledger.jblankedCalendar = { lastAttemptAt, nextAttemptAt, snapshot: next, error: null }; });
+          await store.commit(ledger => { ledger.jblankedCalendar = {
+            lastAttemptAt, nextAttemptAt, intervalMs: jblankedIntervalMs, snapshot: next, error: null,
+          }; });
         } catch (error) {
           const code = error.calendarCode || "CALENDAR_FETCH_OR_STORAGE_FAILED";
           try { await store.commit(ledger => { ledger.jblankedCalendar = { ...record, nextAttemptAt, error: code }; }); }

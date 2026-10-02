@@ -32,7 +32,7 @@ test("only Alpaca crypto sources count as executable quotes", () => {
   assert.equal(isAlpacaCryptoExecutionSource("finnhub_ws_trade"), false);
 });
 
-test("stream slots go to held names and names that still need an Alpaca book", () => {
+test("stream slots prioritize held names and core market context", () => {
   const selected = selectAlpacaCryptoStreamSymbols({
     symbols: ["USDT/USD", "BTC/USD", "ETH/USD", "DOGE/USD"],
     quotes: { "BTC/USD": alpacaBook },
@@ -41,10 +41,10 @@ test("stream slots go to held names and names that still need an Alpaca book", (
     limit: 2,
     now,
   });
-  assert.deepEqual(selected, ["DOGE/USD", "ETH/USD"]);
+  assert.deepEqual(selected, ["DOGE/USD", "BTC/USD"]);
 });
 
-test("already subscribed coins stay pinned instead of rotating off the socket", () => {
+test("pinning is bounded so a stronger executable candidate can enter", () => {
   const selected = selectAlpacaCryptoStreamSymbols({
     symbols: ["USDT/USD", "BTC/USD", "ETH/USD", "DOGE/USD"],
     quotes: { "BTC/USD": alpacaBook },
@@ -54,7 +54,27 @@ test("already subscribed coins stay pinned instead of rotating off the socket", 
     limit: 2,
     now,
   });
-  assert.deepEqual(selected, ["BTC/USD", "USDT/USD"]);
+  assert.deepEqual(selected, ["BTC/USD", "ETH/USD"]);
+});
+
+test("unsupported research symbols never consume execution stream or REST capacity", () => {
+  const supportedSymbols = ["BTC/USD", "ETH/USD", "SOL/USD"];
+  const stream = selectAlpacaCryptoStreamSymbols({
+    symbols: ["HYPE/USD", "BTC/USD", "ETH/USD"],
+    supportedSymbols,
+    scores: { "HYPE/USD": 100, "BTC/USD": 80, "ETH/USD": 70 },
+    limit: 2,
+    now,
+  });
+  assert.deepEqual(stream, ["BTC/USD", "ETH/USD"]);
+  const rest = selectCryptoRestQuoteBatch({
+    symbols: ["HYPE/USD", "BTC/USD", "ETH/USD"],
+    supportedSymbols,
+    quotes: {},
+    batchSize: 3,
+    now,
+  });
+  assert.deepEqual(rest.symbols, ["BTC/USD", "ETH/USD"]);
 });
 
 test("REST snapshots stream coins whose Alpaca book is stale", () => {

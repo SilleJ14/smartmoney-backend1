@@ -55,11 +55,35 @@ test("daily quota survives provider recreation and concurrent calls; cached time
   assert.equal(calls, 1);
   assert.equal(restarted.getStatus().lastSuccessAt, new Date(START).toISOString());
   assert.equal(restarted.getSnapshot().coverageComplete, false);
-  assert.match(restarted.getStatus().limitation, /Daily snapshot/);
+  assert.match(restarted.getStatus().limitation, /1440 minutes/);
   assert.ok(!JSON.stringify(await config.store.load()).includes("test-secret"));
   now = START + DAY;
   await restarted.refresh();
   assert.equal(calls, 2);
+});
+
+test("membership interval refreshes every five minutes and shortens a legacy daily reservation", async () => {
+  let now = START, calls = 0;
+  const store = createMemoryStore({ treatAsDurable: true });
+  const daily = createEconomicCalendarProvider({
+    ...options(), store, nowFn: () => now,
+    fetchImpl: async () => { calls++; return new Response(JSON.stringify(rows)); },
+  });
+  await daily.refresh();
+  assert.equal(calls, 1);
+
+  const member = createEconomicCalendarProvider({
+    ...options(), store, jblankedRefreshMs: 5 * 60000, nowFn: () => now,
+    fetchImpl: async () => { calls++; return new Response(JSON.stringify(rows)); },
+  });
+  now += 5 * 60000 - 1;
+  await member.refresh();
+  assert.equal(calls, 1);
+  now += 1;
+  await member.refresh();
+  assert.equal(calls, 2);
+  assert.match(member.getStatus().limitation, /5 minutes/);
+  assert.equal((await store.load()).jblankedCalendar.intervalMs, 5 * 60000);
 });
 
 test("provider failures consume quota and redact provider bodies", async () => {

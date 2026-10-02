@@ -28,16 +28,19 @@ are retained; no migration or clearing of safety locks occurs automatically.
 
 The backend defaults to JBlanked's Forex Factory weekly calendar endpoint. Configure
 the server-only `JBLANKED_API_KEY`; no key is sent to the app. JBlanked calendar use
-also requires the durable ledger above because the free endpoint permits one request
-per 24 hours. The request reservation and response are persisted before calendar
-evidence can authorize an entry, so restarts cannot accidentally consume the quota.
+also requires the durable ledger above. Production uses
+`JBLANKED_REFRESH_MS=300000` (five minutes), which requires JBlanked credits or
+membership; free-tier deployments must set `86400000` (24 hours). The request
+reservation and response are persisted before calendar evidence can authorize an
+entry, so restarts cannot accidentally consume the provider allowance.
 
 The adapter fetches the current trading week and preserves actual, forecast, previous,
 impact and currency fields. JBlanked documents event times as GMT+3; normalization
 converts them to UTC and rejects tentative, all-day or malformed timestamps. A ten-
 second timeout, bounded response size and conservative error handling apply. A failed
-request consumes the daily reservation and blocks new entries until valid cached
-coverage or the next permitted refresh.
+request consumes its reserved interval and blocks new entries until valid cached
+coverage or the next permitted refresh. HTTP 429 `Retry-After` always extends the
+local reservation.
 
 Low-impact non-central-bank events are excluded. Medium/high/unknown importance and
 central-bank announcements/speeches are retained. Unknown country mappings use `ALL`
