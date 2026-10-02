@@ -154,6 +154,8 @@ test("fresh trade ticks cannot starve independent bid-ask refreshes", () => {
   assert.match(streamBlock, /selectAlpacaCryptoStreamSymbols/);
   assert.match(streamBlock, /heldSymbols:/);
   assert.match(streamBlock, /pinnedSymbols:/);
+  assert.doesNotMatch(streamBlock, /alpacaCryptoStream\?\.getStatus\(\)/);
+  assert.match(streamBlock, /engineState\.alpacaCryptoStreamState\?\.subscribedSymbols/);
   assert.match(serverSource, /engineState\.alpacaCryptoStreamState = alpacaCryptoStream\.getStatus\(\)/);
   assert.match(serverSource, /\(\) => alpacaCryptoStream\.start\(\)/);
   assert.doesNotMatch(serverSource, /ENABLE_ALPACA_CRYPTO_WEBSOCKET/);

@@ -33767,8 +33767,8 @@ alpacaCryptoStream = createAlpacaCryptoStream({
     heldSymbols: (engineState.cachedPositions || [])
       .map((item) => normalizeSymbol(item.symbol))
       .filter((symbol) => isCrypto(symbol)),
-    pinnedSymbols: alpacaCryptoStream?.getStatus()?.subscribedSymbols || [],
-    limit: alpacaCryptoStream?.getStatus()?.symbolLimit || 120,
+    pinnedSymbols: engineState.alpacaCryptoStreamState?.subscribedSymbols || [],
+    limit: engineState.alpacaCryptoStreamState?.symbolLimit || 120,
   }),
   onQuote: (symbol, quote) => updateQuoteCache(symbol, quote),
   onStatus: status => { engineState.alpacaCryptoStreamState = status; },
