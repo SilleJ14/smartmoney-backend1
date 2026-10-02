@@ -88,15 +88,18 @@ async function fixture() {
     run:(options={})=>runForexEngineCycle({client,store,journal,providerContext,now,clockNow:()=>time,forexAutoEnabled:auto,getAutoEnabled:()=>auto,getEntryPause:()=>pause,calendar,registry:registry(),spec:{...FOREX_SPEC,scanInstruments:["EUR_USD"]},...options})};
 }
 
-test("operator Autopilot permission requires strategy validation and never enables live",()=>{
+test("operator Autopilot permission allows practice orders without promoting research or enabling live",()=>{
   const r=createApprovalRegistry();const before=JSON.stringify(r);
-  assert.equal(automaticEntryPermission(r,STRATEGY_IDS.CONTINUATION,{autopilotEnabled:true}).allowed,false);
-  assert.equal(automaticEntryPermission(r,STRATEGY_IDS.CONTINUATION,{autopilotEnabled:false}).allowed,false);
-  assert.equal(automaticEntryPermission(r,STRATEGY_IDS.BREAKOUT,{autopilotEnabled:true}).allowed,false);
-  assert.equal(automaticEntryPermission(r,STRATEGY_IDS.MANUAL,{autopilotEnabled:true}).allowed,false);
-  assert.equal(automaticEntryPermission(r,'unknown',{autopilotEnabled:true}).allowed,false);
-  assert.equal(automaticEntryPermission(r,STRATEGY_IDS.CONTINUATION,{autopilotEnabled:true,environment:'LIVE'}).allowed,false);
+  const continuation=automaticEntryPermission(r,STRATEGY_IDS.CONTINUATION,{autopilotEnabled:true});
+  assert.equal(continuation.allowed,true);
+  assert.equal(continuation.source,"PRACTICE_OPERATOR");
+  assert.equal(automaticEntryPermission(r,STRATEGY_IDS.CONTINUATION,{autopilotEnabled:false}).reason,"FOREX_AUTOPILOT_OFF");
+  assert.equal(automaticEntryPermission(r,STRATEGY_IDS.BREAKOUT,{autopilotEnabled:true}).source,"PRACTICE_OPERATOR");
+  assert.equal(automaticEntryPermission(r,STRATEGY_IDS.MANUAL,{autopilotEnabled:true}).reason,"STRATEGY_NOT_APPROVED");
+  assert.equal(automaticEntryPermission(r,'unknown',{autopilotEnabled:true}).reason,"STRATEGY_NOT_APPROVED");
+  assert.equal(automaticEntryPermission(r,STRATEGY_IDS.CONTINUATION,{autopilotEnabled:true,environment:'LIVE'}).reason,"LIVE_BLOCKED");
   assert.equal(mayAutoExecute(r,STRATEGY_IDS.CONTINUATION),false);
+  assert.equal(r[STRATEGY_IDS.CONTINUATION].permittedEnvironment,"RESEARCH");
   assert.equal(JSON.stringify(r),before);
   r[STRATEGY_IDS.CONTINUATION].disabled=true;
   assert.equal(automaticEntryPermission(r,STRATEGY_IDS.CONTINUATION,{autopilotEnabled:true}).reason,'STRATEGY_DISABLED');
@@ -108,11 +111,16 @@ test("operator Autopilot permission requires strategy validation and never enabl
   assert.equal(FOREX_RISK_LIMITS.drawdownPausePercent,10);
 });
 
-test("scanner keeps every unvalidated automatic strategy out of execution",async()=>{
-  const f=await fixture();const result=await f.run({registry:createApprovalRegistry()});
-  assert.equal(f.orders,0);
-  assert.ok(result.candidates.filter(c=>c.strategyId===STRATEGY_IDS.BREAKOUT).every(c=>c.blockers.includes('STRATEGY_NOT_APPROVED')));
-  assert.ok(result.candidates.filter(c=>c.strategyId===STRATEGY_IDS.CONTINUATION).every(c=>c.blockers.includes('STRATEGY_NOT_APPROVED')));
+test("research registry places one uncalibrated practice order and still blocks live",async()=>{
+  const f=await fixture();
+  const result=await f.run({registry:createApprovalRegistry(),providerContext:{}});
+  assert.equal(f.orders,1,JSON.stringify(result.candidates.map(c=>({state:c.state,reason:c.lastReason,blockers:c.blockers}))));
+  assert.equal(result.lastPracticeOrder.state,"FILLED");
+  assert.equal(result.signals.find(s=>s.forexState==="ordered")?.forexProbability??null,null);
+  assert.equal(result.signals.find(s=>s.forexState==="ordered")?.forexDecision?.reason,"UNCALIBRATED_PRACTICE");
+  const saved=await f.store.load();
+  assert.equal(saved.strategyRegistry[STRATEGY_IDS.BREAKOUT].permittedEnvironment,"RESEARCH");
+  assert.equal(automaticEntryPermission(createApprovalRegistry(),STRATEGY_IDS.BREAKOUT,{autopilotEnabled:true,environment:"LIVE"}).reason,"LIVE_BLOCKED");
 });
 
 for(const condition of ['ON','OFF','STOP','STALE','NO_CALENDAR','LOSS_LOCK'])test(`validated continuation with real mocked preflight: ${condition}`,async()=>{

@@ -704,7 +704,26 @@ export async function runForexEngineCycle({
             configHash: spec.version,
           });
           dataQualityMonitor?.recordLatency("featureAndDecision", performance.now() - featureStarted);
-          const canonicalAuthorized = canonical.decision.action === side.toUpperCase();
+          const decision = canonical.decision;
+          // A new practice account has no out-of-sample probability yet. The
+          // strategy trigger may still place a paper order when every other
+          // mandatory gate passed. The missing probability stays null.
+          const uncalibratedPractice = practiceOrder
+            && triggered
+            && approved
+            && decision.action !== side.toUpperCase()
+            && decision.rejectionReasons.length === 0
+            && decision.missingReasons.length === 1
+            && decision.missingReasons[0] === "EXPECTED_VALUE_EVIDENCE_MISSING";
+          const publishedDecision = uncalibratedPractice ? {
+            ...decision,
+            action: side.toUpperCase(),
+            disposition: "APPROVE",
+            reason: "UNCALIBRATED_PRACTICE",
+            paperOrder: true,
+            probabilityCalibrated: false,
+          } : decision;
+          const canonicalAuthorized = publishedDecision.action === side.toUpperCase();
           const executable = (result.reason === "RENEWED_MOVEMENT" || result.reason === "ENTRY_TRIGGER")
             && practiceOrder
             && approved
@@ -735,7 +754,7 @@ export async function runForexEngineCycle({
             ...(getEntryPause?.() === true ? ["ENTRIES_PAUSED"] : []),
             ...(!autoRequested() ? ["FOREX_AUTOPILOT_OFF"] : []),
             ...(!approved ? [entryPermission.reason] : []),
-            ...(!canonicalAuthorized ? [canonical.decision.reason] : []),
+            ...(!canonicalAuthorized ? [publishedDecision.reason] : []),
             ...(!recovered.executionReady ? [recovered.halt || "EXECUTION_NOT_READY"] : []),
             ...(triggered && !spread.ok ? [spread.reason] : []),
             ...(triggered && !stopDistanceOk({ entry: entryQuote, stop, A: result.frozen?.A }) ? ["STOP_DISTANCE"] : []),
@@ -745,10 +764,10 @@ export async function runForexEngineCycle({
           if (triggered && blockers.length) { stage = "BLOCKED"; reason = blockers[0]; }
           transitionCandidate(row, stage, reason, {
             entryPermission,
-            canonicalDecision: canonical.decision,
+            canonicalDecision: publishedDecision,
             forexOpportunityScore: canonical.opportunityScore.score,
             forexScoreCoverage: canonical.opportunityScore.coverage,
-            forexProbability: canonical.probability.probability ?? null,
+            forexProbability: canonical.probability.calibrationApplied ? canonical.probability.probability : null,
             forexExpectedValueR: canonical.expectedValue.expectedValue,
             forexRegime: canonical.regime,
             forexFeatures: canonical.features,

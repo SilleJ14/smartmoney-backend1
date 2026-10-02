@@ -110,8 +110,8 @@ export function applyStrategyDriftReview(registry, strategyId, review = {}, now 
   return { ok: true, disabled: row.disabled === true, reason: row.disabledReason || null };
 }
 
-// Operator permission is separate from research/performance promotion. It never
-// upgrades the registry or permits real-money execution.
+// Forex Autopilot may place practice orders for the two automatic strategies.
+// That does not promote their research record and never permits a live order.
 export const FOREX_AUTOPILOT_POLICY_VERSION = "FOREX_VALIDATED_STRATEGY_V2";
 export function automaticEntryPermission(registry, strategyId, { autopilotEnabled, environment = "FORWARD_PRACTICE" } = {}) {
   const base = { policyVersion: FOREX_AUTOPILOT_POLICY_VERSION, allowed: false, source: null };
@@ -120,12 +120,16 @@ export function automaticEntryPermission(registry, strategyId, { autopilotEnable
   if (![STRATEGY_IDS.CONTINUATION, STRATEGY_IDS.BREAKOUT].includes(strategyId) || !registry?.[strategyId]) {
     return { ...base, reason: "STRATEGY_NOT_APPROVED" };
   }
-  if (registry[strategyId].disabled === true) return { ...base, reason: "STRATEGY_DISABLED" };
-  if (!mayAutoExecute(registry, strategyId, environment)) {
-    return { ...base, reason: "STRATEGY_NOT_APPROVED" };
-  }
-  if (registry[strategyId].validatedConfigHash !== registry[strategyId].configHash) {
+  const strategy = registry[strategyId];
+  if (strategy.disabled === true) return { ...base, reason: "STRATEGY_DISABLED" };
+  if (strategy.validatedConfigHash != null && strategy.validatedConfigHash !== strategy.configHash) {
     return { ...base, reason: "DECISION_CONFIG_CHANGED" };
   }
-  return { ...base, allowed: true, source: "STRATEGY_REGISTRY", reason: null };
+  const validated = mayAutoExecute(registry, strategyId, environment);
+  return {
+    ...base,
+    allowed: true,
+    source: validated ? "STRATEGY_REGISTRY" : "PRACTICE_OPERATOR",
+    reason: null,
+  };
 }
