@@ -68,14 +68,14 @@ export function attachCryptoExecutableAllocation(signal = {}, {
       || String(row.symbol || "").endsWith("USD"))
     .reduce((sum, row) => sum + Math.abs(Number(row.market_value || 0)), 0);
   const cryptoBudget = Number(account.equity || 0)
-    * Number(config.maxBotExposurePercent || 0) / 100
+    * Number(config.maxBotExposurePercent ?? 0) / 100
     * Number(config.cryptoMaxExposureShareOfBotExposure ?? 100) / 100;
   const bounded = Math.min(
     suggested,
     Math.max(0, cryptoBudget - cryptoExposure - reserved),
     Math.max(0, availableBuyingPower(account, true) - reserved)
   );
-  const minAmount = Number(config.minCryptoTradeAmount || 25);
+  const minAmount = Number(config.minCryptoTradeAmount ?? 25);
   const amount = bounded >= minAmount ? Math.floor(bounded * 100) / 100 : 0;
   if (!signal.decisionUpdatedAt) signal.decisionUpdatedAt = new Date(now).toISOString();
   signal.sizingDecisionUpdatedAt = signal.decisionUpdatedAt;

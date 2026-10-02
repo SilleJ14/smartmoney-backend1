@@ -86,7 +86,7 @@ export function registerFrontendRoutes(app, dependencies) {
           realizedPL: 0,
           portfolioReturnPercent,
           drawdownPercent,
-          dailyLossLeftPercent: Number(config.dailyLossLimitPercent || 2) - drawdownPercent,
+          dailyLossLeftPercent: Number(config.dailyLossLimitPercent ?? 2) - drawdownPercent,
           openPositions: Number(latestStatus?.positions?.length || 0),
           peakEquity,
         },
@@ -298,7 +298,7 @@ export function registerFrontendRoutes(app, dependencies) {
         .map(mergeLiveQuote)
         .filter((signal) => {
           const score = getCanonicalFinalScore(signal);
-          return score !== null && score >= Number(config.minScoreToBuy || 70);
+          return score !== null && score >= Number(config.minScoreToBuy ?? 70);
         })
         .sort(compareCanonicalSignals)
         .slice(0, 25)

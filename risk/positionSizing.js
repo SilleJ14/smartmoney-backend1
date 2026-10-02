@@ -9,8 +9,8 @@ export function calculateDynamicTradeAmount({ account = {}, positions = [], sign
   const buyingPower = Number(account.buying_power ?? cash);
   if ([account, positions].some(snapshot => snapshot?.snapshotAt != null && (Date.now() - snapshot.snapshotAt > 10000 || snapshot.snapshotAt > Date.now() + 5000))) return 0;
   if (cash <= 0 || equity <= 0) return 0;
-  const minimum = Number(config.minAutonomousTradeAmount || config.eliteConcentrationMinTradeAmount || 25);
-  const configuredBudget = equity * (Number(config.maxBotExposurePercent || 0) / 100);
+  const minimum = Number(config.minAutonomousTradeAmount ?? config.eliteConcentrationMinTradeAmount ?? 25);
+  const configuredBudget = equity * (Number(config.maxBotExposurePercent ?? 0) / 100);
   const budget = Math.min(configuredBudget, Number(compoundingState.compoundedBotBudget ?? configuredBudget));
   const remaining = Math.max(0, budget - getExposure(positions));
   const available = Math.min(remaining, Number(compoundingState.remainingCompoundedBudget ?? remaining), cash, buyingPower);

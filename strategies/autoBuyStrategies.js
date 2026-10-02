@@ -212,7 +212,7 @@ export function createAutoBuyStrategies(dependencies) {
     const managedPositions = aiPositions;
     const maxBotBudget =
       Number(account.equity || 0) *
-      (Number(CONFIG.maxBotExposurePercent || 0) / 100);
+      (Number(CONFIG.maxBotExposurePercent ?? 0) / 100);
     const currentBotExposure = getBotExposure(aiPositions);
     const remainingBotBudget = Math.max(
       0,
@@ -1538,7 +1538,7 @@ export function createAutoBuyStrategies(dependencies) {
         const totalBotExposure = getBotExposure(managedPositions);
         const totalMaxBotBudget =
           Number(account?.equity || 0) *
-          (Number(CONFIG.maxBotExposurePercent || 15) / 100);
+          (Number(CONFIG.maxBotExposurePercent ?? 15) / 100);
         const remainingTotalBotBudget = Math.max(
           0,
           totalMaxBotBudget - totalBotExposure - cryptoBudgetReservedThisCycle
@@ -1551,8 +1551,8 @@ export function createAutoBuyStrategies(dependencies) {
         }, 0);
         const cryptoMaxBudget =
           Number(account?.equity || 0) *
-          (Number(CONFIG.maxBotExposurePercent || 0) / 100) *
-          (Number(CONFIG.cryptoMaxExposureShareOfBotExposure || 30) / 100);
+          (Number(CONFIG.maxBotExposurePercent ?? 0) / 100) *
+          (Number(CONFIG.cryptoMaxExposureShareOfBotExposure ?? 30) / 100);
         const remainingCryptoBudget = Math.max(
           0,
           cryptoMaxBudget - cryptoExposure - cryptoBudgetReservedThisCycle
@@ -1572,7 +1572,7 @@ export function createAutoBuyStrategies(dependencies) {
           ).toFixed(2)
         );
         const minCryptoTradeAmount = Number(
-          CONFIG.minCryptoTradeAmount || CONFIG.minAutonomousTradeAmount || 25
+          CONFIG.minCryptoTradeAmount ?? CONFIG.minAutonomousTradeAmount ?? 25
         );
         if (finalTradeAmount > 0 && finalTradeAmount < minCryptoTradeAmount) {
           finalTradeAmount =

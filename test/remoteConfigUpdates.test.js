@@ -2,13 +2,14 @@ import test from "node:test";
 import assert from "node:assert/strict";
 import { parseRemoteConfigUpdates } from "../config/remoteConfigUpdates.js";
 
-test("remote config parses types and enforces score floor", () => {
-  const result = parseRemoteConfigUpdates({ minScoreToBuy: "55", maxOpenTrades: "4", enableAdvancedFilters: "true", tradingMode: 7 });
-  assert.deepEqual(result.updates, { minScoreToBuy: 70, maxOpenTrades: 4, enableAdvancedFilters: true, tradingMode: "7" });
+test("remote config parses valid types without rewriting their values", () => {
+  const result = parseRemoteConfigUpdates({ minScoreToBuy: "75", maxOpenTrades: "4", enableAdvancedFilters: "true", tradingMode: 7 });
+  assert.deepEqual(result.updates, { minScoreToBuy: 75, maxOpenTrades: 4, enableAdvancedFilters: true, tradingMode: "7" });
 });
 
 test("remote config rejects invalid numbers and emergency activation", () => {
   assert.match(parseRemoteConfigUpdates({ maxOpenTrades: "bad" }).error, /Invalid number/);
+  assert.match(parseRemoteConfigUpdates({ minScoreToBuy: "55" }).error, /between 70 and 100/);
   assert.equal(parseRemoteConfigUpdates({ autoTradingEnabled: true }, true).locked, true);
 });
 

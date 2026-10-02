@@ -74,7 +74,7 @@ export function attachStockExecutableAllocation(signal = {}, {
     suggested,
     Math.max(0, availableBuyingPower(account, false) - reserved)
   );
-  const minAmount = Number(config.minAutonomousTradeAmount || 25);
+  const minAmount = Number(config.minAutonomousTradeAmount ?? 25);
   const amount = bounded >= minAmount ? Math.floor(bounded * 100) / 100 : 0;
   if (!signal.decisionUpdatedAt) signal.decisionUpdatedAt = new Date(now).toISOString();
   const report = finalizeStockOpportunityLayers(layers, amount, resolveScoreState(signal, STOCK_EXECUTION_THRESHOLDS.finalScore));

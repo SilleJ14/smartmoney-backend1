@@ -53,6 +53,27 @@ test('ON and explicit OFF survive settings saves and reloads without environment
   } finally { fs.rmSync(directory, { recursive: true, force: true }); }
 });
 
+test('frontend automation preferences survive unrelated saves and exact reloads', () => {
+  const directory = fs.mkdtempSync(path.join(os.tmpdir(), 'smartmoney-preferences-test-'));
+  try {
+    const file = path.join(directory, 'runtime-config.json');
+    const preferences = {
+      maxOpenTrades: 9,
+      maxStockOpenTrades: 4,
+      maxCryptoOpenTrades: 5,
+      maxBotExposurePercent: 18.5,
+      cryptoMaxExposureShareOfBotExposure: 42.5,
+      minAutonomousTradeAmount: 31.25,
+      minCryptoTradeAmount: 27.5,
+      dailyLossLimitPercent: 1.75,
+    };
+    saveRuntimeConfig(file, preferences);
+    saveRuntimeConfig(file, { tradingMode: 'smart' });
+    const reloaded = loadRuntimeConfig(file);
+    for (const [key, value] of Object.entries(preferences)) assert.equal(reloaded[key], value);
+  } finally { fs.rmSync(directory, { recursive: true, force: true }); }
+});
+
 test('order service buys only while enabled, allows exits through risk pauses, and resumes after transient failure', async () => {
   const context = { autoTradingEnabled: true, realCashTradingUnlocked: true, isCrypto: true,
     account: { equity: 1000, cash: 1000, buying_power: 1000 }, positions: [], price: 100,

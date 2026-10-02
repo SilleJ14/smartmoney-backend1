@@ -98,6 +98,15 @@ test("a locked live account cannot receive automatic crypto approval or sizing",
   assert.ok(sized.executionEligibility.reasons.includes("REAL_CASH_TRADING_LOCKED"));
 });
 
+test("zero frontend exposure disables crypto sizing without falling back to a default", () => {
+  const now = Date.now();
+  const sized = attachCryptoExecutableAllocation(liveBtc(now), {
+    now, account, positions: [], config: { ...config, maxBotExposurePercent: 0 },
+  });
+  assert.equal(sized.buyableNow, false);
+  assert.equal(sized.finalApprovedTradeAmount, 0);
+});
+
 test("Finnhub still cannot make BTC buyable", () => {
   const now = Date.now();
   const sized = attachCryptoExecutableAllocation(liveBtc(now, {

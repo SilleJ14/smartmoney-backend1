@@ -79,3 +79,31 @@ test("api config validates numeric values and strips non-config persistence flag
   assert.equal(valid.statusCode, 200);
   assert.deepEqual(api.applied, [{ maxBotExposurePercent: 15, dailyLossLimitPercent: 2 }]);
 });
+
+test("frontend automation preferences are exact or rejected instead of silently rewritten", async () => {
+  for (const [body, message] of [
+    [{ maxBotExposurePercent: 101 }, /between 0 and 100/],
+    [{ cryptoMaxExposureShareOfBotExposure: -1 }, /between 0 and 100/],
+    [{ maxCryptoOpenTrades: 2.5 }, /whole number/],
+    [{ minScoreToBuy: 69 }, /between 70 and 100/],
+  ]) {
+    const api = harness();
+    const response = await api.invoke("/api/config", body);
+    assert.equal(response.statusCode, 400);
+    assert.match(response.body.error, message);
+    assert.equal(api.applied.length, 0);
+  }
+
+  const api = harness();
+  const preferences = {
+    maxOpenTrades: 9,
+    maxStockOpenTrades: 4,
+    maxCryptoOpenTrades: 5,
+    maxBotExposurePercent: 18.5,
+    cryptoMaxExposureShareOfBotExposure: 42.5,
+    minAutonomousTradeAmount: 31.25,
+    minCryptoTradeAmount: 27.5,
+  };
+  assert.equal((await api.invoke("/api/config", preferences)).statusCode, 200);
+  assert.deepEqual(api.applied, [preferences]);
+});

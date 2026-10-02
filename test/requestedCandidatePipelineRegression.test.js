@@ -258,6 +258,32 @@ test("settings forex controls are separate and display backend execution mode", 
   assert.match(frontendSource, /OANDA_FOREX_PAIRS/);
 });
 
+test("frontend owns and verifies the complete automation preference payload", frontendTestOptions, () => {
+  const saveBlock = frontendSource.slice(
+    frontendSource.indexOf("const saveConfig = async () => {"),
+    frontendSource.indexOf("const searchStockSymbol")
+  );
+  for (const key of [
+    "maxOpenTrades",
+    "maxStockOpenTrades",
+    "maxCryptoOpenTrades",
+    "maxBotExposurePercent",
+    "cryptoMaxExposureShareOfBotExposure",
+    "minAutonomousTradeAmount",
+    "minCryptoTradeAmount",
+    "dailyLossLimitPercent",
+  ]) assert.match(saveBlock, new RegExp(`${key}:`));
+  assert.match(saveBlock, /assertConfigMatches\(data\.config/);
+  assert.match(saveBlock, /assertConfigMatches\(statusData\?\.config/);
+  const hydration = frontendSource.slice(
+    frontendSource.indexOf("const hydrateConfigInputs"),
+    frontendSource.indexOf("const fetchStatusAndSignals")
+  );
+  assert.match(hydration, /if \(!nextConfig \|\| typeof nextConfig !== "object" \|\| !Object\.keys\(nextConfig\)\.length\) return/);
+  assert.match(hydration, /cryptoMaxExposureShareOfBotExposure/);
+  assert.doesNotMatch(hydration, /setMaxExposureInput\(String\(nextConfig\?\.maxBotExposurePercent \?\? 15\)\)/);
+});
+
 test("frontend live-score merge updates canonical approval and sizing only when explicitly supplied", frontendTestOptions, () => {
   const mergeBlock = frontendSource.slice(
     frontendSource.indexOf("function mergeSignalByFreshness"),

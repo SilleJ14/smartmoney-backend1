@@ -41,6 +41,7 @@ import { stockFeedProvenance } from "./market-data/feedContract.js";
 import { stockDataHealth } from "./market-data/providerHealth.js";
 import { invalidateAuthorizationsForConfigChange } from "./config/configAuthorization.js";
 import { recordConfigRevision } from "./config/configurationSchema.js";
+import { AUTOMATION_PREFERENCE_KEYS } from "./config/remoteConfigUpdates.js";
 import { streamTiming } from "./scoring/executionPolicy.js";
 import { assessTechnicalFeatures } from "./scoring/technicalFeatureReadiness.js";
 import { recentBarVolumeEvidence } from './market-data/volumeEvidence.js';
@@ -8516,7 +8517,7 @@ function calculatePhase57EliteOverrideDecision({
   const highPortfolioHeat =
     Number(portfolioHeat.portfolioHeatScore || 0) >= 75 &&
     Number(portfolioHeat.totalOpenBotPositions || 0) >=
-    Number(CONFIG.maxStockOpenTrades || 5);
+    Number(CONFIG.maxStockOpenTrades ?? 5);
   const eliteSignalQuality =
     score >= CONFIG.minScoreToBuy &&
     institutionalBrainScore >= 70 &&
@@ -8836,9 +8837,9 @@ function calculateAiPortfolioManagerDecision(
         portfolioHeat.duplicateSymbolRisk !== true &&
         marketStress <= 20 &&
         sameSectorOpenPositions <=
-        Number(CONFIG.maxStockOpenTrades || 5) &&
+        Number(CONFIG.maxStockOpenTrades ?? 5) &&
         totalOpenBotPositions <=
-        Number(CONFIG.maxStockOpenTrades || 5) &&
+        Number(CONFIG.maxStockOpenTrades ?? 5) &&
         (
           highQualityMomentum ||
           squeezeContinuationEdge ||
@@ -8939,7 +8940,7 @@ function calculateAiPortfolioManagerDecision(
       "ELITE_CONCENTRATION"
     );
   const reconciledMaxBotBudget = maxBotBudget;
-  const institutionalMinimumScore = Number(CONFIG.minScoreToBuy || 70);
+  const institutionalMinimumScore = Number(CONFIG.minScoreToBuy ?? 70);
   const currentInstitutionalScore = Number(
     signal.score ||
     signal.institutionalScore ||
@@ -11721,7 +11722,7 @@ function calculateFinalPositionSizingReconciliation({
   const cash = Number(account?.cash || 0);
   const buyingPower = Number(account?.buying_power || cash || 0);
   const currentBotExposure = getBotExposure(managedPositions);
-  const maxBotBudget = equity * (Number(CONFIG.maxBotExposurePercent || 15) / 100);
+  const maxBotBudget = equity * (Number(CONFIG.maxBotExposurePercent ?? 15) / 100);
   const remainingBotBudget = Math.max(0, maxBotBudget - currentBotExposure);
   const perTradeMax = getDynamicTradeAmount(account, managedPositions, getCanonicalFinalScore(signal) ?? 0, signal);
   const governorMultiplier = Number(
@@ -21569,7 +21570,7 @@ function calculateAutonomousCapitalPressure({
   const buyingPower = Number(account?.buying_power || cash);
   const equity = Number(account?.equity || 0);
   const maxBotBudget =
-    equity * (Number(CONFIG.maxBotExposurePercent || 15) / 100);
+    equity * (Number(CONFIG.maxBotExposurePercent ?? 15) / 100);
   const currentBotExposure = getBotExposure(managedPositions);
   const remainingBotBudget = Math.max(0, maxBotBudget - currentBotExposure);
   const asymmetricOpportunityScore = clampScore(
@@ -24062,8 +24063,8 @@ async function rotateWeakCryptoIfBetter(signals, positions) {
           calculateAdaptiveCryptoPositionSize(refreshedCandidate, account);
         const cryptoMaxBudget =
           Number(account?.equity || 0) *
-          (Number(CONFIG.maxBotExposurePercent || 0) / 100) *
-          (Number(CONFIG.cryptoMaxExposureShareOfBotExposure || 30) / 100);
+          (Number(CONFIG.maxBotExposurePercent ?? 0) / 100) *
+          (Number(CONFIG.cryptoMaxExposureShareOfBotExposure ?? 30) / 100);
         const currentCryptoExposure = freshAiPositions.reduce((sum, position) => {
           const positionSymbol = normalizeSymbol(position.symbol);
           return isCrypto(positionSymbol)
@@ -24077,7 +24078,7 @@ async function rotateWeakCryptoIfBetter(signals, positions) {
         const totalBotExposure = getBotExposure(freshAiPositions);
         const totalMaxBotBudget =
           Number(account?.equity || 0) *
-          (Number(CONFIG.maxBotExposurePercent || 15) / 100);
+          (Number(CONFIG.maxBotExposurePercent ?? 15) / 100);
         const remainingTotalBotBudget = Math.max(
           0,
           totalMaxBotBudget - totalBotExposure
@@ -24209,7 +24210,7 @@ function calculateAdaptiveCryptoPositionSize(signal = {}, account = {}) {
     volatilityMultiplier *
     macroMultiplier;
   const minCryptoTradeAmount = Number(
-    CONFIG.minCryptoTradeAmount || CONFIG.minAutonomousTradeAmount || 25
+    CONFIG.minCryptoTradeAmount ?? CONFIG.minAutonomousTradeAmount ?? 25
   );
   const cappedRecommendedAmount = Math.min(
     rawRecommendedAmount,
@@ -30343,7 +30344,7 @@ function isSoftMasterBlockRestorable(candidate = {}) {
   return (
     masterBlocked &&
     !hardBlocked &&
-    finalAmount >= Number(CONFIG.minAutonomousTradeAmount || 25) &&
+    finalAmount >= Number(CONFIG.minAutonomousTradeAmount ?? 25) &&
     approvalProtected
   );
 }
@@ -30552,12 +30553,12 @@ function buildLiveStarterBuyDecision(candidate = {}, account = {}, managedPositi
   }, 0);
   const totalMaxBotBudget =
     equity > 0
-      ? equity * (Number(CONFIG.maxBotExposurePercent || 0) / 100)
+      ? equity * (Number(CONFIG.maxBotExposurePercent ?? 0) / 100)
       : 0;
   const assetMaxBotBudget =
     cryptoAsset
       ? totalMaxBotBudget *
-      (Number(CONFIG.cryptoMaxExposureShareOfBotExposure || 30) / 100)
+      (Number(CONFIG.cryptoMaxExposureShareOfBotExposure ?? 30) / 100)
       : totalMaxBotBudget;
   const remainingBudget = Math.max(
     0,
@@ -30682,8 +30683,8 @@ function buildLiveStarterBuyDecision(candidate = {}, account = {}, managedPositi
     blockReasons.push("Already owned");
   }
   const maxOpenTradesForAsset = cryptoAsset
-    ? Number(CONFIG.maxCryptoOpenTrades || CONFIG.maxOpenTrades || 1)
-    : Number(CONFIG.maxStockOpenTrades || CONFIG.maxOpenTrades || 1);
+    ? Number(CONFIG.maxCryptoOpenTrades ?? CONFIG.maxOpenTrades ?? 1)
+    : Number(CONFIG.maxStockOpenTrades ?? CONFIG.maxOpenTrades ?? 1);
   if (openTradeCount >= maxOpenTradesForAsset) {
     blockReasons.push(
       `Max ${cryptoAsset ? "crypto" : "stock"} open trades reached`
@@ -31334,7 +31335,7 @@ function buildLiveScaleInDecision(position = {}, account = {}, managedPositions 
     plannedFullTradeAmount - currentPositionValue
   );
   const cryptoScaleCapMultiplier = cryptoAsset
-    ? Number(CONFIG.cryptoMaxExposureShareOfBotExposure || 30) / 100
+    ? Number(CONFIG.cryptoMaxExposureShareOfBotExposure ?? 30) / 100
     : 1;
   const rawScaleAmount =
     plannedFullTradeAmount *
@@ -31343,7 +31344,7 @@ function buildLiveScaleInDecision(position = {}, account = {}, managedPositions 
   const totalExposure = getBotExposure(managedPositions);
   const maxBotBudget =
     Number(account?.equity || account?.portfolio_value || 0) *
-    (Number(CONFIG.maxBotExposurePercent || 15) / 100);
+    (Number(CONFIG.maxBotExposurePercent ?? 15) / 100);
   const remainingTotalBotBudget = Math.max(
     0,
     maxBotBudget - totalExposure
@@ -31356,8 +31357,8 @@ function buildLiveScaleInDecision(position = {}, account = {}, managedPositions 
   }, 0);
   const cryptoMaxBudget =
     Number(account?.equity || account?.portfolio_value || 0) *
-    (Number(CONFIG.maxBotExposurePercent || 15) / 100) *
-    (Number(CONFIG.cryptoMaxExposureShareOfBotExposure || 30) / 100);
+    (Number(CONFIG.maxBotExposurePercent ?? 15) / 100) *
+    (Number(CONFIG.cryptoMaxExposureShareOfBotExposure ?? 30) / 100);
   const remainingCryptoBudget = cryptoAsset
     ? Math.max(0, cryptoMaxBudget - cryptoExposure)
     : Infinity;
@@ -31398,7 +31399,7 @@ function buildLiveScaleInDecision(position = {}, account = {}, managedPositions 
   }
   if (
     Number(account?.cash || 0) < scaleAmount ||
-    scaleAmount < Number(CONFIG.minAutonomousTradeAmount || 25)
+    scaleAmount < Number(CONFIG.minAutonomousTradeAmount ?? 25)
   ) {
     blockReasons.push("Not enough cash or scale-in below minimum trade amount");
   }
@@ -33684,6 +33685,17 @@ function applyConfigRevision(updates = {}) {
   };
 }
 
+function withAutomationPreferenceRevision(updates = {}) {
+  const changed = AUTOMATION_PREFERENCE_KEYS.filter((key) => updates[key] !== undefined);
+  if (!changed.length) return updates;
+  return {
+    ...updates,
+    automationPreferencesRevision: Number(runtimeConfig.automationPreferencesRevision || 0) + 1,
+    automationPreferencesUpdatedAt: new Date().toISOString(),
+    automationPreferencesSource: "FRONTEND",
+  };
+}
+
 registerConfigRoutes(app, {
   requireAdmin,
   getConfig: () => CONFIG,
@@ -33695,15 +33707,26 @@ registerConfigRoutes(app, {
     profitLocked: engineState.profitLocked,
   }),
   resetRuntimeConfig: () => {
-    const preserved = { alpacaLiveKey: runtimeConfig.alpacaLiveKey, alpacaLiveSecret: runtimeConfig.alpacaLiveSecret,
-      autoTradingEnabled, emergencyStopActive };
+    const preserved = {
+      alpacaLiveKey: runtimeConfig.alpacaLiveKey,
+      alpacaLiveSecret: runtimeConfig.alpacaLiveSecret,
+      autoTradingEnabled,
+      emergencyStopActive,
+      ...Object.fromEntries(AUTOMATION_PREFERENCE_KEYS
+        .filter((key) => runtimeConfig[key] !== undefined)
+        .map((key) => [key, runtimeConfig[key]])),
+      automationPreferencesRevision: runtimeConfig.automationPreferencesRevision,
+      automationPreferencesUpdatedAt: runtimeConfig.automationPreferencesUpdatedAt,
+      automationPreferencesSource: runtimeConfig.automationPreferencesSource,
+    };
     if (fs.existsSync(CONFIG_FILE)) fs.unlinkSync(CONFIG_FILE);
     runtimeConfig = saveRuntimeConfig(CONFIG_FILE, preserved);
   },
   applyPermanentUpdates: (updates) => {
     applyConfigRevision(updates);
+    const persistedUpdates = withAutomationPreferenceRevision(updates);
     const saved = sanitizeRuntimeConfig(saveRuntimeConfig(CONFIG_FILE, {
-      ...runtimeConfig, ...updates,
+      ...runtimeConfig, ...persistedUpdates,
       tradingMode: updates.tradingMode ?? TRADING_MODE,
       tradingModeLocked: updates.tradingModeLocked ?? tradingModeLocked,
       autoTradingEnabled: updates.autoTradingEnabled ?? autoTradingEnabled,
@@ -33714,7 +33737,7 @@ registerConfigRoutes(app, {
     if (updates.tradingMode !== undefined) TRADING_MODE = updates.tradingMode;
     runtimeConfig = saved;
     Object.assign(CONFIG, runtimeConfig);
-    CONFIG.minScoreToBuy = Math.max(70, Number(CONFIG.minScoreToBuy || 70));
+    CONFIG.minScoreToBuy = Math.max(70, Number(CONFIG.minScoreToBuy ?? 70));
     applyRuntimeLiveSettings();
     saveEngineState("MANUAL_CONFIG_UPDATED");
     return { ok: true, permanent: true, message: "Remote config permanently updated", config: CONFIG,
@@ -33726,13 +33749,14 @@ registerConfigRoutes(app, {
   },
   applyApiUpdates: (updates) => {
     applyConfigRevision(updates);
-    const saved = sanitizeRuntimeConfig(saveRuntimeConfig(CONFIG_FILE, { ...runtimeConfig, ...updates }));
+    const persistedUpdates = withAutomationPreferenceRevision(updates);
+    const saved = sanitizeRuntimeConfig(saveRuntimeConfig(CONFIG_FILE, { ...runtimeConfig, ...persistedUpdates }));
     runtimeConfig = saved;
     if (updates.tradingMode) TRADING_MODE = runtimeConfig.tradingMode = String(updates.tradingMode);
     if (updates.tradingModeLocked !== undefined) tradingModeLocked = runtimeConfig.tradingModeLocked = updates.tradingModeLocked === true || updates.tradingModeLocked === "true";
     if (updates.autoTradingEnabled !== undefined) autoTradingEnabled = runtimeConfig.autoTradingEnabled = updates.autoTradingEnabled === true || updates.autoTradingEnabled === "true";
     Object.assign(CONFIG, runtimeConfig);
-    CONFIG.minScoreToBuy = Math.max(70, Number(CONFIG.minScoreToBuy || 70));
+    CONFIG.minScoreToBuy = Math.max(70, Number(CONFIG.minScoreToBuy ?? 70));
     applyRuntimeLiveSettings();
     saveEngineState("MANUAL_CONFIG_UPDATED");
     return { permanent: true, config: CONFIG, runtimeConfig, tradingMode: TRADING_MODE, effectiveMode: getEffectiveTradingMode(engineState.marketOpen),

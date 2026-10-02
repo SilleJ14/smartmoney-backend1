@@ -19,7 +19,7 @@ export function classifyStockScoreBand(finalScore: number | null | undefined): s
 
 export function analyticalStockPass(input?: {
   finalScore?: number | null;
-  entryScore?: number | null;
+  entryApproved?: boolean;
   entryCoverage?: number | null;
 }): boolean;
 

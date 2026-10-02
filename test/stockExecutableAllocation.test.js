@@ -83,6 +83,15 @@ test("a locked live account cannot receive automatic stock approval or sizing", 
   assert.ok(sized.executionEligibility.reasons.includes("REAL_CASH_TRADING_LOCKED"));
 });
 
+test("zero frontend exposure disables stock sizing without falling back to a default", () => {
+  const now = Date.now();
+  const sized = attachStockExecutableAllocation(liveStock(now), {
+    now, account, positions: [], config: { ...config, maxBotExposurePercent: 0 },
+  });
+  assert.equal(sized.buyableNow, false);
+  assert.equal(sized.finalApprovedTradeAmount, 0);
+});
+
 test("a stale quote keeps a strong F and blocks buyable on execution", () => {
   const now = Date.now();
   const staleAt = new Date(now - 8400).toISOString();

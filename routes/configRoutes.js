@@ -20,7 +20,7 @@ export function registerConfigRoutes(app, dependencies) {
     return null;
   };
   app.post("/reset-runtime-config", requireAdmin, (_req, res) => {
-    try { resetRuntimeConfig(); res.json({ success: true, message: "runtime-config.json deleted successfully. Restart backend now." }); }
+    try { resetRuntimeConfig(); res.json({ success: true, message: "Runtime config reset; frontend automation preferences were preserved. Restart backend now." }); }
     catch (error) { res.status(500).json({ success: false, error: error.message }); }
   });
   app.get("/config", requireAdmin, (_req, res) => res.json({ message: "Current remote config", config: getConfig() }));
