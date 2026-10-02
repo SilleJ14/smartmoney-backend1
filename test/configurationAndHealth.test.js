@@ -78,7 +78,14 @@ test("a healthy provider with no symbol quote does not invent a score", () => {
 });
 
 test("status health separates feed, entitlement, fallback, and delay", () => {
-  const stocks = stockDataHealth({ massive: { delayed: true }, alpaca: { authenticated: true } });
+  const stocks = stockDataHealth({
+    tradier: {
+      authentication: { state: "PASS" },
+      entitlement: { marketData: "REALTIME_CONSOLIDATED" },
+    },
+    massive: { delayed: true },
+    alpaca: { authenticated: true, stockFeedEntitlement: "IEX" },
+  });
   assert.equal(stocks.stocks.tradier.entitlement.marketData, "REALTIME_CONSOLIDATED");
   assert.equal(stocks.stocks.massive.feed, "DELAYED");
   assert.equal(stocks.stocks.alpaca.stockFeedEntitlement, "IEX");

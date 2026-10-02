@@ -175,10 +175,16 @@ export function executionQuoteDecision({
   if (ageMs === null || ageMs === undefined || !Number.isFinite(Number(ageMs))) {
     return { state: "DATA_UNAVAILABLE", reason: "MEASURED_AT_MISSING", satisfiesExecution: false, changesFinalScore: false };
   }
+  if (Number(ageMs) < -5000) {
+    return { state: "WAIT", reason: "QUOTE_TIMESTAMP_IN_FUTURE", satisfiesExecution: false, changesFinalScore: false };
+  }
   if (Number(ageMs) > 5000) {
     return { state: "WAIT", reason: "QUOTE_STALE", satisfiesExecution: false, changesFinalScore: false };
   }
-  if (spreadPercent !== null && spreadPercent !== undefined && Number(spreadPercent) > 1) {
+  if (spreadPercent === null || spreadPercent === undefined || !Number.isFinite(Number(spreadPercent)) || Number(spreadPercent) < 0) {
+    return { state: "DATA_UNAVAILABLE", reason: "SPREAD_UNAVAILABLE", satisfiesExecution: false, changesFinalScore: false };
+  }
+  if (Number(spreadPercent) > 1) {
     return { state: "EXECUTION_NOT_READY", reason: "SPREAD_TOO_WIDE", satisfiesExecution: false, changesFinalScore: false };
   }
   return {

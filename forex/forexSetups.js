@@ -2,11 +2,12 @@ import { FOREX_SPEC, pipSize } from "./forexSpec.js";
 
 function num(value) {
   const n = Number(value);
-  return Number.isFinite(n) ? n : 0;
+  return value !== null && value !== undefined && value !== "" && Number.isFinite(n) ? n : null;
 }
 
 export function completedCandles(candles = []) {
-  return candles.filter((candle) => candle && candle.complete !== false && Number.isFinite(num(candle.c)));
+  return candles.filter((candle) => candle && candle.complete !== false &&
+    [candle.o, candle.h, candle.l, candle.c].every(value => Number.isFinite(num(value))));
 }
 
 export function trueRange(candle, previous) {

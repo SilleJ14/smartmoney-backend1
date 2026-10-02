@@ -1,7 +1,6 @@
-// Shadow Entry. Production still uses calculateEntryQualityScore and E >= 75.
-// Each family turns its inputs into one score. Agreeing indicators raise
-// coverage. They do not add a second pile of points.
-// The equal-family blend is only a logging series for later calibration.
+// Canonical structural Entry evidence. Each family turns its inputs into one
+// score and the setup policy defines which families must be present. Agreeing
+// indicators raise coverage; they do not introduce another numeric gate.
 
 import { measureBarStructure } from "./setupStateClassifier.js";
 
@@ -30,21 +29,21 @@ const SUPPORTIVE = ENTRY_REQUIREMENTS.SUPPORTIVE;
 const MEASURED = ENTRY_REQUIREMENTS.MEASURED;
 
 export const ENTRY_POLICY = Object.freeze({
-  BREAKOUT: { trend: REQUIRED, momentum: REQUIRED, structure: REQUIRED, volume: REQUIRED, volatility: MEASURED, execution: REQUIRED },
-  PULLBACK: { trend: REQUIRED, momentum: SUPPORTIVE, structure: REQUIRED, volume: SUPPORTIVE, volatility: REQUIRED, execution: REQUIRED },
-  RETEST: { trend: REQUIRED, momentum: SUPPORTIVE, structure: REQUIRED, volume: SUPPORTIVE, volatility: MEASURED, execution: REQUIRED },
-  CONTINUATION: { trend: REQUIRED, momentum: SUPPORTIVE, structure: REQUIRED, volume: SUPPORTIVE, volatility: MEASURED, execution: REQUIRED },
-  REVERSAL: { trend: REQUIRED, momentum: REQUIRED, structure: REQUIRED, volume: SUPPORTIVE, volatility: MEASURED, execution: REQUIRED },
-  IGNITION: { trend: SUPPORTIVE, momentum: REQUIRED, structure: REQUIRED, volume: REQUIRED, volatility: MEASURED, execution: REQUIRED },
+  BREAKOUT: { trend: REQUIRED, momentum: REQUIRED, structure: REQUIRED, volume: REQUIRED, volatility: MEASURED, execution: SUPPORTIVE },
+  PULLBACK: { trend: REQUIRED, momentum: SUPPORTIVE, structure: REQUIRED, volume: SUPPORTIVE, volatility: REQUIRED, execution: SUPPORTIVE },
+  RETEST: { trend: REQUIRED, momentum: SUPPORTIVE, structure: REQUIRED, volume: SUPPORTIVE, volatility: MEASURED, execution: SUPPORTIVE },
+  CONTINUATION: { trend: REQUIRED, momentum: SUPPORTIVE, structure: REQUIRED, volume: SUPPORTIVE, volatility: MEASURED, execution: SUPPORTIVE },
+  REVERSAL: { trend: REQUIRED, momentum: REQUIRED, structure: REQUIRED, volume: SUPPORTIVE, volatility: MEASURED, execution: SUPPORTIVE },
+  IGNITION: { trend: SUPPORTIVE, momentum: REQUIRED, structure: REQUIRED, volume: REQUIRED, volatility: MEASURED, execution: SUPPORTIVE },
 });
 
 const FAMILY_REQUIREMENTS = Object.freeze({
-  BREAKOUT: { required: ["trend", "momentum", "structure", "volume", "execution"], measured: ["volatility"], supportive: [] },
-  PULLBACK: { required: ["trend", "structure", "volatility", "execution"], measured: [], supportive: ["momentum", "volume"] },
-  RETEST: { required: ["trend", "structure", "execution"], measured: ["volatility"], supportive: ["momentum", "volume"] },
-  CONTINUATION: { required: ["trend", "structure", "execution"], measured: ["volatility"], supportive: ["momentum", "volume"] },
-  REVERSAL: { required: ["trend", "momentum", "structure", "execution"], measured: ["volatility"], supportive: ["volume"] },
-  IGNITION: { required: ["momentum", "structure", "volume", "execution"], measured: ["volatility"], supportive: ["trend"] },
+  BREAKOUT: { required: ["trend", "momentum", "structure", "volume"], measured: ["volatility"], supportive: ["execution"] },
+  PULLBACK: { required: ["trend", "structure", "volatility"], measured: [], supportive: ["momentum", "volume", "execution"] },
+  RETEST: { required: ["trend", "structure"], measured: ["volatility"], supportive: ["momentum", "volume", "execution"] },
+  CONTINUATION: { required: ["trend", "structure"], measured: ["volatility"], supportive: ["momentum", "volume", "execution"] },
+  REVERSAL: { required: ["trend", "momentum", "structure"], measured: ["volatility"], supportive: ["volume", "execution"] },
+  IGNITION: { required: ["momentum", "structure", "volume"], measured: ["volatility"], supportive: ["trend", "execution"] },
 });
 
 function finite(...values) {
@@ -438,9 +437,10 @@ export function scoreEntryFamilies(signal = {}, {
   return {
     mode: "LIVE",
     algorithm: "ENTRY_FAMILIES_LIVE_UNCALIBRATED_V1",
-    replacesProductionEntry: false,
+    replacesProductionEntry: true,
     controlsLiveApproval: true,
-    productionEntryGate: 75,
+    productionEntryGate: null,
+    legacyDiagnosticEntryGate: 75,
     thresholdStatus: "NOT_CALIBRATED",
     blendMethod: "UNCALIBRATED_EQUAL_COVERAGE",
     familyWeights: null,

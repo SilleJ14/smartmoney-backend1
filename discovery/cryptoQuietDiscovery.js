@@ -82,7 +82,12 @@ export async function runBoundedCryptoQuietDiscovery({
         dailyBars: historyToDailyBars(history),
         now,
       });
-      if (Number(scorecard.score || 0) < 58 && scorecard.setupState !== "EXTENDED" && scorecard.setupState !== "EXHAUSTED") continue;
+      const discoveryScore = scorecard.score === null || scorecard.score === undefined || scorecard.score === ""
+        ? null
+        : Number(scorecard.score);
+      const scoreAvailable = Number.isFinite(discoveryScore);
+      if (!scoreAvailable && scorecard.setupState !== "EXTENDED" && scorecard.setupState !== "EXHAUSTED") continue;
+      if (scoreAvailable && discoveryScore < 58 && scorecard.setupState !== "EXTENDED" && scorecard.setupState !== "EXHAUSTED") continue;
       ranked.push({
         symbol,
         assetClass: "crypto",
@@ -92,7 +97,8 @@ export async function runBoundedCryptoQuietDiscovery({
         newLongEntryAllowed: scorecard.newLongEntryAllowed !== false,
         extensionEvidence: scorecard.extensionEvidence,
         current: Number(history.at(-1)?.c || 0),
-        cryptoDiscoveryScore: Number(scorecard.score || 0),
+        cryptoDiscoveryScore: scoreAvailable ? discoveryScore : null,
+        cryptoDiscoveryScoreAvailable: scoreAvailable,
         cryptoDiscoveryTier: scorecard.tier,
         cryptoDiscoveryScorecard: {
           stage: scorecard.stage,
@@ -116,14 +122,18 @@ export async function runBoundedCryptoQuietDiscovery({
     if (memoryBudgetExceeded) break;
     await new Promise((resolve) => setImmediate(resolve));
   }
-  ranked.sort((a, b) => Number(b.cryptoDiscoveryScore || 0) - Number(a.cryptoDiscoveryScore || 0));
+  const scoreForSort = (item) => Number.isFinite(Number(item?.cryptoDiscoveryScore))
+    && item?.cryptoDiscoveryScore !== null
+    ? Number(item.cryptoDiscoveryScore)
+    : Number.NEGATIVE_INFINITY;
+  ranked.sort((a, b) => scoreForSort(b) - scoreForSort(a));
   const storedWatchlist = ranked.slice(0, config.watchlistSize);
   const bySymbol = new Map(scanWatchlist.map((item) => [item.symbol, item]));
   for (const item of storedWatchlist) {
     if (!bySymbol.has(item.symbol)) bySymbol.set(item.symbol, item);
   }
   const topCandidates = [...bySymbol.values()]
-    .sort((a, b) => Number(b.cryptoDiscoveryScore || 0) - Number(a.cryptoDiscoveryScore || 0))
+    .sort((a, b) => scoreForSort(b) - scoreForSort(a))
     .slice(0, config.watchlistSize);
   return {
     ok: memoryBudgetExceeded !== true,

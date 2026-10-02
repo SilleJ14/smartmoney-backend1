@@ -3,6 +3,9 @@ export const EVALUATION_MINIMUMS = Object.freeze({
   minMonths: 12,
   requireForwardPractice: true,
   requireLowerBoundAboveZero: true,
+  maxProbabilityBacktestOverfit: 0.2,
+  minDeflatedSharpeProbability: 0.95,
+  maxBrierScore: 0.25,
 });
 
 export function evaluateStrategyReport(report = {}) {
@@ -22,6 +25,23 @@ export function evaluateStrategyReport(report = {}) {
   if (report.drawdownAcceptable !== true) reasons.push("DRAWDOWN_POLICY");
   if (report.survivedAdverseCosts !== true) reasons.push("ADVERSE_COSTS");
   if (report.independentOfOtherStrategy !== true) reasons.push("NOT_INDEPENDENT");
+  if (report.walkForwardPassed !== true) reasons.push("WALK_FORWARD_REQUIRED");
+  if (report.untouchedOutOfSamplePassed !== true) reasons.push("OUT_OF_SAMPLE_REQUIRED");
+  if (!(Number(report.probabilityBacktestOverfit) >= 0) ||
+      Number(report.probabilityBacktestOverfit) > EVALUATION_MINIMUMS.maxProbabilityBacktestOverfit) {
+    reasons.push("BACKTEST_OVERFIT_RISK");
+  }
+  if (!(Number(report.deflatedSharpeProbability) >= EVALUATION_MINIMUMS.minDeflatedSharpeProbability)) {
+    reasons.push("DEFLATED_SHARPE");
+  }
+  if (!(Number(report.brierScore) >= 0) ||
+      Number(report.brierScore) > EVALUATION_MINIMUMS.maxBrierScore ||
+      report.calibrationPassed !== true) {
+    reasons.push("PROBABILITY_CALIBRATION");
+  }
+  if (report.featureSnapshotVersion == null || report.configHash == null) {
+    reasons.push("REPRODUCIBILITY_EVIDENCE");
+  }
   return { ok: reasons.length === 0, reasons };
 }
 

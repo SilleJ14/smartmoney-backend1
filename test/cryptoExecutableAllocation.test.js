@@ -36,6 +36,8 @@ function liveBtc(now = Date.now(), extras = {}) {
     newsCatalyst: { dataAvailable: true, riskDetected: false },
     barsFound: 30,
     windowDollarVolume: 1_000_000,
+    cryptoContextScorecard: { score: 50, independent: true, source: "independent_test_context" },
+    cryptoMarketContext: { score: 50, state: "NEUTRAL", measuredAt: iso, affectsF: false },
     centralAutonomousDecisionCore: { updatedAt: iso, action: "ALLOW", cryptoDecisionEvidence: { coreEvidencePass: true } },
     researchEvidenceAt: iso,
     ...extras,
@@ -73,7 +75,10 @@ test("zero research size is pending, not a revoked crypto buy", () => {
 test("F66 BTC with a live Alpaca book gets a size and a 5s buy window", () => {
   const now = Date.now();
   const sized = attachCryptoExecutableAllocation(liveBtc(now), { now, account, positions: [], config });
-  assert.equal(sized.buyableNow, true);
+  assert.equal(sized.buyableNow, true, JSON.stringify({
+    reasons: sized.executionEligibility?.reasons,
+    shadow: sized.cryptoAnalyticalShadow,
+  }));
   assert.ok(sized.finalApprovedTradeAmount >= 25);
   assert.equal(sized.sizingDecisionUpdatedAt, sized.decisionUpdatedAt);
   assert.equal(getApprovedTradeAmount(sized) >= 1, true);

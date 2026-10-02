@@ -159,7 +159,10 @@ test("frontend signals require all approval flags and rank by canonical F", asyn
         { symbol: "LOOSE", price: 100, score: 100, masterFinalScore: 99, stockDecisionScoreAvailable: true, qualifiedToBuy: true, autoTradeApproved: true },
       ],
       topCryptoSignals: [
-        { symbol: "BTC/USD", price: 100, score: 99, cryptoDecisionScore: 72, cryptoDecisionScoreAvailable: true, ...approval },
+        { symbol: "BTC/USD", price: 100, score: 99, cryptoDecisionScore: 72,
+          cryptoDecisionScoreAvailable: true, cryptoAnalyticalShadow: {
+            cryptoAnalyticalF: 72, replacesCanonicalF: true, productionEffect: true,
+          }, ...approval },
       ],
     }),
   });

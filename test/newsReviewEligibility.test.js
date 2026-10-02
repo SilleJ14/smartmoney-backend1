@@ -5,6 +5,7 @@ import { calculateEntryQualityScore } from '../scoring/decisionScores.js';
 
 const fixture = () => ({
   symbol: 'AUDIT', price: 100, discoveryScore: 65, preMoveScore: 65,
+  setupState: 'PULLBACK', pullbackStructure: { trendIntact: true, depthAtr: 1 },
   technicalBarsFound: 60, technicals: { ema9: 101, ema20: 99, macd: 2, macdSignal: 1, rsi: 60 },
   confirmations: { closeNearHighPercent: 95, aboveVwap: true, fakeBreakout: false, newsRiskAvailable: false },
   phase5SignalQuality: { breakoutRetestConfirmation: true, liquidityStabilityScore: 95,

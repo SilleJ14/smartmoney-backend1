@@ -12,10 +12,16 @@ export function installCentralDecision(signal, decision, { crypto = false, now =
   if (!canPublishDecision({ decisionRevision: currentRevision }, decision)) return signal;
   if (!crypto) retainMeasuredStockScores(signal, {}, now);
   const evidence = crypto ? decision.cryptoDecisionEvidence : decision.stockDecisionEvidence;
-  const rawScore = crypto ? decision.cryptoDecisionScore ?? (hasDecisionAnalysis(evidence) ? decision.finalDecisionScore : null) : decision.finalDecisionScore;
+  const cryptoShadow = crypto ? evidence?.cryptoAnalyticalShadow : null;
+  const rawScore = crypto
+    ? ((cryptoShadow?.replacesCanonicalF === true || cryptoShadow?.productionEffect === true)
+      ? cryptoShadow.cryptoAnalyticalF
+      : null)
+    : decision.finalDecisionScore;
   const score = rawScore == null || rawScore === "" ? NaN : Number(rawScore);
-  const available = hasDecisionAnalysis(evidence) && Number.isFinite(score) && score >= 0 && score <= 100;
-  const review = completeCentralReview(signal, available ? score : null, now);
+  const analyticalAvailable = Number.isFinite(score) && score >= 0 && score <= 100;
+  const reviewAvailable = hasDecisionAnalysis(evidence) && analyticalAvailable;
+  const review = completeCentralReview(signal, reviewAvailable ? score : null, now);
   const analytical = signal.currentAnalyticalSnapshot || evidence?.currentAnalyticalSnapshot || null;
   const authorizedDecisionSnapshot = review
     ? authorizeAnalyticalSnapshot(analytical, review.scoreVersion, new Date(now).toISOString())
@@ -41,20 +47,23 @@ export function installCentralDecision(signal, decision, { crypto = false, now =
     setupRevalidationRequired: false,
     quoteRevalidationBasis: null,
     centralAutonomousAction: decision.action,
-    finalAutonomousDecisionScore: available ? score : null,
-    masterFinalScore: available ? score : null,
+    finalAutonomousDecisionScore: reviewAvailable ? score : null,
+    masterFinalScore: reviewAvailable ? score : null,
     ...(authorizedDecisionSnapshot ? {
       authorizedDecisionSnapshot,
       authorizedF: authorizedDecisionSnapshot.authorizedF,
     } : {}),
     ...(crypto ? {
-      cryptoDecisionScore: available ? score : null,
-      cryptoDecisionScoreAvailable: available,
+      cryptoDecisionScore: analyticalAvailable ? score : null,
+      cryptoDecisionScoreAvailable: analyticalAvailable,
+      cryptoAnalyticalShadow: cryptoShadow || null,
+      currentAnalyticalSnapshot: evidence?.currentAnalyticalSnapshot || signal.currentAnalyticalSnapshot || null,
+      legacyCryptoCompositeScore: Number.isFinite(Number(evidence?.score)) ? Number(evidence.score) : null,
       cryptoScoreTelemetry: { ...(signal.cryptoScoreTelemetry || {}), decision: evidence },
       provisionalCryptoDecisionScore: decision.provisionalCryptoDecisionScore,
     } : {
-      stockDecisionScore: available ? score : null,
-      stockDecisionScoreAvailable: available,
+      stockDecisionScore: reviewAvailable ? score : null,
+      stockDecisionScoreAvailable: reviewAvailable,
       stockDecisionEvidence: evidence,
       discoveryLane: evidence?.discoveryLane || signal.discoveryLane,
       continuationSetup: evidence?.continuationSetup || signal.continuationSetup,

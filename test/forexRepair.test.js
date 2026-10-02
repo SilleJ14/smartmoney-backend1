@@ -22,7 +22,10 @@ import { evaluateTrendContinuation } from "../forex/strategies/trendContinuation
 
 const now = Date.parse("2026-09-23T14:00:30Z");
 const bar = (t, o=1.1,h=1.101,l=1.099,c=1.1) => ({ t:new Date(t).toISOString(),o,h,l,c,complete:true });
-const registry = () => createApprovalRegistry({ FOREX_BREAKOUT_RETEST_V1: { permittedEnvironment:"FORWARD_PRACTICE" } });
+const registry = () => createApprovalRegistry({
+  FOREX_BREAKOUT_RETEST_V1: { permittedEnvironment:"FORWARD_PRACTICE" },
+  FOREX_TREND_CONTINUATION_V1: { permittedEnvironment:"FORWARD_PRACTICE" },
+});
 const calendar = { coverageComplete:true,refreshedAt:new Date(now).toISOString(),events:[] };
 
 for (const stage of ['fetch', 'commit']) test(`new calendar restriction during ${stage} prevents order submission`, async()=>{
@@ -48,17 +51,30 @@ async function fixture() {
   const close=Math.floor(now/900000)*900000;
   const identity=canonicalAccountId({environment:"practice",broker:"oanda",accountId:"a",assetClass:"forex",instrumentId:"EUR_USD"});
   await store.commit(l=>{l.candidates=[{identity,strategyId:"FOREX_BREAKOUT_RETEST_V1",side:"buy",state:"WATCHING",firstSeenAt:new Date(now-3600000).toISOString(),setupAnchor:new Date(close-2700000).toISOString(),frozen:{H:1.1,L:1.098,A:.002,side:"buy",rangeEnd:new Date(close-2700000).toISOString()}}];});
-  const prices=names=>({prices:names.map(instrument=>({instrument,time:new Date(time).toISOString(),bids:[{price:"1.10040"}],asks:[{price:"1.10041"}],tradeable:true})),homeConversions:[{currency:"USD",accountLoss:"1"}]});
+  const prices=names=>({prices:names.map(instrument=>({instrument,time:new Date(time).toISOString(),bids:[{price:"1.10040",liquidity:1000000}],asks:[{price:"1.10041",liquidity:1000000}],tradeable:true})),homeConversions:[{currency:"USD",accountLoss:"1"}]});
+  const outcomeBucket="FOREX_BREAKOUT_RETEST_V1:range:london+newYork:BUY";
+  const journal={
+    health:()=>({ok:true}),
+    listEvents:({type})=>type==="OUTCOME"?Array.from({length:20},(_,index)=>({payload:{
+      bucket:outcomeBucket,success:index<14,resolvedAt:new Date(now-(index+1)*86400000).toISOString(),
+    }})):[],
+    recordSnapshot:({payload})=>({snapshotId:`test-${payload.hash}`}),
+    append(){},
+  };
+  const providerContext={
+    calibration:{FOREX_BREAKOUT_RETEST_V1:{outOfSample:true,points:[{predicted:0,observed:0},{predicted:1,observed:1}]}},
+    executionCosts:{EUR_USD:{slippageR:.01,financingR:.01}},
+  };
   const client={token:"mock",accountId:"a",liveHost:false,
     async getAccount(){return {account:{id:"a",NAV:"1000",balance:"1000",currency:"USD",lastTransactionID:"1",marginAvailable:"1000",marginUsed:"0"}}},
     async getOpenTrades(){return {trades:[]}},async getPendingOrders(){return {orders:[]}},async getTransactionsSince(){return {transactions:[]}},
-    async getInstruments(){return {instruments:[{name:"EUR_USD",displayPrecision:5,tradeUnitsPrecision:0,minimumTradeSize:1,marginRate:.02}]}},
+    async getInstruments(){return {instruments:[{name:"EUR_USD",pipLocation:-4,displayPrecision:5,tradeUnitsPrecision:0,minimumTradeSize:1,marginRate:.02}]}},
     async getPrices(names){return prices(names)},
     async getCandles(_instrument,{granularity}){
-      const period={H4:14400000,H1:3600000,M15:900000}[granularity];
+      const period={H4:14400000,H1:3600000,M15:900000,M5:300000,D:86400000}[granularity];
       const end=Math.floor(now/period)*period;
       // 23 H1 bars supply ATR + range; three H4 bars intentionally neutral (no opposing trend).
-      const count={H4:3,H1:30,M15:20}[granularity];
+      const count={H4:3,H1:30,M15:20,M5:30,D:30}[granularity];
       const rows=Array.from({length:count},(_,i)=>bar(end-(count-i)*period));
       if(granularity==="M15") rows.splice(-3,3,
         bar(close-2700000,1.10005,1.10035,1.09995,1.10030),
@@ -69,12 +85,12 @@ async function fixture() {
     async createMarketOrder(order){orders++;return {orderFillTransaction:{id:"2",type:"ORDER_FILL",orderID:"2",units:String(order.units),instrument:order.instrument,time:new Date(time).toISOString(),tradeOpened:{tradeID:"t",units:String(order.units),price:"1.10041"}}}},
   };
   return {client,store,get orders(){return orders},setAuto(v){auto=v},setPause(v){pause=v},setTime(v){time=v},
-    run:(options={})=>runForexEngineCycle({client,store,now,clockNow:()=>time,forexAutoEnabled:auto,getAutoEnabled:()=>auto,getEntryPause:()=>pause,calendar,registry:registry(),spec:{...FOREX_SPEC,scanInstruments:["EUR_USD"]},...options})};
+    run:(options={})=>runForexEngineCycle({client,store,journal,providerContext,now,clockNow:()=>time,forexAutoEnabled:auto,getAutoEnabled:()=>auto,getEntryPause:()=>pause,calendar,registry:registry(),spec:{...FOREX_SPEC,scanInstruments:["EUR_USD"]},...options})};
 }
 
-test("operator Autopilot permission does not fabricate strategy validation or enable breakout/live",()=>{
+test("operator Autopilot permission requires strategy validation and never enables live",()=>{
   const r=createApprovalRegistry();const before=JSON.stringify(r);
-  assert.equal(automaticEntryPermission(r,STRATEGY_IDS.CONTINUATION,{autopilotEnabled:true}).allowed,true);
+  assert.equal(automaticEntryPermission(r,STRATEGY_IDS.CONTINUATION,{autopilotEnabled:true}).allowed,false);
   assert.equal(automaticEntryPermission(r,STRATEGY_IDS.CONTINUATION,{autopilotEnabled:false}).allowed,false);
   assert.equal(automaticEntryPermission(r,STRATEGY_IDS.BREAKOUT,{autopilotEnabled:true}).allowed,false);
   assert.equal(automaticEntryPermission(r,STRATEGY_IDS.MANUAL,{autopilotEnabled:true}).allowed,false);
@@ -84,23 +100,28 @@ test("operator Autopilot permission does not fabricate strategy validation or en
   assert.equal(JSON.stringify(r),before);
   r[STRATEGY_IDS.CONTINUATION].disabled=true;
   assert.equal(automaticEntryPermission(r,STRATEGY_IDS.CONTINUATION,{autopilotEnabled:true}).reason,'STRATEGY_DISABLED');
-  for(const key of ['plannedRiskPerTradePercent','openPlusPendingPercent','sameDirectionCurrencyPercent','dailyLossTriggerPercent','drawdownPausePercent'])assert.equal(FOREX_RISK_LIMITS[key],10);
+  assert.equal(FOREX_RISK_LIMITS.plannedRiskPerTradePercent,0.5);
+  assert.equal(FOREX_RISK_LIMITS.openPlusPendingPercent,2);
+  assert.equal(FOREX_RISK_LIMITS.sameDirectionCurrencyPercent,1.5);
+  assert.equal(FOREX_RISK_LIMITS.dailyLossTriggerPercent,2);
+  assert.equal(FOREX_RISK_LIMITS.weeklyLossTriggerPercent,4);
+  assert.equal(FOREX_RISK_LIMITS.drawdownPausePercent,10);
 });
 
-test("scanner exposes operator permission but keeps unapproved breakout out of execution",async()=>{
+test("scanner keeps every unvalidated automatic strategy out of execution",async()=>{
   const f=await fixture();const result=await f.run({registry:createApprovalRegistry()});
   assert.equal(f.orders,0);
   assert.ok(result.candidates.filter(c=>c.strategyId===STRATEGY_IDS.BREAKOUT).every(c=>c.blockers.includes('STRATEGY_NOT_APPROVED')));
-  assert.ok(result.candidates.filter(c=>c.strategyId===STRATEGY_IDS.CONTINUATION).every(c=>c.entryPermission.allowed));
+  assert.ok(result.candidates.filter(c=>c.strategyId===STRATEGY_IDS.CONTINUATION).every(c=>c.blockers.includes('STRATEGY_NOT_APPROVED')));
 });
 
-for(const condition of ['ON','OFF','STOP','STALE','NO_CALENDAR','LOSS_LOCK'])test(`continuation with operator permission and real mocked preflight: ${condition}`,async()=>{
+for(const condition of ['ON','OFF','STOP','STALE','NO_CALENDAR','LOSS_LOCK'])test(`validated continuation with real mocked preflight: ${condition}`,async()=>{
   const f=await fixture();
   await f.store.commit(l=>{l.dayStart.a={adjustedEquity:condition==='LOSS_LOCK'?1200:1000};l.peakEquity.a=1000});
   if(condition==='STALE'){
     const original=f.client.getPrices;f.client.getPrices=async names=>{const p=await original(names);p.prices[0].time=new Date(now-10000).toISOString();return p};
   }
-  const coordinator=createExecutionCoordinator({adapter:f.client,store:f.store,registry:createApprovalRegistry(),nowFn:()=>now,
+  const coordinator=createExecutionCoordinator({adapter:f.client,store:f.store,registry:registry(),nowFn:()=>now,
     getAutoEnabled:()=>condition!=='OFF',getEntryPause:()=>condition==='STOP'});
   const result=await coordinator.submit({intent:'automatic',environment:'FORWARD_PRACTICE',practiceOrdersEnabled:true,
     executionReady:true,autoTradingAuthorized:true,strategyId:STRATEGY_IDS.CONTINUATION,accountId:'a',instrumentId:'EUR_USD',
@@ -109,7 +130,7 @@ for(const condition of ['ON','OFF','STOP','STALE','NO_CALENDAR','LOSS_LOCK'])tes
     clientRequestId:`continuation-${condition}`});
   assert.equal(f.orders,condition==='ON'?1:0,JSON.stringify(result));
   if(condition==='ON'){
-    assert.equal(result.state,'FILLED');assert.equal((await f.store.load()).intents[0].entryPermission.source,'OPERATOR_AUTOPILOT');
+    assert.equal(result.state,'FILLED');assert.equal((await f.store.load()).intents[0].entryPermission.source,'STRATEGY_REGISTRY');
   }else assert.equal(result.state,'BLOCKED');
 });
 
@@ -157,8 +178,12 @@ test("forex and stock/crypto routes never mutate the other control domain",async
   await invoke('/forex-auto/on');await invoke('/forex-auto/off');assert.equal(state.autoTradingEnabled,true);assert.equal(state.forexAutoEnabled,false);
 });
 test("forex protection can run while independent discovery is blocked",async()=>{
-  let finish;let protection=0;const scheduler=createForexScheduler({scan:()=>new Promise(r=>finish=r),protect:async()=>++protection});
-  const running=scheduler.scan();await scheduler.protect();assert.equal(protection,1);assert.equal((await scheduler.scan()).skipped,"SCAN_RUNNING");finish();await running;
+  let finish;let protection=0;let scans=0;const scheduler=createForexScheduler({
+    scan:()=>++scans===1?new Promise(r=>finish=r):Promise.resolve({requeued:true}),
+    protect:async()=>++protection,
+  });
+  const running=scheduler.scan();await scheduler.protect();assert.equal(protection,1);
+  const queued=scheduler.scan();finish();await running;assert.equal((await queued).requeued,true);assert.equal(scans,2);
   const server=fs.readFileSync(new URL('../server.js',import.meta.url),'utf8');
   const runtime=server.slice(server.indexOf('function getForexEngineRuntime'),server.indexOf('const forexScheduler'));
   assert.doesNotMatch(runtime,/\bemergencyStopActive\b|\bautoTradingEnabled\b/);

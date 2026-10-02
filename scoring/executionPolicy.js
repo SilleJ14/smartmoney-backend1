@@ -20,6 +20,11 @@ export const PREMARKET_MOVER_DISCOVERY_MAX_SPREAD = 3;
 
 const DISPLAY_QUOTE_MAX_MS = 15000;
 
+function finiteEvidence(value) {
+  return value !== null && value !== undefined && typeof value !== "boolean"
+    && !(typeof value === "string" && value.trim() === "") && Number.isFinite(Number(value));
+}
+
 export function evidenceAgeMs({ measuredAt = null, now = Date.now() } = {}) {
   const measured = typeof measuredAt === "number" ? measuredAt : Date.parse(String(measuredAt || ""));
   if (!Number.isFinite(measured)) {
@@ -52,8 +57,8 @@ export function classifyQuotePurpose({
     usedCacheInsertionTime: false,
     executionGrade,
     purposes: {
-      DISPLAY: quoteAgeMs <= DISPLAY_QUOTE_MAX_MS,
-      DISCOVERY: quoteAgeMs <= DISPLAY_QUOTE_MAX_MS,
+      DISPLAY: quoteAgeMs >= -5000 && quoteAgeMs <= DISPLAY_QUOTE_MAX_MS,
+      DISCOVERY: quoteAgeMs >= -5000 && quoteAgeMs <= DISPLAY_QUOTE_MAX_MS,
       ANALYTICAL: true,
       EXECUTION: executionGrade,
     },
@@ -68,8 +73,14 @@ export function classifyStockExecution({
   bookAvailable = true,
   sizeExceedsDepth = false,
 } = {}) {
-  if (quoteAgeMs === null || spreadAgeMs === null || spreadPercent === null) {
+  if (![quoteAgeMs, spreadAgeMs, spreadPercent].every(finiteEvidence)) {
     return { state: "EXECUTION_NOT_READY", reason: "POLICY_MISSING", changesFinalScore: false };
+  }
+  if (Number(quoteAgeMs) < -5000 || Number(spreadAgeMs) < -5000) {
+    return { state: "EXECUTION_NOT_READY", reason: "EVIDENCE_TIMESTAMP_IN_FUTURE", changesFinalScore: false };
+  }
+  if (Number(spreadPercent) < 0) {
+    return { state: "EXECUTION_NOT_READY", reason: "SPREAD_INVALID", changesFinalScore: false };
   }
   if (quoteAgeMs > STOCK_EXECUTION_POLICY.quoteAgeMs) {
     return { state: "EXECUTION_NOT_READY", reason: "QUOTE_STALE", changesFinalScore: false };
@@ -97,8 +108,11 @@ export function classifyCryptoExecution({
   bookAvailable = true,
   sizeExceedsDepth = false,
 } = {}) {
-  if (spreadPercent === null) {
+  if (!finiteEvidence(spreadPercent)) {
     return { state: "EXECUTION_NOT_READY", reason: "POLICY_MISSING", changesFinalScore: false };
+  }
+  if (Number(spreadPercent) < 0) {
+    return { state: "EXECUTION_NOT_READY", reason: "SPREAD_INVALID", changesFinalScore: false };
   }
   if (Number(spreadPercent) > CRYPTO_EXECUTION_POLICY.maxQuotedSpreadPercent) {
     return { state: "EXECUTION_NOT_READY", reason: "SPREAD_TOO_WIDE", changesFinalScore: false };
@@ -113,6 +127,7 @@ export function classifyCryptoExecution({
 }
 
 export function discoverySpreadAllowsWatch(spreadPercent, { session = "REGULAR" } = {}) {
+  if (!finiteEvidence(spreadPercent) || Number(spreadPercent) < 0) return false;
   const limit = session === "PREMARKET"
     ? PREMARKET_MOVER_DISCOVERY_MAX_SPREAD
     : REGULAR_MOVER_DISCOVERY_MAX_SPREAD;

@@ -5,6 +5,7 @@ import { isNearFinalBuyGate } from "../scoring/nearFinalBuyGate.js";
 
 function finite(...values) {
   for (const value of values) {
+    if (value === null || value === undefined || value === "" || typeof value === "boolean") continue;
     const score = Number(value);
     if (Number.isFinite(score)) return score;
   }
@@ -13,7 +14,7 @@ function finite(...values) {
 
 function buyGateFor(row, override) {
   if (override !== null && override !== undefined && Number.isFinite(Number(override))) return Number(override);
-  return String(row.symbol || "").includes("/") ? 65 : 70;
+  return String(row.symbol || "").includes("/") ? null : 70;
 }
 
 export function evidencePriority(row = {}, { now = Date.now(), buyGate = null } = {}) {
@@ -21,22 +22,25 @@ export function evidencePriority(row = {}, { now = Date.now(), buyGate = null } 
   const currentD = (row.currentAnalyticalSnapshot
     ? finite(row.currentAnalyticalSnapshot.components?.discovery?.score)
     : finite(row.discoveryScore, row.preMoveScore, row.discoveryScorecard?.score)) ?? 0;
-  const currentF = finite(
-    row.currentAnalyticalScore,
-    row.stockDecisionScore,
-    row.cryptoDecisionScore,
-    row.masterFinalScore
-  );
-  const distanceToQualification = currentF === null ? null : Number((gate - currentF).toFixed(2));
-  const qualification = currentF === null
+  const crypto = String(row.symbol || "").includes("/");
+  const cryptoShadow = row.cryptoAnalyticalShadow
+    || row.cryptoScoreTelemetry?.decision?.cryptoAnalyticalShadow
+    || row.centralAutonomousDecisionCore?.cryptoDecisionEvidence?.cryptoAnalyticalShadow;
+  const currentF = crypto
+    ? finite(cryptoShadow?.cryptoAnalyticalF)
+    : finite(row.currentAnalyticalScore, row.stockDecisionScore);
+  const distanceToQualification = currentF === null || gate === null
+    ? null
+    : Number((gate - currentF).toFixed(2));
+  const qualification = currentF === null || gate === null
     ? 0
     : distanceToQualification > 0
       ? Math.max(0, 40 - distanceToQualification)
       : 8;
   const coverage = finite(row.decisionCoverage);
   const maximumPossibleF = finite(row.maximumPossibleF);
-  const highAndUncertain = currentF !== null && coverage !== null && coverage < 0.9 && currentF >= gate - 5;
-  const couldCross = currentF !== null && currentF < gate && maximumPossibleF !== null && maximumPossibleF >= gate;
+  const highAndUncertain = gate !== null && currentF !== null && coverage !== null && coverage < 0.9 && currentF >= gate - 5;
+  const couldCross = gate !== null && currentF !== null && currentF < gate && maximumPossibleF !== null && maximumPossibleF >= gate;
   const bounds = row.analyticalBounds && typeof row.analyticalBounds === "object" ? row.analyticalBounds : null;
   let evidenceAcquisition = highAndUncertain || couldCross
     ? Number(((1 - (coverage ?? 1)) * 30).toFixed(2))
@@ -77,8 +81,15 @@ export function evidencePriority(row = {}, { now = Date.now(), buyGate = null } 
   const neverEvaluated = !Number.isFinite(lastFullAt);
   const minutesSinceEvaluation = neverEvaluated ? null : Math.max(0, (now - lastFullAt) / 60000);
   const novelty = neverEvaluated || row.lane === "EXPLORATION" || row.candidateSource === "EXPLORATION";
-  const nearLine = isNearFinalBuyGate(currentF, gate, 5);
-  const authorizationRequired = currentF !== null && currentF >= gate && row.authorizedDecisionValid !== true;
+  const nearLine = gate !== null && isNearFinalBuyGate(currentF, gate, 5);
+  const cryptoSetupReady = crypto && (
+    cryptoShadow?.E?.state === "PASS"
+    || row.cryptoSetup?.eligible === true
+    || row.cryptoSetupGate?.approved === true
+  );
+  const authorizationRequired = currentF !== null
+    && (crypto ? cryptoSetupReady : currentF >= gate)
+    && row.authorizedDecisionValid !== true;
   const priority = Number((
     currentD * 0.25
     + qualification

@@ -12,8 +12,8 @@ import { getApprovedTradeAmount } from './approvedSizing.js';
 import { buildStockOpportunityLayers, finalizeStockOpportunityLayers } from './opportunityLayers.js';
 import { evaluateSetupDrift } from './setupDrift.js';
 
-// Fresh evidence replaces current F in either direction. Authorization stays
-// until a new central decision is installed. There is no crypto-only ratchet.
+// Fresh evidence replaces current F in either direction. A material F change
+// invalidates authorization until a new central decision is installed.
 export function publishQuoteRefreshScore(previous = {}, freshScore, {
   crypto = false,
   now = Date.now(),
@@ -76,9 +76,14 @@ export function revalidateCandidate(previous, incoming, { now = Date.now() } = {
   const before = existingBasis ? null : build(previous);
   const evidence = build(next);
   if (crypto) {
-    const entry = evidence.componentsByName?.execution;
-    const entryAvailable = entry?.available === true && evidence.quoteFreshness?.fresh === true && evidence.spreadFreshness?.fresh === true;
-    next.cryptoEntryScore = entryAvailable ? entry.value : null;
+    next.cryptoAnalyticalShadow = evidence.cryptoAnalyticalShadow || null;
+    next.currentAnalyticalSnapshot = evidence.currentAnalyticalSnapshot || null;
+    next.legacyCryptoCompositeScore = Number.isFinite(Number(evidence.score))
+      ? Number(evidence.score)
+      : null;
+    const entry = evidence.entry;
+    const entryAvailable = entry?.available === true;
+    next.cryptoEntryScore = entryAvailable ? entry.score : null;
     next.cryptoEntryScoreAvailable = entryAvailable;
     next.cryptoEntryScorecard = { score: next.cryptoEntryScore, available: entryAvailable,
       missingComponents: entryAvailable ? [] : ['CURRENT_CRYPTO_ENTRY_EVIDENCE_UNAVAILABLE'] };
@@ -102,29 +107,36 @@ export function revalidateCandidate(previous, incoming, { now = Date.now() } = {
   next.quoteRevalidationBasis = basis;
   // A temporary outage must not permanently latch F to null. Rebuild measured
   // analysis when evidence returns; a recovered score NEVER revives permission.
-  const available = hasDecisionAnalysis(evidence);
-  const freshScore = available && Number.isFinite(Number(evidence.score))
-    ? Number(Number(evidence.score).toFixed(2))
+  const analyticalShadow = crypto ? evidence.cryptoAnalyticalShadow : null;
+  const analyticalScore = analyticalShadow?.cryptoAnalyticalF;
+  const available = crypto
+    ? analyticalScore !== null && analyticalScore !== undefined && Number.isFinite(Number(analyticalScore))
+    : hasDecisionAnalysis(evidence);
+  const freshScore = available
+    ? Number(Number(crypto ? analyticalScore : evidence.score).toFixed(2))
     : null;
+  const canonicalCoverage = crypto
+    ? analyticalShadow?.analyticalCoverage ?? null
+    : evidence.coverage;
   const scoreChangeCause = classifyScoreChange({
     previousBasis: previous.evidenceBasis || null,
     nextBasis: evidence.evidenceBasis || null,
     previousScore: priorFinal,
     nextScore: freshScore,
     previousCoverage: previous.decisionCoverage,
-    nextCoverage: evidence.coverage,
+    nextCoverage: canonicalCoverage,
   });
   const authorization = publishQuoteRefreshScore(previous, freshScore, {
     crypto,
     now,
     scoreChangeCause,
     evidenceBasis: evidence.evidenceBasis || null,
-    coverage: evidence.coverage,
+    coverage: canonicalCoverage,
     remainingScoreDelta: evidence.analyticalBounds?.remainingScoreDelta ?? null,
   });
   next.evidenceBasis = evidence.evidenceBasis || null;
   next.evidenceBasisVersion = evidence.evidenceBasisVersion || null;
-  next.decisionCoverage = evidence.coverage;
+  next.decisionCoverage = canonicalCoverage;
   next.maximumPossibleF = evidence.maximumPossibleF ?? null;
   next.minimumPossibleF = evidence.minimumPossibleF ?? null;
   next.analyticalBounds = evidence.analyticalBounds || null;
@@ -146,13 +158,13 @@ export function revalidateCandidate(previous, incoming, { now = Date.now() } = {
       : { stockDecisionScore: final, stockDecisionScoreAvailable: final !== null, stockDecisionEvidence: evidence }) });
   if (preserveScores) {
     const preservedCurrent = crypto
-      ? (previous.currentAnalyticalScore ?? previous.cryptoDecisionScore)
+      ? (previous.cryptoAnalyticalShadow?.cryptoAnalyticalF ?? previous.currentAnalyticalSnapshot?.F)
       : (previous.currentAnalyticalScore ?? previous.stockDecisionScore);
     if (preservedCurrent != null) {
       next.currentAnalyticalScore = preservedCurrent;
       if (crypto) {
-        next.cryptoDecisionScore = previous.cryptoDecisionScore ?? preservedCurrent;
-        next.cryptoDecisionScoreAvailable = previous.cryptoDecisionScoreAvailable !== false;
+        next.cryptoDecisionScore = preservedCurrent;
+        next.cryptoDecisionScoreAvailable = true;
       } else {
         next.stockDecisionScore = previous.stockDecisionScore ?? preservedCurrent;
         next.stockDecisionScoreAvailable = previous.stockDecisionScoreAvailable !== false;

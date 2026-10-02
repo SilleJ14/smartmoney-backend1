@@ -17,6 +17,8 @@ export function eligibleDecisionFixture(symbol, now = Date.now()) {
     ...(crypto ? { barsFound: 220, windowDollarVolume: 1000000,
       newsCatalyst: { dataAvailable: true, riskDetected: false },
       cryptoDiscoveryScorecard: { score: 90, coverage: 1, calculatedAt: stamp, extension: { alreadyExtended: false } },
+      cryptoContextScorecard: { score: 50, independent: true, source: 'independent_test_context' },
+      cryptoMarketContext: { score: 50, state: 'NEUTRAL', measuredAt: stamp, affectsF: false },
       centralAutonomousDecisionCore: { updatedAt: stamp, action: 'ALLOW', cryptoDecisionEvidence: { coreEvidencePass: true } },
     } : {}),
   };

@@ -4,8 +4,8 @@ import { calculateDynamicTradeAmount } from "../risk/positionSizing.js";
 import { availableBuyingPower } from "../risk/brokerEvidence.js";
 import { outstandingOrderNotional } from "../risk/orderRiskReservations.js";
 
-// Fresh F>=65 plus a live Alpaca book can receive a new size. This does not
-// inherit an old approval, loosen 5s, or accept a non-Alpaca buy quote.
+// Measured analytical F plus a valid setup and live Alpaca execution evidence
+// can receive a size. There is no inherited legacy F65 threshold.
 export function attachCryptoExecutableAllocation(signal = {}, {
   now = Date.now(),
   account = {},
@@ -14,13 +14,24 @@ export function attachCryptoExecutableAllocation(signal = {}, {
   reservations = {},
   dailyStartEquity,
 } = {}) {
-  const eligibility = evaluateCryptoTradeCandidate(signal, { now, requireExplicitApproval: false });
+  const preflight = evaluateCryptoTradeCandidate(signal, { now, requireExplicitApproval: false });
+  signal.cryptoAnalyticalShadow = preflight.evidence?.cryptoAnalyticalShadow || null;
+  signal.currentAnalyticalSnapshot = preflight.evidence?.currentAnalyticalSnapshot || null;
+  signal.currentAnalyticalScore = preflight.score;
+  signal.cryptoDecisionScore = preflight.score;
+  signal.cryptoDecisionScoreAvailable = preflight.score !== null;
+  const preSizingReasons = (preflight.reasons || []).filter((reason) =>
+    reason !== "INTENDED_NOTIONAL_UNKNOWN"
+  );
   if (config.realCashTradingUnlocked === false) {
-    eligibility.approved = false;
-    eligibility.reasons = [...(eligibility.reasons || []), "REAL_CASH_TRADING_LOCKED"];
+    preSizingReasons.push("REAL_CASH_TRADING_LOCKED");
   }
-  signal.executionEligibility = eligibility;
-  if (!eligibility.approved) {
+  if (preSizingReasons.length > 0) {
+    signal.executionEligibility = {
+      ...preflight,
+      approved: false,
+      reasons: [...new Set(preSizingReasons)],
+    };
     Object.assign(signal, {
       approved: false,
       backendApproved: false,
@@ -36,7 +47,7 @@ export function attachCryptoExecutableAllocation(signal = {}, {
     (sum, entry) => sum + outstandingOrderNotional(entry, sizingPositions),
     0
   );
-  const finalScore = getCanonicalFinalScore(signal) ?? eligibility.score;
+  const finalScore = getCanonicalFinalScore(signal);
   const suggested = calculateDynamicTradeAmount({
     account: {
       ...account,
@@ -72,12 +83,32 @@ export function attachCryptoExecutableAllocation(signal = {}, {
   signal.finalTradeAmount = amount;
   signal.recommendedTradeAmount = amount;
   signal.displayTradeAmount = amount;
+  signal.intendedNotional = amount > 0 ? amount : null;
   signal.finalSizingReconciliation = {
     finalTradeAmount: amount,
     finalBlocked: amount <= 0,
-    basis: "CRYPTO_F65_LIVE_QUOTE",
+    basis: "CRYPTO_ANALYTICAL_XRS_LIVE_QUOTE",
   };
-  const executable = amount >= 1;
+  const eligibility = amount >= 1
+    ? evaluateCryptoTradeCandidate(signal, { now, requireExplicitApproval: false })
+    : {
+      ...preflight,
+      approved: false,
+      reasons: [...new Set([...(preflight.reasons || []), "SIZING_BLOCKED"])],
+    };
+  signal.cryptoAnalyticalShadow = eligibility.evidence?.cryptoAnalyticalShadow || signal.cryptoAnalyticalShadow;
+  signal.currentAnalyticalSnapshot = eligibility.evidence?.currentAnalyticalSnapshot || signal.currentAnalyticalSnapshot;
+  signal.executionEligibility = eligibility;
+  const executable = amount >= 1 && eligibility.approved === true;
+  if (!executable) {
+    signal.finalApprovedTradeAmount = 0;
+    signal.finalTradeAmount = 0;
+    signal.recommendedTradeAmount = 0;
+    signal.displayTradeAmount = 0;
+    signal.intendedNotional = null;
+    signal.finalSizingReconciliation.finalTradeAmount = 0;
+    signal.finalSizingReconciliation.finalBlocked = true;
+  }
   Object.assign(signal, {
     approved: executable,
     backendApproved: executable,

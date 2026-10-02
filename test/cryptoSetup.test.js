@@ -128,7 +128,7 @@ test('the shared order service checks crypto depth again after risk reservation,
   await assert.rejects(service.cryptoMarketBuy({ symbol: 'BTC/USD', dollars: 100 }), /ORDERBOOK_STALE/);
   assert.equal(writes, 0);
 });
-test('continuation opportunity can replace low early-D in F without changing D or bypassing mandatory evidence', () => {
+test('continuation opportunity remains entry evidence without replacing intrinsic discovery F', () => {
   const s = { ...make(), scoringModelVersion: 'SMARTMONEY_CRYPTO_DECISION_V4',
     cryptoDiscoveryScorecard: { score: 55, coverage: 1, calculatedAt: new Date(now).toISOString(), extension: { alreadyExtended: true } },
     barsFound: 220, windowDollarVolume: 1000000, bid: 99.95, ask: 100.05,
@@ -138,7 +138,8 @@ test('continuation opportunity can replace low early-D in F without changing D o
   const result = buildCryptoDecisionScore(s, { now });
   assert.equal(result.opportunityBasis, 'RETEST');
   assert.equal(result.earlyDiscovery.value, 55);
-  assert.equal(result.componentsByName.base.value, result.setup.score);
+  assert.equal(result.componentsByName.base.value, 55);
+  assert.equal(result.cryptoAnalyticalShadow.cryptoAnalyticalF, 55);
   assert.equal(result.coreEvidencePass, true, JSON.stringify(result.missingCriticalEvidence));
   assert.equal(evaluateCryptoTradeCandidate(s, { now }).approved, false, 'F does not replace central authorization');
   const providerDown = buildCryptoDecisionScore({ ...s, newsCatalyst: { dataAvailable: false, riskDetected: false } }, { now });

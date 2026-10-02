@@ -112,10 +112,16 @@ test("startup recovery never marks execution ready without durable storage", asy
 });
 
 test("live OANDA host remains forbidden", async () => {
-  const client = createOandaClient({ accountId: "x", token: "y", baseUrl: "https://api-fxtrade.oanda.com" });
+  let requests = 0;
+  const client = createOandaClient({
+    accountId: "x", token: "y", baseUrl: "https://api-fxtrade.oanda.com",
+    fetchImpl: async () => { requests += 1; throw new Error("MUST_NOT_CONNECT"); },
+  });
+  await assert.rejects(() => client.getAccount(), /LIVE_FOREX/);
   await assert.rejects(() => client.createMarketOrder({
     instrument: "EUR_USD", units: -1, priceBound: "1", stopLossPrice: "1.1",
   }), /LIVE_FOREX/);
+  assert.equal(requests, 0);
 });
 
 test("engine scan does not call the broker order API", async () => {

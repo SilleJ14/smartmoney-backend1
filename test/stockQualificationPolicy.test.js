@@ -45,6 +45,7 @@ test("F74 can auto-buy without an extra F78 floor", () => {
     centralAutonomousAction: "ALLOW",
     riskScore: 70,
     spreadPercent: 0.2,
+    bid: 99.9, ask: 100.1,
     liveQuoteUpdatedAt: now,
     spreadUpdatedAt: now,
     liveQuoteSource: "alpaca_latest_stock_quote",

@@ -1,4 +1,4 @@
-export const FOREX_SPEC_VERSION = "fx-v1.1-balanced-entry";
+export const FOREX_SPEC_VERSION = "fx-v2.0-evidence-platform";
 
 export const FOREX_SPEC = Object.freeze({
   version: FOREX_SPEC_VERSION,
@@ -13,8 +13,15 @@ export const FOREX_SPEC = Object.freeze({
   h4Count: 220,
   h1Count: 140,
   m15Count: 80,
+  m5Count: 120,
+  s5Count: 120,
   atrPeriod: 14,
   atrTimeframe: "H1",
+  macroMaxAgeHours: 36,
+  ratesMaxAgeDays: 7,
+  positioningMaxAgeDays: 10,
+  futuresMaxAgeDays: 3,
+  crossMarketMaxAgeHours: 24,
   scanInstruments: Object.freeze([
     "EUR_USD",
     "GBP_USD",

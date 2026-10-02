@@ -38,23 +38,16 @@ function canonicalSignalKey(signal, normalizeSymbol) {
 
 export function getCanonicalFinalScore(signal = {}) {
   if (isCryptoSignal(signal)) {
-    if (signal.cryptoDecisionScoreAvailable === false) return null;
-    const score = finite(
-      signal.currentAnalyticalScore ??
-      signal.cryptoDecisionScore ??
-      signal.masterFinalScore ??
-      signal.finalAutonomousDecisionScore ??
-      signal.centralAutonomousDecisionCore?.cryptoDecisionScore
-    );
-    // Use the current revalidated evidence before the original central snapshot,
-    // just as score publication does. A stale available flag is not stronger
-    // evidence than a current failed scorecard.
-    const evidence = signal.cryptoScoreTelemetry?.decision ||
-      signal.centralAutonomousDecisionCore?.cryptoDecisionEvidence;
-    const available = typeof evidence?.coreEvidencePass === "boolean" || typeof evidence?.analysisEvidencePass === 'boolean'
-      ? hasDecisionAnalysis(evidence)
-      : signal.cryptoDecisionScoreAvailable === true;
-    return available && score !== null ? score : null;
+    const shadow = signal.cryptoAnalyticalShadow ||
+      signal.cryptoScoreTelemetry?.decision?.cryptoAnalyticalShadow ||
+      signal.centralAutonomousDecisionCore?.cryptoDecisionEvidence?.cryptoAnalyticalShadow;
+    if (shadow?.replacesCanonicalF === true || shadow?.productionEffect === true) {
+      return finite(shadow.cryptoAnalyticalF);
+    }
+    // Old cryptoDecisionScore/masterFinalScore values used the legacy composite
+    // model. Without an analytical shadow their provenance is ambiguous, so
+    // they remain diagnostic-only and cannot become canonical F.
+    return null;
   }
 
   if (signal.stockDecisionScoreAvailable === false) return null;

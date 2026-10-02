@@ -12,7 +12,8 @@ test("smart mode selects the stronger approved asset class", () => {
   assert.equal(selectSmartTradingMode({
     selectedMode: "smart",
     stockSignals: [{ symbol: "AAPL", masterFinalScore: 80, stockDecisionScoreAvailable: true, ...approval }],
-    cryptoSignals: [{ symbol: "BTC/USD", cryptoDecisionScore: 90, cryptoDecisionScoreAvailable: true, ...approval }],
+    cryptoSignals: [{ symbol: "BTC/USD", cryptoDecisionScore: 90, cryptoDecisionScoreAvailable: true,
+      cryptoAnalyticalShadow: { cryptoAnalyticalF: 90, replacesCanonicalF: true, productionEffect: true }, ...approval }],
   }), "live_crypto");
 });
 test("smart mode ignores legacy scores and incomplete approval flags", () => {

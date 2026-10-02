@@ -26,20 +26,18 @@ are retained; no migration or clearing of safety locks occurs automatically.
 
 ## Economic-calendar adapter
 
-The backend now defaults to Finnhub's `/calendar/economic` endpoint using the existing
-server-only `FINNHUB_API_KEY` through the `X-Finnhub-Token` header. No key is sent to
-the app. Provider calendar entitlement must be checked separately; 401/403 is an
-explicit `CALENDAR_ACCESS_DENIED` blocker, not an empty calendar.
+The backend defaults to JBlanked's Forex Factory weekly calendar endpoint. Configure
+the server-only `JBLANKED_API_KEY`; no key is sent to the app. JBlanked calendar use
+also requires the durable ledger above because the free endpoint permits one request
+per 24 hours. The request reservation and response are persisted before calendar
+evidence can authorize an entry, so restarts cannot accidentally consume the quota.
 
-Refresh runs at startup and every five minutes, single-flight, with a ten-second
-timeout, bounded response size and error backoff. It requests yesterday through two
-days ahead, requires coverage of the holding horizon, and uses the request-start
-timestamp rather than making delayed responses appear newly observed.
-
-Offset/Z event timestamps work directly. Unzoned timestamps require an independently
-verified provider timezone contract and `FOREX_CALENDAR_TIMEZONE=UTC` if that contract
-confirms UTC. Without it they fail with `CALENDAR_TIMEZONE_UNVERIFIED`; do not assume
-the host timezone or set UTC simply to bypass this check.
+The adapter fetches the current trading week and preserves actual, forecast, previous,
+impact and currency fields. JBlanked documents event times as GMT+3; normalization
+converts them to UTC and rejects tentative, all-day or malformed timestamps. A ten-
+second timeout, bounded response size and conservative error handling apply. A failed
+request consumes the daily reservation and blocks new entries until valid cached
+coverage or the next permitted refresh.
 
 Low-impact non-central-bank events are excluded. Medium/high/unknown importance and
 central-bank announcements/speeches are retained. Unknown country mappings use `ALL`
@@ -50,14 +48,14 @@ Calendar failure does not disable existing-position protection.
 `/status` exposes `forexCalendar` health, error code, coverage dates and last-success
 time without credentials. This feed covers scheduled economic events, **not all
 unscheduled breaking news**. A valid response is provider-reported coverage, not proof
-that the provider omitted nothing. Live entitlement and timezone remain deployment
-verification items.
+that the provider omitted nothing.
 
 ### Legacy file adapter
 
 Set `FOREX_CALENDAR_PATH` to a JSON snapshot maintained by a trusted calendar adapter.
-An existing path selects the file adapter unless `FOREX_CALENDAR_PROVIDER=finnhub`
-is explicitly selected. No subscription is purchased or credentials modified.
+An existing path selects the file adapter unless `FOREX_CALENDAR_PROVIDER=jblanked`
+is explicitly selected. Finnhub remains available only as an explicit legacy override
+with `FOREX_CALENDAR_PROVIDER=finnhub`; it is no longer the default.
 The adapter must atomically replace the file, refresh within 15 minutes, and provide
 complete relevant event coverage (including the strategy's eight-hour holding horizon).
 Do not claim complete coverage for an empty, failed, truncated, or partial response.

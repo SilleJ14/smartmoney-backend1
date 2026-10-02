@@ -236,6 +236,7 @@ export function evaluateEvidencePolicy(basis = {}, policy = {}, { newsUnknown = 
 }
 
 function boundaryDistance(minimum, maximum, required) {
+  if (required === null || required === undefined || required === "") return null;
   if (minimum !== null && minimum + 1e-9 >= required) return round(minimum - required);
   if (maximum !== null && maximum + 1e-9 < required) return round(maximum - required);
   return 0;
@@ -243,10 +244,14 @@ function boundaryDistance(minimum, maximum, required) {
 
 function modelCanPass(model = {}, requiredFinalScore, requiredEntryScore) {
   const maximumF = Number(model.maximumPossibleScore ?? model.maximumPossibleF);
-  const requiredF = Number(model.requiredFinalScore ?? requiredFinalScore);
+  const rawRequiredF = model.requiredFinalScore ?? requiredFinalScore;
+  const requiredF = rawRequiredF === null || rawRequiredF === undefined || rawRequiredF === ""
+    ? null
+    : Number(rawRequiredF);
   const requiredE = model.requiredEntryScore === undefined ? requiredEntryScore : model.requiredEntryScore;
   const maximumE = Number(model.maximumPossibleEntryScore);
-  const finalReachable = Number.isFinite(maximumF) && maximumF + 1e-9 >= requiredF;
+  const finalReachable = Number.isFinite(maximumF)
+    && (requiredF === null || maximumF + 1e-9 >= requiredF);
   const entryReachable = requiredE === null || requiredE === undefined
     || (Number.isFinite(maximumE) && maximumE + 1e-9 >= Number(requiredE));
   return finalReachable && entryReachable;
@@ -296,9 +301,21 @@ export function computeAnalyticalBounds({
   const entryBound = entry
     ? entryScoreBound(entry)
     : { currentEntryScore: null, maximumPossibleEntryScore: null, minimumPossibleEntryScore: null };
-  const requiredEntryScore = entry && Number.isFinite(Number(entry.required)) ? Number(entry.required) : null;
-  const finalScoreReachable = maximumPossibleScore !== null && maximumPossibleScore + 1e-9 >= requiredFinalScore;
-  const finalScoreGuaranteed = minimumPossibleScore !== null && minimumPossibleScore + 1e-9 >= requiredFinalScore;
+  const requiredEntryScore = entry
+    && entry.required !== null
+    && entry.required !== undefined
+    && entry.required !== ""
+    && Number.isFinite(Number(entry.required))
+    ? Number(entry.required)
+    : null;
+  const hasFinalThreshold = requiredFinalScore !== null
+    && requiredFinalScore !== undefined
+    && requiredFinalScore !== ""
+    && Number.isFinite(Number(requiredFinalScore));
+  const finalScoreReachable = maximumPossibleScore !== null
+    && (!hasFinalThreshold || maximumPossibleScore + 1e-9 >= Number(requiredFinalScore));
+  const finalScoreGuaranteed = minimumPossibleScore !== null
+    && (!hasFinalThreshold || minimumPossibleScore + 1e-9 >= Number(requiredFinalScore));
   const entryScoreReachable = requiredEntryScore === null
     || (entryBound.maximumPossibleEntryScore !== null && entryBound.maximumPossibleEntryScore + 1e-9 >= requiredEntryScore);
   const entryScoreGuaranteed = requiredEntryScore === null

@@ -1,7 +1,11 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 import { buildCryptoDecisionScore, CRYPTO_DECISION_WEIGHTS, evaluateCryptoTradeCandidate } from "../scoring/componentScore.js";
-import { CRYPTO_ANALYTICAL_THRESHOLD, CRYPTO_ANALYTICAL_SCORE } from "../scoring/cryptoAnalyticalShadow.js";
+import { CRYPTO_ANALYTICAL_THRESHOLD, CRYPTO_ANALYTICAL_SCORE, liveCryptoPermission } from "../scoring/cryptoAnalyticalShadow.js";
+import { revalidateCandidate } from "../scoring/revalidateCandidate.js";
+import { getCanonicalFinalScore } from "../scoring/canonicalSignalRank.js";
+import { normalizeSignalScoreCompleteness } from "../scoring/signalScoreCompleteness.js";
+import { CRYPTO_SETUP_TYPES } from "../scoring/cryptoSetupModels.js";
 
 const now = Date.parse("2026-09-25T14:00:00.000Z");
 
@@ -70,6 +74,21 @@ function stale(overrides = {}) {
   });
 }
 
+function breakoutBars() {
+  return Array.from({ length: 30 }, (_, index) => {
+    const last = index === 29;
+    return {
+      t: now - (31 - index) * 60_000,
+      o: last ? 100.2 : 100,
+      h: last ? 102.2 : 100.3,
+      l: last ? 100.1 : 99.8,
+      c: last ? 102 : 100,
+      v: last ? 300 : 100,
+      intervalMs: 60_000,
+    };
+  });
+}
+
 test("a stale quote keeps analytical F visible and waits on execution", () => {
   const evidence = buildCryptoDecisionScore(stale(), { now });
   const shadow = evidence.cryptoAnalyticalShadow;
@@ -118,6 +137,39 @@ test("a missing book leaves F unchanged and marks execution unavailable", () => 
   assert.equal(withoutBook.X.bookState.state, "DATA_UNAVAILABLE");
   assert.equal(withoutBook.X.state, "DATA_UNAVAILABLE");
   assert.equal(withoutBook.buyable, false);
+});
+
+test("required crypto news distinguishes unavailable evidence from measured negative news", () => {
+  const unavailable = buildCryptoDecisionScore(fresh({
+    newsCatalystRequired: true,
+    newsCatalyst: { dataAvailable: false },
+  }), { now }).cryptoAnalyticalShadow;
+  assert.equal(unavailable.C.state, "DATA_UNAVAILABLE");
+  assert.equal(unavailable.C.reason, "NEWS_PROVIDER_UNAVAILABLE");
+  assert.ok(liveCryptoPermission(unavailable).reasons.includes("NEWS_PROVIDER_UNAVAILABLE"));
+
+  const negative = buildCryptoDecisionScore(fresh({
+    newsCatalystRequired: true,
+    newsCatalyst: { dataAvailable: true, riskDetected: true,
+      newsEvidence: { providerState: "AVAILABLE", coverageState: "COVERED", adverseState: "NEGATIVE" } },
+  }), { now }).cryptoAnalyticalShadow;
+  assert.equal(negative.C.state, "REJECT");
+  assert.equal(negative.C.reason, "NEGATIVE_CATALYST");
+  assert.equal(negative.buyable, false);
+  assert.ok(liveCryptoPermission(negative).reasons.includes("NEGATIVE_CATALYST"));
+});
+
+test("a reported spread without measured bid and ask is analytical-only", () => {
+  const shadow = buildCryptoDecisionScore(fresh({
+    bid: null,
+    ask: null,
+    spreadAvailable: true,
+    spreadPercent: 0.3,
+  }), { now }).cryptoAnalyticalShadow;
+  assert.equal(shadow.cryptoAnalyticalF, 88);
+  assert.equal(shadow.X.spreadState.state, "DATA_UNAVAILABLE");
+  assert.equal(shadow.X.spreadState.reason, "QUOTED_SPREAD_UNAVAILABLE");
+  assert.equal(shadow.buyable, false);
 });
 
 test("a larger order can fail the book walk without changing F", () => {
@@ -178,6 +230,21 @@ test("the legacy formula and the analytical score are stored together", () => {
   assert.equal(shadow.runnerWeight, 0);
 });
 
+test("the production decision path evaluates all five independent setup families", () => {
+  const evidence = buildCryptoDecisionScore(fresh({
+    price: 102,
+    current: 102,
+    chartBars: breakoutBars(),
+  }), { now });
+  assert.deepEqual(
+    Object.keys(evidence.setup.cryptoSetupAssessment.candidates),
+    [...CRYPTO_SETUP_TYPES]
+  );
+  assert.equal(evidence.entry.setupType, "BREAKOUT");
+  assert.equal(evidence.entry.approved, true);
+  assert.equal(evidence.cryptoAnalyticalShadow.E.state, "PASS");
+});
+
 test("the new analytical score does not inherit the legacy 65 gate", () => {
   assert.equal(CRYPTO_ANALYTICAL_THRESHOLD.status, "NOT_CALIBRATED");
   assert.equal(CRYPTO_ANALYTICAL_THRESHOLD.analyticalMinimum, null);
@@ -194,4 +261,53 @@ test("the new analytical score does not inherit the legacy 65 gate", () => {
   assert.equal(low.cryptoAnalyticalF, 40);
   assert.equal(low.threshold.analyticalMinimum, null);
   assert.equal(low.X.state, "PASS");
+});
+
+test("quote refresh publishes discovery F and keeps the legacy composite diagnostic-only", () => {
+  const original = fresh();
+  const evidence = buildCryptoDecisionScore(original, { now });
+  const previous = {
+    ...original,
+    approved: true,
+    backendApproved: true,
+    autoTradeApproved: true,
+    qualifiedToBuy: true,
+    cryptoDecisionScore: 41,
+    cryptoDecisionScoreAvailable: true,
+    currentAnalyticalScore: 88,
+    authorizedDecisionScore: 88,
+    decisionUpdatedAt: new Date(now).toISOString(),
+    centralAutonomousDecisionCore: {
+      action: "ALLOW",
+      cryptoDecisionScore: 88,
+      cryptoDecisionEvidence: evidence,
+    },
+  };
+  const refreshed = revalidateCandidate(previous, fresh(), { now });
+  assert.equal(refreshed.cryptoDecisionScore, 88);
+  assert.equal(refreshed.currentAnalyticalScore, 88);
+  assert.equal(getCanonicalFinalScore(refreshed), 88);
+  assert.equal(refreshed.legacyCryptoCompositeScore, evidence.score);
+  assert.notEqual(refreshed.legacyCryptoCompositeScore, refreshed.cryptoDecisionScore);
+  assert.equal(refreshed.currentAnalyticalSnapshot.F, 88);
+});
+
+test("recovered crypto evidence drops stale unavailable reasons", () => {
+  const evidence = buildCryptoDecisionScore(fresh(), { now });
+  const normalized = normalizeSignalScoreCompleteness({
+    ...fresh(),
+    cryptoDecisionScore: 88,
+    cryptoDecisionScoreAvailable: true,
+    cryptoAnalyticalShadow: evidence.cryptoAnalyticalShadow,
+    cryptoScoreTelemetry: { decision: evidence },
+    missingEvidenceReasons: [
+      "MISSING_BASE",
+      "CRYPTO_DISCOVERY_SCORE_UNAVAILABLE",
+      "ORDER_BOOK_UNAVAILABLE",
+    ],
+  });
+  assert.equal(normalized.cryptoDecisionScore, 88);
+  assert.equal(normalized.missingEvidenceReasons.includes("MISSING_BASE"), false);
+  assert.equal(normalized.missingEvidenceReasons.includes("CRYPTO_DISCOVERY_SCORE_UNAVAILABLE"), false);
+  assert.equal(normalized.missingEvidenceReasons.includes("ORDER_BOOK_UNAVAILABLE"), false);
 });

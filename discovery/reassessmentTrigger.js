@@ -1,8 +1,6 @@
 import { evaluateSetupDrift } from "../scoring/setupDrift.js";
-import { CRYPTO_MIN_FINAL_SCORE_TO_BUY } from "../scoring/componentScore.js";
 import { STOCK_EXECUTION_THRESHOLDS } from "../scoring/decisionScores.js";
 import {
-  CRYPTO_NEAR_LINE_MARGIN,
   STOCK_NEAR_LINE_MARGIN,
   isNearFinalBuyGate,
 } from "../scoring/nearFinalBuyGate.js";
@@ -19,9 +17,9 @@ export function reassessmentTrigger(row, now = Date.now()) {
   const merged = { ...row, ...drift };
   const crypto = String(merged.symbol || "").includes("/");
   const final = crypto ? merged.cryptoDecisionScore : merged.stockDecisionScore;
-  const buyGate = crypto ? CRYPTO_MIN_FINAL_SCORE_TO_BUY : STOCK_EXECUTION_THRESHOLDS.finalScore;
-  const margin = crypto ? CRYPTO_NEAR_LINE_MARGIN : STOCK_NEAR_LINE_MARGIN;
-  const near = isNearFinalBuyGate(final, buyGate, margin);
+  const near = crypto
+    ? false
+    : isNearFinalBuyGate(final, STOCK_EXECUTION_THRESHOLDS.finalScore, STOCK_NEAR_LINE_MARGIN);
   const held = merged.isHeldPosition === true;
   const quoteReady = merged.liveQuoteFresh === true && merged.liveSpreadFresh === true;
   const missingEntry = crypto ? merged.cryptoEntryScoreAvailable === false : merged.entryQualityScoreAvailable === false;

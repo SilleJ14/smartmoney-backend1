@@ -27,6 +27,7 @@ function roundScore(value) {
 
 function meetsRequiredF(score, requiredF) {
   if (score === null) return false;
+  if (requiredF === null || requiredF === undefined || requiredF === "") return true;
   const gate = Number(requiredF);
   if (!Number.isFinite(gate)) return true;
   return score >= gate;
@@ -90,16 +91,26 @@ export function applyAnalyticalScoreUpdate(previous = {}, nextScore, {
     && !aboveCompletionCeiling;
   const alreadyAuthorized = prior.authorizedDecisionValid === true
     && meetsRequiredF(prior.authorizedDecisionScore, requiredF);
+  const noCalibratedThreshold = requiredF === null || requiredF === undefined || requiredF === "";
+  const authorizationInvalidated = noCalibratedThreshold
+    && changed
+    && prior.authorizedDecisionValid === true
+    && currentAnalyticalScore !== prior.authorizedDecisionScore;
   let centralReviewStatus = prior.centralReviewStatus;
   let reviewTrigger = prior.reviewTrigger;
-  if (crossed && !alreadyAuthorized && centralReviewStatus === "NONE") {
+  if (authorizationInvalidated && currentAnalyticalScore !== null) {
+    centralReviewStatus = "QUEUED";
+    reviewTrigger = scoreChangeCause === "SETUP_CHANGED"
+      ? "SETUP_CHANGED"
+      : "MATERIAL_SCORE_IMPROVEMENT";
+  } else if (crossed && !alreadyAuthorized && centralReviewStatus === "NONE") {
     centralReviewStatus = "QUEUED";
     reviewTrigger = "THRESHOLD_CROSS";
   }
   return {
     currentAnalyticalScore,
     authorizedDecisionScore: prior.authorizedDecisionScore,
-    authorizedDecisionValid: prior.authorizedDecisionValid,
+    authorizedDecisionValid: authorizationInvalidated ? false : prior.authorizedDecisionValid,
     scoreVersion: prior.scoreVersion,
     centralReviewStatus,
     reviewTrigger,
@@ -118,6 +129,7 @@ export function applyAnalyticalScoreUpdate(previous = {}, nextScore, {
     analyticalImprovement: evidenceLossRise || aboveCompletionCeiling
       ? false
       : currentAnalyticalScore !== null && baseline !== null && currentAnalyticalScore > baseline,
+    authorizationInvalidated,
     scoreVelocity: evidenceLossRise || aboveCompletionCeiling ? 0 : previous.scoreVelocity,
   };
 }

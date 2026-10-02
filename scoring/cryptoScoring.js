@@ -8,11 +8,11 @@ export const CRYPTO_MIN_REPORTED_24H_DOLLAR_VOLUME = 1_000_000;
 export const CRYPTO_PROBE_REPORTED_24H_DOLLAR_VOLUME = 250_000;
 export const CRYPTO_MAX_ENTRY_SPREAD_PERCENT = 0.85;
 
-// Crypto score gates. Entry evidence is required. There is no numeric Entry
-// floor until crypto outcomes show that one adds information beyond F.
+// Crypto evidence gates. Entry and analytical F must be measured. Neither has
+// a numeric floor until validated out-of-sample outcomes calibrate one.
 export const CRYPTO_EXECUTION_THRESHOLDS = Object.freeze({
   discoveryScore: 60,
-  finalScore: 65,
+  finalScore: null,
   entryScore: null,
   requireEntryEvidence: true,
   requireValidSetup: true,
@@ -50,7 +50,9 @@ export function evaluateCryptoAnalyticalQualification({
   const entry = evaluateCryptoEntryEvidence(entryScore, thresholds);
   const finalMeasured = finalScore !== null && finalScore !== undefined && finalScore !== "" && Number.isFinite(Number(finalScore));
   const finalValue = finalMeasured ? Number(finalScore) : null;
-  const finalPass = finalMeasured && finalValue >= thresholds.finalScore;
+  const finalPass = finalMeasured && (
+    thresholds.finalScore == null || finalValue >= Number(thresholds.finalScore)
+  );
   if (entry.state === "WAIT") {
     return { state: "WAIT", reason: entry.reason, finalPass, entry };
   }
@@ -451,14 +453,15 @@ export function resolveCryptoLiquidityEvidence(marketData = {}) {
       : windowDollarVolume || 0
   );
   const thresholds = getCryptoLiquidityThresholds(source);
+  const available = source !== "missing";
   return {
     source,
     dollarVolume: Number(dollarVolume.toFixed(2)),
     minimum: thresholds.minimum,
     probeMinimum: thresholds.probeMinimum,
-    available: dollarVolume > 0,
-    pass: dollarVolume >= thresholds.minimum,
-    probePass: dollarVolume >= thresholds.probeMinimum,
+    available,
+    pass: available && dollarVolume >= thresholds.minimum,
+    probePass: available && dollarVolume >= thresholds.probeMinimum,
   };
 }
 

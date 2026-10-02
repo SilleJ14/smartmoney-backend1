@@ -9,8 +9,11 @@ export const STOCK_FUNNEL_STAGES = Object.freeze([
   "TECHNICAL_EVIDENCE",
   "ENTRY_THRESHOLD",
   "F_THRESHOLD",
+  "AUTHORIZATION",
+  "EVIDENCE_READY",
   "EXECUTION_READY",
   "RISK_APPROVED",
+  "SIZED",
   "BUYABLE",
 ]);
 
@@ -21,8 +24,11 @@ export const CRYPTO_FUNNEL_STAGES = Object.freeze([
   "D_THRESHOLD",
   "SETUP_READY",
   "F_THRESHOLD",
+  "AUTHORIZATION",
+  "EVIDENCE_READY",
   "EXECUTION_READY",
   "RISK_APPROVED",
+  "SIZED",
   "BUYABLE",
 ]);
 
@@ -33,14 +39,26 @@ function finite(value) {
 }
 
 export function buildCandidateFunnel(signal = {}, { asset = "stock", now = new Date().toISOString() } = {}) {
+  const previous = signal.candidateFunnel && typeof signal.candidateFunnel === "object"
+    ? signal.candidateFunnel
+    : null;
   const stages = asset === "crypto" ? CRYPTO_FUNNEL_STAGES : STOCK_FUNNEL_STAGES;
   const discovery = finite(signal.discoveryScore ?? signal.discoveryScorecard?.score ?? signal.cryptoDiscoveryScore);
   const entry = finite(signal.entryQualityScore ?? signal.cryptoEntryScore);
-  const finalScore = finite(signal.currentAnalyticalScore ?? signal.stockDecisionScore ?? signal.cryptoDecisionScore);
+  const cryptoShadow = signal.cryptoAnalyticalShadow
+    || signal.cryptoScoreTelemetry?.decision?.cryptoAnalyticalShadow
+    || signal.centralAutonomousDecisionCore?.cryptoDecisionEvidence?.cryptoAnalyticalShadow;
+  const finalScore = finite(asset === "crypto"
+    ? cryptoShadow?.cryptoAnalyticalF
+    : signal.currentAnalyticalScore ?? signal.stockDecisionScore);
   const requiredF = asset === "crypto" ? null : STOCK_EXECUTION_THRESHOLDS.finalScore;
   const technicalReady = asset === "crypto"
-    ? signal.cryptoSetupGate?.approved === true || signal.setupReady === true
-    : signal.technicalSnapshot?.packageComplete === true || signal.technicalEvidenceReady === true;
+    ? cryptoShadow?.E?.state === "PASS" || signal.cryptoSetupGate?.approved === true || signal.setupReady === true
+    : signal.technicalSnapshot?.packageComplete === true
+      || signal.technicals?.technicalSnapshot?.packageComplete === true
+      || signal.technicalPackageComplete === true
+      || signal.technicals?.technicalPackageComplete === true
+      || signal.technicalEvidenceReady === true;
   const checks = {
     UNIVERSE: true,
     BASIC_FILTER: signal.basicFilterPassed !== false,
@@ -52,9 +70,20 @@ export function buildCandidateFunnel(signal = {}, { asset = "stock", now = new D
       ? entry !== null
       : signal.entryApproved === true || signal.entryQualityScorecard?.approved === true,
     F_THRESHOLD: finalScore !== null && (requiredF === null || finalScore >= requiredF),
-    EXECUTION_READY: signal.executionReady === true || signal.opportunityLayers?.X?.state === "PASS",
-    RISK_APPROVED: signal.riskApproved === true || signal.opportunityLayers?.R?.state === "PASS" || signal.opportunityLayers?.R?.state === "PASS_WITH_CONSTRAINT",
-    BUYABLE: signal.buyable === true,
+    AUTHORIZATION: signal.authorizedDecisionValid === true
+      || signal.currentDecision?.authorization?.approved === true,
+    EVIDENCE_READY: asset === "crypto"
+      ? cryptoShadow?.C?.state === "PASS"
+      : signal.evidenceReady === true || signal.opportunityLayers?.C?.state === "PASS",
+    EXECUTION_READY: signal.executionReady === true || signal.opportunityLayers?.X?.state === "PASS" || cryptoShadow?.X?.state === "PASS",
+    RISK_APPROVED: signal.riskApproved === true
+      || signal.opportunityLayers?.R?.state === "PASS"
+      || signal.opportunityLayers?.R?.state === "PASS_WITH_CONSTRAINT"
+      || cryptoShadow?.R?.state === "PASS"
+      || cryptoShadow?.R?.state === "PASS_WITH_CONSTRAINT",
+    SIZED: finite(signal.finalApprovedTradeAmount ?? signal.recommendedTradeAmount
+      ?? signal.opportunityLayers?.S?.amount) > 0,
+    BUYABLE: signal.buyable === true || signal.buyableNow === true || cryptoShadow?.buyable === true,
   };
   let blocker = null;
   for (const stage of stages) {
@@ -62,6 +91,41 @@ export function buildCandidateFunnel(signal = {}, { asset = "stock", now = new D
       blocker = signal.buyBlockReason || stage;
       break;
     }
+  }
+  const rejectionReasons = [...new Set([
+    signal.buyBlockReason,
+    ...(signal.currentDecision?.reasons || []),
+    ...(signal.stockTradeEvidence?.reasons || []),
+    ...(asset === "crypto" && cryptoShadow ? liveCryptoPermission(cryptoShadow).reasons : []),
+  ].filter(Boolean))];
+  const currentEvent = {
+    time: now,
+    status: blocker ? "REJECTED" : "BUYABLE",
+    stage: blocker,
+    D: discovery,
+    E: entry,
+    F: finalScore,
+    exactBlocker: signal.buyBlockReason || blocker,
+    reasons: rejectionReasons,
+    price: finite(signal.price ?? signal.current),
+  };
+  const history = Array.isArray(previous?.history)
+    ? previous.history.filter((event) => event && typeof event === "object").slice(-49)
+    : [];
+  const previousEvent = history.at(-1);
+  const eventSignature = (event) => JSON.stringify({
+    status: event?.status,
+    stage: event?.stage,
+    D: event?.D,
+    E: event?.E,
+    F: event?.F,
+    exactBlocker: event?.exactBlocker,
+    reasons: event?.reasons || [],
+  });
+  if (eventSignature(previousEvent) === eventSignature(currentEvent)) {
+    history[history.length - 1] = currentEvent;
+  } else {
+    history.push(currentEvent);
   }
   return {
     asset,
@@ -81,7 +145,9 @@ export function buildCandidateFunnel(signal = {}, { asset = "stock", now = new D
     maximumPossibleF: finite(signal.maximumPossibleF),
     blocker,
     buyable: blocker === null,
-    firstSeenAt: signal.firstSeenAt || now,
+    reasons: rejectionReasons,
+    history,
+    firstSeenAt: signal.firstSeenAt || previous?.firstSeenAt || now,
     lastEvaluatedAt: now,
     lastFullReassessmentAt: signal.decisionUpdatedAt || null,
     priceAtRejection: blocker ? finite(signal.price ?? signal.current) : null,

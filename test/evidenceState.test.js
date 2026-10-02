@@ -99,7 +99,7 @@ test("a previously valid quote that is now stale waits on execution", () => {
   }, {
     eligibility: { ...freshBook, quoteAgeSeconds: 9, quoteFreshnessPass: false },
   });
-  assert.equal(layers.X.state, "EXECUTION_NOT_READY");
+  assert.equal(layers.X.state, "WAIT");
   assert.ok(layers.X.reasons.includes("QUOTE_STALE"));
   assert.equal(layers.F, 80);
   assert.equal(layers.E, 82);
@@ -109,7 +109,7 @@ test("a measured 1.2 percent spread rejects execution and leaves F and E", () =>
   const signal = { ...approvedEntry, currentAnalyticalScore: 81, stockDecisionScore: 81 };
   const open = buildStockOpportunityLayers(signal, { eligibility: freshBook });
   const wide = buildStockOpportunityLayers(signal, { eligibility: { ...freshBook, spreadTooWide: true } });
-  assert.equal(wide.X.state, "EXECUTION_NOT_READY");
+  assert.equal(wide.X.state, "REJECT");
   assert.ok(wide.X.reasons.includes("SPREAD_ABOVE_EXECUTION_LIMIT"));
   assert.equal(wide.F, open.F);
   assert.equal(wide.E, open.E);
@@ -206,7 +206,7 @@ test("evidence and execution keep independent states at the same time", () => {
     confirmations: { newsRiskAvailable: false },
   }, { eligibility: { ...freshBook, spreadTooWide: true } });
   assert.equal(layers.C.state, "DATA_UNAVAILABLE");
-  assert.equal(layers.X.state, "EXECUTION_NOT_READY");
+  assert.equal(layers.X.state, "REJECT");
   assert.equal(layers.R.state, "PASS");
   assert.equal(layers.F, 80);
   assert.ok(layers.C.reasons.includes("NEWS_UNKNOWN"));

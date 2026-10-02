@@ -1,11 +1,63 @@
 export const RELEASE_CONFIRMATION = "RELEASE EMERGENCY STOP";
 export const RESET_DAILY_LOSS_CONFIRMATION = "RESET DAILY LOSS LOCK";
+export const RELEASE_MASTER_CONFIRMATION = "RELEASE MASTER KILL SWITCH";
 
 export function registerOperationalControlRoutes(app, dependencies) {
   const {
     requireAdmin, getControlState, updateControlState,
     recordOrder, getClientIp, saveEngineState, resetDailyLossLock,
   } = dependencies;
+
+  app.post("/master-kill-switch", requireAdmin, (req, res) => {
+    const state = updateControlState({
+      emergencyStopActive: true,
+      autoTradingEnabled: false,
+      forexEmergencyStopActive: true,
+      forexAutoEnabled: false,
+      forexPauseEntries: true,
+    });
+    recordOrder("MASTER_KILL_SWITCH_ENGAGED", "ACCOUNT", {
+      ip: getClientIp(req), engagedAt: new Date().toISOString(),
+    });
+    saveEngineState("MASTER_KILL_SWITCH_ENGAGED");
+    res.json({
+      ok: true,
+      emergencyStopActive: state.emergencyStopActive === true,
+      forexEmergencyStopActive: state.forexEmergencyStopActive === true,
+      autoTradingEnabled: state.autoTradingEnabled === true,
+      forexAutoEnabled: state.forexAutoEnabled === true,
+      message: "All automated entries are stopped. Position protection and reduce-only exits remain available.",
+    });
+  });
+
+  app.post("/master-kill-switch/release", requireAdmin, (req, res) => {
+    if (String(req.body?.confirmation || "") !== RELEASE_MASTER_CONFIRMATION) {
+      return res.status(400).json({
+        ok: false,
+        error: `Exact confirmation phrase required: ${RELEASE_MASTER_CONFIRMATION}`,
+      });
+    }
+    // Releasing the stop never arms either automated trading system.
+    const state = updateControlState({
+      emergencyStopActive: false,
+      autoTradingEnabled: false,
+      forexEmergencyStopActive: false,
+      forexAutoEnabled: false,
+      forexPauseEntries: false,
+    });
+    recordOrder("MASTER_KILL_SWITCH_RELEASED", "ACCOUNT", {
+      ip: getClientIp(req), releasedAt: new Date().toISOString(),
+    });
+    saveEngineState("MASTER_KILL_SWITCH_RELEASED");
+    res.json({
+      ok: true,
+      emergencyStopActive: state.emergencyStopActive === true,
+      forexEmergencyStopActive: state.forexEmergencyStopActive === true,
+      autoTradingEnabled: false,
+      forexAutoEnabled: false,
+      message: "Master stop released. Automated trading remains off and must be enabled separately.",
+    });
+  });
 
   app.post("/emergency-stop", requireAdmin, (req, res) => {
     const state = updateControlState({ emergencyStopActive: true, autoTradingEnabled: false });

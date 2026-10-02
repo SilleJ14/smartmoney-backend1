@@ -75,3 +75,25 @@ test('analysis-only branch returns before pyramid and capital allocation stages'
   assert.match(code, /qualifiedToBuy: false/);
   assert.match(code, /finalApprovedTradeAmount: 0/);
 });
+
+test('a busy scorer requeues work without starting the review cooldown', async () => {
+  let busy = true;
+  let time = 1000;
+  const worker = createEarlyCandidateReassessment({
+    batchSize: 1,
+    now: () => time,
+    analyze: async symbols => busy ? null : symbols.map(symbol => ({ symbol })),
+    publish: () => {},
+  });
+  const deferred = await worker.run(['AAPL']);
+  assert.equal(deferred.deferred, true);
+  assert.equal(worker.getStatus().pending, 1);
+  assert.equal(worker.getStatus().deferredByBusy, 1);
+  busy = false;
+  time += 10;
+  const completed = await worker.run([]);
+  assert.equal(completed.scored, 1);
+  assert.equal(worker.getStatus().pending, 0);
+  assert.equal(worker.getStatus().queueWaitP50Ms, 10);
+  assert.notEqual(worker.getStatus().scoreDurationP50Ms, null);
+});

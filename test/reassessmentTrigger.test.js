@@ -4,7 +4,6 @@ import { reassessmentTrigger } from '../discovery/reassessmentTrigger.js';
 import { CRYPTO_MIN_FINAL_SCORE_TO_BUY } from '../scoring/componentScore.js';
 import { STOCK_EXECUTION_THRESHOLDS } from '../scoring/decisionScores.js';
 import {
-  CRYPTO_NEAR_LINE_MARGIN,
   STOCK_NEAR_LINE_MARGIN,
   isNearFinalBuyGate,
 } from '../scoring/nearFinalBuyGate.js';
@@ -12,9 +11,8 @@ import {
 test('near-line is the open band below the canonical final buy gate', () => {
   assert.equal(STOCK_EXECUTION_THRESHOLDS.finalScore, 70);
   assert.equal(STOCK_EXECUTION_THRESHOLDS.strongScore, 78);
-  assert.equal(CRYPTO_MIN_FINAL_SCORE_TO_BUY, 65);
+  assert.equal(CRYPTO_MIN_FINAL_SCORE_TO_BUY, null);
   assert.equal(STOCK_NEAR_LINE_MARGIN, 5);
-  assert.equal(CRYPTO_NEAR_LINE_MARGIN, 5);
 
   const stockGate = STOCK_EXECUTION_THRESHOLDS.finalScore;
   assert.equal(isNearFinalBuyGate(64, stockGate, STOCK_NEAR_LINE_MARGIN), false);
@@ -25,12 +23,6 @@ test('near-line is the open band below the canonical final buy gate', () => {
   assert.equal(isNearFinalBuyGate(78, stockGate, STOCK_NEAR_LINE_MARGIN), false);
   assert.equal(isNearFinalBuyGate(Number.NaN, stockGate, STOCK_NEAR_LINE_MARGIN), false);
 
-  const cryptoGate = CRYPTO_MIN_FINAL_SCORE_TO_BUY;
-  assert.equal(isNearFinalBuyGate(59, cryptoGate, CRYPTO_NEAR_LINE_MARGIN), false);
-  assert.equal(isNearFinalBuyGate(60, cryptoGate, CRYPTO_NEAR_LINE_MARGIN), true);
-  assert.equal(isNearFinalBuyGate(64, cryptoGate, CRYPTO_NEAR_LINE_MARGIN), true);
-  assert.equal(isNearFinalBuyGate(65, cryptoGate, CRYPTO_NEAR_LINE_MARGIN), false);
-  assert.equal(isNearFinalBuyGate(85, cryptoGate, CRYPTO_NEAR_LINE_MARGIN), false);
 });
 
 test('reassessment priority 2 is only the near band and does not grant permission', () => {
@@ -55,8 +47,8 @@ test('reassessment priority 2 is only the near band and does not grant permissio
     approved: false,
   });
   assert.equal(crypto(59).reassessmentPriority, 0);
-  assert.equal(crypto(60).reassessmentPriority, 2);
-  assert.equal(crypto(64).reassessmentPriority, 2);
+  assert.equal(crypto(60).reassessmentPriority, 0);
+  assert.equal(crypto(64).reassessmentPriority, 0);
   assert.equal(crypto(65).reassessmentPriority, 0);
   assert.equal(crypto(65).approved, false);
 

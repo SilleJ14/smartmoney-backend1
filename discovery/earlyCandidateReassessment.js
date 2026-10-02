@@ -12,16 +12,22 @@ export function createEarlyCandidateReassessment({ analyze, publish, trace = () 
   canRun = () => true, now = Date.now, capacity = 120, batchSize = 2, retryMs = 120000, minStartIntervalMs = 0,
   acceptsSymbol = symbol => /^[A-Z][A-Z0-9.-]{0,9}$/.test(symbol) }) {
   const queue = new Map(), reviewed = new Map(), events = new Map();
+  const queueWaitSamples = [], durationSamples = [];
   let running = null, lastStartedAt = -Infinity;
   const status = { completedBatches: 0, failures: 0, lastScored: 0, lastCompletedAt: null, lastDurationMs: null,
-    deferredByCapacity: 0, evictedByPriority: 0, maxObservedQueueWaitMs: 0, lastQueueWaitMs: null };
+    deferredByCapacity: 0, deferredByBusy: 0, evictedByPriority: 0, maxObservedQueueWaitMs: 0, lastQueueWaitMs: null };
+  const percentile = (values, p) => {
+    if (!values.length) return null;
+    const sorted = [...values].sort((a, b) => a - b);
+    return sorted[Math.min(sorted.length - 1, Math.floor((p / 100) * sorted.length))];
+  };
   function queueRank(candidate) {
     const explicit = Math.max(0, Math.min(3, Number(candidate?.reassessmentPriority) || 0));
     if (!candidate || typeof candidate !== "object") return explicit;
     const evidence = evidencePriority(candidate, { now: now() });
     const measured = evidence.currentF !== null || evidence.currentD > 0;
     const base = measured ? evidence.priority : explicit;
-    return explicit >= 3 ? base + 1000 : base;
+    return Math.max(base, explicit);
   }
   function enqueue(candidates) {
     for (const candidate of candidates.slice(0, capacity * 2)) {
@@ -76,11 +82,20 @@ export function createEarlyCandidateReassessment({ analyze, publish, trace = () 
       const queueWaitMs = Math.max(0, startedAt - queue.get(symbol).at);
       status.lastQueueWaitMs = queueWaitMs;
       status.maxObservedQueueWaitMs = Math.max(status.maxObservedQueueWaitMs, queueWaitMs);
+      queueWaitSamples.push(queueWaitMs);
+      if (queueWaitSamples.length > 200) queueWaitSamples.shift();
       queue.delete(symbol); reviewed.set(symbol, now());
       trace({ symbol, stage: 'EARLY_ANALYSIS_STARTED', queueWaitMs });
     }
     while (reviewed.size > capacity) reviewed.delete(reviewed.keys().next().value);
     running = Promise.resolve().then(() => analyze(selected)).then(async rows => {
+      if (!Array.isArray(rows)) {
+        for (const symbol of selected) reviewed.delete(symbol);
+        enqueue(selected);
+        status.deferredByBusy += selected.length;
+        for (const symbol of selected) trace({ symbol, stage: 'EARLY_ANALYSIS_DEFERRED', reasons: ['SCORER_BUSY'] });
+        return { deferred: true, reason: 'SCORER_BUSY', pending: queue.size };
+      }
       const published = await publish(rows);
       if (published === false) {
         // A full scan can start while provider requests are in flight. Discarded
@@ -89,8 +104,11 @@ export function createEarlyCandidateReassessment({ analyze, publish, trace = () 
         enqueue(selected);
         return { superseded: true, pending: queue.size };
       }
+      const durationMs = now() - startedAt;
+      durationSamples.push(durationMs);
+      if (durationSamples.length > 200) durationSamples.shift();
       Object.assign(status, { completedBatches: status.completedBatches + 1, lastScored: rows.length,
-        lastCompletedAt: new Date(now()).toISOString(), lastDurationMs: now() - startedAt });
+        lastCompletedAt: new Date(now()).toISOString(), lastDurationMs: durationMs });
       for (const symbol of selected) {
         const row = rows.find(r => r.symbol === symbol);
         trace({ ...(row || {}), symbol, stage: row ? 'EARLY_ANALYSIS_COMPLETED' : 'EARLY_ANALYSIS_NO_RESULT',
@@ -106,5 +124,7 @@ export function createEarlyCandidateReassessment({ analyze, publish, trace = () 
     return running;
   }
   return { run, getStatus: () => ({ ...status, pending: queue.size, running: running !== null,
+    queueWaitP50Ms: percentile(queueWaitSamples, 50), queueWaitP95Ms: percentile(queueWaitSamples, 95),
+    scoreDurationP50Ms: percentile(durationSamples, 50), scoreDurationP95Ms: percentile(durationSamples, 95),
     oldestPendingWaitMs: queue.size ? Math.max(0, now() - queue.values().next().value.at) : 0 }) };
 }

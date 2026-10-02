@@ -107,7 +107,7 @@ test("crypto early discovery reports empty-history reasons without fabricating b
   assert.equal(closeOnly.dataQuality.completedValidDailyBars, 0);
   assert.ok(closeOnly.dataQuality.historyNormalization.includes("NO_VALID_OHLC_BARS"));
   assert.ok(closeOnly.gates.includes("NO_VALID_OHLC_BARS"));
-  assert.equal(closeOnly.score, 0);
+  assert.equal(closeOnly.score, null);
 });
 
 test("a single missing crypto daily bar does not wipe a complete quiet history", () => {
@@ -148,7 +148,8 @@ test("crypto evaluate honors require flags without loosening the default path", 
     cryptoDecisionScoreAvailable: true,
   }, { now });
   assert.equal(strict.approved, false);
-  assert.ok(strict.reasons.includes("CRYPTO_QUOTE_OR_SPREAD_NOT_FRESH"));
+  assert.ok(strict.reasons.includes("QUOTE_UNAVAILABLE"));
+  assert.ok(strict.reasons.includes("ANALYTICAL_F_UNAVAILABLE"));
 });
 
 test("elite discovery labels still receive the pre-mover scan boost mapping", () => {

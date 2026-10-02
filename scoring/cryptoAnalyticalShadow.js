@@ -6,9 +6,9 @@ import {
   buildCryptoLiquidityGate,
 } from "./cryptoExecutionEconomics.js";
 
-// Shadow only. Analytical F is the coin's own measured discovery until a
+// Canonical crypto analytical F is the coin's own measured discovery until a
 // separate setup-entry weight is calibrated. Market breadth and execution
-// do not change it. Legacy F65 included both, so it is not this threshold.
+// do not change it. Legacy F65 included both and remains diagnostic-only.
 export const CRYPTO_ANALYTICAL_SCORE = Object.freeze({
   source: "INTRINSIC_DISCOVERY_UNTIL_SETUP_ENTRY",
   includesExecution: false,
@@ -57,6 +57,35 @@ function marketContextFromSignal(signal = {}, measuredAt = null) {
 
 function layer(state, reason) {
   return { state, reason };
+}
+
+function evidenceLayer(signal = {}) {
+  const required = signal.newsCatalystRequired === true;
+  const news = signal.newsCatalyst;
+  const evidence = news?.newsEvidence || {};
+  const negative = evidence.adverseState === "NEGATIVE" || news?.riskDetected === true;
+  if (negative) {
+    return { owner: "EVIDENCE", state: required ? "REJECT" : "PASS",
+      reason: required ? "NEGATIVE_CATALYST" : null, newsState: "NEGATIVE_CATALYST", required };
+  }
+  if (!required) {
+    return { owner: "EVIDENCE", state: "PASS", reason: null,
+      newsState: news?.dataAvailable === false ? "NEWS_PROVIDER_UNAVAILABLE" : "OPTIONAL", required };
+  }
+  if (!news || news.dataAvailable === false || evidence.providerState === "UNAVAILABLE") {
+    return { owner: "EVIDENCE", state: "DATA_UNAVAILABLE",
+      reason: "NEWS_PROVIDER_UNAVAILABLE", newsState: "NEWS_PROVIDER_UNAVAILABLE", required };
+  }
+  if (evidence.coverageState === "NOT_COVERED") {
+    return { owner: "EVIDENCE", state: "DATA_UNAVAILABLE",
+      reason: "NEWS_NOT_COVERED", newsState: "NEWS_NOT_COVERED", required };
+  }
+  if (evidence.adverseState === "UNKNOWN") {
+    return { owner: "EVIDENCE", state: "DATA_UNAVAILABLE",
+      reason: "NEWS_UNAVAILABLE", newsState: "NEWS_UNAVAILABLE", required };
+  }
+  return { owner: "EVIDENCE", state: "PASS", reason: null,
+    newsState: "NO_NEGATIVE_CATALYST", required };
 }
 
 function quoteLayer(quote = {}, maxQuoteAgeSeconds = 5) {
@@ -114,6 +143,7 @@ export function buildCryptoAnalyticalShadow({
   legacyCryptoF = null,
   legacyCoverage = null,
   discovery = {},
+  entry = {},
   quote = {},
   spread = {},
   notional = null,
@@ -123,7 +153,12 @@ export function buildCryptoAnalyticalShadow({
   const analytical = scoreCryptoAnalyticalF({ discovery });
   const cryptoMarketContext = marketContextFromSignal(signal, new Date(now).toISOString());
   const regime = cryptoBreadthRiskAndSize(cryptoMarketContext);
-  const C = { owner: "EVIDENCE", state: "PASS", reason: null, usesMarketBreadth: false };
+  const C = { ...evidenceLayer(signal), usesMarketBreadth: false };
+  const E = entry.approved === true
+    ? { state: "PASS", reason: null, score: Number.isFinite(Number(entry.score)) ? Number(entry.score) : null, setupType: entry.setupType || null }
+    : entry.available === true
+      ? { state: "REJECT", reason: entry.reason || "CRYPTO_SETUP_NOT_APPROVED", score: Number.isFinite(Number(entry.score)) ? Number(entry.score) : null, setupType: entry.setupType || null }
+      : { state: "DATA_UNAVAILABLE", reason: entry.reason || "CRYPTO_SETUP_EVIDENCE_UNAVAILABLE", score: null, setupType: entry.setupType || null };
   const economics = buildCryptoExecutionEconomics(signal, { notional, now, orderType: "market" });
   const liquidity = buildCryptoLiquidityGate(signal);
   const quoteState = quoteLayer(quote, maxQuoteAgeSeconds);
@@ -156,12 +191,15 @@ export function buildCryptoAnalyticalShadow({
     scoreSource: CRYPTO_ANALYTICAL_SCORE,
     threshold: CRYPTO_ANALYTICAL_THRESHOLD,
     runnerWeight,
+    E,
     C,
     cryptoMarketContext,
     R: regime.R,
     S: regime.S,
     X,
-    buyable: X.state === "PASS"
+    buyable: E.state === "PASS"
+      && C.state === "PASS"
+      && X.state === "PASS"
       && Number.isFinite(cryptoAnalyticalF)
       && (regime.R.state === "PASS" || regime.R.state === "PASS_WITH_CONSTRAINT")
       && Number(regime.S.regimeMultiplier) > 0,
@@ -177,9 +215,15 @@ export function liveCryptoPermission(shadow) {
     return { allowed: false, score: null, reasons: ["CRYPTO_ANALYTICAL_DECISION_MISSING"], inheritsLegacyThreshold: false };
   }
   const reasons = [];
-  const score = Number(shadow.cryptoAnalyticalF);
-  const scoreKnown = Number.isFinite(score);
+  const rawScore = shadow.cryptoAnalyticalF;
+  const score = Number(rawScore);
+  const scoreKnown = rawScore !== null && rawScore !== undefined
+    && typeof rawScore !== "boolean"
+    && !(typeof rawScore === "string" && rawScore.trim() === "")
+    && Number.isFinite(score) && score >= 0 && score <= 100;
   if (!scoreKnown) reasons.push("ANALYTICAL_F_UNAVAILABLE");
+  if (shadow.E?.state !== "PASS") reasons.push(shadow.E?.reason || "CRYPTO_SETUP_NOT_APPROVED");
+  if (shadow.C?.state !== "PASS") reasons.push(shadow.C?.reason || "EVIDENCE_NOT_PASS");
   if (shadow.X?.state !== "PASS") {
     const executionReasons = Array.isArray(shadow.X?.reasons) ? shadow.X.reasons.filter(Boolean) : [];
     reasons.push(...(executionReasons.length ? executionReasons : ["EXECUTION_NOT_READY"]));

@@ -17,15 +17,26 @@ const normalizedHistory = new WeakMap();
 function normalizeHistory(input) {
   if (normalizedHistory.has(input)) return normalizedHistory.get(input);
   const rows = [];
+  const useMarketVolume = input.length > 0 && input.every((bar) =>
+    bar?.marketVolume !== null &&
+    bar?.marketVolume !== undefined &&
+    bar?.marketVolume !== "" &&
+    Number.isFinite(Number(bar.marketVolume)) &&
+    Number(bar.marketVolume) >= 0
+  );
   for (let i = 0; i < input.length; i++) {
     const b = input[i], volume = normalizeCryptoVolume(b);
     if (!volume) return null;
     if (i < input.length - 240) continue;
+    const marketVolume = b.marketVolume == null ? null : Number(b.marketVolume);
     rows.push({ time: stamp(b.time ?? b.t), open: Number(b.open ?? b.o),
       high: Number(b.high ?? b.h), low: Number(b.low ?? b.l), close: Number(b.close ?? b.c),
-      volume: volume.volume, intervalMs: Number(b.intervalMs),
-      marketVolume: b.marketVolume == null ? null : Number(b.marketVolume),
-      marketVolumeSource: b.marketVolumeSource });
+      volume: useMarketVolume ? marketVolume : volume.volume,
+      executionVolume: volume.volume,
+      intervalMs: Number(b.intervalMs),
+      marketVolume,
+      marketVolumeSource: b.marketVolumeSource,
+      participationVolumeSource: useMarketVolume ? b.marketVolumeSource : null });
   }
   // Only detached, deeply frozen histories have stable field values. Mutable
   // inputs must be re-read; freshness/completion checks below always run.
@@ -99,6 +110,9 @@ export function assessCryptoSetup(signal = {}, { now = Date.now() } = {}) {
   const targetPrice = resistance + range;
   const breakout = assessment.candidates.BREAKOUT;
   const retest = assessment.candidates.RETEST;
+  const participationSource = rows.every((bar) => bar.participationVolumeSource)
+    ? rows.at(-1).participationVolumeSource
+    : null;
   const reasons = assessment.exhausted
     ? ["EXHAUSTION"]
     : selected
@@ -124,7 +138,14 @@ export function assessCryptoSetup(signal = {}, { now = Date.now() } = {}) {
     targetBasis: "MEASURED_RANGE_PROJECTION_NOT_GUARANTEED",
     targetReassessment: selected?.targetReassessment === true,
     volumeConfirmed: breakout?.requiredEvidence?.breakBarVolume === "PASS",
+    volumeSource: participationSource,
     volumeRatio: breakout?.volumeRatio ?? null,
+    participation: {
+      available: participationSource !== null,
+      source: participationSource,
+      confirmed: breakout?.requiredEvidence?.breakBarVolume === "PASS",
+      ratio: breakout?.volumeRatio ?? null,
+    },
     higherHighs: assessment.higherHighs,
     higherLows: assessment.higherLows,
     breakout: breakout?.state === "PASS",

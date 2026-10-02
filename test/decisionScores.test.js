@@ -147,6 +147,8 @@ test("unavailable news does not lower discovery or entry", () => {
     ...canonicalDiscoveryEvidence,
     percentChange: 0.3,
     preMoveScore: 85,
+    setupState: "PULLBACK",
+    pullbackStructure: { trendIntact: true, depthAtr: 1 },
     requireNewsRiskForEntry: true,
     confirmations: {
       aboveVwap: true,
@@ -156,7 +158,7 @@ test("unavailable news does not lower discovery or entry", () => {
     },
     bid: 10,
     ask: 10.01,
-    technicalBarsFound: 30,
+    technicalBarsFound: 34,
     technicals: { ema9: 11, ema20: 10, macd: 2, macdSignal: 1, rsi: 60 },
     phase5SignalQuality: {
       liquidityStabilityScore: 90,
@@ -177,6 +179,8 @@ test("unavailable news does not lower discovery or entry", () => {
 
 test("news availability only hard-blocks Entry when the production risk check is required", () => {
   const entry = calculateEntryQualityScore({
+    setupState: "PULLBACK",
+    pullbackStructure: { trendIntact: true, depthAtr: 1 },
     requireNewsRiskForEntry: false,
     confirmations: {
       aboveVwap: true,
@@ -186,7 +190,7 @@ test("news availability only hard-blocks Entry when the production risk check is
     },
     bid: 10,
     ask: 10.01,
-    technicalBarsFound: 30,
+    technicalBarsFound: 34,
     technicals: { ema9: 11, ema20: 10, macd: 2, macdSignal: 1, rsi: 60 },
     phase5SignalQuality: {
       liquidityStabilityScore: 90,
@@ -204,23 +208,25 @@ test("news availability only hard-blocks Entry when the production risk check is
 
 test("entry approval depends on the setup, not the live spread", () => {
   const base = {
+    setupState: "PULLBACK",
+    pullbackStructure: { trendIntact: true, depthAtr: 1 },
     confirmations: { aboveVwap: true, closeNearHighPercent: 82, fakeBreakout: false },
     technicals: { ema9: 11, ema20: 10, macd: 2, macdSignal: 1, rsi: 60 },
     phase5SignalQuality: { liquidityStabilityScore: 85, antiChaseRisk: 15, exhaustionRisk: 15, spreadWideningRisk: 10, breakoutRetestConfirmation: true },
   };
-  const missingSpread = calculateEntryQualityScore({ ...base, technicalBarsFound: 30 });
+  const missingSpread = calculateEntryQualityScore({ ...base, technicalBarsFound: 34 });
   assert.equal(missingSpread.approved, true);
   assert.equal(missingSpread.gates.includes("MISSING_SPREAD_EVIDENCE"), false);
   const tooFewBars = calculateEntryQualityScore({ ...base, bid: 10, ask: 10.01, technicalBarsFound: 10 });
   assert.equal(tooFewBars.approved, false);
   assert.ok(tooFewBars.missingComponents.includes("trendAlignment"));
-  const complete = calculateEntryQualityScore({ ...base, bid: 10, ask: 10.01, technicalBarsFound: 30 });
+  const complete = calculateEntryQualityScore({ ...base, bid: 10, ask: 10.01, technicalBarsFound: 34 });
   assert.equal(complete.approved, true);
   const costlyButBelowLimit = calculateEntryQualityScore({
     ...base,
     bid: 9.96,
     ask: 10.04,
-    technicalBarsFound: 30,
+    technicalBarsFound: 34,
   });
   assert.equal(costlyButBelowLimit.score, complete.score);
   assert.equal(costlyButBelowLimit.spreadPenalty, undefined);
@@ -233,7 +239,7 @@ test("entry approval depends on the setup, not the live spread", () => {
     spreadPercent: 0.1,
     bid: 10,
     ask: 10.5,
-    technicalBarsFound: 30,
+    technicalBarsFound: 34,
   });
   assert.equal(wideSpread.approved, true);
   assert.equal(wideSpread.spreadTooWide, true);
@@ -387,12 +393,14 @@ test("watch names fill E when a live bid/ask arrives on an incomplete entry card
     gates: ["MISSING_SPREAD_EVIDENCE"],
   };
   const watch = {
+    setupState: "PULLBACK",
+    pullbackStructure: { trendIntact: true, depthAtr: 1 },
     discoveryScorecard: { score: 80, buyScore: 80, coverage: 1 },
     entryQualityScorecard: incompleteEntry,
     confirmations: { aboveVwap: true, closeNearHighPercent: 82, fakeBreakout: false },
     technicals: { ema9: 11, ema20: 10, macd: 2, macdSignal: 1, rsi: 60 },
     phase5SignalQuality: { liquidityStabilityScore: 85, antiChaseRisk: 15, exhaustionRisk: 15, spreadWideningRisk: 10, breakoutRetestConfirmation: true },
-    technicalBarsFound: 30,
+    technicalBarsFound: 34,
     bid: 10,
     ask: 10.02,
     spreadAvailable: true,
@@ -435,7 +443,7 @@ test("scoring context, risk, and fundamentals on a watch name lifts F without ch
   assert.equal(STOCK_EXECUTION_THRESHOLDS.finalScore, 70);
 });
 
-test("bounded reinforcement changes the canonical stock decision score", () => {
+test("bounded reinforcement stays observational and cannot change canonical stock weights", () => {
   const base = {
     discoveryScorecard: { score: 92, coverage: 1 },
     entryQualityScorecard: { score: 82, coverage: 1, approved: true },
@@ -454,9 +462,10 @@ test("bounded reinforcement changes the canonical stock decision score", () => {
     reinforcementLearningActive: true,
     reinforcementWeights: { momentum: 0.05, statisticalEdge: 0.05, technicals: 0.5, macro: 0.1, riskQuality: 0.15, fundamentals: 0.12 },
   });
-  assert.notEqual(discoveryWeighted.score, entryWeighted.score);
-  assert.equal(discoveryWeighted.reinforcementWeightsApplied, true);
-  assert.ok(Object.values(discoveryWeighted.effectiveWeights).every((value) => value > 0));
+  assert.equal(discoveryWeighted.score, entryWeighted.score);
+  assert.equal(discoveryWeighted.reinforcementWeightsApplied, false);
+  assert.deepEqual(discoveryWeighted.effectiveWeights, STOCK_DECISION_WEIGHTS);
+  assert.notDeepEqual(discoveryWeighted.learningSuggestedWeights, entryWeighted.learningSuggestedWeights);
 });
 
 test("legacy reinforcement weights stay inactive without enough measured samples", () => {
@@ -486,7 +495,7 @@ test("legacy reinforcement weights stay inactive without enough measured samples
   assert.equal(premature.reinforcementLearningActive, false);
 });
 
-test("bounded outcome learning changes weights only when activated", () => {
+test("bounded outcome learning is observed without changing canonical weights", () => {
   const base = {
     discoveryScorecard: { score: 95, coverage: 1 },
     entryQualityScorecard: { score: 70, coverage: 1, approved: true },
@@ -517,10 +526,13 @@ test("bounded outcome learning changes weights only when activated", () => {
     },
   });
   assert.equal(inactive.outcomeLearningApplied, false);
-  assert.equal(active.outcomeLearningApplied, true);
+  assert.equal(active.outcomeLearningApplied, false);
+  assert.equal(active.outcomeLearningObserved, true);
   assert.equal(active.outcomeLearningSampleCount, 30);
-  assert.ok(active.effectiveWeights.discovery > inactive.effectiveWeights.discovery);
-  assert.ok(active.effectiveWeights.entry < inactive.effectiveWeights.entry);
+  assert.deepEqual(active.effectiveWeights, inactive.effectiveWeights);
+  assert.equal(active.score, inactive.score);
+  assert.ok(active.learningSuggestedWeights.discovery > inactive.learningSuggestedWeights.discovery);
+  assert.ok(active.learningSuggestedWeights.entry < inactive.learningSuggestedWeights.entry);
 });
 
 test("stock execution enforces final, entry, coverage, and acceleration thresholds", () => {
@@ -534,6 +546,7 @@ test("stock execution enforces final, entry, coverage, and acceleration threshol
     centralAutonomousAction: "ALLOW",
     riskScore: 70,
     spreadPercent: 0.2,
+    bid: 99.9, ask: 100.1,
     liveQuoteUpdatedAt: now,
     spreadUpdatedAt: now,
     liveQuoteSource: "alpaca_latest_stock_quote",
@@ -553,6 +566,7 @@ test("stock execution enforces final, entry, coverage, and acceleration threshol
     centralAutonomousAction: "ACCELERATE_CAPITAL",
     riskScore: 70,
     spreadPercent: 0.2,
+    bid: 99.9, ask: 100.1,
     liveQuoteUpdatedAt: now,
     spreadUpdatedAt: now,
     liveQuoteSource: "alpaca_latest_stock_quote",
@@ -584,6 +598,7 @@ test("stock execution enforces final, entry, coverage, and acceleration threshol
     decisionScoreCoverage: 0.2,
     centralAutonomousAction: "WATCH",
     spreadPercent: 0.2,
+    bid: 99.9, ask: 100.1,
     liveQuoteUpdatedAt: now,
     spreadUpdatedAt: now,
     liveQuoteSource: "alpaca_latest_stock_quote",
@@ -599,6 +614,7 @@ test("stock execution enforces final, entry, coverage, and acceleration threshol
     decisionScoreCoverage: 0.2,
     centralAutonomousAction: "WATCH",
     spreadPercent: 0.2,
+    bid: 99.9, ask: 100.1,
     liveQuoteUpdatedAt: now,
     spreadUpdatedAt: now,
     liveQuoteSource: "alpaca_latest_stock_quote",
@@ -614,6 +630,7 @@ test("stock execution enforces final, entry, coverage, and acceleration threshol
     decisionScoreCoverage: 0.2,
     centralAutonomousAction: "WATCH",
     spreadPercent: 0.2,
+    bid: 99.9, ask: 100.1,
     liveQuoteUpdatedAt: now,
     spreadUpdatedAt: now,
     liveQuoteSource: "alpaca_latest_stock_quote",
@@ -644,6 +661,7 @@ test("server execution rejects stale and future stock decisions even with a fres
     centralAutonomousAction: "ALLOW",
     riskScore: 70,
     spreadPercent: 0.2,
+    bid: 99.9, ask: 100.1,
     liveQuoteUpdatedAt: new Date(now).toISOString(),
     spreadUpdatedAt: new Date(now).toISOString(),
     liveQuoteSource: "alpaca_latest_stock_quote",
@@ -674,6 +692,7 @@ test("final stock gate cannot approve incomplete core evidence or a central bloc
     centralAutonomousAction: "ALLOW",
     riskScore: 70,
     spreadPercent: 0.2,
+    bid: 99.9, ask: 100.1,
     liveQuoteUpdatedAt: now,
     spreadUpdatedAt: now,
     liveQuoteSource: "alpaca_latest_stock_quote",
@@ -704,6 +723,7 @@ test("final stock gate enforces explicit buy blocks and the execution spread lim
   const displayOnly = evaluateStockTradeCandidate({
     ...base,
     spreadPercent: 0.2,
+    bid: 99.9, ask: 100.1,
     spreadUpdatedAt: new Date().toISOString(),
     liveQuoteSource: "alpaca_latest_stock_quote",
     spreadSource: "alpaca_latest_stock_quote",
@@ -732,16 +752,17 @@ test("final stock gate enforces explicit buy blocks and the execution spread lim
   assert.equal(staleCachedSpread.spreadSource, "signal_bid_ask");
   assert.ok(staleCachedSpread.reasons.includes("SPREAD_ABOVE_EXECUTION_LIMIT"));
 
-  const legacySuppression = evaluateStockTradeCandidate({
+  const legacySuppressionDiagnostic = evaluateStockTradeCandidate({
     ...base,
     spreadPercent: 0.2,
+    bid: 99.9, ask: 100.1,
     spreadUpdatedAt: new Date().toISOString(),
     liveQuoteSource: "alpaca_latest_stock_quote",
     spreadSource: "alpaca_latest_stock_quote",
     priceIsLive: true,
     phase9LiquiditySuppressed: true,
   }, { requireCentralDecision: true });
-  assert.equal(legacySuppression.approved, false);
+  assert.equal(legacySuppressionDiagnostic.approved, true);
 });
 
 test("final stock gate requires minimum measured risk quality", () => {
@@ -756,6 +777,7 @@ test("final stock gate requires minimum measured risk quality", () => {
     liveQuoteUpdatedAt: now,
     spreadUpdatedAt: now,
     spreadPercent: 0.2,
+    bid: 99.9, ask: 100.1,
     liveQuoteSource: "alpaca_latest_stock_quote",
     spreadSource: "alpaca_latest_stock_quote",
     priceIsLive: true,
@@ -779,6 +801,7 @@ test("final stock gate requires a fresh quote for executable approval", () => {
     centralAutonomousAction: "ALLOW",
     riskScore: 70,
     spreadPercent: 0.2,
+    bid: 99.9, ask: 100.1,
     liveQuoteSource: "alpaca_latest_stock_quote",
     spreadSource: "alpaca_latest_stock_quote",
     priceIsLive: true,
@@ -891,6 +914,7 @@ test("stock execution fails closed on invalid final score and missing spread", (
     ...base,
     masterFinalScore: "not-a-score",
     spreadPercent: 0.2,
+    bid: 99.9, ask: 100.1,
   }, { requireCentralDecision: true });
   assert.equal(invalidScore.approved, false);
   assert.ok(invalidScore.reasons.includes("FINAL_SCORE_INVALID"));
@@ -906,6 +930,7 @@ test("legacy generic stock score cannot substitute for canonical F", () => {
     centralAutonomousAction: "ALLOW",
     riskScore: 70,
     spreadPercent: 0.2,
+    bid: 99.9, ask: 100.1,
     liveQuoteUpdatedAt: new Date().toISOString(),
   }, { requireCentralDecision: true });
 
@@ -925,6 +950,7 @@ test("execution-time stock gate fails closed without every explicit approval", (
     centralAutonomousAction: "ALLOW",
     riskScore: 70,
     spreadPercent: 0.2,
+    bid: 99.9, ask: 100.1,
     liveQuoteUpdatedAt: now,
     spreadUpdatedAt: now,
     decisionUpdatedAt: now,
@@ -966,6 +992,7 @@ test("stock execution rejects fresh-looking timestamps from an unapproved source
     centralAutonomousAction: "ALLOW",
     riskScore: 70,
     spreadPercent: 0.2,
+    bid: 99.9, ask: 100.1,
     liveQuoteUpdatedAt: now,
     spreadUpdatedAt: now,
     decisionUpdatedAt: now,

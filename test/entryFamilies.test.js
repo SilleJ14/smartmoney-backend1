@@ -110,7 +110,7 @@ test("a measured 1.2 percent spread is poor execution quality and still fails th
     },
   });
   assert.equal(entry.spreadTooWide, true);
-  assert.equal(entry.entryFamilyShadow.replacesProductionEntry, false);
+  assert.equal(entry.entryFamilyShadow.replacesProductionEntry, true);
   assert.ok(entry.entryFamilyShadow.families.execution.familyScore < 50);
 });
 
@@ -223,7 +223,7 @@ test("breakout and retest use different family requirements", () => {
   assert.ok(retestWithoutStructure.familyApproval.missing.includes("structure"));
 });
 
-test("the shadow entry does not change the production score or Buyable", () => {
+test("canonical entry families control entry approval without changing F", () => {
   const signal = {
     price: 11,
     bid: 10,
@@ -252,7 +252,7 @@ test("the shadow entry does not change the production score or Buyable", () => {
   assert.equal(entry.entryFamilyShadow.oldEntry, entry.score);
   assert.equal(entry.approved, entry.entryFamilyShadow.entryApproved);
   assert.equal(entry.entryFamilyShadow.controlsLiveApproval, true);
-  assert.equal(entry.entryFamilyShadow.replacesProductionEntry, false);
+  assert.equal(entry.entryFamilyShadow.replacesProductionEntry, true);
   const buyable = evaluateBuyable({
     authorizedDecisionValid: true,
     authorizedDecisionScore: 80,
@@ -276,7 +276,8 @@ test("the new entry threshold stays uncalibrated", () => {
     phase5SignalQuality: { liquidityStabilityScore: 80, antiChaseRisk: 10, breakoutRetestConfirmation: true },
   });
   assert.equal(STOCK_EXECUTION_THRESHOLDS.entryScore, 75);
-  assert.equal(entry.entryFamilyShadow.productionEntryGate, 75);
+  assert.equal(entry.entryFamilyShadow.productionEntryGate, null);
+  assert.equal(entry.entryFamilyShadow.legacyDiagnosticEntryGate, 75);
   assert.equal(entry.entryFamilyShadow.thresholdStatus, "NOT_CALIBRATED");
   assert.equal(entry.entryFamilyShadow.familyWeights, null);
   assert.equal(entry.entryFamilyShadow.blendMethod, "UNCALIBRATED_EQUAL_COVERAGE");

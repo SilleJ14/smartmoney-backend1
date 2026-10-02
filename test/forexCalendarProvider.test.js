@@ -19,6 +19,15 @@ test('calendar maps currencies, retains uncertain importance and central-bank ev
   assert.equal(calendarForDecision(snapshot,{now,instrument:'EUR_USD'}).reason,'EVENT_WINDOW');
 });
 
+test('calendar preserves measured macro surprise fields and never invents missing zeroes',()=>{
+  const measured=normalizeEconomicCalendar(payload([{...row,actual:'3.2%',estimate:'3.0%',prev:'2.9%',unit:'percent'}]),options).events[0];
+  assert.equal(measured.actual,3.2);assert.equal(measured.estimate,3);assert.equal(measured.previous,2.9);
+  assert.equal(measured.surpriseAvailable,true);
+  const missing=normalizeEconomicCalendar(payload([row]),options).events[0];
+  assert.equal(missing.actual,null);assert.equal(missing.estimate,null);assert.equal(missing.previous,null);
+  assert.equal(missing.surpriseAvailable,false);
+});
+
 test('explicit timestamp zones only; never infer server timezone or roll invalid dates',()=>{
   assert.equal(calendarTimestamp('2026-09-23T10:00:00-04:00'),new Date(now).toISOString());
   assert.equal(calendarTimestamp('2026-09-23 14:00:00','UTC'),new Date(now).toISOString());
@@ -39,7 +48,7 @@ test('calendar verifies holding-horizon and currency coverage',()=>{
 
 test('provider batches concurrent refreshes, caches, keeps secrets out of URL and diagnostics',async()=>{
   let calls=0,time=now;
-  const p=createEconomicCalendarProvider({apiKey:'private-key',nowFn:()=>time,fetchImpl:async(url,init)=>{
+  const p=createEconomicCalendarProvider({provider:'finnhub',apiKey:'private-key',nowFn:()=>time,fetchImpl:async(url,init)=>{
     calls++;assert.equal(new URL(url).pathname,'/api/v1/calendar/economic');
     assert.equal(new URL(url).searchParams.get('from'),'2026-09-22');
     assert.equal(init.headers['X-Finnhub-Token'],'private-key');assert.ok(!url.includes('private-key'));
@@ -55,7 +64,7 @@ test('provider batches concurrent refreshes, caches, keeps secrets out of URL an
 for(const [code,reason] of [[401,'CALENDAR_ACCESS_DENIED'],[403,'CALENDAR_ACCESS_DENIED'],[429,'CALENDAR_RATE_LIMITED'],[500,'CALENDAR_PROVIDER_FAILED']]) {
   test(`HTTP ${code} blocks entries and backs off`,async()=>{
     let calls=0;
-    const p=createEconomicCalendarProvider({apiKey:'secret',nowFn:()=>now,fetchImpl:async()=>{calls++;return new Response('secret',{status:code,headers:{'retry-after':'1800'}})}});
+    const p=createEconomicCalendarProvider({provider:'finnhub',apiKey:'secret',nowFn:()=>now,fetchImpl:async()=>{calls++;return new Response('secret',{status:code,headers:{'retry-after':'1800'}})}});
     await p.refresh();await p.refresh();assert.equal(calls,1);
     assert.equal(p.getStatus().error,reason);assert.equal(p.getSnapshot().coverageComplete,false);
     assert.ok(!JSON.stringify(p.getStatus()).includes('secret'));
@@ -65,7 +74,7 @@ for(const [code,reason] of [[401,'CALENDAR_ACCESS_DENIED'],[403,'CALENDAR_ACCESS
 
 test('failed refresh invalidates cached authorization without changing evidence time; later success recovers',async()=>{
   let time=now,broken=false;
-  const p=createEconomicCalendarProvider({apiKey:'key',nowFn:()=>time,fetchImpl:async()=>{
+  const p=createEconomicCalendarProvider({provider:'finnhub',apiKey:'key',nowFn:()=>time,fetchImpl:async()=>{
     if(broken)throw new Error('private transport details');return response(payload());
   }});
   await p.refresh();const original=p.getSnapshot().refreshedAt;
@@ -76,13 +85,13 @@ test('failed refresh invalidates cached authorization without changing evidence 
 });
 
 test('cold start without credentials blocks without making a request',async()=>{
-  const p=createEconomicCalendarProvider({nowFn:()=>now,fetchImpl:()=>assert.fail('no request allowed')});
+  const p=createEconomicCalendarProvider({provider:'finnhub',nowFn:()=>now,fetchImpl:()=>assert.fail('no request allowed')});
   await p.refresh();assert.equal(p.getStatus().error,'CALENDAR_MISSING_API_KEY');
 });
 
 test('oversized and invalid bodies fail closed',async()=>{
   for(const body of ['not json','x'.repeat(2*1024*1024+1)]){
-    const p=createEconomicCalendarProvider({apiKey:'key',nowFn:()=>now,fetchImpl:async()=>new Response(body)});
+    const p=createEconomicCalendarProvider({provider:'finnhub',apiKey:'key',nowFn:()=>now,fetchImpl:async()=>new Response(body)});
     await p.refresh();assert.equal(p.getSnapshot().coverageComplete,false);
     assert.match(p.getStatus().error,/CALENDAR_(INVALID_RESPONSE|RESPONSE_TOO_LARGE)/);
   }
@@ -90,6 +99,6 @@ test('oversized and invalid bodies fail closed',async()=>{
 
 test('slow response cannot acquire a fresh receipt timestamp',async()=>{
   let time=now;
-  const p=createEconomicCalendarProvider({apiKey:'key',nowFn:()=>time,fetchImpl:async()=>{time+=16*60000;return response(payload())}});
+  const p=createEconomicCalendarProvider({provider:'finnhub',apiKey:'key',nowFn:()=>time,fetchImpl:async()=>{time+=16*60000;return response(payload())}});
   await p.refresh();assert.equal(p.getStatus().error,'CALENDAR_STALE_RESPONSE');
 });

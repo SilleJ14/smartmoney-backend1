@@ -31,6 +31,36 @@ test("every automated stock market-buy path supplies a holding category", () => 
   assert.match(serverSource, /Stock order holding category is required/);
 });
 
+test("every automated buy path supplies the canonical signal contract", () => {
+  const stockCalls = [...serverSource.matchAll(/await placeMarketBuy\(/g)];
+  for (const call of stockCalls) {
+    const callWindow = serverSource.slice(call.index, call.index + 750);
+    assert.match(callWindow, /canonicalSignal(?:\s*:|\s*[,}])/);
+  }
+  const cryptoCalls = [...serverSource.matchAll(/await placeCryptoMarketBuy\(/g)]
+    .filter((call) => !serverSource.slice(call.index - 120, call.index).includes("function placeCryptoMarketBuy"));
+  for (const call of cryptoCalls) {
+    const callWindow = serverSource.slice(call.index, call.index + 500);
+    assert.match(callWindow, /(canonicalSignal:|cryptoAnalyticalShadow:)/);
+    assert.match(callWindow, /authorized:/);
+  }
+  assert.match(serverSource, /function requireAutomatedCanonicalOrder/);
+});
+
+test("manual orders remain explicit and separate from automated canonical authorization", () => {
+  const cryptoBuyBlock = serverSource.slice(
+    serverSource.indexOf("async function placeCryptoMarketBuy"),
+    serverSource.indexOf("async function placeCryptoMarketSell")
+  );
+  assert.ok(cryptoBuyBlock.indexOf("options.manual === true") < cryptoBuyBlock.indexOf("requireAutomatedCanonicalOrder"));
+  const routeBlock = serverSource.slice(
+    serverSource.indexOf("manualStockBuy:"),
+    serverSource.indexOf("manualCryptoBuy:")
+  );
+  assert.doesNotMatch(routeBlock, /requireCanonicalOrder/);
+  assert.match(routeBlock, /orderService\.manualStockBuy/);
+});
+
 test("live WebSocket feeds never substitute receipt time for provider time", () => {
   for (const [startName, endName] of [
     ["function handlePolygonLiveMessage", "function startPolygonStockStream"],

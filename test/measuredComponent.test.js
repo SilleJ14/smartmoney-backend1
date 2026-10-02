@@ -110,6 +110,8 @@ test("restored fundamentals put the measured 30 back into F", () => {
 
 test("unread required news does not cap entry at 35", () => {
   const entry = calculateEntryQualityScore({
+    setupState: "PULLBACK",
+    pullbackStructure: { trendIntact: true, depthAtr: 1 },
     requireNewsRiskForEntry: true,
     confirmations: {
       aboveVwap: true,
@@ -119,7 +121,7 @@ test("unread required news does not cap entry at 35", () => {
     },
     bid: 10,
     ask: 10.01,
-    technicalBarsFound: 30,
+    technicalBarsFound: 34,
     technicals: { ema9: 11, ema20: 10, macd: 2, macdSignal: 1, rsi: 60 },
     phase5SignalQuality: {
       liquidityStabilityScore: 90,

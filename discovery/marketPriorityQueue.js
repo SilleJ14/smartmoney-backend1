@@ -423,6 +423,7 @@ export function createMarketPriorityQueue({ workerCapacity = 4, streamCapacity =
     });
     return {
       queueDepth: pending.length,
+      deepScored: [...candidates.values()].filter((row) => Boolean(row.lastDeepScoreAt)).length,
       monitored: [...candidates.values()].filter((row) => row.lane === LANES.OPEN_POSITION || row.lane === LANES.AUTHORIZED_NEAR_BUY).length,
       queueWaitP50: percentile(waitSamples, 50),
       queueWaitP95: percentile(waitSamples, 95),

@@ -172,7 +172,7 @@ test("the book venue and the execution venue are both recorded", () => {
 
 test("crypto still has no numeric Entry floor and F is unchanged", () => {
   assert.equal(CRYPTO_EXECUTION_THRESHOLDS.entryScore, null);
-  assert.equal(CRYPTO_EXECUTION_THRESHOLDS.finalScore, 65);
+  assert.equal(CRYPTO_EXECUTION_THRESHOLDS.finalScore, null);
   assert.equal(CRYPTO_DECISION_WEIGHTS.base, 0.45);
   assert.equal(CRYPTO_DECISION_WEIGHTS.execution, 0.40);
   assert.equal(CRYPTO_DECISION_WEIGHTS.runner, 0);

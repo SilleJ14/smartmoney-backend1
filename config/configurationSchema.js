@@ -1,8 +1,42 @@
 import { STOCK_EXECUTION_THRESHOLDS } from "../scoring/stockQualificationPolicy.js";
 import { CRYPTO_MAX_ENTRY_SPREAD_PERCENT } from "../scoring/cryptoScoring.js";
+import { BOOLEAN_CONFIG_KEYS, NUMERIC_CONFIG_KEYS } from "./remoteConfigUpdates.js";
+import { FOREX_RISK_LIMITS } from "../forex/riskManager.js";
+import { FOREX_SPEC } from "../forex/forexSpec.js";
+
+const remoteOwner = (key) => /^(movers|minimumVolume|minVolume|maxPercentChange|maxSignals|newsLookback)/i.test(key)
+  ? "discovery.stocks"
+  : /^(liveOrder|liveStarter|livePosition|liveScale|stopLoss|takeProfit|trailingStop)/i.test(key)
+    ? "policy.execution"
+    : "automation";
+
+const REMOTE_CONFIGURATION_SCHEMA = Object.fromEntries([
+  ...NUMERIC_CONFIG_KEYS.map((key) => [key, {
+    owner: remoteOwner(key),
+    type: "number",
+    default: null,
+    purpose: `Runtime numeric setting consumed as CONFIG.${key}.`,
+    consumers: [`CONFIG.${key}`],
+  }]),
+  ...BOOLEAN_CONFIG_KEYS.map((key) => [key, {
+    owner: remoteOwner(key),
+    type: "boolean",
+    default: null,
+    purpose: `Runtime boolean setting consumed as CONFIG.${key}.`,
+    consumers: [`CONFIG.${key}`],
+  }]),
+  ["tradingMode", {
+    owner: "automation",
+    type: "string",
+    default: "smart",
+    purpose: "Runtime execution mode.",
+    consumers: ["TRADING_MODE"],
+  }],
+]);
 
 // Canonical policy is not a user setting. Automation preference cannot rename Qualified.
 export const CONFIGURATION_SCHEMA = Object.freeze({
+  ...REMOTE_CONFIGURATION_SCHEMA,
   "policy.stocks.finalScore": {
     owner: "policy.stocks",
     type: "number",
@@ -81,6 +115,48 @@ export const CONFIGURATION_SCHEMA = Object.freeze({
     default: false,
     purpose: "Whether automatic orders are allowed.",
     consumers: ["runtimeConfig.autoTradingEnabled"],
+  },
+  "automation.forexAutoEnabled": {
+    owner: "automation.forex",
+    type: "boolean",
+    default: false,
+    purpose: "Operator preference for validated OANDA practice strategies only.",
+    consumers: ["runtimeConfig.forexAutoEnabled"],
+  },
+  "policy.forex.plannedRiskPerTradePercent": {
+    owner: "policy.forex.risk",
+    type: "number",
+    default: FOREX_RISK_LIMITS.plannedRiskPerTradePercent,
+    purpose: "Maximum planned account-equity risk for one Forex entry.",
+    consumers: ["FOREX_RISK_LIMITS.plannedRiskPerTradePercent"],
+  },
+  "policy.forex.openPlusPendingPercent": {
+    owner: "policy.forex.risk",
+    type: "number",
+    default: FOREX_RISK_LIMITS.openPlusPendingPercent,
+    purpose: "Combined Forex open and pending stop-risk cap.",
+    consumers: ["FOREX_RISK_LIMITS.openPlusPendingPercent"],
+  },
+  "policy.forex.quoteMaxAgeSeconds": {
+    owner: "policy.forex.evidence",
+    type: "number",
+    default: FOREX_SPEC.quoteProviderMaxAgeSeconds,
+    purpose: "Maximum OANDA quote age for a Forex decision.",
+    consumers: ["FOREX_SPEC.quoteProviderMaxAgeSeconds"],
+  },
+  "infrastructure.forexOandaHost": {
+    owner: "infrastructure.forex",
+    type: "string",
+    default: FOREX_SPEC.practiceApiUrl,
+    purpose: "Practice-only OANDA REST origin; live origin is forbidden.",
+    consumers: ["resolveOandaEnv", "createOandaClient"],
+  },
+  "infrastructure.forexJournal": {
+    owner: "infrastructure.forex",
+    type: "string",
+    default: null,
+    purpose: "SQLite/WAL Forex evidence journal on the persistent volume.",
+    consumers: ["FOREX_JOURNAL_PATH", "createForexSqliteJournal"],
   },
   "infrastructure.apiBaseUrl": {
     owner: "infrastructure",

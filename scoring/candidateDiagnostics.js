@@ -1,4 +1,6 @@
 // Explanation only. Never changes scores, sizing or approval.
+import { STOCK_EXECUTION_THRESHOLDS } from "./stockQualificationPolicy.js";
+
 const num = x => typeof x === 'number' && Number.isFinite(x) ? x : null;
 const round = x => Math.round(x * 100) / 100;
 export function candidateDiagnostics(signal, evidence = {}, gate = {}) {
@@ -19,12 +21,12 @@ export function candidateDiagnostics(signal, evidence = {}, gate = {}) {
   const crypto = signal.assetClass === 'crypto' || String(signal.symbol).includes('/');
   const score = crypto ? signal.cryptoDecisionScore : signal.stockDecisionScore;
   const available = crypto ? signal.cryptoDecisionScoreAvailable : signal.stockDecisionScoreAvailable;
-  const threshold = crypto ? 65 : 78;
+  const threshold = crypto ? null : STOCK_EXECUTION_THRESHOLDS.finalScore;
   const currentFinal = available === true ? num(score) : null;
   const status = gate.approved === true ? 'APPROVED'
     : freshness.length ? 'WAITING_FOR_FRESH_DATA'
     : missing.length || currentFinal === null ? 'INSUFFICIENT_EVIDENCE'
-    : currentFinal < threshold ? 'BELOW_SCORE_THRESHOLD' : 'WAITING_FOR_ENTRY_OR_RISK_APPROVAL';
+    : threshold !== null && currentFinal < threshold ? 'BELOW_SCORE_THRESHOLD' : 'WAITING_FOR_ENTRY_OR_RISK_APPROVAL';
   return { status, threshold, currentFinal,
     componentAssessmentAt: signal.scoreAssessmentUpdatedAt || signal.decisionUpdatedAt || null,
     componentScope: 'Component model measurements; not current executable E or permission to buy',

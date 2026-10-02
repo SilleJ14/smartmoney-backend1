@@ -44,8 +44,10 @@ test("current validated evidence has the same precedence as score publication", 
     stockDecisionEvidence: { coreEvidencePass: true },
     centralAutonomousDecisionCore: { stockDecisionEvidence: { coreEvidencePass: false } } }), 78);
   assert.equal(getCanonicalFinalScore({ symbol: "BTC/USD", cryptoDecisionScore: 65,
-    cryptoScoreTelemetry: { decision: { coreEvidencePass: true } },
-    centralAutonomousDecisionCore: { cryptoDecisionEvidence: { coreEvidencePass: false } } }), 65);
+    cryptoScoreTelemetry: { decision: { coreEvidencePass: true, cryptoAnalyticalShadow: {
+      replacesCanonicalF: true, productionEffect: true, cryptoAnalyticalF: 67,
+    } } },
+    centralAutonomousDecisionCore: { cryptoDecisionEvidence: { coreEvidencePass: false } } }), 67);
 });
 
 test("newer decision rejection replaces older approval in either input order", () => {
@@ -184,19 +186,29 @@ test("candidate approval requires every explicit backend approval field", () => 
   }
 });
 
-test("canonical F uses one stable score priority for stocks and crypto", () => {
+test("canonical F uses current stock analysis and analytical crypto provenance only", () => {
   assert.equal(getCanonicalFinalScore({
     symbol: "AAPL",
     masterFinalScore: 84,
     finalAutonomousDecisionScore: 82,
     stockDecisionScore: 70,
     stockDecisionScoreAvailable: true,
-  }), 84);
+  }), 70);
   assert.equal(getCanonicalFinalScore({
     symbol: "BTC/USD",
     assetClass: "crypto",
     cryptoDecisionScore: 65,
     masterFinalScore: 90,
     cryptoDecisionScoreAvailable: true,
-  }), 65);
+  }), null);
+  assert.equal(getCanonicalFinalScore({
+    symbol: "BTC/USD",
+    assetClass: "crypto",
+    cryptoDecisionScore: 65,
+    cryptoAnalyticalShadow: {
+      replacesCanonicalF: true,
+      productionEffect: true,
+      cryptoAnalyticalF: 72,
+    },
+  }), 72);
 });

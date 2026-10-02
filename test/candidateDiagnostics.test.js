@@ -16,7 +16,9 @@ test('stale execution is not presented as low quality and missing F is not zero'
   assert.equal(candidateDiagnostics(signal,{}, {reasons:['SPREAD_STALE']}).status,'WAITING_FOR_FRESH_DATA');
   const d = candidateDiagnostics({...signal,cryptoDecisionScoreAvailable:false},{},{reasons:['barHistory']});
   assert.equal(d.currentFinal,null); assert.equal(d.status,'INSUFFICIENT_EVIDENCE');
-  assert.equal(candidateDiagnostics({...signal,cryptoDecisionScore:64},{},{reasons:[]}).status,'BELOW_SCORE_THRESHOLD');
+  const uncalibrated = candidateDiagnostics({...signal,cryptoDecisionScore:64},{},{reasons:[]});
+  assert.equal(uncalibrated.threshold, null);
+  assert.equal(uncalibrated.status,'WAITING_FOR_ENTRY_OR_RISK_APPROVAL');
 });
 test('summary counts blockers once per candidate and trace preserves crypto D/E', () => {
   const d = candidateDiagnostics(signal,{}, {reasons:['SPREAD_STALE','SPREAD_STALE']});

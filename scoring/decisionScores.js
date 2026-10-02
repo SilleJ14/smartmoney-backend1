@@ -146,7 +146,7 @@ function firstFinite(...values) {
 
 function resolveMeasuredStockSpread(signal = {}, quality = {}) {
   if (signal.spreadAvailable === false || signal.liveQuote?.spreadAvailable === false) {
-    return { spreadPercent: null, source: "explicitly_unavailable" };
+    return { spreadPercent: null, source: "explicitly_unavailable", measuredBidAsk: false };
   }
   const liveBid = firstFinite(signal.liveQuote?.bid);
   const liveAsk = firstFinite(signal.liveQuote?.ask);
@@ -159,6 +159,7 @@ function resolveMeasuredStockSpread(signal = {}, quality = {}) {
         ((Number(liveAsk) - Number(liveBid)) /
           ((Number(liveAsk) + Number(liveBid)) / 2)) * 100,
       source: "live_quote_bid_ask",
+      measuredBidAsk: true,
     };
   }
 
@@ -170,6 +171,7 @@ function resolveMeasuredStockSpread(signal = {}, quality = {}) {
         ((Number(ask) - Number(bid)) /
           ((Number(ask) + Number(bid)) / 2)) * 100,
       source: "signal_bid_ask",
+      measuredBidAsk: true,
     };
   }
 
@@ -179,8 +181,8 @@ function resolveMeasuredStockSpread(signal = {}, quality = {}) {
     signal.institutionalSignalQuality?.spreadPercent
   );
   return Number(directSpread) >= 0
-    ? { spreadPercent: Number(directSpread), source: "reported_spread_fallback" }
-    : { spreadPercent: null, source: "unavailable" };
+    ? { spreadPercent: Number(directSpread), source: "reported_spread_analytical_only", measuredBidAsk: false }
+    : { spreadPercent: null, source: "bid_ask_unavailable", measuredBidAsk: false };
 }
 
 function resolveRiskQualityEvidence(signal = {}) {
@@ -295,7 +297,9 @@ export function evaluateStockTradeCandidate(
     signal.phase5SignalQuality || signal.institutionalSignalQuality || {}
   );
   const calculatedSpread = spreadEvidence.spreadPercent;
-  const spreadAvailable = calculatedSpread !== null && Number.isFinite(calculatedSpread);
+  const spreadAvailable = calculatedSpread !== null
+    && Number.isFinite(calculatedSpread)
+    && (!requireCentralDecision || spreadEvidence.measuredBidAsk === true);
   const effectiveMaxSpread = Number.isFinite(Number(maxSpreadPercent))
     ? Math.min(
       STOCK_EXECUTION_THRESHOLDS.maxSpreadPercent,
@@ -408,8 +412,7 @@ export function evaluateStockTradeCandidate(
     signal.finalSizingReconciliation?.finalBlocked === true ||
     signal.confirmations?.fakeBreakout === true ||
     signal.confirmations?.newsRisk === true ||
-    signal.globalRiskOffDefense?.shouldBlock === true ||
-    signal.shouldWaitForPullback === true;
+    signal.globalRiskOffDefense?.shouldBlock === true;
   const reasons = [
     ...(requireCentralDecision && !structureOrScoreBuy ? researchExecutionIssues(signal,evidencePolicy('stock','order','automatic'), now) : []),
     ...(!entryApproved ? ["ENTRY_NOT_APPROVED"] : []),
@@ -972,9 +975,12 @@ export function buildStockDecisionScore(signal = {}) {
     fundamentals: STOCK_DECISION_WEIGHTS.fundamentals * boundedRatio("fundamentals", 0.12) * outcomeMultiplier("fundamentals"),
   };
   const learnedWeightTotal = Object.values(learnedWeights).reduce((sum, value) => sum + value, 0);
-  const effectiveWeights = Object.fromEntries(
+  const learningSuggestedWeights = Object.fromEntries(
     Object.entries(learnedWeights).map(([name, value]) => [name, Number((value / learnedWeightTotal).toFixed(6))])
   );
+  // Learning is observational until an explicit calibrated policy release.
+  // Canonical D/E/F weights do not move at runtime.
+  const effectiveWeights = { ...STOCK_DECISION_WEIGHTS };
   const selectedDiscovery = selectDiscoveryInput({
     measuredContinuationEligible: useContinuation,
     continuationScore: continuationSetup.score,
@@ -1181,9 +1187,11 @@ export function buildStockDecisionScore(signal = {}) {
       },
     }),
     effectiveWeights,
-    reinforcementWeightsApplied: Object.keys(reinforcementWeights).length > 0,
+    learningSuggestedWeights,
+    reinforcementWeightsApplied: false,
     reinforcementLearningActive,
-    outcomeLearningApplied: outcomeLearningActive,
+    outcomeLearningApplied: false,
+    outcomeLearningObserved: outcomeLearningActive,
     outcomeLearningSampleCount: Number(outcomeLearning.sampleCount || 0),
     discovery,
     entry,

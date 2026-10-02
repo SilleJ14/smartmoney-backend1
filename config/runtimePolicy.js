@@ -37,7 +37,7 @@ export function resolveAutoTradingEnabled(config = {}, environmentValue) {
   if (environmentValue !== undefined && String(environmentValue).trim() !== "") {
     return String(environmentValue).trim().toLowerCase() === "true";
   }
-  return true;
+  return false;
 }
 
 export function resolveForexAutoEnabled(config = {}, environmentValue) {

@@ -30,8 +30,6 @@ export function createStockQuoteBatch({ primary, fallback, normalizeSymbol, now 
     for (const q of extra) {
       const key = normalizeSymbol(q.symbol);
       const existing = bySymbol.get(key);
-      const existingSource = String(existing?.liveQuoteSource || existing?.source || "");
-      if (existing && existingSource.includes("tradier")) continue;
       bySymbol.set(key, selectStockExecutionQuote(existing, q, { now: now() }));
     }
     return [...bySymbol.values()].map((q) => {

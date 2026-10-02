@@ -27,6 +27,11 @@ test("persisted top-signal aliases rank explicit approval and canonical F", () =
         score: 5,
         cryptoDecisionScore: 85,
         cryptoDecisionScoreAvailable: true,
+        cryptoAnalyticalShadow: {
+          cryptoAnalyticalF: 85,
+          replacesCanonicalF: true,
+          productionEffect: true,
+        },
         ...approval,
       },
       { symbol: "ETH/USD", score: 99 },

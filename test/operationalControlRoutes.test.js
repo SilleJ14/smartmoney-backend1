@@ -1,6 +1,10 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import { registerOperationalControlRoutes, RELEASE_CONFIRMATION } from "../routes/operationalControlRoutes.js";
+import {
+  registerOperationalControlRoutes,
+  RELEASE_CONFIRMATION,
+  RELEASE_MASTER_CONFIRMATION,
+} from "../routes/operationalControlRoutes.js";
 
 function install() {
   const routes = new Map();
@@ -44,4 +48,25 @@ test("profit lock does not block turning Autopilot on after stop is released", a
   const off = await call("/auto-trading/off");
   assert.equal(off.statusCode, 423);
   assert.equal(getControl().autoTradingEnabled, true);
+});
+
+test("master kill switch stops both engines and release never arms either", async () => {
+  const { call, getControl } = install();
+  const engaged = await call("/master-kill-switch");
+  assert.equal(engaged.body.emergencyStopActive, true);
+  assert.equal(engaged.body.forexEmergencyStopActive, true);
+  assert.equal(getControl().autoTradingEnabled, false);
+  assert.equal(getControl().forexAutoEnabled, false);
+  assert.equal(getControl().forexPauseEntries, true);
+
+  const denied = await call("/master-kill-switch/release", { confirmation: "no" });
+  assert.equal(denied.statusCode, 400);
+  const released = await call("/master-kill-switch/release", {
+    confirmation: RELEASE_MASTER_CONFIRMATION,
+  });
+  assert.equal(released.body.emergencyStopActive, false);
+  assert.equal(released.body.forexEmergencyStopActive, false);
+  assert.equal(released.body.autoTradingEnabled, false);
+  assert.equal(released.body.forexAutoEnabled, false);
+  assert.equal(getControl().forexPauseEntries, false);
 });

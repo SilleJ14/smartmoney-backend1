@@ -23,7 +23,7 @@ test('an already-rising stock can earn a measured continuation lane, not automat
     entryQualityScorecard: { score: 80, coverage: 1, approved: true }, contextScore: 80, riskPortfolioScore: 80 });
   assert.equal(evidence.opportunityBasis, 'MEASURED_CONTINUATION');
   assert.equal(evidence.discovery.score, 55, 'late discovery must not be relabeled early');
-  assert.equal(evidence.components.find(c => c.name === 'discovery').source, 'measured_continuation_setup');
+  assert.equal(evidence.components.find(c => c.name === 'discovery').source, 'CONTINUATION_SETUP');
 });
 test('large daily gain alone, exhaustion, missing or stale bars cannot establish continuation', () => {
   assert.equal(assessContinuationSetup({ price: 100, percentChange: 88 }).available, false);

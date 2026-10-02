@@ -17,6 +17,27 @@ export function resolveCanonicalStockDecisionScore(signal = {}) {
   return value === null ? 0 : value;
 }
 
+export function applyLiveCryptoContextSizing(amount, signal = {}) {
+  let sized = Number(amount);
+  if (!Number.isFinite(sized) || sized <= 0) {
+    return { amount: 0, breadthMultiplier: null, btcMultiplier: null };
+  }
+  const breadthMultiplier = Number(
+    (signal.cryptoAnalyticalShadow
+      || signal.centralAutonomousDecisionCore?.cryptoDecisionEvidence?.cryptoAnalyticalShadow
+    )?.S?.regimeMultiplier
+  );
+  if (breadthMultiplier > 0 && breadthMultiplier < 1) {
+    sized = Number((sized * breadthMultiplier).toFixed(2));
+  }
+  const btc = applyLiveBtcSize(sized, signal.btcRegime);
+  return {
+    amount: btc.amount,
+    breadthMultiplier: Number.isFinite(breadthMultiplier) ? breadthMultiplier : null,
+    btcMultiplier: Number.isFinite(Number(btc.multiplier)) ? Number(btc.multiplier) : null,
+  };
+}
+
 export function evaluateCanonicalStockAutoBuyEligibility(
   signal = {},
   minimumScore = STOCK_EXECUTION_THRESHOLDS.finalScore,
@@ -112,8 +133,7 @@ export function createAutoBuyStrategies(dependencies) {
   } = dependencies;
 
   function getCryptoDecisionScore(signal = {}) {
-    const value = getCanonicalFinalScore({ ...signal, assetClass: "crypto" });
-    return value === null ? 0 : value;
+    return getCanonicalFinalScore({ ...signal, assetClass: "crypto" });
   }
 
   function getMeasuredCryptoSpread(signal = {}) {
@@ -1354,17 +1374,22 @@ export function createAutoBuyStrategies(dependencies) {
       ...signals
         .filter(hasExplicitTradeApproval)
         .map((s) => getCryptoDecisionScore(s))
+        .filter(Number.isFinite)
     );
-    let scoreMultiplier = 0.5;
-    if (bestCandidateScore >= 95) scoreMultiplier = 1;
-    else if (bestCandidateScore >= 90) scoreMultiplier = 0.85;
-    else if (bestCandidateScore >= 85) scoreMultiplier = 0.7;
-    else if (bestCandidateScore >= 75) scoreMultiplier = 0.55;
+    let legacyScoreMultiplier = 0.5;
+    if (bestCandidateScore >= 95) legacyScoreMultiplier = 1;
+    else if (bestCandidateScore >= 90) legacyScoreMultiplier = 0.85;
+    else if (bestCandidateScore >= 85) legacyScoreMultiplier = 0.7;
+    else if (bestCandidateScore >= 75) legacyScoreMultiplier = 0.55;
+    const scoreMultiplier = 1;
     const tradeAmount = baseTradeAmount * scoreMultiplier;
-    const cryptoPermissionFor = (signal) => liveCryptoPermission(
-      signal?.cryptoAnalyticalShadow
-      || signal?.centralAutonomousDecisionCore?.cryptoDecisionEvidence?.cryptoAnalyticalShadow
-    );
+    const cryptoPermissionFor = (signal) => {
+      const shadow = signal?.cryptoAnalyticalShadow
+        || signal?.centralAutonomousDecisionCore?.cryptoDecisionEvidence?.cryptoAnalyticalShadow;
+      return shadow
+        ? liveCryptoPermission(shadow)
+        : evaluateCryptoTradeCandidate(signal).livePermission;
+    };
     if (tradeAmount < 1) {
       recordFailedOrder("AUTO_CRYPTO_BUY_SKIPPED", "CRYPTO", "Not enough budget");
       return;
@@ -1380,9 +1405,13 @@ export function createAutoBuyStrategies(dependencies) {
         return !openSymbols.has(sym) && Date.now() - lastSold > 120000;
       })
       .sort(
-        (a, b) =>
-          getCryptoDecisionScore(b) -
-          getCryptoDecisionScore(a)
+        (a, b) => {
+          const left = getCryptoDecisionScore(a);
+          const right = getCryptoDecisionScore(b);
+          if (right === null) return left === null ? 0 : -1;
+          if (left === null) return 1;
+          return right - left;
+        }
       )
       .slice(0, openSlots);
     let cryptoBudgetReservedThisCycle = 0;
@@ -1462,7 +1491,7 @@ export function createAutoBuyStrategies(dependencies) {
         };
         crypto.rawRecommendedTradeAmount = Number(adaptiveCryptoSizing.recommendedAmount || 0);
         crypto.displayTradeAmount = Number(adaptiveCryptoSizing.recommendedAmount || 0);
-        const cryptoConvictionMultiplier =
+        const legacyCryptoConvictionMultiplier =
           cryptoInstitutionalScore >= 88 &&
             cryptoTechnicalScore >= 82 &&
             cryptoStatisticalScore >= 75
@@ -1473,6 +1502,7 @@ export function createAutoBuyStrategies(dependencies) {
               : cryptoInstitutionalScore >= 72
                 ? 1.35
                 : 0.65;
+        const cryptoConvictionMultiplier = 1;
         const finalMasterDecisionProfile =
           calculateFinalMasterDecisionProfile({
             ...crypto,
@@ -1500,8 +1530,9 @@ export function createAutoBuyStrategies(dependencies) {
           );
           continue;
         }
-        const finalMasterCryptoSizingMultiplier =
+        const legacyFinalMasterCryptoSizingMultiplier =
           Number(finalMasterDecisionProfile.finalSizingMultiplier || 1);
+        const finalMasterCryptoSizingMultiplier = 1;
         const availableCryptoBuyingPower =
           getCryptoAvailableBuyingPower(account);
         const totalBotExposure = getBotExposure(managedPositions);
@@ -1552,15 +1583,8 @@ export function createAutoBuyStrategies(dependencies) {
               ? minCryptoTradeAmount
               : 0;
         }
-        const breadthMultiplier = Number(
-          (crypto.cryptoAnalyticalShadow
-            || crypto.centralAutonomousDecisionCore?.cryptoDecisionEvidence?.cryptoAnalyticalShadow
-          )?.S?.regimeMultiplier
-        );
-        if (breadthMultiplier > 0 && breadthMultiplier < 1) {
-          finalTradeAmount = Number((finalTradeAmount * breadthMultiplier).toFixed(2));
-        }
-        finalTradeAmount = applyLiveBtcSize(finalTradeAmount, crypto.btcRegime).amount;
+        const contextSizing = applyLiveCryptoContextSizing(finalTradeAmount, crypto);
+        finalTradeAmount = contextSizing.amount;
         crypto.finalApprovedTradeAmount = Number(finalTradeAmount || 0);
         crypto.finalTradeAmount = Number(finalTradeAmount || 0);
         crypto.displayTradeAmount = Number(finalTradeAmount || crypto.displayTradeAmount || 0);
@@ -1573,10 +1597,18 @@ export function createAutoBuyStrategies(dependencies) {
           cryptoConvictionMultiplier,
           finalMasterCryptoSizingMultiplier,
           parliamentMultiplier: Number(cryptoParliamentGate.multiplier || 1),
+          breadthMultiplier: contextSizing.breadthMultiplier,
+          btcMultiplier: contextSizing.btcMultiplier,
           availableCryptoBuyingPower,
           remainingCryptoBudget,
           remainingTotalBotBudget,
           minCryptoTradeAmount,
+          legacyScoreSizingDiagnostics: {
+            affectsSize: false,
+            scoreMultiplier: legacyScoreMultiplier,
+            cryptoConvictionMultiplier: legacyCryptoConvictionMultiplier,
+            finalMasterCryptoSizingMultiplier: legacyFinalMasterCryptoSizingMultiplier,
+          },
         };
         if (!finalTradeAmount || finalTradeAmount <= 0) {
           recordOrder(

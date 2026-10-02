@@ -15,6 +15,15 @@ const COUNTRY_CURRENCY = Object.freeze(Object.fromEntries([
 
 function fail(code) { throw Object.assign(new Error(code), { calendarCode: code }); }
 
+function calendarNumber(value) {
+  if (value === null || value === undefined || value === "") return null;
+  const normalized = typeof value === "string"
+    ? value.trim().replaceAll(",", "").replace(/%$/, "")
+    : value;
+  const parsed = Number(normalized);
+  return Number.isFinite(parsed) ? parsed : null;
+}
+
 export function calendarTimestamp(value, timezone = "") {
   if (typeof value !== "string") fail("CALENDAR_INVALID_EVENT_TIME");
   let text = value.trim().replace(" ", "T");
@@ -56,7 +65,26 @@ export function normalizeEconomicCalendar(payload, { from, to, requestedAt, time
     if (impact === "low" && !centralBank) { lowImpactCount++; continue; }
     const type = centralBank ? `central bank: ${title}` : title;
     const id = `${currency}:${start}:${title}`;
-    events.set(id, { id, currency, type, start, end: start, impact, country });
+    const actual = calendarNumber(row.actual);
+    const estimate = calendarNumber(row.estimate ?? row.forecast);
+    const previous = calendarNumber(row.prev ?? row.previous);
+    events.set(id, {
+      id,
+      currency,
+      type,
+      start,
+      end: start,
+      impact,
+      country,
+      actual,
+      estimate,
+      previous,
+      actualAvailable: actual !== null,
+      estimateAvailable: estimate !== null,
+      previousAvailable: previous !== null,
+      unit: typeof row.unit === "string" ? row.unit.slice(0, 40) : null,
+      surpriseAvailable: actual !== null && estimate !== null,
+    });
   }
   return { source: "finnhub_economic_calendar", schemaVersion: 1, refreshedAt: new Date(requestedAt).toISOString(),
     coverageComplete: true, qualityStatus: "VALID", coveredFrom, coveredThrough, coveredCurrencies: CURRENCIES,
@@ -90,6 +118,10 @@ export function normalizeJBlankedCalendar(rows, requestedAt) {
   const to = new Date(+sunday + 7 * DAY).toISOString().slice(0, 10);
   const snapshot = normalizeEconomicCalendar({ economicCalendar: rows.map(row => ({
     event: row?.Name, country: row?.Currency, impact: row?.Impact,
+    actual: row?.Actual,
+    estimate: row?.Forecast,
+    previous: row?.Previous,
+    unit: row?.Unit,
     // JBlanked FAQ specifies GMT+3. Reject tentative/all-day/malformed times.
     time: typeof row?.Date === "string" && /^\d{4}\.\d{2}\.\d{2} \d{2}:\d{2}:\d{2}$/.test(row.Date)
       ? row.Date.replaceAll(".", "-").replace(" ", "T") + "+03:00" : null,
@@ -99,7 +131,7 @@ export function normalizeJBlankedCalendar(rows, requestedAt) {
     coveredThrough: new Date(+sunday + 6 * DAY + 3 * 3600000 + 59 * MINUTE).toISOString() };
 }
 
-export function createEconomicCalendarProvider({ apiKey, jblankedApiKey, store, filePath, provider = filePath ? "file" : "finnhub",
+export function createEconomicCalendarProvider({ apiKey, jblankedApiKey, store, filePath, provider = filePath ? "file" : "jblanked",
   timezone = "", fetchImpl = globalThis.fetch, nowFn = Date.now, timeoutMs = 10000 } = {}) {
   let snapshot = defaultCalendarSnapshot();
   let pending = null;

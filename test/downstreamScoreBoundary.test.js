@@ -65,7 +65,7 @@ test("an archetype score is not copied over canonical crypto F", () => {
   assert.equal(separated.archetype.affectsF, false);
 });
 
-test("crypto quote refresh moves current F up without a new authorization", () => {
+test("a material crypto F change publishes current F and requires reauthorization", () => {
   const next = publishQuoteRefreshScore({
     symbol: "BTC/USD",
     currentAnalyticalScore: 72,
@@ -79,10 +79,11 @@ test("crypto quote refresh moves current F up without a new authorization", () =
   assert.equal(next.currentAnalyticalScore, 79);
   assert.equal(next.authorizedDecisionScore, 72);
   assert.equal(next.scoreVersion, 3);
-  assert.equal(next.centralReviewStatus, "NONE");
+  assert.equal(next.authorizedDecisionValid, false);
+  assert.equal(next.centralReviewStatus, "QUEUED");
 });
 
-test("crypto quote refresh moves current F down and revokes buy only when the requirement fails", () => {
+test("crypto has no numeric analytical floor but changed F still requires reauthorization", () => {
   const next = publishQuoteRefreshScore({
     symbol: "BTC/USD",
     currentAnalyticalScore: 79,
@@ -95,16 +96,17 @@ test("crypto quote refresh moves current F down and revokes buy only when the re
   assert.equal(next.authorizedDecisionScore, 79);
   assert.equal(next.scoreVersion, 4);
   const stillClearsLegacyGate = evaluateBuyable({
-    authorizedDecisionValid: true,
+    authorizedDecisionValid: next.authorizedDecisionValid,
     authorizedDecisionScore: next.authorizedDecisionScore,
     currentAnalyticalScore: next.currentAnalyticalScore,
     requiredF: CRYPTO_MIN_FINAL_SCORE_TO_BUY,
     entryApproved: true,
     S: 100,
   });
-  assert.equal(CRYPTO_MIN_FINAL_SCORE_TO_BUY, 65);
+  assert.equal(CRYPTO_MIN_FINAL_SCORE_TO_BUY, null);
   assert.equal(stillClearsLegacyGate.currentPass, true);
-  assert.equal(stillClearsLegacyGate.buyable, true);
+  assert.equal(stillClearsLegacyGate.buyable, false);
+  assert.equal(stillClearsLegacyGate.reason, "CENTRAL_REAUTHORIZATION_REQUIRED");
   const belowGate = publishQuoteRefreshScore({
     currentAnalyticalScore: 79,
     authorizedDecisionScore: 79,
@@ -114,7 +116,7 @@ test("crypto quote refresh moves current F down and revokes buy only when the re
   assert.equal(belowGate.currentAnalyticalScore, 60);
   assert.equal(belowGate.authorizedDecisionScore, 79);
   const revoked = evaluateBuyable({
-    authorizedDecisionValid: true,
+    authorizedDecisionValid: belowGate.authorizedDecisionValid,
     authorizedDecisionScore: belowGate.authorizedDecisionScore,
     currentAnalyticalScore: belowGate.currentAnalyticalScore,
     requiredF: CRYPTO_MIN_FINAL_SCORE_TO_BUY,
@@ -122,7 +124,8 @@ test("crypto quote refresh moves current F down and revokes buy only when the re
     S: 100,
   });
   assert.equal(revoked.buyable, false);
-  assert.equal(revoked.reason, "CURRENT_ANALYTICAL_SCORE_BELOW_THRESHOLD");
+  assert.equal(revoked.currentPass, true);
+  assert.equal(revoked.reason, "CENTRAL_REAUTHORIZATION_REQUIRED");
 });
 
 test("a stale master score cannot replace a newer stock F", () => {
@@ -203,7 +206,16 @@ test("installing a central decision updates authorization and leaves the analyti
     action: "BLOCK",
     finalDecisionScore: 64,
     cryptoDecisionScore: 82,
-    cryptoDecisionEvidence: { analysisEvidencePass: true, coreEvidencePass: true, score: 82 },
+    cryptoDecisionEvidence: {
+      analysisEvidencePass: true,
+      coreEvidencePass: true,
+      score: 82,
+      cryptoAnalyticalShadow: {
+        cryptoAnalyticalF: 82,
+        replacesCanonicalF: true,
+        productionEffect: true,
+      },
+    },
     riskDecision: { state: "REJECT", reasons: ["FAKE_BREAKOUT"], affectsF: false },
   }, { crypto: true, now: Date.parse("2026-09-25T12:05:00.000Z") });
   assert.equal(signal.currentAnalyticalSnapshot.F, 82);

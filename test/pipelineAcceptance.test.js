@@ -35,7 +35,7 @@ function orderRecord(symbol, decision) {
 test("full pipeline acceptance from market data to Buyable or a recorded blocker", () => {
   assert.equal(STOCK_EXECUTION_THRESHOLDS.finalScore, 70);
 
-  const paths = ["scanner", "continuation", "starter", "manual", "auto-trade", "crypto-rotation", "execution"];
+  const paths = ["scanner", "continuation", "starter", "auto-trade", "crypto-rotation", "execution"];
   for (const path of paths) {
     const blocked = requireCanonicalOrder(path, {
       entryApproved: true,
@@ -79,14 +79,29 @@ test("full pipeline acceptance from market data to Buyable or a recorded blocker
   });
   assert.equal(cryptoBlocked.allowed, false);
   assert.equal(cryptoBlocked.inheritsLegacyThreshold, false);
+  const cryptoNewsBlocked = requireCanonicalOrder("crypto-rotation", {
+    asset: "crypto",
+    shadow: {
+      cryptoAnalyticalF: 74,
+      E: { state: "PASS" },
+      C: { state: "REJECT", reason: "NEGATIVE_CATALYST" },
+      X: { state: "PASS" },
+      R: { state: "PASS" },
+      S: { regimeMultiplier: 1 },
+    },
+    authorized: true,
+    S: 25,
+  });
+  assert.equal(cryptoNewsBlocked.allowed, false);
+  assert.equal(cryptoNewsBlocked.blocker, "NEGATIVE_CATALYST");
 
   assert.match(scanner, /evaluateStockTradeCandidate/);
   assert.match(autoBuy, /evaluateStockTradeCandidate/);
   assert.match(autoBuy, /liveCryptoPermission/);
   assert.match(server, /requireCanonicalOrder\("starter"/);
-  assert.match(server, /requireCanonicalOrder\("manual"/);
-  assert.match(server, /requireCanonicalOrder\("execution"/);
-  assert.match(server, /requireCanonicalOrder\("crypto-order"/);
+  assert.match(server, /manualStockBuy:\s*\(input\) => orderService\.manualStockBuy/);
+  assert.match(server, /requireAutomatedCanonicalOrder\("execution"/);
+  assert.match(server, /requireAutomatedCanonicalOrder\("crypto-order"/);
   assert.match(server, /evaluateCryptoTradeCandidate/);
   assert.doesNotMatch(server, /minimumScore: 85/);
   assert.doesNotMatch(autoBuy, /minimumScore: 85/);
@@ -247,6 +262,8 @@ test("full pipeline acceptance from market data to Buyable or a recorded blocker
     decisionScoreCoverage: 1,
     centralAutonomousAction: "ALLOW",
     riskScore: 80,
+    bid: 99.9,
+    ask: 100.1,
     spreadPercent: 0.2,
     liveQuoteUpdatedAt: fresh,
     spreadUpdatedAt: fresh,

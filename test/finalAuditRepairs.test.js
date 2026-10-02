@@ -167,7 +167,8 @@ test('AI stock button reaches the real order guard; depleted budget prevents res
       const lossBudgetSizing = sizing(purchasePolicy(options), () => ({ approved: remaining > 0, maxNotional: remaining }), {}, [], {}, {}, {}, 0);
       assertPreTradeRisk({ order, options, context: { account: { equity: 1000, cash: 1000, buying_power: 1000 }, positions: [],
         realCashTradingUnlocked: true, marketOpen: true, price: 100, quoteAgeSeconds: 0, quoteIsLive: true,
-        spreadAvailable: true, spreadPercent: .1, maxExposurePercent: 100, lossBudgetSizing } });
+        spreadAvailable: true, spreadPercent: .1, maxQuoteAgeSeconds: 5, maxSpreadPercent: 1,
+        maxExposurePercent: 100, lossBudgetSizing } });
     } },
     reserveRisk: async () => { reservations++; return { settle() {} }; },
     tradingRequest: async () => { submissions++; return { id: 'mock-order' }; } });

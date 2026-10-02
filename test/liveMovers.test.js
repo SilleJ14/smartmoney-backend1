@@ -1,6 +1,7 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 import { buildLiveMovers as buildConfiguredLiveMovers } from "../market-data/liveMovers.js";
+import { cryptoSetupEvidence } from "./fixtures/cryptoSetupFixture.js";
 // These scoring fixtures intentionally use prices above the default universe cap.
 const buildLiveMovers = options => buildConfiguredLiveMovers({ config: { maxStockPrice: 1000 }, ...options });
 
@@ -288,6 +289,7 @@ test("live movers finalize crypto F when discovery entry context and quote evide
     symbol: "BTC/USD",
     price: 100,
     current: 100,
+    ...cryptoSetupEvidence(100, now.getTime()),
     bid: 99.95,
     ask: 100.05,
     spreadAvailable: true,
@@ -307,8 +309,14 @@ test("live movers finalize crypto F when discovery entry context and quote evide
       score: 68,
       source: "cross_asset_crypto_breadth",
     },
+    cryptoMarketContext: {
+      score: 50,
+      state: "NEUTRAL",
+      measuredAt: now.toISOString(),
+      affectsF: false,
+    },
     newsCatalyst: { dataAvailable: true, riskDetected: false },
-    barsFound: 30,
+    barsFound: 220,
     windowDollarVolume: 2_000_000,
     multiDayContinuationScore: 70,
     multiDayAccumulation: { seenDays: ["2026-08-29", "2026-08-30"] },
@@ -335,7 +343,7 @@ test("live movers finalize crypto F when discovery entry context and quote evide
   assert.ok(movers[0].cryptoDecisionCoverage >= 0.8);
 });
 
-test("same-symbol provisional crypto F cannot replace an available canonical F", () => {
+test("same-symbol legacy crypto composite remains diagnostic-only during quote refresh", () => {
   const now = new Date("2026-08-31T15:00:00.000Z");
   const liveQuote = {
     symbol: "BTC/USD",
@@ -392,9 +400,9 @@ test("same-symbol provisional crypto F cannot replace an available canonical F",
   });
 
   assert.equal(movers.length, 1);
-  assert.equal(movers[0].cryptoDecisionScore, 75);
-  assert.equal(movers[0].cryptoDecisionScoreAvailable, true);
-  assert.equal(movers[0].provisionalCryptoDecisionScore, null);
+  assert.equal(movers[0].cryptoDecisionScore, null);
+  assert.equal(movers[0].cryptoDecisionScoreAvailable, false);
+  assert.equal(movers[0].legacyCryptoCompositeScore, 75);
   assert.equal(Number(movers[0].changePercent.toFixed(2)), 1);
   assert.equal(movers[0].executionEligibility.approved, false);
 });

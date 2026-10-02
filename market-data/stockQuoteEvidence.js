@@ -149,10 +149,11 @@ export function getStockExecutionEvidenceFreshness(
   quote = {},
   { now = Date.now(), maxAgeSeconds = 5 } = {}
 ) {
-  const maximumAgeMs = Math.min(
-    5,
-    Math.max(1, Number(maxAgeSeconds || 5))
-  ) * 1000;
+  const parsedMaximumAge = Number(maxAgeSeconds);
+  const freshnessPolicyValid = Number.isFinite(parsedMaximumAge) && parsedMaximumAge > 0;
+  const maximumAgeMs = freshnessPolicyValid
+    ? Math.min(5, Math.max(1, parsedMaximumAge)) * 1000
+    : null;
   const quoteTimestamp = Date.parse(
     quote.liveQuoteUpdatedAt || quote.quoteFetchedAt || quote.updatedAt || ""
   );
@@ -169,10 +170,10 @@ export function getStockExecutionEvidenceFreshness(
   const spreadSource = quote.spreadSource || "";
   const bid = finitePositive(quote.bid, quote.bp);
   const ask = finitePositive(quote.ask, quote.ap);
-  const quoteFresh = quote.priceIsLive === true &&
+  const quoteFresh = freshnessPolicyValid && quote.priceIsLive === true &&
     isLiveQuoteSource(quoteSource, "stock") &&
     quoteAgeMs !== null && quoteAgeMs >= -5_000 && quoteAgeMs <= maximumAgeMs;
-  const spreadFresh = bid !== null && ask !== null && ask >= bid &&
+  const spreadFresh = freshnessPolicyValid && bid !== null && ask !== null && ask >= bid &&
     quote.spreadAvailable !== false &&
     isLiveQuoteSource(spreadSource, "stock") &&
     spreadAgeMs !== null && spreadAgeMs >= -5_000 && spreadAgeMs <= maximumAgeMs;
@@ -181,6 +182,7 @@ export function getStockExecutionEvidenceFreshness(
     spreadFresh,
     quoteAgeSeconds: quoteAgeMs === null ? null : quoteAgeMs / 1000,
     spreadAgeSeconds: spreadAgeMs === null ? null : spreadAgeMs / 1000,
-    maximumAgeSeconds: maximumAgeMs / 1000,
+    maximumAgeSeconds: maximumAgeMs === null ? null : maximumAgeMs / 1000,
+    freshnessPolicyValid,
   };
 }

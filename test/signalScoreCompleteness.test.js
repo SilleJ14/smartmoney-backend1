@@ -94,11 +94,16 @@ test("complete crypto D/E/F/MD evidence retains legitimate zero-valued measureme
     cryptoDiscoveryScorecard: { score: 0, coverage: 0.65 },
     cryptoEntryScore: 0,
     cryptoEntryScorecard: { score: 0, available: true },
-    cryptoDecisionScore: 65,
+    cryptoDecisionScore: 91,
     centralAutonomousDecisionCore: {
       cryptoDecisionEvidence: {
         coreEvidencePass: true,
         componentsByName: { execution: { available: true, value: 0 } },
+        cryptoAnalyticalShadow: {
+          cryptoAnalyticalF: 65,
+          replacesCanonicalF: true,
+          productionEffect: true,
+        },
       },
     },
     continuationScorecard: { score: 0, available: true, observedSessions: 2 },
@@ -110,12 +115,13 @@ test("complete crypto D/E/F/MD evidence retains legitimate zero-valued measureme
   assert.equal(normalized.cryptoEntryScore, 0);
   assert.equal(normalized.cryptoDecisionScoreAvailable, true);
   assert.equal(normalized.cryptoDecisionScore, 65);
+  assert.equal(normalized.legacyCryptoCompositeScore, 91);
   assert.equal(normalized.multiDayScoreAvailable, true);
   assert.equal(normalized.multiDayScore, 0);
   assert.deepEqual(normalized.missingEvidenceReasons, ['POSITION_SIZING_PENDING']);
 });
 
-test("incomplete crypto evidence exposes exact reasons and keeps provisional F non-canonical", () => {
+test("missing crypto execution evidence preserves analytical E and keeps legacy F non-canonical", () => {
   const normalized = normalizeSignalScoreCompleteness({
     symbol: "ETH/USD",
     assetClass: "crypto",
@@ -137,8 +143,8 @@ test("incomplete crypto evidence exposes exact reasons and keeps provisional F n
     continuationScorecard: { score: 50, available: false, observedSessions: 1 },
   });
 
-  assert.equal(normalized.cryptoEntryScore, null);
-  assert.equal(normalized.cryptoEntryScoreAvailable, false);
+  assert.equal(normalized.cryptoEntryScore, 83);
+  assert.equal(normalized.cryptoEntryScoreAvailable, true);
   assert.equal(normalized.cryptoDecisionScore, null);
   assert.equal(normalized.cryptoDecisionScoreAvailable, false);
   assert.equal(normalized.provisionalCryptoDecisionScore, 62);
@@ -146,7 +152,7 @@ test("incomplete crypto evidence exposes exact reasons and keeps provisional F n
   assert.equal(normalized.multiDayScore, null);
   assert.equal(normalized.multiDayScoreAvailable, false);
   assert.ok(normalized.missingEvidenceReasons.includes("liveSpread"));
-  assert.ok(normalized.missingEvidenceReasons.includes("CRYPTO_ENTRY_SCORE_UNAVAILABLE"));
+  assert.equal(normalized.missingEvidenceReasons.includes("CRYPTO_ENTRY_SCORE_UNAVAILABLE"), false);
   assert.ok(normalized.missingEvidenceReasons.includes("CANONICAL_CRYPTO_FINAL_DECISION_UNAVAILABLE"));
   assert.ok(normalized.missingEvidenceReasons.includes("CRYPTO_MULTI_DAY_EVIDENCE_UNAVAILABLE"));
   assert.equal(normalized.score, 97);

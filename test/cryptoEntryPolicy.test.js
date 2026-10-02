@@ -24,10 +24,10 @@ test("missing crypto Entry waits and stays null", () => {
   assert.notEqual(result.entry.score, 0);
 });
 
-test("high Entry does not bypass a final score under 65", () => {
+test("measured crypto F has no inherited legacy 65 floor", () => {
   const result = evaluateCryptoAnalyticalQualification({ finalScore: 62, entryScore: 90 });
-  assert.equal(result.state, "REJECT");
-  assert.equal(result.reason, "FINAL_SCORE_BELOW_POLICY");
+  assert.equal(result.state, "PASS");
+  assert.equal(result.finalPass, true);
 });
 
 test("measured weak Entry is not failed by a hidden 75", () => {
@@ -42,7 +42,7 @@ test("the scanner and the trade policy read the same crypto thresholds", () => {
   assert.equal(scanner.includes("evaluateCryptoEntryEvidence"), true);
   assert.equal(scanner.includes("entryQualityScore || 0) >= 75"), false);
   assert.equal(CRYPTO_MIN_FINAL_SCORE_TO_BUY, CRYPTO_EXECUTION_THRESHOLDS.finalScore);
-  assert.equal(autoBuy.includes("CRYPTO_MIN_FINAL_SCORE_TO_BUY"), true);
+  assert.equal(autoBuy.includes("CRYPTO_MIN_FINAL_SCORE_TO_BUY"), false);
   const missing = evaluateCryptoEntryEvidence(null);
   const measured = evaluateCryptoEntryEvidence(70);
   assert.equal(missing.state, "WAIT");
@@ -54,7 +54,7 @@ test("the phone does not apply the stock Entry floor to crypto", () => {
   const start = ui.indexOf("const qualifiedCandidate = isCrypto");
   const cryptoArm = ui.slice(start, ui.indexOf(":", start));
   assert.equal(cryptoArm.includes("75"), false);
-  assert.equal(ui.includes("entryQualityScore >= 75"), true);
+  assert.equal(ui.includes("entryQualityScore >= 75"), false);
 });
 
 test("the stock Entry floor stays 75", () => {

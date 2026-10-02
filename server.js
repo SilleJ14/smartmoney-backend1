@@ -38,7 +38,9 @@ import { createStockQuoteBatch } from "./market-data/stockQuoteBatch.js";
 import { createBrokerClock } from "./market-data/brokerClock.js";
 import { createStockHistory } from "./market-data/stockHistory.js";
 import { stockFeedProvenance } from "./market-data/feedContract.js";
-import { createProviderHealth, stockDataHealth } from "./market-data/providerHealth.js";
+import { stockDataHealth } from "./market-data/providerHealth.js";
+import { invalidateAuthorizationsForConfigChange } from "./config/configAuthorization.js";
+import { recordConfigRevision } from "./config/configurationSchema.js";
 import { streamTiming } from "./scoring/executionPolicy.js";
 import { assessTechnicalFeatures } from "./scoring/technicalFeatureReadiness.js";
 import { recentBarVolumeEvidence } from './market-data/volumeEvidence.js';
@@ -219,8 +221,10 @@ import {
   evaluateCryptoTradeCandidate,
 } from "./scoring/componentScore.js";
 import { liveCryptoPermission } from "./scoring/cryptoAnalyticalShadow.js";
+import { applyCrossAssetCryptoContext } from "./scoring/cryptoContext.js";
 import {
   buildStockDiscoveryFunnel,
+  executionQuoteDecision,
   filterStaticUniverse,
   newsPromotion,
   rankTradierSweep,
@@ -233,6 +237,7 @@ import {
 } from "./scoring/fundamentalValidation.js";
 import { calculateMultiHorizonExtension } from "./scoring/earlyDiscovery.js";
 import { calculateNewsCatalyst } from "./scoring/newsCatalyst.js";
+import { evaluateCryptoNewsReassessment } from "./scoring/cryptoNewsReassessment.js";
 import {
   summarizeQuietCandidateOutcomes,
   getQuietFollowupSymbols,
@@ -283,6 +288,10 @@ import { createOandaClient } from "./forex/oandaClient.js";
 import { runForexEngineCycle } from "./forex/forexEngine.js";
 import { resetForexDailyLoss, validateForexSettings } from "./forex/settingsControl.js";
 import { createForexStore } from "./forex/durableStore.js";
+import { createForexSqliteJournal } from "./forex/sqliteJournal.js";
+import { createForexDataQualityMonitor } from "./forex/dataQualityMonitor.js";
+import { createForexProviderContextService, forexRateSeriesFromEnv } from "./forex/providerContextService.js";
+import { createOandaStreamSupervisor } from "./forex/oandaStreamSupervisor.js";
 import { resolveOandaEnv } from "./forex/oandaEnv.js";
 import { manageForexPositions } from "./forex/positionManager.js";
 import { createForexScheduler } from "./forex/scheduler.js";
@@ -962,11 +971,10 @@ let emergencyStopActive =
     : parseEnvBoolean("EMERGENCY_STOP_ACTIVE", false);
 if (typeof runtimeConfig.autoTradingEnabled !== "boolean") {
   emergencyStopActive = false;
-  autoTradingEnabled = true;
   runtimeConfig = saveRuntimeConfig(CONFIG_FILE, {
     ...runtimeConfig,
     emergencyStopActive: false,
-    autoTradingEnabled: true,
+    autoTradingEnabled,
   });
 }
 const AI_ORDER_PREFIX = "SM_AI";
@@ -3187,6 +3195,8 @@ function buildBackendHealthPayload(clock = {}) {
   const liveQuoteCount = Object.keys(engineState.liveQuoteCache || {}).length;
   const latestLiveQuoteUpdateAt = getLatestLiveQuoteUpdateAt();
   const processMemory = buildMemoryGuardSnapshot();
+  const tradierStatus = tradierMarketData.getStatus();
+  const alpacaHealth = engineState.apiHealth?.alpacaTrading;
   return {
     ok: true,
     online: true,
@@ -3296,11 +3306,20 @@ function buildBackendHealthPayload(clock = {}) {
         hasLiveSecret: Boolean(process.env.ALPACA_LIVE_SECRET),
       },
       channels: stockDataHealth({
-        tradier: { authenticated: true, stream: tradierQuoteStream.getStatus() },
+        tradier: { ...tradierStatus, stream: tradierQuoteStream.getStatus() },
         massive: { delayed: streamTiming(POLYGON_WS_URL).realtime !== true },
-        alpaca: { authenticated: Boolean(process.env.ALPACA_LIVE_KEY) },
+        alpaca: {
+          authentication: {
+            state: alpacaHealth?.ok === true
+              ? "PASS"
+              : alpacaHealth?.ok === false
+                ? "FAIL"
+                : "UNKNOWN",
+          },
+          stockFeedEntitlement: "IEX",
+        },
       }),
-      tradier: { ...tradierMarketData.getStatus(), stream: tradierQuoteStream.getStatus() },
+      tradier: { ...tradierStatus, stream: tradierQuoteStream.getStatus() },
     },
     safety: {
       dailyLossLocked: Boolean(engineState.dailyLossLocked),
@@ -14665,6 +14684,16 @@ async function runTradierQuoteSweep(universeSymbols = []) {
   engineState.stockSweepCursor = slice.nextCursor;
   const quotes = slice.symbols.length ? await getLatestStockMarketQuotes(slice.symbols) : [];
   const ranked = rankTradierSweep(quotes);
+  for (const row of ranked.ranked) {
+    const measuredAt = Date.parse(row.liveQuoteUpdatedAt || "");
+    row.executionQuoteDecision = executionQuoteDecision({
+      provider: row.provider,
+      feed: row.feed,
+      timing: "REALTIME",
+      ageMs: Number.isFinite(measuredAt) ? Math.max(0, Date.now() - measuredAt) : null,
+      spreadPercent: row.spreadPercent,
+    });
+  }
   const monitors = discoveryMonitorContext();
   const queueStatus = marketPriorityQueue.accumulateSweep({
     cheapMovers: ranked.movers,
@@ -14676,6 +14705,7 @@ async function runTradierQuoteSweep(universeSymbols = []) {
   const streaming = typeof marketPriorityQueue.subscriptionSymbols === "function"
     ? marketPriorityQueue.subscriptionSymbols()
     : [];
+  const deepStatus = marketPriorityQueue.publicStatus();
   const funnel = buildStockDiscoveryFunnel({
     broadUniverseCount: filtered.broadUniverseCount,
     staticFilterPassedCount: filtered.staticFilterPassedCount,
@@ -14684,7 +14714,7 @@ async function runTradierQuoteSweep(universeSymbols = []) {
     cheapCandidates: ranked.ranked.length,
     streamingSymbols: streaming.length,
     queueDepth: queueStatus?.queueDepth ?? queueStatus?.pending ?? ranked.ranked.length,
-    deepScored: 0,
+    deepScored: deepStatus.deepScored,
     rejections: [...filtered.rejections, ...ranked.rejections],
   });
   engineState.stockDiscoveryFunnel = funnel;
@@ -15540,13 +15570,32 @@ async function getNewsRisk(symbol) {
   return stockNewsReview.get(normalizeSymbol(symbol));
 }
 
+function recordCryptoNewsEvidence(symbol, result) {
+  const cleanSymbol = normalizeSymbol(symbol);
+  engineState.cryptoNewsEvidence ||= {};
+  const previous = engineState.cryptoNewsEvidence[cleanSymbol];
+  const assessment = evaluateCryptoNewsReassessment(cleanSymbol, result, previous);
+  if (assessment.event) {
+    engineState.pendingCryptoNewsReassessment ||= {};
+    engineState.pendingCryptoNewsReassessment[cleanSymbol] = assessment.event;
+    const pendingKeys = Object.keys(engineState.pendingCryptoNewsReassessment);
+    for (const old of pendingKeys.slice(0, Math.max(0, pendingKeys.length - 80))) {
+      delete engineState.pendingCryptoNewsReassessment[old];
+    }
+  }
+  engineState.cryptoNewsEvidence[cleanSymbol] = assessment.current;
+  const keys = Object.keys(engineState.cryptoNewsEvidence);
+  for (const old of keys.slice(0, Math.max(0, keys.length - 120))) delete engineState.cryptoNewsEvidence[old];
+  return result;
+}
+
 async function getCryptoNewsIntelligence(symbol) {
   if (!FINNHUB_API_KEY) {
-    return calculateNewsCatalyst({
+    return recordCryptoNewsEvidence(symbol, calculateNewsCatalyst({
       dataAvailable: false,
       maxAgeHours: 48,
       source: "finnhub_crypto_market_news",
-    });
+    }));
   }
   const now = Date.now();
   if (now - Number(cryptoMarketNewsCache.at || 0) > 10 * 60 * 1000) {
@@ -15590,7 +15639,7 @@ async function getCryptoNewsIntelligence(symbol) {
   }).slice(0, 20);
   // A ticker inside a general headline does not prove this feed covers the asset.
   if (!tagged.length) {
-    return calculateNewsCatalyst({
+    return recordCryptoNewsEvidence(symbol, calculateNewsCatalyst({
       articles: [],
       dataAvailable: cryptoMarketNewsCache.available,
       maxAgeHours: 48,
@@ -15598,9 +15647,9 @@ async function getCryptoNewsIntelligence(symbol) {
       coverageMode: cryptoMarketNewsCache.available ? "NOT_COVERED" : "SYMBOL_SCOPED",
       coverageReason: "NO_SYMBOL_TAG",
       sources: ["FINNHUB_CRYPTO_CATEGORY"],
-    });
+    }));
   }
-  return calculateNewsCatalyst({
+  return recordCryptoNewsEvidence(symbol, calculateNewsCatalyst({
     articles: tagged,
     dataAvailable: cryptoMarketNewsCache.available,
     maxAgeHours: 48,
@@ -15608,7 +15657,7 @@ async function getCryptoNewsIntelligence(symbol) {
     coverageMode: "SYMBOL_TAGGED",
     coverageReason: "SYMBOL_TAGGED_BY_PROVIDER",
     sources: ["FINNHUB_CRYPTO_CATEGORY"],
-  });
+  }));
 }
 let benchmarkBarsCache = {
   symbol: "",
@@ -18316,19 +18365,20 @@ async function getBestCryptoBars(symbol) {
   return enrichCryptoResearchVolume(symbol, await cryptoIntradayBars.get(symbol));
 }
 async function placeCryptoMarketBuy(symbol, dollars, options = {}) {
-  const canonical = requireCanonicalOrder("crypto-order", {
-    asset: "crypto",
-    shadow: options.cryptoAnalyticalShadow,
-    authorized: options.authorized === true,
-    S: dollars,
-  });
-  if (!canonical.allowed) {
-    throw new Error(`Canonical pipeline blocked ${symbol}: ${canonical.blocker}`);
-  }
   if (options.manual === true) {
     return orderService.cryptoMarketBuy({
       symbol, dollars, manual: true, confirmationId: options.confirmationId,
     });
+  }
+  const canonicalSignal = options.canonicalSignal || {
+    symbol,
+    assetClass: "crypto",
+    cryptoAnalyticalShadow: options.cryptoAnalyticalShadow,
+    authorizedDecisionValid: options.authorized === true,
+  };
+  const canonical = requireAutomatedCanonicalOrder("crypto-order", canonicalSignal, dollars);
+  if (!canonical.allowed) {
+    throw new Error(`Canonical pipeline blocked ${symbol}: ${canonical.blocker}`);
   }
   if (CONFIG.realCashTradingUnlocked !== true) {
     throw new Error("Real cash trading locked: set REAL_CASH_TRADING_UNLOCKED=true only after paper validation");
@@ -19418,7 +19468,14 @@ const { calculateInstitutionalScores, attachStockWatchDecisionComponents, passes
   runTradierQuoteSweep,
   onQueuedDeepScore: (symbol, result) => {
     marketPriorityQueue.finish(symbol, result);
-    publishDiscoveryQueue();
+    const status = publishDiscoveryQueue();
+    if (engineState.stockDiscoveryFunnel) {
+      engineState.stockDiscoveryFunnel = {
+        ...engineState.stockDiscoveryFunnel,
+        priorityQueue: status.queueDepth,
+        deepScored: status.deepScored,
+      };
+    }
   },
   preferDeepEvidence: (_symbol, quote) => marketPriorityQueue.applyEvidence(quote),
   recordCandidateEvent: event => candidateTraceStore.record(event),
@@ -19539,7 +19596,45 @@ function getStoredStockHoldCategory(symbol, signal = {}) {
   });
 }
 
+function requireAutomatedCanonicalOrder(path, signal = {}, amount = 0) {
+  const crypto = isCrypto(signal.symbol) || signal.assetClass === "crypto" || signal.assetType === "crypto";
+  const decision = crypto
+    ? {
+      asset: "crypto",
+      shadow: signal.cryptoAnalyticalShadow
+        || signal.centralAutonomousDecisionCore?.cryptoDecisionEvidence?.cryptoAnalyticalShadow,
+      authorized: signal.authorizedDecisionValid === true,
+      S: amount,
+    }
+    : {
+      entryApproved: signal.entryQualityScorecard?.approved === true
+        || signal.entryApproved === true
+        || signal.finalStockExecutionGate?.entryApproved === true
+        || signal.stockTradeEvidence?.entryApproved === true,
+      finalScore: signal.currentAnalyticalScore
+        ?? signal.stockDecisionScore
+        ?? signal.finalStockExecutionGate?.finalScore,
+      authorized: signal.authorizedDecisionValid === true,
+      C: signal.opportunityLayers?.C?.state
+        || ((signal.finalStockExecutionGate?.coreEvidencePass || signal.stockTradeEvidence?.coreEvidencePass) ? "PASS" : "WAIT"),
+      X: signal.opportunityLayers?.X?.state
+        || ((signal.finalStockExecutionGate?.approved || signal.stockTradeEvidence?.approved) ? "PASS" : "WAIT"),
+      R: signal.opportunityLayers?.R?.state
+        || ((signal.finalStockExecutionGate?.approved || signal.stockTradeEvidence?.approved) ? "PASS" : "WAIT"),
+      S: amount,
+    };
+  return requireCanonicalOrder(path, decision);
+}
+
 async function placeMarketBuy(symbol, dollars, score = 0, options = {}) {
+  const canonical = requireAutomatedCanonicalOrder(
+    options.canonicalPath || "stock-order",
+    options.canonicalSignal || {},
+    dollars
+  );
+  if (!canonical.allowed) {
+    throw new Error(`Canonical pipeline blocked ${symbol}: ${canonical.blocker}`);
+  }
   if (CONFIG.realCashTradingUnlocked !== true) {
     throw new Error("Real cash trading locked: set REAL_CASH_TRADING_UNLOCKED=true only after paper validation");
   }
@@ -19608,22 +19703,7 @@ async function executeAdaptiveBuyOrder({
     signal.assetClass === "crypto" ||
     String(symbol || "").includes("/") ||
     String(symbol || "").endsWith("USD");
-  const canonicalOrder = isCryptoExecution
-    ? requireCanonicalOrder("execution", {
-      asset: "crypto",
-      shadow: signal.cryptoAnalyticalShadow,
-      authorized: signal.authorizedDecisionValid === true,
-      S: amount,
-    })
-    : requireCanonicalOrder("execution", {
-      entryApproved: signal.entryQualityScorecard?.approved === true || signal.entryApproved === true || signal.finalStockExecutionGate?.entryApproved === true || signal.stockTradeEvidence?.entryApproved === true,
-      finalScore: signal.currentAnalyticalScore ?? signal.stockDecisionScore ?? signal.finalStockExecutionGate?.finalScore,
-      authorized: signal.authorizedDecisionValid === true,
-      C: signal.opportunityLayers?.C?.state || ((signal.finalStockExecutionGate?.coreEvidencePass || signal.stockTradeEvidence?.coreEvidencePass) ? "PASS" : "WAIT"),
-      X: signal.opportunityLayers?.X?.state || ((signal.finalStockExecutionGate?.approved || signal.stockTradeEvidence?.approved) ? "PASS" : "WAIT"),
-      R: signal.opportunityLayers?.R?.state || ((signal.finalStockExecutionGate?.approved || signal.stockTradeEvidence?.approved) ? "PASS" : "WAIT"),
-      S: amount,
-    });
+  const canonicalOrder = requireAutomatedCanonicalOrder("execution", signal, amount);
   if (!canonicalOrder.allowed) {
     throw new Error(`Canonical pipeline blocked ${symbol}: ${canonicalOrder.blocker}`);
   }
@@ -19669,15 +19749,14 @@ async function executeAdaptiveBuyOrder({
     const phase60AdaptiveExecution =
       signal.phase60AdaptiveExecution ||
       calculatePhase60AdaptiveExecutionAlgorithms(signal, amount);
-    if (phase60AdaptiveExecution.shouldBlockExecution) {
-      throw new Error("Phase 60 adaptive execution blocked unsafe execution");
-    }
     const phase15ExecutionDominance =
       signal.phase15ExecutionDominance ||
       calculatePhase15AutonomousExecutionDominance(signal, amount);
-    if (phase15ExecutionDominance.blockExecution) {
-      throw new Error("Phase 15 execution dominance blocked weak execution");
-    }
+    signal.legacyExecutionVetoShadow = {
+      phase60WouldBlock: phase60AdaptiveExecution.shouldBlockExecution === true,
+      phase15WouldBlock: phase15ExecutionDominance.blockExecution === true,
+      mayChangeCanonicalBuyable: false,
+    };
     const centralCoreExecutionMultiplier = Number(
       signal.centralCoreExecution?.executionSizeMultiplier ||
       signal.executionSizeMultiplier ||
@@ -19752,11 +19831,14 @@ async function executeAdaptiveBuyOrder({
         assetClass === "crypto"
           ? await placeCryptoMarketBuy(symbol, sliceAmount, {
             allowExistingOpenOrder: i > 0,
+            canonicalSignal: signal,
             cryptoAnalyticalShadow: signal.cryptoAnalyticalShadow,
             authorized: signal.authorizedDecisionValid === true,
           })
           : await placeMarketBuy(symbol, sliceAmount, signal.score, {
             allowExistingOpenOrder: i > 0,
+            canonicalSignal: signal,
+            canonicalPath: "adaptive-stock-order",
             holdCategory: getSignalHoldCategory(signal),
           });
       orders.push(order);
@@ -21235,7 +21317,11 @@ async function replaceWeakestIfBetter(signals, positions, aiOwnedSymbols) {
           topCandidate.symbol,
           tradeAmount,
           refreshedCanonicalScore,
-          { holdCategory: getStoredStockHoldCategory(topCandidate.symbol, topCandidate) }
+          {
+            canonicalSignal: topCandidate,
+            canonicalPath: "stock-rotation-order",
+            holdCategory: getStoredStockHoldCategory(topCandidate.symbol, topCandidate),
+          }
         );
         markAiManagedSymbol(topCandidate.symbol);
         engineState.aiEntryScores[normalizeSymbol(topCandidate.symbol)] = {
@@ -24013,8 +24099,9 @@ async function rotateWeakCryptoIfBetter(signals, positions) {
           refreshedCandidate.symbol,
           tradeAmount,
           {
+            canonicalSignal: refreshedCandidate,
             cryptoAnalyticalShadow: refreshedCandidateGate.evidence?.cryptoAnalyticalShadow,
-            authorized: true,
+            authorized: refreshedCandidate.authorizedDecisionValid === true,
           }
         );
         markAiManagedSymbol(refreshedCandidate.symbol);
@@ -24091,16 +24178,18 @@ function calculateAdaptiveCryptoPositionSize(signal = {}, account = {}) {
     equity *
     (CONFIG.maxBotExposurePercent / 100) *
     (CONFIG.cryptoMaxExposureShareOfBotExposure / 100);
-  const qualityMultiplier =
+  const legacyQualityMultiplier =
     score >= 90 ? 1 :
       score >= 80 ? 0.75 :
         score >= 70 ? 0.5 : 0.25;
-  const technicalMultiplier =
+  const legacyTechnicalMultiplier =
     technicalScore >= 80 || statisticalScore >= 75
       ? 1
       : technicalScore >= 65
         ? 0.75
         : 0.5;
+  const qualityMultiplier = 1;
+  const technicalMultiplier = 1;
   const volatilityMultiplier =
     percentChange >= 20 ? 0.85 :
       percentChange >= 12 ? 1.15 :
@@ -24133,6 +24222,11 @@ function calculateAdaptiveCryptoPositionSize(signal = {}, account = {}) {
     availableCryptoBuyingPower: Number(availableCryptoBuyingPower.toFixed(2)),
     qualityMultiplier,
     technicalMultiplier,
+    legacyScoreDiagnostics: {
+      affectsSize: false,
+      qualityMultiplier: legacyQualityMultiplier,
+      technicalMultiplier: legacyTechnicalMultiplier,
+    },
     volatilityMultiplier,
     macroMultiplier,
     reason:
@@ -24292,14 +24386,77 @@ const { executeEngineCycleBody } = createEngineCycle({
     LIVE_ORDER_MAX_SPREAD_PERCENT,
   }),
 });
-const forexStore = createForexStore({ useFile: true, filePath: process.env.FOREX_LEDGER_PATH });
+const forexPersistentRoot = process.env.FOREX_PERSISTENT_ROOT ||
+  (process.env.FOREX_LEDGER_PATH ? path.dirname(path.resolve(process.env.FOREX_LEDGER_PATH)) : null);
+const forexStore = createForexStore({
+  useFile: true,
+  filePath: process.env.FOREX_LEDGER_PATH,
+  persistentRoot: forexPersistentRoot,
+});
+const forexDataQualityMonitor = createForexDataQualityMonitor();
+const forexProviderContext = createForexProviderContextService({
+  fredApiKey: process.env.FRED_API_KEY,
+  finnhubApiKey: FINNHUB_API_KEY,
+  cmeEndpoint: process.env.FOREX_CME_DELAYED_CSV_URL,
+  rateSeries: forexRateSeriesFromEnv(process.env),
+});
+const forexProviderRefreshTimer = setInterval(() => {
+  forexProviderContext.refresh().catch(error => {
+    engineState.forexProviderLastError = {
+      message: String(error?.message || error),
+      at: new Date().toISOString(),
+    };
+  });
+}, Math.max(5 * 60 * 1000, Number(process.env.FOREX_PROVIDER_REFRESH_MS) || 15 * 60 * 1000));
+forexProviderRefreshTimer.unref?.();
+let forexJournal = null;
+let forexJournalError = null;
+if (forexPersistentRoot) {
+  try {
+    forexJournal = createForexSqliteJournal({
+      filePath: process.env.FOREX_JOURNAL_PATH || path.join(forexPersistentRoot, "forex-journal.sqlite"),
+      persistentRoot: forexPersistentRoot,
+    });
+  } catch (error) {
+    forexJournalError = String(error?.message || error);
+  }
+}
 const forexCalendarProvider = createEconomicCalendarProvider({
   apiKey: FINNHUB_API_KEY,
   jblankedApiKey: process.env.JBLANKED_API_KEY,
   store: forexStore,
-  provider: process.env.FOREX_CALENDAR_PROVIDER || (process.env.FOREX_CALENDAR_PATH ? "file" : process.env.JBLANKED_API_KEY ? "jblanked" : "finnhub"),
+  provider: process.env.FOREX_CALENDAR_PROVIDER || (process.env.FOREX_CALENDAR_PATH ? "file" : "jblanked"),
   filePath: process.env.FOREX_CALENDAR_PATH,
   timezone: process.env.FOREX_CALENDAR_TIMEZONE || "",
+});
+const forexStreams = createOandaStreamSupervisor({
+  instruments: FOREX_SPEC.scanInstruments,
+  onHealth: health => {
+    const recent = Date.parse(health.pricing.lastMessageAt || "");
+    forexDataQualityMonitor.recordProvider("oanda_stream", {
+      ok: health.pricing.connected && Number.isFinite(recent) && Date.now() - recent <= 15000,
+      connected: health.pricing.connected,
+      entitled: health.pricing.error === "LIVE_BLOCKED" ? false : null,
+      measuredAt: health.pricing.lastMessageAt,
+      error: health.pricing.error,
+    });
+  },
+  onTransaction: event => {
+    if (!event || event.type === "HEARTBEAT" || !forexJournal) return;
+    try {
+      forexJournal.append({
+        type: "PROVIDER_OBSERVATION",
+        occurredAt: event.time || new Date().toISOString(),
+        entityId: event.instrument || event.tradeID || null,
+        payload: { provider: "OANDA_TRANSACTION_STREAM", event },
+      });
+    } catch (error) {
+      engineState.forexJournalStreamError = {
+        message: String(error?.message || error),
+        at: new Date().toISOString(),
+      };
+    }
+  },
 });
 let forexClient;
 let forexClientConfig;
@@ -24323,6 +24480,7 @@ function getForexEngineRuntime() {
     if (!forexClient || Object.keys(clientConfig).some(key => clientConfig[key] !== forexClientConfig[key])) {
       forexClient = createOandaClient(clientConfig);
       forexClientConfig = clientConfig;
+      forexStreams.start(forexClient);
     }
     return {
     client: forexClient,
@@ -24342,6 +24500,10 @@ function getForexEngineRuntime() {
     forexEmergencyStopActive: runtimeConfig.forexEmergencyStopActive === true,
     now: Date.now(),
     store: forexStore,
+    journal: forexJournal,
+    dataQualityMonitor: forexDataQualityMonitor,
+    providerContext: forexProviderContext.getSnapshot(),
+    getProviderContext: () => forexProviderContext.getSnapshot(),
   };
 }
 const forexScheduler = createForexScheduler({
@@ -24351,6 +24513,7 @@ const forexScheduler = createForexScheduler({
   protect: async () => {
     engineState.forexProtection = await manageForexPositions(getForexEngineRuntime());
   },
+  onQueueWait: milliseconds => forexDataQualityMonitor.recordLatency("scanQueueWait", milliseconds),
   onError: (lane, error) => { engineState.forexLastError = { lane, message: String(error.message), at: new Date().toISOString() }; },
 });
 setInterval(() => {
@@ -26543,9 +26706,8 @@ function calculateAiParliamentVote({
   marketStress,
 }) {
   const votes = [];
-  const minimumFinalScore = isCrypto(signal)
-    ? CRYPTO_MIN_FINAL_SCORE_TO_BUY
-    : Number(CONFIG.minScoreToBuy || 70);
+  const cryptoSignal = isCrypto(signal);
+  const minimumFinalScore = cryptoSignal ? null : STOCK_EXECUTION_THRESHOLDS.finalScore;
   function addVote(engine, vote, confidence, reason) {
     votes.push({
       engine,
@@ -26586,9 +26748,15 @@ function calculateAiParliamentVote({
   );
   addVote(
     "CENTRAL_CORE",
-    finalDecisionScore >= 82 ? "ACCELERATE" : finalDecisionScore >= minimumFinalScore ? "ALLOW" : "WATCH",
+    cryptoSignal
+      ? "NEUTRAL"
+      : finalDecisionScore >= STOCK_EXECUTION_THRESHOLDS.acceleratedFinalScore
+        ? "ACCELERATE"
+        : finalDecisionScore >= minimumFinalScore ? "ALLOW" : "WATCH",
     finalDecisionScore,
-    `Final central score ${finalDecisionScore}/100`
+    cryptoSignal
+      ? "Crypto analytical F has no calibrated parliament threshold"
+      : `Final central score ${finalDecisionScore}/100`
   );
   const buyPower = votes
     .filter((v) => ["BUY", "BUY_NOW", "ACCELERATE", "ALLOW"].includes(v.vote))
@@ -26660,6 +26828,7 @@ function calculateCentralCoreExecutionStyle({
     closeNearHighPercent >= 95 ||
     riskPenalty >= 22;
   const isEliteRunner =
+    !isCrypto(signal) &&
     tradeArchetype === "EXPLOSIVE_RUNNER" &&
     runnerScore >= 82 &&
     velocityScore >= 75 &&
@@ -27535,7 +27704,7 @@ function calculateCentralAutonomousDecisionCore(stockSignals = [], cryptoSignals
         marketStress,
         contradictionState,
       });
-    const hardBlock =
+    const legacyHardBlockDiagnostic =
       signal.globalRiskOffDefense?.shouldBlock === true ||
       marketStress >= 90 ||
       signal.confirmations?.fakeBreakout === true ||
@@ -27548,7 +27717,7 @@ function calculateCentralAutonomousDecisionCore(stockSignals = [], cryptoSignals
         stockDecisionEvidence?.continuationSetup?.eligible === true
       );
     const requiredDecisionScore = isCryptoSignal
-      ? CRYPTO_MIN_FINAL_SCORE_TO_BUY
+      ? null
       : STOCK_EXECUTION_THRESHOLDS.finalScore;
     const continuationExecutable =
       !isCryptoSignal &&
@@ -27567,10 +27736,9 @@ function calculateCentralAutonomousDecisionCore(stockSignals = [], cryptoSignals
       stockEvidenceBlock ||
       !Number.isFinite(finalDecisionScore) ||
       (!isCryptoSignal && finalDecisionScore < requiredDecisionScore));
-    const cryptoRiskVeto = isCryptoSignal && downstreamSeparation.R.state === "REJECT";
+    const canonicalRiskVeto = downstreamSeparation.R.state === "REJECT";
     const shouldBlock =
-      hardBlock ||
-      cryptoRiskVeto ||
+      canonicalRiskVeto ||
       cryptoEvidenceBlock ||
       (!structureOrScoreBuy && stockEvidenceBlock) ||
       (!isCryptoSignal && !structureOrScoreBuy && Number.isFinite(finalDecisionScore) && finalDecisionScore < requiredDecisionScore) ||
@@ -27603,16 +27771,8 @@ function calculateCentralAutonomousDecisionCore(stockSignals = [], cryptoSignals
         eliteOverride,
       });
     const shouldAccelerate = isCryptoSignal
-      ? !shouldBlock &&
-      cryptoDecisionEvidence?.coreEvidencePass === true &&
-      cryptoDecisionEvidence?.componentsByName?.runner?.available === true &&
-      centralCoreExecution.shouldWaitForPullback !== true &&
-      finalDecisionScore >= 82 &&
-      executionScore >= 65 &&
-      runnerScore >= 65 &&
-      marketStress < 60
-      :
-      !shouldBlock &&
+      ? false
+      : !shouldBlock &&
       centralCoreExecution.shouldWaitForPullback !== true &&
       finalDecisionScore >= STOCK_EXECUTION_THRESHOLDS.acceleratedFinalScore &&
       executionScore >= STOCK_EXECUTION_THRESHOLDS.acceleratedEntryScore &&
@@ -27620,22 +27780,11 @@ function calculateCentralAutonomousDecisionCore(stockSignals = [], cryptoSignals
     const action =
       shouldBlock
         ? "BLOCK"
-        : aiParliamentVote.parliamentDecision === "PARLIAMENT_BLOCK"
-          ? "BLOCK"
-          : aiParliamentVote.parliamentDecision === "PARLIAMENT_REDUCED_SIZE_APPROVAL"
-          ? "ALLOW_REDUCED_SIZE"
-          : aiParliamentVote.parliamentDecision === "PARLIAMENT_WAIT"
-            ? "WAIT_FOR_PULLBACK"
-            : centralCoreExecution.shouldWaitForPullback === true
-              ? "WAIT_FOR_PULLBACK"
-              : eliteOverride.adjustedAction ||
-              (shouldBlock
-                ? "BLOCK"
-                : shouldAccelerate
-                  ? "ACCELERATE_CAPITAL"
-                  : structureOrScoreBuy || finalDecisionScore >= requiredDecisionScore
-                    ? "ALLOW"
-                    : "WATCH");
+        : shouldAccelerate
+          ? "ACCELERATE_CAPITAL"
+          : structureOrScoreBuy
+            ? "ALLOW"
+            : "WATCH";
     return {
       symbol: signal.symbol,
       assetClass:
@@ -27756,7 +27905,8 @@ function calculateCentralAutonomousDecisionCore(stockSignals = [], cryptoSignals
         centralCoreExecution.executionStyleTrustAdjustment,
       executionStyleTrustMultiplier:
         centralCoreExecution.executionStyleTrustMultiplier,
-      hardBlock,
+      hardBlock: canonicalRiskVeto,
+      legacyHardBlockDiagnostic,
       softBlock,
       riskPenalty,
       finalDecisionScore,
@@ -27813,12 +27963,11 @@ function calculateFinalMasterDecisionProfile(signal = {}) {
     decision.action ||
     "WATCH";
   const finalScore = getCanonicalFinalScore(signal);
+  const canonicalRiskDecision = decision.riskDecision || signal.riskDecision || null;
   const hardBlock =
     decision.hardBlock === true ||
     signal.centralCoreHardBlock === true ||
-    signal.confirmations?.fakeBreakout === true ||
-    signal.confirmations?.newsRisk === true ||
-    signal.globalRiskOffDefense?.shouldBlock === true;
+    canonicalRiskDecision?.state === "REJECT";
   const softBlock =
     decision.softBlock === true ||
     signal.centralCoreSoftBlock === true ||
@@ -27835,13 +27984,7 @@ function calculateFinalMasterDecisionProfile(signal = {}) {
     centralExecution.executionStyle === "ENTER_REDUCED_SIZE";
   const suppressEntry =
     !["ALLOW", "ALLOW_REDUCED_SIZE", "ACCELERATE_CAPITAL"].includes(action) ||
-    hardBlock ||
-    waitForPullback ||
-    (
-      softBlock &&
-      action !== "ALLOW_REDUCED_SIZE" &&
-      decision.eliteOverride?.eligibleForEliteOverride !== true
-    );
+    hardBlock;
   const masterCapitalMultiplier = Number(
     signal.masterCapitalMultiplier ||
     decision.masterCapitalMultiplier ||
@@ -27856,12 +27999,13 @@ function calculateFinalMasterDecisionProfile(signal = {}) {
   const allocationMultiplier = Number(
     signal.allocationMultiplier || 1
   );
-  const parliamentMultiplier =
+  const legacyParliamentMultiplier =
     decision.parliamentDecision === "PARLIAMENT_REDUCED_SIZE_APPROVAL"
       ? 0.5
       : decision.parliamentDecision === "PARLIAMENT_BLOCK"
         ? 0
         : 1;
+  const parliamentMultiplier = 1;
   const actionMultiplier =
     suppressEntry
       ? 0
@@ -27889,9 +28033,7 @@ function calculateFinalMasterDecisionProfile(signal = {}) {
   );
   const executionDecision =
     suppressEntry
-      ? waitForPullback
-        ? "WAIT_FOR_PULLBACK"
-        : "BLOCK_EXECUTION"
+      ? "BLOCK_EXECUTION"
       : reducedApproval
         ? "EXECUTE_REDUCED_SIZE"
         : action === "ACCELERATE_CAPITAL"
@@ -27957,6 +28099,7 @@ function calculateFinalMasterDecisionProfile(signal = {}) {
     executionSizeMultiplier,
     allocationMultiplier,
     parliamentMultiplier,
+    legacyParliamentMultiplier,
     actionMultiplier,
     finalExitProfile,
     reason: "STATE_UPDATED",
@@ -28353,6 +28496,22 @@ function getLatestFrontendStatusSnapshot() {
     forexEmergencyStopActive: runtimeConfig.forexEmergencyStopActive === true,
     forexPauseEntries: runtimeConfig.forexPauseEntries === true,
     forexProtection: engineState.forexProtection || null,
+    forexStreams: forexStreams.snapshot(),
+    forexDataQuality: forexDataQualityMonitor.snapshot(),
+    forexProviders: {
+      capturedAt: forexProviderContext.getSnapshot().capturedAt,
+      providers: Object.fromEntries(Object.entries(forexProviderContext.getSnapshot().providers || {})
+        .map(([name, provider]) => [name, {
+          state: provider.state,
+          ageMs: provider.ageMs ?? null,
+          error: provider.error || null,
+          observedAt: provider.provenance?.observedAt || null,
+          publishedAt: provider.provenance?.publishedAt || null,
+        }])),
+    },
+    forexJournal: forexJournal
+      ? forexJournal.health()
+      : { ok: false, kind: "sqlite-wal", error: forexJournalError || "FOREX_JOURNAL_NOT_CONFIGURED" },
     institutionalDashboard: buildInstitutionalDashboardPayload(),
     autonomousTradingSystem: engineState.autonomousTradingSystemState || {},
     phase20AutonomousOrchestration: engineState.phase20AutonomousOrchestrationState || {},
@@ -30500,40 +30659,21 @@ function buildLiveStarterBuyDecision(candidate = {}, account = {}, managedPositi
   if (!symbol || price <= 0) {
     blockReasons.push("Invalid live price");
   }
-  if (!cryptoAsset && candidate.runnerHoldQuality?.runnerHoldApproved !== true) {
-    blockReasons.push(
-      `Runner hold quality failed: ${candidate.runnerHoldQuality?.runnerHoldScore ?? "missing"}`
-    );
-  }
   const liveBuyQuality = validateLiveBuyQuality({
     ...candidate,
     finalLiveScore,
     fastScore,
     gateScore,
   });
-  if (!liveBuyQuality.approved) {
-    blockReasons.push(...(liveBuyQuality.blockReasons || []));
-  }
-  if (candidate.quickInstitutionalApproved !== true) {
-    blockReasons.push("Quick Institutional Gate not approved");
-  }
-  if (
-    ["MATURE", "EXHAUSTION", "TOO_LATE"].includes(
-      String(candidate.runnerStage || "").toUpperCase()
-    )
-  ) {
-    blockReasons.push("Runner already too extended / chase risk");
-  }
-  const minFastScoreForStarterAsset = cryptoAsset ? CRYPTO_MIN_FINAL_SCORE_TO_BUY : FAST_RUNNER_MIN_SCORE;
-  if (fastScore < minFastScoreForStarterAsset) {
-    blockReasons.push(
-      `Fast Runner score below ${minFastScoreForStarterAsset}`
-    );
-  }
-  const minGateScoreForAsset = cryptoAsset ? CRYPTO_MIN_FINAL_SCORE_TO_BUY : LIVE_STARTER_MIN_GATE_SCORE;
-  if (gateScore < minGateScoreForAsset) {
-    blockReasons.push(`Live starter gate score below ${minGateScoreForAsset}`);
-  }
+  const legacyStarterDiagnostics = {
+    affectsPermission: false,
+    quickInstitutionalApproved: candidate.quickInstitutionalApproved === true,
+    runnerHoldApproved: candidate.runnerHoldQuality?.runnerHoldApproved === true,
+    runnerStage: candidate.runnerStage || null,
+    liveBuyQuality,
+    fastRunnerScore: fastScore,
+    gateScore,
+  };
   if (alreadyOwned) {
     blockReasons.push("Already owned");
   }
@@ -30548,17 +30688,30 @@ function buildLiveStarterBuyDecision(candidate = {}, account = {}, managedPositi
   if (cash < 1 || remainingBudget < 1 || starterAmount < 1) {
     blockReasons.push("Insufficient cash or exposure budget for starter buy");
   }
-  if (engineState.marketCrashProtectionState?.shouldBlockNewTrades === true) {
-    blockReasons.push("Market crash protection blocked new trades");
-  }
-  if (engineState.portfolioGovernorState?.shouldBlockNewTrades === true) {
-    blockReasons.push("Portfolio governor blocked new trades");
-  }
+  const canonicalRiskReasons = [
+    ...(engineState.marketCrashProtectionState?.shouldBlockNewTrades === true
+      ? ["MARKET_CRASH_PROTECTION"] : []),
+    ...(engineState.portfolioGovernorState?.shouldBlockNewTrades === true
+      ? ["PORTFOLIO_GOVERNOR"] : []),
+  ];
   if (
     engineState.macroRiskState?.shouldBlockNewTrades === true &&
     engineState.macroProbeOverrideState?.allowed !== true
   ) {
-    blockReasons.push("Macro risk blocked new trades");
+    canonicalRiskReasons.push("MACRO_RISK");
+  }
+  const existingRisk = candidate.opportunityLayers?.R || candidate.riskDecision || null;
+  if (existingRisk?.state === "REJECT") {
+    canonicalRiskReasons.push(...(existingRisk.reasons || ["CANDIDATE_RISK_REJECT"]));
+  }
+  candidate.opportunityLayers = {
+    ...(candidate.opportunityLayers || {}),
+    R: canonicalRiskReasons.length
+      ? { state: "REJECT", reasons: [...new Set(canonicalRiskReasons)], affectsF: false }
+      : existingRisk || { state: "PASS", reasons: [], affectsF: false },
+  };
+  if (candidate.opportunityLayers.R.state === "REJECT") {
+    blockReasons.push(...candidate.opportunityLayers.R.reasons.map((reason) => `R: ${reason}`));
   }
   const approved = blockReasons.length === 0;
   return {
@@ -30573,6 +30726,7 @@ function buildLiveStarterBuyDecision(candidate = {}, account = {}, managedPositi
     finalLiveScore,
     runnerHoldQuality: candidate.runnerHoldQuality || null,
     liveBuyQuality,
+    legacyStarterDiagnostics,
     cash,
     equity,
     currentExposure: Number(totalExposure.toFixed(2)),
@@ -30612,7 +30766,6 @@ async function runLiveStarterBuyGate() {
     const marketOpen = Boolean(clock?.is_open);
     const candidates = (engineState.quickInstitutionalCandidates || [])
       .filter((candidate) => marketOpen || isCrypto(candidate.symbol))
-      .filter((candidate) => candidate.quickInstitutionalApproved === true)
       .map((candidate) => (
         isCrypto(candidate.symbol)
           ? hydrateCryptoExecutionCandidate(candidate)
@@ -30778,12 +30931,18 @@ async function runLiveStarterBuyGate() {
       activeBuyExecutionLocks.add(symbol);
       try {
         const order = isCrypto(symbol)
-          ? await placeCryptoMarketBuy(symbol, decision.starterAmount)
+          ? await placeCryptoMarketBuy(symbol, decision.starterAmount, {
+            canonicalSignal: decision.candidate,
+            cryptoAnalyticalShadow: decision.candidate?.cryptoAnalyticalShadow,
+            authorized: decision.candidate?.authorizedDecisionValid === true,
+          })
           : await placeMarketBuy(
             symbol,
             decision.starterAmount,
             decision.finalLiveScore,
             {
+              canonicalSignal: decision.candidate,
+              canonicalPath: "live-starter-stock-order",
               holdCategory: getStoredStockHoldCategory(
                 symbol,
                 decision.candidate || decision
@@ -31356,13 +31515,20 @@ async function runLiveScaleInEngine() {
       }
       activeBuyExecutionLocks.add(symbol);
       try {
+        const canonicalSignal = decision.candidate || decision.position || decision;
         const order = isCrypto(symbol)
-          ? await placeCryptoMarketBuy(symbol, decision.scaleAmount)
+          ? await placeCryptoMarketBuy(symbol, decision.scaleAmount, {
+            canonicalSignal,
+            cryptoAnalyticalShadow: canonicalSignal.cryptoAnalyticalShadow,
+            authorized: canonicalSignal.authorizedDecisionValid === true,
+          })
           : await placeMarketBuy(
             symbol,
             decision.scaleAmount,
             decision.fastRunnerScore,
             {
+              canonicalSignal,
+              canonicalPath: "live-scale-in-stock-order",
               holdCategory: getStoredStockHoldCategory(
                 symbol,
                 decision.candidate || decision.position || decision
@@ -31684,6 +31850,7 @@ function requestFastRunnerRefresh() {
 }
 async function reviewCandidateScores(rows, crypto = false) {
   const fresh = await (crypto ? refreshCryptoExecutionQuotes(rows) : refreshStockExecutionQuotes(rows));
+  if (crypto) applyCrossAssetCryptoContext(fresh, engineState);
   const central = calculateCentralAutonomousDecisionCore(crypto ? [] : fresh, crypto ? fresh : []);
   return fresh.map(row => {
     const reviewingMove = row.rescoreStatus === "QUEUED" || row.rescoreStatus === "RUNNING";
@@ -31733,7 +31900,16 @@ const cryptoCandidateReassessment = createEarlyCandidateReassessment({
   minStartIntervalMs: 2500,
   acceptsSymbol: symbol => /^[A-Z0-9]{1,15}\/USD$/.test(symbol),
   canRun: () => !engineState.running && !activeScanLocks.scanMarket && !buildMemoryGuardSnapshot().shouldPauseHeavyWork,
-  analyze: async symbols => reviewCandidateScores(await analyzeCryptoCandidates(symbols), true),
+  analyze: async symbols => {
+    const events = new Map(symbols.map(symbol => [symbol, engineState.pendingCryptoNewsReassessment?.[symbol]]));
+    const rows = await reviewCandidateScores(await analyzeCryptoCandidates(symbols), true);
+    for (const row of rows) {
+      if (events.get(row.symbol) && engineState.pendingCryptoNewsReassessment?.[row.symbol] === events.get(row.symbol)) {
+        delete engineState.pendingCryptoNewsReassessment[row.symbol];
+      }
+    }
+    return rows;
+  },
   trace: event => candidateTraceStore.record({ ...event, assetClass: 'crypto' }),
   publish: rows => {
     if (engineState.running) return false;
@@ -31806,6 +31982,7 @@ const incrementalResearch = createIncrementalResearch({
     const current = mergeLiveQuoteIntoSignal(row);
     // A price move that invalidates the setup needs the full evidence pipeline.
     if (current.rescoreStatus === "QUEUED" || current.rescoreStatus === "RUNNING" || current.setupRevalidationRequired === true) return current;
+    if (crypto) applyCrossAssetCryptoContext([current], engineState);
     const central = calculateCentralAutonomousDecisionCore(crypto ? [] : [current], crypto ? [current] : []);
     const decision = central.rankedDecisions.find(item => normalizeSymbol(item.symbol) === normalizeSymbol(current.symbol));
     if (decision) installCentralDecision(current, decision, { crypto });
@@ -31897,6 +32074,7 @@ function startLiveScheduler() {
     ].map(reassessmentTrigger)));
     void runLiveScheduledTask('reassessCryptoCandidates', 1000, () => cryptoCandidateReassessment.run(
       [
+        ...Object.values(engineState.pendingCryptoNewsReassessment || {}),
         ...FALLBACK_ALPACA_CRYPTO_USD_PAIRS.map((symbol) => ({ symbol, assetClass: "crypto" })),
         ...(engineState.incrementalResearchSignals || []).filter(row => isCrypto(row.symbol) && (row.rescoreStatus === "QUEUED" || row.setupRevalidationRequired === true)),
         ...(engineState.lastCryptoSignals || []),
@@ -33454,19 +33632,7 @@ registerManualExecutionRoutes(app, {
   getStockQuote,
   getVerifiedStockQuote: (symbol) => resolveVerifiedPreTradeQuote(symbol, false),
   getVerifiedCryptoQuote: (symbol) => resolveVerifiedPreTradeQuote(symbol, true),
-  manualStockBuy: (input) => {
-    const canonical = requireCanonicalOrder("manual", input.canonicalDecision || {
-      entryApproved: input.entryApproved === true,
-      finalScore: input.finalScore,
-      authorized: input.authorized === true,
-      C: input.C,
-      X: input.X,
-      R: input.R,
-      S: input.dollars,
-    });
-    if (!canonical.allowed) throw new Error(`Canonical pipeline blocked ${input.symbol}: ${canonical.blocker}`);
-    return orderService.manualStockBuy(input);
-  },
+  manualStockBuy: (input) => orderService.manualStockBuy(input),
   manualCryptoBuy: (input) => placeCryptoMarketBuy(input.symbol, input.dollars, {
     source: "MANUAL_VERIFIED_CRYPTO_ROUTE",
     manual: input.manual === true,
@@ -33494,6 +33660,25 @@ registerManualExecutionRoutes(app, {
 });
 
 
+function applyConfigRevision(updates = {}) {
+  const previous = { ...CONFIG };
+  const revision = Number(engineState.configRevision?.revision || 0) + 1;
+  engineState.configRevision = recordConfigRevision(previous, { ...previous, ...updates }, { revision });
+  const rows = [
+    ...(engineState.lastStockSignals || []),
+    ...(engineState.topStockSignals || []),
+    ...(engineState.lastCryptoSignals || []),
+    ...(engineState.topCryptoSignals || []),
+    ...(engineState.incrementalResearchSignals || []),
+    ...freshEarlyAssessments(engineState.earlyAssessedStockSignals),
+  ];
+  engineState.configAuthorizationInvalidation = {
+    ...invalidateAuthorizationsForConfigChange(rows, updates, revision),
+    revision,
+    at: engineState.configRevision.at,
+  };
+}
+
 registerConfigRoutes(app, {
   requireAdmin,
   getConfig: () => CONFIG,
@@ -33511,6 +33696,7 @@ registerConfigRoutes(app, {
     runtimeConfig = saveRuntimeConfig(CONFIG_FILE, preserved);
   },
   applyPermanentUpdates: (updates) => {
+    applyConfigRevision(updates);
     const saved = sanitizeRuntimeConfig(saveRuntimeConfig(CONFIG_FILE, {
       ...runtimeConfig, ...updates,
       tradingMode: updates.tradingMode ?? TRADING_MODE,
@@ -33534,6 +33720,7 @@ registerConfigRoutes(app, {
         LIVE_SCALE_IN_MIN_PROFIT_PERCENT, LIVE_SCALE_IN_MIN_FAST_SCORE } };
   },
   applyApiUpdates: (updates) => {
+    applyConfigRevision(updates);
     const saved = sanitizeRuntimeConfig(saveRuntimeConfig(CONFIG_FILE, { ...runtimeConfig, ...updates }));
     runtimeConfig = saved;
     if (updates.tradingMode) TRADING_MODE = runtimeConfig.tradingMode = String(updates.tradingMode);
@@ -33597,11 +33784,19 @@ startServerLifecycle({
   runStartupEngineScan: RUN_STARTUP_ENGINE_SCAN,
   runStartupScan: runEngineCycle,
   saveState: saveEngineState,
-    flushState: async () => { alpacaCryptoStream.stop(); tradierQuoteStream.stop(); await candidateTraceStore.flush(); await flushStateToFile(); },
+    flushState: async () => {
+      alpacaCryptoStream.stop();
+      tradierQuoteStream.stop();
+      forexStreams.stop();
+      await candidateTraceStore.flush();
+      await flushStateToFile();
+      forexJournal?.close?.();
+    },
   saveRenderMemory,
   checkRunnerResults: checkRunnerPredictionResults,
   startServices: [
     () => forexCalendarProvider.refresh(),
+    () => forexProviderContext.refresh(),
     () => { if (process.env.ENABLE_ALPACA_CRYPTO_WEBSOCKET !== 'false') alpacaCryptoStream.start(); },
     startFinnhubStream,
     startLiveScheduler,

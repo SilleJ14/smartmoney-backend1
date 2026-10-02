@@ -1,4 +1,27 @@
 import { confirmedSwings } from "./swings.js";
+export {
+  PointInTimeReplay,
+  applyExecutionShock,
+  assertNoSplitLeakage,
+  blockBootstrap,
+  calibrationAnalysis,
+  confidenceBand,
+  cscvPbo,
+  deflatedSharpeRatio,
+  groupedAnalytics,
+  latestVintages,
+  monitorDrift,
+  monteCarloBlockBootstrap,
+  monteCarloTradeOrder,
+  performanceAnalytics,
+  prepareReplay,
+  probabilisticSharpeRatio,
+  rollingWalkForwardSplits,
+  roundTripPnL,
+  shockedQuote,
+  simulateFill,
+  visibleAt,
+} from "./research/index.js";
 
 export function candlesKnownAt(candles = [], decisionTime, periodMs = 0) {
   const at = Date.parse(decisionTime);

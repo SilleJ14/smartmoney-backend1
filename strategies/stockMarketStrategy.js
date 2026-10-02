@@ -1380,7 +1380,6 @@ export function createStockMarketStrategy(dependencies) {
                 quote.phase6ScoringLayers?.hardReject !== true &&
                 quote.entryQualityScorecard?.approved === true &&
                 Number(quote.entryQualityScorecard?.coverage || 0) >= 0.8 &&
-                Number(quote.entryQualityScore || 0) >= 75 &&
                 quote.phase6ScoringLayers?.finalTradeApproval !== "REJECT_WEAK_TIMING" &&
                 quote.phase6ScoringLayers?.finalTradeApproval !== "BLOCK" &&
                 quote.phase6ScoringLayers?.finalTradeApproval !== "WATCHLIST_WAIT_FOR_DATA" &&
@@ -2240,7 +2239,7 @@ export function createStockMarketStrategy(dependencies) {
           signal.entryEvidenceBlockReason = [
             ...signal.entryQualityScorecard.gates,
             ...stockTradeEvidence.reasons,
-          ].join(", ") || "ENTRY_SCORE_BELOW_75";
+          ].join(", ") || "CANONICAL_EXECUTION_GATE_FAILED";
         }
         signal.legacyVetoShadow = buildLegacyVetoShadow(signal);
       }
@@ -2278,7 +2277,7 @@ export function createStockMarketStrategy(dependencies) {
 
   function analyzeCandidates(symbols) {
     if (activeAnalysis) return activeAnalysis;
-    if (activeScanLocks.scanMarket) return Promise.resolve([]);
+    if (activeScanLocks.scanMarket) return Promise.resolve(null);
     activeAnalysis = scanMarket({ analysisOnly: true, targetSymbols: symbols })
       .finally(() => { activeAnalysis = null; });
     return activeAnalysis;

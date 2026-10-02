@@ -43,8 +43,9 @@ test("a clean breakout can pass without pullback or retest evidence", () => {
   assert.equal(result.families.structure.requirement, "REQUIRED");
   assert.equal(result.families.volume.requirement, "REQUIRED");
   assert.ok(result.families.structure.inputs.every((item) => !/pullback|retest/.test(item.id)));
-  assert.equal(result.replacesProductionEntry, false);
-  assert.equal(result.productionEntryGate, 75);
+  assert.equal(result.replacesProductionEntry, true);
+  assert.equal(result.productionEntryGate, null);
+  assert.equal(result.legacyDiagnosticEntryGate, 75);
 });
 
 test("a pullback can pass from trend and ATR depth without a volume spike", () => {
@@ -103,6 +104,7 @@ test("continuation evidence does not bypass a final score under 70", () => {
     entryQualityScorecard: { approved: true, coverage: 1 },
     centralAutonomousAction: "ALLOW",
     spreadPercent: 0.2,
+    bid: 99.9, ask: 100.1,
     liveQuoteUpdatedAt: iso,
     spreadUpdatedAt: iso,
     liveQuoteSource: "alpaca_latest_stock_quote",
@@ -228,6 +230,7 @@ test("F at 70 with a failed entry is not buyable", () => {
     entryQualityScorecard: { approved: false, coverage: 0.4 },
     centralAutonomousAction: "ALLOW",
     spreadPercent: 0.2,
+    bid: 99.9, ask: 100.1,
     liveQuoteUpdatedAt: now,
     spreadUpdatedAt: now,
     liveQuoteSource: "alpaca_latest_stock_quote",
@@ -256,15 +259,19 @@ test("F 70 with an approved entry and passing C X R S is buyable", () => {
     stockDecisionScoreAvailable: true,
     entryQualityScore: 80,
     entryQualityScorecard: { approved: true, coverage: 1 },
+    discoveryScorecard: { coverage: 1 },
+    decisionScoreCoverage: 1,
     centralAutonomousAction: "ALLOW",
+    riskScore: 70,
     spreadPercent: 0.2,
+    bid: 99.9, ask: 100.1,
     liveQuoteUpdatedAt: now,
     spreadUpdatedAt: now,
     liveQuoteSource: "alpaca_latest_stock_quote",
     spreadSource: "alpaca_latest_stock_quote",
     priceIsLive: true,
   }, { requireCentralDecision: true });
-  assert.equal(gate.approved, true);
+  assert.equal(gate.approved, true, JSON.stringify(gate.reasons));
   assert.equal(gate.qualifiedCandidate, true);
 });
 

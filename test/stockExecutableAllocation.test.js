@@ -93,7 +93,7 @@ test("a stale quote keeps a strong F and blocks buyable on execution", () => {
   }), { now, account, positions: [], config });
   assert.equal(sized.opportunityLayers.F, 70);
   assert.equal(sized.opportunityLayers.analyticalPass, true);
-  assert.equal(sized.opportunityLayers.X.state, "EXECUTION_NOT_READY");
+  assert.equal(sized.opportunityLayers.X.state, "WAIT");
   assert.equal(sized.opportunityLayers.X.reasons.includes("QUOTE_STALE"), true);
   assert.ok(sized.opportunityLayers.S.amount >= 25);
   assert.equal(sized.opportunityLayers.buyable, false);

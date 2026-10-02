@@ -5,14 +5,27 @@ import os from "node:os";
 import path from "node:path";
 import { calendarForDecision, loadCalendarSnapshot } from "../forex/calendarFeed.js";
 import { emptyLedger, createFileStore, createMemoryStore } from "../forex/durableStore.js";
-import { updateEquityBaselines, openStopRisk, dailyLossState } from "../forex/accountRisk.js";
+import {
+  dailyLossState,
+  openStopRisk,
+  updateEquityBaselines,
+  weeklyLossState,
+} from "../forex/accountRisk.js";
 import { createExecutionCoordinator } from "../forex/executionCoordinator.js";
 import { createSafetySupervisor } from "../forex/safetySupervisor.js";
 import { runForexEngineCycle, selectForexSignals } from "../forex/forexEngine.js";
 import { resolveStrategyConflict } from "../forex/conflictPolicy.js";
 import { FOREX_SPEC } from "../forex/forexSpec.js";
+import { spreadChecks } from "../forex/spreadCost.js";
 
 const now = Date.parse("2026-09-22T18:00:00Z");
+
+test("malformed spread economics and policy values fail closed", () => {
+  const common = { bid: 1.1, ask: 1.1001, stopDistance: 0.002, targetDistance: 0.0045 };
+  assert.equal(spreadChecks({ ...common, absoluteLimit: "bad" }).reason, "SPREAD_POLICY_INVALID");
+  assert.equal(spreadChecks({ ...common, targetDistance: null }).reason, "SPREAD_ECONOMICS_INVALID");
+  assert.equal(spreadChecks(common).ok, true);
+});
 const calendar = { coverageComplete: true, refreshedAt: new Date(now).toISOString(), events: [] };
 
 test("calendar blocks relevant events, both currencies, and central-bank windows", () => {
@@ -55,6 +68,7 @@ test("daily baseline rolls at UTC midnight and transfers are applied exactly onc
   const changed = { ...account, NAV: 1090, lastTransactionID: "2" };
   const first = updateEquityBaselines(ledger, changed, deposit, now + 1000);
   assert.equal(first.cashFlowAdjustedDayStart, 1100);
+  assert.equal(first.cashFlowAdjustedWeekStart, 1100);
   assert.equal(first.peakEquity, 1100);
   assert.equal(updateEquityBaselines(ledger, changed, deposit, now + 2000).cashFlowAdjustedDayStart, 1100);
   const withdrawal = [{ id: "3", type: "TRANSFER_FUNDS", amount: "-100" }];
@@ -66,6 +80,14 @@ test("daily baseline rolls at UTC midnight and transfers are applied exactly onc
 
 test("invalid equity cannot create fresh risk capacity", () => {
   assert.equal(dailyLossState({ equity: 0, dayStartEquity: 1000 }).locked, true);
+  assert.equal(weeklyLossState({ equity: 0, weekStartEquity: 1000 }).locked, true);
+});
+
+test("weekly loss room is separate from the daily reset", () => {
+  const weekly = weeklyLossState({ equity: 950, weekStartEquity: 1000 });
+  assert.equal(weekly.locked, true);
+  assert.equal(weekly.reason, "WEEKLY_LOSS_LOCK");
+  assert.equal(weekly.remainingPercent, 0);
 });
 
 test("stop risk uses executable prices and account-loss conversion, not margin", () => {
@@ -132,7 +154,7 @@ test("engine fetches pending orders, advances replay cursor, and reports elapsed
   const input = { client, store, now, clockNow: () => time, calendar, forexAutoEnabled: true, spec: { ...FOREX_SPEC, scanInstruments: ["EUR_USD"] } };
   const snapshot = await runForexEngineCycle(input);
   assert.equal(pendingCalls, 1);
-  assert.equal(snapshot.quoteAgeSeconds, 4); // Three strategy histories plus optional daily display history.
+  assert.equal(snapshot.quoteAgeSeconds, 5); // H4/H1/M15/M5 plus optional daily history.
   assert.equal(snapshot.halt, "STALE_PRICE");
   // The existing practice-host mode label describes configuration, not
   // permission to submit. Stale evidence must still deny authorization below.

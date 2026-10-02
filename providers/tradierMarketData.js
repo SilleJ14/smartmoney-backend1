@@ -56,7 +56,16 @@ export function createTradierMarketData({ apiKey = process.env.TRADIER_API_KEY,
   let windowStart = 0;
   let requests = 0;
   const pending = new Map();
-  let status = { configured: Boolean(apiKey), sandbox, lastSuccessAt: null, lastError: null };
+  let status = {
+    configured: Boolean(apiKey),
+    sandbox,
+    authentication: { state: apiKey ? "UNKNOWN" : "FAIL" },
+    entitlement: { marketData: sandbox ? "DELAYED" : "UNKNOWN" },
+    quote: { state: "UNKNOWN", lastSuccessAt: null },
+    lastSuccessAt: null,
+    lastError: null,
+    lastLatencyMs: null,
+  };
   async function getLatestQuotes(symbols = []) {
     const selected = [...new Set(symbols.map((s) => String(s).trim().toUpperCase()))]
       .filter((s) => /^[A-Z][A-Z0-9.-]{0,9}$/.test(s)).slice(0, MAX_SYMBOLS).sort();
@@ -69,6 +78,7 @@ export function createTradierMarketData({ apiKey = process.env.TRADIER_API_KEY,
     if (requests >= (sandbox ? 45 : 90)) { status = { ...status, lastSkipReason: "LOCAL_RATE_BUDGET" }; return []; }
     requests += 1;
     const request = (async () => {
+      const startedAt = now();
       const controller = new AbortController();
       const timer = setTimeout(() => controller.abort(), 2000);
       try {
@@ -76,6 +86,11 @@ export function createTradierMarketData({ apiKey = process.env.TRADIER_API_KEY,
         const response = await fetchImpl(`${base}/markets/quotes?symbols=${encodeURIComponent(key)}`, {
           headers: { Authorization: `Bearer ${apiKey}`, Accept: "application/json" }, signal: controller.signal,
         });
+        status = {
+          ...status,
+          authentication: { state: response.status === 401 || response.status === 403 ? "FAIL" : "PASS" },
+          lastHttpStatus: response.status,
+        };
         const remaining = Number(response.headers?.get("x-ratelimit-available"));
         if (response.status === 429 || remaining === 0 && response.headers?.get("x-ratelimit-available") !== null) {
           const expiry = Number(response.headers?.get("x-ratelimit-expiry"));
@@ -100,12 +115,29 @@ export function createTradierMarketData({ apiKey = process.env.TRADIER_API_KEY,
         const quotes = (Array.isArray(rows) ? rows : rows ? [rows] : []).slice(0, MAX_SYMBOLS)
           .filter((row) => selected.includes(row.symbol))
           .map((row) => normalizeTradierQuote(row, { now: now(), sandbox })).filter(Boolean);
-        status = { ...status, lastSuccessAt: quotes.length ? new Date(now()).toISOString() : status.lastSuccessAt,
-          lastError: quotes.length ? null : "NO_VALID_QUOTES", lastSkipReason: null, returnedCount: quotes.length };
+        const completedAt = now();
+        status = {
+          ...status,
+          entitlement: { marketData: sandbox ? "DELAYED" : "REALTIME_CONSOLIDATED" },
+          quote: {
+            state: quotes.length ? "HEALTHY" : "DATA_UNAVAILABLE",
+            lastSuccessAt: quotes.length ? new Date(completedAt).toISOString() : status.quote?.lastSuccessAt || null,
+          },
+          lastSuccessAt: quotes.length ? new Date(completedAt).toISOString() : status.lastSuccessAt,
+          lastLatencyMs: Math.max(0, completedAt - startedAt),
+          lastError: quotes.length ? null : "NO_VALID_QUOTES",
+          lastSkipReason: null,
+          returnedCount: quotes.length,
+        };
         return quotes;
       } catch (error) {
         // Never include URLs, headers or provider payloads in errors exposed to the app.
-        status = { ...status, lastError: error?.name === "AbortError" ? "TRADIER_TIMEOUT" : "TRADIER_REQUEST_FAILED" };
+        status = {
+          ...status,
+          quote: { ...status.quote, state: "DEGRADED" },
+          lastLatencyMs: Math.max(0, now() - startedAt),
+          lastError: error?.name === "AbortError" ? "TRADIER_TIMEOUT" : "TRADIER_REQUEST_FAILED",
+        };
         blockedUntil = Math.max(blockedUntil, now() + 5000);
         return [];
       } finally { clearTimeout(timer); }

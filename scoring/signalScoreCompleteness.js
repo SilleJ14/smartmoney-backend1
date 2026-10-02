@@ -1,5 +1,6 @@
 import { hasDecisionAnalysis } from './decisionAnalysis.js';
 import { buildCurrentDecisionView } from './currentDecisionView.js';
+import { buildCandidateFunnel } from './candidateFunnel.js';
 function finiteNumber(...values) {
   for (const value of values) {
     if (value === null || value === undefined || value === "") continue;
@@ -49,7 +50,9 @@ export function normalizeSignalScoreCompleteness(signal = {}) {
   const result = normalizeScores(signal);
   if (!result || typeof result !== 'object') return result;
   const currentDecision = buildCurrentDecisionView(result);
-  return { ...result, currentDecision };
+  const asset = isCryptoSignal(result) ? "crypto" : "stock";
+  const candidateFunnel = buildCandidateFunnel(result, { asset });
+  return { ...result, currentDecision, candidateFunnel };
 }
 
 function normalizeScores(signal = {}) {
@@ -76,17 +79,23 @@ function normalizeScores(signal = {}) {
       signal.cryptoScoreTelemetry?.decision ||
       signal.centralAutonomousDecisionCore?.cryptoDecisionEvidence ||
       null;
+    const analyticalShadow = signal.cryptoAnalyticalShadow ||
+      decisionEvidence?.cryptoAnalyticalShadow ||
+      null;
     const discoveryScore = finiteNumber(
       signal.cryptoDiscoveryScore,
       signal.rawCryptoScore,
       discovery?.score
     );
     const entryScore = finiteNumber(
+      decisionEvidence?.entry?.score,
+      decisionEvidence?.setup?.score,
       signal.cryptoEntryScore,
       entry?.score,
-      decisionEvidence?.componentsByName?.execution?.value
     );
-    const finalScore = finiteNumber(
+    const analyticalScore = finiteNumber(analyticalShadow?.cryptoAnalyticalF);
+    const legacyFinalScore = finiteNumber(
+      signal.legacyCryptoCompositeScore,
       signal.cryptoDecisionScore,
       signal.centralAutonomousDecisionCore?.cryptoDecisionScore,
       signal.masterFinalScore,
@@ -98,8 +107,7 @@ function normalizeScores(signal = {}) {
         ? signal.cryptoDiscoveryScoreAvailable
         : discovery?.available === true || discoveryCoverage >= 0.5
     );
-    const centralEntryAvailable =
-      decisionEvidence?.componentsByName?.execution?.available;
+    const centralEntryAvailable = decisionEvidence?.entry?.available;
     const entryAvailable = signal.cryptoEntryScoreAvailable !== false && entryScore !== null && (
       typeof centralEntryAvailable === "boolean"
         ? centralEntryAvailable
@@ -107,18 +115,14 @@ function normalizeScores(signal = {}) {
           ? signal.cryptoEntryScoreAvailable
           : entry?.available === true
     );
-    const finalAvailable = signal.cryptoDecisionScoreAvailable !== false && finalScore !== null && (
-      typeof decisionEvidence?.coreEvidencePass === "boolean" || typeof decisionEvidence?.analysisEvidencePass === 'boolean'
-        ? hasDecisionAnalysis(decisionEvidence)
-        : signal.cryptoDecisionScoreAvailable === true
-    );
+    const shadowIsCanonical = analyticalShadow?.replacesCanonicalF === true ||
+      analyticalShadow?.productionEffect === true;
+    const finalAvailable = shadowIsCanonical && analyticalScore !== null;
     const provisionalScore = finalAvailable
       ? finiteNumber(signal.provisionalCryptoDecisionScore)
       : finiteNumber(
         signal.provisionalCryptoDecisionScore,
-        signal.centralAutonomousDecisionCore?.provisionalCryptoDecisionScore,
-        finalScore,
-        decisionEvidence?.score
+        signal.centralAutonomousDecisionCore?.provisionalCryptoDecisionScore
       );
     const missingEvidenceReasons = uniqueReasons([
       currentStoredReasons(signal, finalAvailable),
@@ -140,13 +144,15 @@ function normalizeScores(signal = {}) {
 
     return {
       ...signal,
+      cryptoAnalyticalShadow: analyticalShadow,
       cryptoDiscoveryScore: discoveryAvailable ? discoveryScore : null,
       rawCryptoScore: discoveryAvailable ? discoveryScore : null,
       cryptoDiscoveryScoreAvailable: discoveryAvailable,
       cryptoEntryScore: entryAvailable ? entryScore : null,
       cryptoEntryScoreAvailable: entryAvailable,
-      cryptoDecisionScore: finalAvailable ? finalScore : null,
+      cryptoDecisionScore: finalAvailable ? analyticalScore : null,
       cryptoDecisionScoreAvailable: finalAvailable,
+      legacyCryptoCompositeScore: legacyFinalScore,
       provisionalCryptoDecisionScore:
         provisionalScore === null ? null : provisionalScore,
       provisionalCryptoDecisionScoreAvailable:
@@ -268,5 +274,9 @@ import { getApprovedTradeAmount } from './approvedSizing.js';
 function currentStoredReasons(signal, finalAvailable = false) {
   return (Array.isArray(signal.missingEvidenceReasons) ? signal.missingEvidenceReasons : [])
     .filter(reason => !(finalAvailable && /^CANONICAL_(STOCK|CRYPTO)_FINAL_DECISION_PENDING_CENTRAL_CORE$/.test(reason)))
-    .filter(reason => !/^(CANONICAL_(STOCK|CRYPTO)_FINAL_DECISION_UNAVAILABLE|(STOCK|CRYPTO)_(DISCOVERY_SCORE|ENTRY_SCORE|MULTI_DAY_EVIDENCE)_UNAVAILABLE|POSITION_SIZING_PENDING)$/.test(reason));
+    // Availability reasons are regenerated from the current scorecards above.
+    // Keeping an old copy here would make recovered evidence look missing.
+    .filter(reason => !/^(CANONICAL_(STOCK|CRYPTO)_FINAL_DECISION_UNAVAILABLE|(STOCK|CRYPTO)_(DISCOVERY_SCORE|ENTRY_SCORE|MULTI_DAY_EVIDENCE)_UNAVAILABLE|POSITION_SIZING_PENDING)$/.test(reason))
+    .filter(reason => !/^MISSING_[A-Z0-9_]+$/.test(reason))
+    .filter(reason => !/^(CURRENT_)?[A-Z0-9_]*(EVIDENCE|CONTEXT|QUOTE|SPREAD|BOOK|HISTORY)_UNAVAILABLE$/.test(reason));
 }

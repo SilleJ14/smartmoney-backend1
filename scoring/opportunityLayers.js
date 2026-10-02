@@ -186,7 +186,7 @@ function executionLayer(eligibility, signal = {}) {
     .filter((reason) => settled.reasons.includes(reason));
   return {
     ...settled,
-    state: notReady.length ? "EXECUTION_NOT_READY" : settled.state,
+    executionReady: notReady.length === 0 && settled.state === "PASS",
     quoteAge: quoteAge === null ? null : Number(quoteAge),
   };
 }

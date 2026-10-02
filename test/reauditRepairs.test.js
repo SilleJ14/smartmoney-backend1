@@ -25,7 +25,9 @@ const now = Date.now();
 const iso = (time = now) => new Date(time).toISOString();
 const crypto = (overrides = {}) => ({ symbol: "BTC/USD", price: 100, current: 100, ...cryptoSetupEvidence(100, now),
   cryptoDiscoveryScorecard: { score: 90, coverage: 1, calculatedAt: iso(), extension: { alreadyExtended: false } },
-  newsCatalyst: { dataAvailable: true, riskDetected: false }, barsFound: 30, windowDollarVolume: 1_000_000,
+  newsCatalyst: { dataAvailable: true, riskDetected: false }, barsFound: 220, windowDollarVolume: 1_000_000,
+  cryptoContextScorecard: { score: 50, independent: true, source: "independent_test_context" },
+  cryptoMarketContext: { score: 50, state: "NEUTRAL", measuredAt: iso(), affectsF: false },
   bid: 99.95, ask: 100.05, spreadAvailable: true, priceIsLive: true,
   liveQuoteUpdatedAt: iso(), spreadUpdatedAt: iso(), liveQuoteSource: "alpaca_crypto_latest", spreadSource: "alpaca_crypto_latest",
   multiDayContinuationScore: 75, multiDayAccumulation: { seenDays: [1, 2].map((d) => iso(now - d * 86400000).slice(0, 10)) },
@@ -34,15 +36,15 @@ const crypto = (overrides = {}) => ({ symbol: "BTC/USD", price: 100, current: 10
   centralAutonomousDecisionCore: { updatedAt: iso(), action: "ALLOW", cryptoDecisionEvidence: { coreEvidencePass: true } },
   ...overrides });
 
-test("current crypto evidence, not cached F85, decides eligibility", () => {
+test("current analytical crypto F ignores cached F85 without inventing a threshold", () => {
   assert.equal(evaluateCryptoTradeCandidate(crypto(), { now }).approved, true);
   const weaker = crypto({ bid: 99.6, ask: 100.4, multiDayContinuationScore: 60,
     cryptoDiscoveryScorecard: { score: 60, coverage: 1, calculatedAt: iso(), extension: { alreadyExtended: false } } });
   const result = evaluateCryptoTradeCandidate(weaker, { now });
   assert.equal(result.evidence.coreEvidencePass, true);
   assert.ok(result.score < 65);
-  assert.equal(result.score, buildCryptoDecisionScore(weaker, { now }).score);
-  assert.equal(result.approved, false);
+  assert.equal(result.score, buildCryptoDecisionScore(weaker, { now }).cryptoAnalyticalShadow.cryptoAnalyticalF);
+  assert.equal(result.approved, true);
 });
 
 test("expired or WATCH central decisions block automatic buys even when F and quotes are live", () => {
@@ -251,13 +253,13 @@ test("automatic selection rejects stored F85 with current weak evidence or revok
   });
   await strategy.autoBuyCryptoSignals([crypto()]);
   assert.equal(submissions.length, 1, "complete current evidence reaches the stubbed broker");
-  await strategy.autoBuyCryptoSignals([crypto({ bid: 99.6, ask: 100.4, multiDayContinuationScore: 60,
+  await strategy.autoBuyCryptoSignals([crypto({ bid: 99, ask: 101, multiDayContinuationScore: 60,
     cryptoDiscoveryScorecard: { score: 60, coverage: 1, calculatedAt: iso(), extension: { alreadyExtended: false } } })]);
   await strategy.autoBuyCryptoSignals([crypto({ recommendedTradeAmount: 0, rawRecommendedTradeAmount: 125 })]);
   assert.equal(submissions.length, 1, "neither weaker evidence nor historical sizing may reach submission");
 });
 
-test("provider refresh demotes old crypto approval without inventing a new decision time", async () => {
+test("provider refresh publishes analytical F and invalidates legacy authorization without changing decision time", async () => {
   const original = crypto();
   const refresh = createCryptoExecutionQuoteRefresher({
     normalizeSymbol: (s) => s.toUpperCase(),
@@ -265,7 +267,7 @@ test("provider refresh demotes old crypto approval without inventing a new decis
     updateQuoteCache: (_symbol, quote) => quote,
   });
   const [row] = await refresh([original]);
-  assert.ok(row.cryptoDecisionScore < 65);
+  assert.equal(row.cryptoDecisionScore, 90);
   assert.equal(row.approved, false);
   assert.equal(row.finalApprovedTradeAmount, 0);
   assert.equal(row.decisionUpdatedAt, original.decisionUpdatedAt);

@@ -77,6 +77,10 @@ export function createTradierQuoteStream({ apiKey, WebSocketImpl, onQuote,
                   ? normalizeTradierPrint(event)
                   : null;
               if (!quote) continue;
+              if (event.type !== 'quote' && (
+                !(Number(quote.lastTradePrice) > 0)
+                || !Number.isFinite(Date.parse(quote.lastTradeTimestamp || ''))
+              )) continue;
               if (event.type === 'quote') Object.assign(quote, normalizeTradierStreamBook(event, quote.liveQuoteUpdatedAt));
               if (event.type !== 'quote') {
                 quote.symbol = event.symbol;

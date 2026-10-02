@@ -26,7 +26,7 @@ function fixture() {
 test('subscribes only stocks, uses independent provider bid/ask clocks, never receipt time', async () => {
   const f = fixture(); await f.stream.refresh(['AAPL', 'BTC/USD']); f.sockets[0].open();
   assert.deepEqual(f.sockets[0].sent[0].symbols, ['AAPL']);
-  assert.deepEqual(f.sockets[0].sent[0].filter, ['quote']);
+  assert.deepEqual(f.sockets[0].sent[0].filter, ['quote', 'trade', 'timesale']);
   f.sockets[0].quote(); assert.equal(f.quotes.length, 1);
   assert.equal(f.quotes[0].spreadUpdatedAt, f.quotes[0].bidUpdatedAt);
   assert.notEqual(f.quotes[0].spreadUpdatedAt, f.quotes[0].receivedAt);

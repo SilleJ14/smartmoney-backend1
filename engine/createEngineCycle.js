@@ -434,7 +434,7 @@ export function createEngineCycle(dependencies) {
         updateCryptoInstitutionalState(cryptoSignals);
       applyCrossAssetCryptoContext(
         cryptoSignals,
-        phase42CryptoInstitutionalState
+        engineState
       );
       recordOrder("PHASE_42_CRYPTO_INSTITUTIONAL_UPDATED", "CRYPTO", {
         reviewedCount: phase42CryptoInstitutionalState.reviewedCount,
@@ -1564,8 +1564,8 @@ export function createEngineCycle(dependencies) {
           (sum, s) => sum + Number(s.score || 0),
           0
         ) / Math.max(1, signals.length);
-      engineState.lastStockSignals = stockSignals;
-      engineState.lastCryptoSignals = cryptoSignals;
+      if (stockSignals.length > 0) engineState.lastStockSignals = stockSignals;
+      if (cryptoSignals.length > 0) engineState.lastCryptoSignals = cryptoSignals;
       emitSignalTapeTransitions(signals);
       emitSystemRiskTapeState({
         reason: "Final scan reconciliation completed.",
@@ -2864,6 +2864,7 @@ export function createEngineCycle(dependencies) {
       const approvedCryptoSignals = cryptoSignals.filter(
         (signal) => signal.executionEligibility?.approved === true
           && hasExplicitTradeApproval(signal)
+          && Number.isFinite(getCanonicalFinalScore(signal))
           && liveCryptoPermission(
             signal.cryptoAnalyticalShadow
             || signal.centralAutonomousDecisionCore?.cryptoDecisionEvidence?.cryptoAnalyticalShadow

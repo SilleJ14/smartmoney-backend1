@@ -140,18 +140,43 @@ export function cryptoBreadthRiskAndSize(context = {}) {
 
 export function applyCrossAssetCryptoContext(
   signals = [],
-  _state = {},
+  state = {},
   options = {}
 ) {
   const candidates = Array.isArray(signals) ? signals : [];
+  const nowDate = typeof options.now === "function" ? options.now() : new Date();
+  const nowMs = nowDate.getTime();
+  const maxPeerAgeMs = Math.max(30_000, Number(options.maxPeerAgeMs || 5 * 60_000));
+  const previousPeers = state?.cryptoBreadthPeerSnapshot?.peers || {};
+  const peers = {};
+  for (const [symbol, peer] of Object.entries(previousPeers)) {
+    const measuredAtMs = Date.parse(peer?.measuredAt || "");
+    if (!Number.isFinite(measuredAtMs) || nowMs - measuredAtMs > maxPeerAgeMs) continue;
+    const change = finiteNumber(peer?.change);
+    if (change !== undefined) peers[symbol] = { change, measuredAt: peer.measuredAt };
+  }
+  for (const signal of candidates) {
+    const symbol = String(signal?.symbol || "").trim().toUpperCase();
+    const change = resolvePeerChange(signal);
+    if (symbol && change !== undefined) {
+      peers[symbol] = { change, measuredAt: nowDate.toISOString() };
+    }
+  }
+  if (state && typeof state === "object") {
+    state.cryptoBreadthPeerSnapshot = {
+      measuredAt: nowDate.toISOString(),
+      maxPeerAgeMs,
+      peers,
+    };
+  }
   let lastScorecard = buildCrossAssetCryptoContextScorecard({}, options);
   for (let index = 0; index < candidates.length; index += 1) {
     const signal = candidates[index];
     if (!signal || typeof signal !== "object") continue;
-    const peerChanges = candidates
-      .filter((peer, peerIndex) => peerIndex !== index && peer && typeof peer === "object")
-      .map(resolvePeerChange)
-      .filter((value) => value !== undefined);
+    const symbol = String(signal.symbol || "").trim().toUpperCase();
+    const peerChanges = Object.entries(peers)
+      .filter(([peerSymbol]) => peerSymbol !== symbol)
+      .map(([, peer]) => peer.change);
     const scorecard = buildCrossAssetCryptoContextScorecard(
       { peerChanges },
       options

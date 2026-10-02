@@ -45,6 +45,7 @@ function resolveEffectiveGroupWeights(reinforcementWeights = {}) {
 }
 
 function finiteScore(value) {
+  if (value === null || value === undefined || value === "" || typeof value === "boolean") return null;
   const score = Number(value);
   return Number.isFinite(score) ? score : null;
 }

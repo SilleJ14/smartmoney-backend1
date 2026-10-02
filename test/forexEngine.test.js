@@ -16,7 +16,7 @@ function flatRange(count, price = 1.1) {
 }
 
 test("frozen forex spec does not share stock F or Alpaca auto", () => {
-  assert.equal(FOREX_SPEC.version, "fx-v1.1-balanced-entry");
+  assert.equal(FOREX_SPEC.version, "fx-v2.0-evidence-platform");
   assert.equal(FOREX_SPEC.quoteProviderMaxAgeSeconds, 2);
   assert.equal(FOREX_SPEC.liveOrdersAuthorized, false);
   assert.equal(FOREX_SPEC.practiceOrdersEnabled, true);

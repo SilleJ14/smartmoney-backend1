@@ -14,6 +14,7 @@ for (const symbol of ['AAPL', 'BTC/USD']) test(`${symbol}: canonical decision an
     realCashTradingUnlocked: true, autoTradingEnabled: true, marketOpen: true,
     isCrypto: symbol.includes('/'), price: 100, quoteIsLive: true,
     quoteAgeSeconds: 0, spreadAvailable: true, spreadPercent: .1,
+    maxQuoteAgeSeconds: 5, maxSpreadPercent: 1,
     maxExposurePercent: 50, maxOpenTrades: 5,
     lossBudgetSizing: { approved: true, maxNotional: 25 },
   };

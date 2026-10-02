@@ -3,6 +3,7 @@ import assert from "node:assert/strict";
 import { buildCryptoDecisionScore } from "../scoring/componentScore.js";
 import {
   CRYPTO_BREADTH_RANGE,
+  applyCrossAssetCryptoContext,
   buildCryptoMarketContext,
   buildCrossAssetCryptoContextScorecard,
 } from "../scoring/cryptoContext.js";
@@ -143,4 +144,30 @@ test("the legacy 65.59 score stays beside the intrinsic score during migration",
   assert.equal(CRYPTO_ANALYTICAL_THRESHOLD.analyticalMinimum, null);
   assert.equal(CRYPTO_ANALYTICAL_THRESHOLD.inheritsLegacyThreshold, false);
   assert.equal(evidence.cryptoAnalyticalShadow.productionEffect, true);
+});
+
+test("a one-symbol reassessment uses the fresh persistent peer snapshot", () => {
+  const state = {};
+  const symbols = ["BTC/USD", "ETH/USD", "SOL/USD", "AVAX/USD", "LINK/USD", "DOGE/USD"];
+  const fullBatch = symbols.map((symbol, index) => ({
+    symbol,
+    dayChangePercent: index % 2 === 0 ? 2 : -1,
+  }));
+  applyCrossAssetCryptoContext(fullBatch, state, { now: () => new Date(now) });
+  const reassessed = [{ symbol: "BTC/USD", dayChangePercent: 3 }];
+  applyCrossAssetCryptoContext(reassessed, state, { now: () => new Date(now + 30_000) });
+  assert.equal(reassessed[0].cryptoContextScorecard.independent, true);
+  assert.equal(reassessed[0].cryptoContextScorecard.sampleSize, 5);
+  assert.equal(Object.keys(state.cryptoBreadthPeerSnapshot.peers).length, 6);
+});
+
+test("expired persistent peers cannot authorize a one-symbol reassessment", () => {
+  const state = {};
+  const fullBatch = ["BTC/USD", "ETH/USD", "SOL/USD", "AVAX/USD", "LINK/USD", "DOGE/USD"]
+    .map((symbol) => ({ symbol, dayChangePercent: 1 }));
+  applyCrossAssetCryptoContext(fullBatch, state, { now: () => new Date(now), maxPeerAgeMs: 60_000 });
+  const reassessed = [{ symbol: "BTC/USD", dayChangePercent: 2 }];
+  applyCrossAssetCryptoContext(reassessed, state, { now: () => new Date(now + 61_000), maxPeerAgeMs: 60_000 });
+  assert.equal(reassessed[0].cryptoContextScorecard.independent, false);
+  assert.equal(reassessed[0].cryptoContextScorecard.score, null);
 });

@@ -79,6 +79,15 @@ test("debug status shows queue position, wait, and worker capacity", () => {
   assert.ok(measured.queueWaitP50 >= 0);
 });
 
+test("deep-scored status counts completed symbols instead of a hardcoded zero", () => {
+  const now = Date.parse("2026-09-25T14:00:00.000Z");
+  const queue = createMarketPriorityQueue({ workerCapacity: 1 });
+  queue.sync({ cheapMovers: [{ symbol: "AAPL", percentChange: 4, volume: 1_000_000 }], now });
+  assert.deepEqual(queue.nextDeepJobs(1, now), ["AAPL"]);
+  queue.finish("AAPL", { scored: true, durationMs: 25, now: now + 25 });
+  assert.equal(queue.publicStatus(now + 25).deepScored, 1);
+});
+
 test("names that leave the cheap band expire visibly and monitors stay subscribed first", () => {
   const queue = createMarketPriorityQueue();
   const now = Date.now();

@@ -19,6 +19,7 @@ test('actual crypto server wrapper bypasses app restrictions only for explicit m
   assert.ok(start >= 0 && end > start);
   const calls = [];
   const scope = { CONFIG: { realCashTradingUnlocked: false }, TRADING_MODE: 'disabled',
+    requireAutomatedCanonicalOrder: () => ({ allowed: true }),
     validateLiveOrder: () => ({ approved: false, blockReasons: ['blocked'] }),
     orderService: { cryptoMarketBuy: async input => { calls.push(input); return { id: 'mock' }; } } };
   vm.createContext(scope);

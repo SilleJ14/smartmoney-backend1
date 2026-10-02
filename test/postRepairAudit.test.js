@@ -23,7 +23,9 @@ const iso = (t = now) => new Date(t).toISOString();
 const approvals = { approved: true, backendApproved: true, autoTradeApproved: true, qualifiedToBuy: true };
 const crypto = () => ({ symbol: "BTC/USD", price: 100, current: 100, ...cryptoSetupEvidence(100, now),
   cryptoDiscoveryScorecard: { score: 90, coverage: 1, calculatedAt: iso(), extension: { alreadyExtended: false } },
-  newsCatalyst: { dataAvailable: true, riskDetected: false }, barsFound: 30, windowDollarVolume: 1000000,
+  newsCatalyst: { dataAvailable: true, riskDetected: false }, barsFound: 220, windowDollarVolume: 1000000,
+  cryptoContextScorecard: { score: 50, independent: true, source: "independent_test_context" },
+  cryptoMarketContext: { score: 50, state: "NEUTRAL", measuredAt: iso(), affectsF: false },
   bid: 99.95, ask: 100.05, spreadAvailable: true, priceIsLive: true,
   liveQuoteUpdatedAt: iso(), spreadUpdatedAt: iso(), liveQuoteSource: "alpaca_crypto_latest", spreadSource: "alpaca_crypto_latest",
   multiDayContinuationScore: 75, multiDayAccumulation: { seenDays: [2, 1].map((d) => iso(now - d * 86400000).slice(0, 10)) },
@@ -89,9 +91,10 @@ test("both production central passes install score availability with the new dec
 
 const stock = () => {
   const signal = { symbol: "AAPL", price: 100, current: 100, bid: 99.995, ask: 100.005,
+    setupState: "PULLBACK", pullbackStructure: { trendIntact: true, depthAtr: 1 },
     priceIsLive: true, spreadAvailable: true, liveQuoteUpdatedAt: iso(), spreadUpdatedAt: iso(),
     liveQuoteSource: "alpaca_latest_stock_quote", spreadSource: "alpaca_latest_stock_quote",
-    technicalBarsFound: 30, technicals: { ema9: 101, ema20: 99, macd: 2, macdSignal: 1, rsi: 60 },
+    technicalBarsFound: 34, technicals: { ema9: 101, ema20: 99, macd: 2, macdSignal: 1, rsi: 60 },
     confirmations: { closeNearHighPercent: 82, aboveVwap: true, fakeBreakout: false },
     phase5SignalQuality: { liquidityStabilityScore: 80, antiChaseRisk: 10, exhaustionRisk: 10, spreadWideningRisk: 10, breakoutRetestConfirmation: true },
     discoveryScorecard: { score: 90, coverage: 1, canonicalExtensionEvidencePass: true },

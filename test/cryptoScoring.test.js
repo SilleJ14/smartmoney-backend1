@@ -176,6 +176,7 @@ test("crypto liquidity applies source-aware thresholds", () => {
   });
   assert.equal(explicitZeroRealism.liquiditySource, "reported_24h");
   assert.equal(explicitZeroDecision.liquidity.source, "reported_24h");
+  assert.equal(explicitZeroDecision.liquidity.available, true);
   assert.equal(explicitZeroDecision.liquidity.pass, false);
 
   const contradictoryAliases = buildCryptoDecisionScore({
@@ -192,6 +193,7 @@ test("crypto liquidity applies source-aware thresholds", () => {
   });
   assert.equal(contradictoryAliases.liquidity.source, "reported_24h");
   assert.equal(contradictoryAliases.liquidity.dollarVolume, 0);
+  assert.equal(contradictoryAliases.liquidity.available, true);
   assert.equal(contradictoryAliases.liquidity.pass, false);
 });
 
@@ -391,22 +393,24 @@ test("missing independent crypto context is unknown and does not contribute zero
 });
 
 test("crypto decision score uses discovery, entry and context, with separate continuation telemetry", () => {
+  const now = Date.now();
   const result = buildCryptoDecisionScore({
+    ...cryptoSetupEvidence(100, now),
     symbol: "BTC/USD",
     cryptoDiscoveryScorecard: {
       stage: "CRYPTO_EARLY_DISCOVERY",
       score: 82,
       coverage: 1,
-      calculatedAt: new Date().toISOString(),
+      calculatedAt: new Date(now).toISOString(),
       extension: { alreadyExtended: false },
     },
     newsCatalyst: { dataAvailable: true, riskDetected: false },
     barsFound: 30,
     current: 100,
     priceIsLive: true,
-    liveQuoteUpdatedAt: new Date().toISOString(),
+    liveQuoteUpdatedAt: new Date(now).toISOString(),
     liveQuoteSource: "alpaca_crypto_latest",
-    spreadUpdatedAt: new Date().toISOString(),
+    spreadUpdatedAt: new Date(now).toISOString(),
     spreadSource: "alpaca_crypto_latest",
     bid: 99.9,
     ask: 100,
@@ -427,7 +431,7 @@ test("crypto decision score uses discovery, entry and context, with separate con
       independent: true,
       source: "independent_test_context",
     },
-  });
+  }, { now });
   const semanticNames = result.components.map((component) => component.semanticName);
 
   assert.deepEqual(
@@ -560,7 +564,7 @@ test("crypto execution no longer uses the legacy 65 score as the buy gate", () =
     },
   };
 
-  assert.equal(CRYPTO_MIN_FINAL_SCORE_TO_BUY, 65);
+  assert.equal(CRYPTO_MIN_FINAL_SCORE_TO_BUY, null);
   assert.equal(evaluateCryptoTradeCandidate({
     ...candidate,
     masterFinalScore: 65,
@@ -713,6 +717,7 @@ test("research-only F65 crypto needs authorization before buying", () => {
 test("crypto immediate-entry F can finalize without MD, but never bypasses execution evidence", () => {
   const now = Date.now();
   const candidate = {
+    ...cryptoSetupEvidence(100, now),
     symbol: "BTC/USD",
     cryptoDiscoveryScorecard: {
       score: 90,

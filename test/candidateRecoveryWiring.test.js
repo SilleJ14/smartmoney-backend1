@@ -20,6 +20,7 @@ test('actual crypto refresh returns quotes without waiting for slow orderbook re
   const state = { lastCryptoSignals: [{ symbol: 'BTC/USD', cryptoSetup: { eligible: true } }] };
   const context = vm.createContext({ engineState: state,
     dedupeSignalsByCanonicalAuthority: rows => rows, getCanonicalFinalScore: () => 80,
+    attachCryptoExecutionShadow: () => {},
     runLiveScheduledTask: (_name, _interval, work) => (bookJob = work()),
     alpacaCryptoMarketData: { getLatestOrderbooks: () => delayed, getLatestQuotes: async () => [{ symbol: 'BTC/USD', price: 100 }] },
   });

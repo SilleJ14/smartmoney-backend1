@@ -99,6 +99,7 @@ test('actual fast score review refreshes evidence and never grants stale approva
   let refreshed = false;
   const context = vm.createContext({
     engineState: {}, CONFIG: {}, attachCryptoExecutableAllocation, attachStockExecutableAllocation,
+    applyCrossAssetCryptoContext: () => {},
     refreshCryptoExecutionQuotes: async rows => { refreshed = true; return rows; },
     normalizeSymbol: s => s, installCentralDecision, normalizeSignalScoreCompleteness: s => s,
     calculateCentralAutonomousDecisionCore: (_stocks, crypto) => {
@@ -110,7 +111,7 @@ test('actual fast score review refreshes evidence and never grants stale approva
   vm.runInContext(functionCode('reviewCandidateScores'), context);
   const [row] = await context.reviewCandidateScores([{ symbol: 'BTC/USD', price: 100, approved: true, autoTradeApproved: true,
     finalApprovedTradeAmount: 100 }], true);
-  assert.equal(row.cryptoDecisionScore, 80);
+  assert.equal(row.cryptoDecisionScore, null);
   assert.equal(row.approved, false); assert.equal(row.autoTradeApproved, false);
   assert.equal(row.finalApprovedTradeAmount, 0);
   assert.equal(row.executionEligibility.approved, false);

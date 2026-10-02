@@ -10,6 +10,23 @@ const options = () => ({ provider: "jblanked", jblankedApiKey: "test-secret",
   store: createMemoryStore({ treatAsDurable: true }), nowFn: () => START,
   fetchImpl: async () => new Response(JSON.stringify(rows)) });
 
+test("JBlanked is the default calendar provider", async () => {
+  let calls = 0;
+  const p = createEconomicCalendarProvider({
+    jblankedApiKey: "test-secret",
+    store: createMemoryStore({ treatAsDurable: true }),
+    nowFn: () => START,
+    fetchImpl: async () => {
+      calls++;
+      return new Response(JSON.stringify(rows));
+    },
+  });
+  await p.refresh();
+  assert.equal(p.getStatus().provider, "jblanked");
+  assert.equal(p.getSnapshot().source, "jblanked_forex_factory");
+  assert.equal(calls, 1);
+});
+
 test("JBlanked converts GMT+3 and bounds coverage to the current week", () => {
   const s = normalizeJBlankedCalendar(rows, START);
   assert.equal(s.events[0].start, "2026-09-24T12:30:00.000Z");

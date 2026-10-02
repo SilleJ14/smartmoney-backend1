@@ -219,7 +219,9 @@ import { cryptoSetupEvidence } from './fixtures/cryptoSetupFixture.js';
 function approvedCrypto(now) {
   const signal = { symbol: 'BTC/USD', price: 100, current: 100, ...cryptoSetupEvidence(100, now),
     cryptoDiscoveryScorecard: { score: 90, coverage: 1, calculatedAt: iso(now), extension: { alreadyExtended: false } },
-    newsCatalyst: { dataAvailable: true, riskDetected: false }, barsFound: 30, windowDollarVolume: 1000000,
+    newsCatalyst: { dataAvailable: true, riskDetected: false }, barsFound: 220, windowDollarVolume: 1000000,
+    cryptoContextScorecard: { score: 50, independent: true, source: 'independent_test_context' },
+    cryptoMarketContext: { score: 50, state: 'NEUTRAL', measuredAt: iso(now), affectsF: false },
     bid: 99.95, ask: 100.05, spreadAvailable: true, priceIsLive: true,
     liveQuoteUpdatedAt: iso(now), spreadUpdatedAt: iso(now), liveQuoteSource: 'alpaca_crypto_latest', spreadSource: 'alpaca_crypto_latest',
     multiDayContinuationScore: 75, multiDayScoreAvailable: true, continuationScorecard: { score: 75, available: true },

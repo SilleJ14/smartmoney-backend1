@@ -2,7 +2,6 @@
 // It is not strongScore, the phone display floor, or the strategy hard floor.
 
 export const STOCK_NEAR_LINE_MARGIN = 5;
-export const CRYPTO_NEAR_LINE_MARGIN = 5;
 
 export function isNearFinalBuyGate(finalScore, buyGate, margin = 5) {
   return (

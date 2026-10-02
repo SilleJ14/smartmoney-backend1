@@ -5,10 +5,12 @@ import { normalizeSignalScoreCompleteness } from '../scoring/signalScoreComplete
 import { installCentralDecision } from '../scoring/installCentralDecision.js';
 import { revalidateCandidate } from '../scoring/revalidateCandidate.js';
 import { buildCryptoDecisionScore, evaluateCryptoTradeCandidate } from '../scoring/componentScore.js';
+import { cryptoSetupEvidence } from './fixtures/cryptoSetupFixture.js';
 
 function fixture() {
   const time = new Date().toISOString();
   return { symbol: 'AAPL', price: 100, bid: 99.99, ask: 100.01, spreadAvailable: true,
+    setupState: 'PULLBACK', pullbackStructure: { trendIntact: true, depthAtr: 1 },
     liveQuoteUpdatedAt: time, spreadUpdatedAt: time, liveQuoteSource: 'tradier_stock_quote',
     spreadSource: 'tradier_stock_quote', priceIsLive: true, technicalBarsFound: 60,
     discoveryScorecard: { score: 80, coverage: 1, canonicalExtensionEvidencePass: true },
@@ -35,7 +37,7 @@ test('repeated stale reviews preserve the actual last measured assessment', () =
   assert.equal(again.approved, false);
 });
 test('measured rejected entry keeps a numeric F without changing execution gates', () => {
-  const signal = fixture(); signal.phase5SignalQuality.antiChaseRisk = 90;
+  const signal = fixture(); signal.pullbackStructure.trendIntact = false;
   signal.entryQualityScorecard = calculateEntryQualityScore(signal);
   const evidence = buildStockDecisionScore(signal);
   assert.equal(evidence.coreEvidencePass, false); assert.equal(evidence.analysisEvidencePass, true);
@@ -83,11 +85,15 @@ test('missing history cannot become F and large price drift still requires reass
   assert.equal(drifted.executionEligibility.reasons.includes("SETUP_PRICE_MOVED_RESCAN_REQUIRED"), false);
 });
 
-test('crypto stale spread then recovery restores measured E/F without enabling a buy', () => {
+test('crypto stale spread leaves analytical E/F intact without enabling a buy', () => {
   const now = Date.now(), time = new Date(now).toISOString();
   const signal = { symbol: 'BTC/USD', price: 100, current: 100,
+    ...cryptoSetupEvidence(100, now),
     cryptoDiscoveryScorecard: { score: 80, coverage: 1, calculatedAt: time, extension: { alreadyExtended: false } },
-    newsCatalyst: { dataAvailable: true, riskDetected: false }, barsFound: 30, windowDollarVolume: 1000000,
+    newsCatalyst: { dataAvailable: true, riskDetected: false }, barsFound: 220, windowDollarVolume: 1000000,
+    cryptoContextScorecard: { score: 50, independent: true, source: 'independent_test_context' },
+    cryptoMarketContext: { score: 50, state: 'NEUTRAL', measuredAt: time, affectsF: false },
+    intendedNotional: 25,
     bid: 99.95, ask: 100.05, spreadAvailable: true, priceIsLive: true,
     liveQuoteUpdatedAt: time, spreadUpdatedAt: time, liveQuoteSource: 'alpaca_crypto_latest', spreadSource: 'alpaca_crypto_latest',
     approved: false, backendApproved: false, autoTradeApproved: false, qualifiedToBuy: false,
@@ -96,7 +102,8 @@ test('crypto stale spread then recovery restores measured E/F without enabling a
   installCentralDecision(signal, { action: 'WATCH', cryptoDecisionScore: evidence.score,
     cryptoDecisionEvidence: evidence }, { crypto: true, now });
   const stale = revalidateCandidate(signal, { ...signal, spreadUpdatedAt: new Date(now - 60000).toISOString() }, { now });
-  assert.equal(stale.cryptoDecisionScoreAvailable, false);
+  assert.equal(stale.cryptoDecisionScoreAvailable, true);
+  assert.equal(stale.executionEligibility.approved, false);
   const recovered = revalidateCandidate(stale, { ...stale, spreadUpdatedAt: time }, { now });
   assert.equal(recovered.cryptoDecisionScoreAvailable, true);
   assert.equal(recovered.cryptoEntryScoreAvailable, true);

@@ -126,8 +126,10 @@ export function stockDataHealth({ tradier = {}, massive = {}, alpaca = {} } = {}
     stocks: {
       tradier: {
         provider: "TRADIER",
-        authentication: { state: tradier.authenticated === false ? "FAIL" : "PASS" },
-        entitlement: { marketData: "REALTIME_CONSOLIDATED" },
+        authentication: tradier.authentication || {
+          state: tradier.authenticated === true ? "PASS" : tradier.authenticated === false ? "FAIL" : "UNKNOWN",
+        },
+        entitlement: tradier.entitlement || { marketData: "UNKNOWN" },
         stream: tradier.stream || { state: "UNKNOWN" },
         quote: tradier.quote || { state: "UNKNOWN" },
         errors: tradier.errors || { recentCount: 0, lastError: null },
@@ -141,8 +143,10 @@ export function stockDataHealth({ tradier = {}, massive = {}, alpaca = {} } = {}
       },
       alpaca: {
         provider: "ALPACA",
-        authentication: { state: alpaca.authenticated === false ? "FAIL" : "PASS" },
-        stockFeedEntitlement: "IEX",
+        authentication: alpaca.authentication || {
+          state: alpaca.authenticated === true ? "PASS" : alpaca.authenticated === false ? "FAIL" : "UNKNOWN",
+        },
+        stockFeedEntitlement: alpaca.stockFeedEntitlement || "UNKNOWN",
         role: "FALLBACK_AND_EXECUTION",
       },
     },

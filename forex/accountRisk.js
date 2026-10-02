@@ -42,6 +42,34 @@ export function dailyLossState({
   };
 }
 
+export function weeklyLossState({
+  equity,
+  cashFlowAdjustedWeekStart,
+  weekStartEquity,
+  extraStopLossIfHit = 0,
+  pendingRisk = 0,
+  limits = FOREX_RISK_LIMITS,
+} = {}) {
+  const start = Number(cashFlowAdjustedWeekStart ?? weekStartEquity);
+  const current = Number(equity);
+  if (!(start > 0) || !(current > 0)) {
+    return { locked: true, remainingPercent: 0, reason: "NO_WEEK_START" };
+  }
+  const decline = Math.max(0, start - current);
+  const declinePercent = decline / start * 100;
+  const stressedPercent = (decline + Number(extraStopLossIfHit) + Number(pendingRisk)) / start * 100;
+  const locked = declinePercent >= limits.weeklyLossTriggerPercent ||
+    stressedPercent >= limits.weeklyLossTriggerPercent;
+  return {
+    locked,
+    weekStartEquity: start,
+    currentEquity: current,
+    declinePercent,
+    remainingPercent: Math.max(0, limits.weeklyLossTriggerPercent - stressedPercent),
+    reason: locked ? "WEEKLY_LOSS_LOCK" : null,
+  };
+}
+
 export function drawdownLock({ peakEquity, equity, maxPercent = FOREX_RISK_LIMITS.drawdownPausePercent }) {
   const peak = Number(peakEquity);
   const current = Number(equity);
@@ -71,25 +99,47 @@ export function gapShockAllowance({ A, weekendGap = false, multiplier = FOREX_RI
 export function updateEquityBaselines(ledger, account, transactions, now) {
   const key = account.id;
   const date = new Date(now).toISOString().slice(0, 10);
+  const day = new Date(now);
+  day.setUTCHours(0, 0, 0, 0);
+  day.setUTCDate(day.getUTCDate() - ((day.getUTCDay() + 6) % 7));
+  const week = day.toISOString().slice(0, 10);
   const cursor = String(account.lastTransactionID || "0");
   const after = (id, previous) => /^\d+$/.test(String(id)) && /^\d+$/.test(String(previous)) && BigInt(id) > BigInt(previous);
-  let day = ledger.dayStart[key];
+  let daily = ledger.dayStart[key];
   const cashRows = transactions.filter((row) => row.type === "TRANSFER_FUNDS"
     && !after(row.id, cursor) && Number.isFinite(Number(row.amount)));
-  const peakCursor = ledger.peakCashFlowCursor?.[key] || day?.cursor || cursor;
+  const peakCursor = ledger.peakCashFlowCursor?.[key] || daily?.cursor || cursor;
   const peakCash = cashRows.filter((row) => after(row.id, peakCursor)).reduce((sum, row) => sum + Number(row.amount), 0);
-  if (!day || day.date !== date) {
-    day = { date, equity: account.NAV, adjustedEquity: account.NAV, at: new Date(now).toISOString(), cursor };
+  if (!daily || daily.date !== date) {
+    daily = { date, equity: account.NAV, adjustedEquity: account.NAV, at: new Date(now).toISOString(), cursor };
   } else {
-    const cash = cashRows.filter((row) => after(row.id, day.cursor || cursor)).reduce((sum, row) => sum + Number(row.amount), 0);
-    day.adjustedEquity = Number(day.adjustedEquity ?? day.equity) + cash;
-    day.cursor = cursor;
+    const cash = cashRows.filter((row) => after(row.id, daily.cursor || cursor)).reduce((sum, row) => sum + Number(row.amount), 0);
+    daily.adjustedEquity = Number(daily.adjustedEquity ?? daily.equity) + cash;
+    daily.cursor = cursor;
   }
-  ledger.dayStart[key] = day;
+  ledger.dayStart[key] = daily;
+  ledger.weekStart ||= {};
+  let weekly = ledger.weekStart[key];
+  if (!weekly || weekly.week !== week) {
+    weekly = { week, equity: account.NAV, adjustedEquity: account.NAV, at: new Date(now).toISOString(), cursor };
+  } else {
+    const cash = cashRows.filter((row) => after(row.id, weekly.cursor || cursor)).reduce((sum, row) => sum + Number(row.amount), 0);
+    weekly.adjustedEquity = Number(weekly.adjustedEquity ?? weekly.equity) + cash;
+    weekly.cursor = cursor;
+  }
+  ledger.weekStart[key] = weekly;
   ledger.peakEquity[key] = Math.max(account.NAV, Number(ledger.peakEquity[key] || account.NAV) + peakCash);
   ledger.peakCashFlowCursor ||= {};
   ledger.peakCashFlowCursor[key] = cursor;
-  return { dayStartEquity: day.equity, cashFlowAdjustedDayStart: day.adjustedEquity, peakEquity: ledger.peakEquity[key], dailySession: date };
+  return {
+    dayStartEquity: daily.equity,
+    cashFlowAdjustedDayStart: daily.adjustedEquity,
+    weekStartEquity: weekly.equity,
+    cashFlowAdjustedWeekStart: weekly.adjustedEquity,
+    peakEquity: ledger.peakEquity[key],
+    dailySession: date,
+    weeklySession: week,
+  };
 }
 
 // Additional loss from current executable price to stop. NAV already includes unrealized P/L.

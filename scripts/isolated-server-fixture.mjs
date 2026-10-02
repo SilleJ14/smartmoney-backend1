@@ -124,7 +124,7 @@ const json = (body, status = 200) => new Response(JSON.stringify(body), { status
 globalThis.fetch = async (input, options = {}) => {
   if ((options.method || 'GET').toUpperCase() !== 'GET') {
     writes++;
-    process.send?.({ type: 'unsafe-write', method: options.method });
+    process.send?.({ type: 'unsafe-write', method: options.method, url: String(input) });
     throw new Error('Fixture forbids provider mutations');
   }
   reads++;

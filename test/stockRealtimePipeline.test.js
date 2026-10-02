@@ -12,6 +12,7 @@ import {
 import { normalizeTradierQuote } from "../providers/tradierMarketData.js";
 import { createMarketPriorityQueue } from "../discovery/marketPriorityQueue.js";
 import { scopedRelativeVolume, stockFeedProvenance } from "../market-data/feedContract.js";
+import { getStockExecutionEvidenceFreshness } from "../market-data/stockQuoteEvidence.js";
 
 const now = Date.parse("2026-09-25T14:00:00.000Z");
 
@@ -101,6 +102,42 @@ test("a stale Tradier quote waits on execution and does not change F", () => {
   const stale = executionQuoteDecision({ provider: "TRADIER", feed: "CONSOLIDATED", ageMs: 14000, spreadPercent: 0.2 });
   assert.equal(stale.reason, "QUOTE_STALE");
   assert.equal(stale.changesFinalScore, false);
+});
+
+test("malformed execution evidence fails closed instead of passing", () => {
+  const missingSpread = executionQuoteDecision({
+    provider: "TRADIER",
+    feed: "REALTIME_CONSOLIDATED",
+    ageMs: 100,
+    spreadPercent: null,
+  });
+  assert.equal(missingSpread.state, "DATA_UNAVAILABLE");
+  assert.equal(missingSpread.reason, "SPREAD_UNAVAILABLE");
+  const future = executionQuoteDecision({
+    provider: "TRADIER",
+    feed: "REALTIME_CONSOLIDATED",
+    ageMs: -6000,
+    spreadPercent: 0.2,
+  });
+  assert.equal(future.state, "WAIT");
+  assert.equal(future.reason, "QUOTE_TIMESTAMP_IN_FUTURE");
+  const quote = {
+    priceIsLive: true,
+    liveQuoteSource: "tradier_stock_quote",
+    spreadSource: "tradier_stock_quote",
+    bid: 10,
+    ask: 10.01,
+    spreadAvailable: true,
+    liveQuoteUpdatedAt: new Date(now).toISOString(),
+    spreadUpdatedAt: new Date(now).toISOString(),
+  };
+  const malformedPolicy = getStockExecutionEvidenceFreshness(quote, {
+    now,
+    maxAgeSeconds: "not-a-number",
+  });
+  assert.equal(malformedPolicy.freshnessPolicyValid, false);
+  assert.equal(malformedPolicy.quoteFresh, false);
+  assert.equal(malformedPolicy.spreadFresh, false);
 });
 
 test("an IEX quote is not consolidated and cannot use an IEX volume baseline", () => {
