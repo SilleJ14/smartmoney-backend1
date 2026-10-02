@@ -33773,6 +33773,7 @@ alpacaCryptoStream = createAlpacaCryptoStream({
   onQuote: (symbol, quote) => updateQuoteCache(symbol, quote),
   onStatus: status => { engineState.alpacaCryptoStreamState = status; },
 });
+engineState.alpacaCryptoStreamState = alpacaCryptoStream.getStatus();
 
 startServerLifecycle({
   app,
@@ -33797,7 +33798,9 @@ startServerLifecycle({
   startServices: [
     () => forexCalendarProvider.refresh(),
     () => forexProviderContext.refresh(),
-    () => { if (process.env.ENABLE_ALPACA_CRYPTO_WEBSOCKET !== 'false') alpacaCryptoStream.start(); },
+    // This is a market-data-only stream. Credential checks inside start() are
+    // the safety boundary; an unrelated deployment flag must not disable books.
+    () => alpacaCryptoStream.start(),
     startFinnhubStream,
     startLiveScheduler,
     startPolygonStockStream,

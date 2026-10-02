@@ -154,6 +154,9 @@ test("fresh trade ticks cannot starve independent bid-ask refreshes", () => {
   assert.match(streamBlock, /selectAlpacaCryptoStreamSymbols/);
   assert.match(streamBlock, /heldSymbols:/);
   assert.match(streamBlock, /pinnedSymbols:/);
+  assert.match(serverSource, /engineState\.alpacaCryptoStreamState = alpacaCryptoStream\.getStatus\(\)/);
+  assert.match(serverSource, /\(\) => alpacaCryptoStream\.start\(\)/);
+  assert.doesNotMatch(serverSource, /ENABLE_ALPACA_CRYPTO_WEBSOCKET/);
 });
 
 test("portfolio desk keeps forex off Autopilot and shares the position book filter", frontendTestOptions, () => {
