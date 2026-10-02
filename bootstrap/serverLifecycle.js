@@ -61,6 +61,6 @@ export function startServerLifecycle(options) {
       state.lastEngineStopReason = "STARTUP_ENGINE_TICK_FAILED";
       state.startupScanState = { ok: false, failedAt: new Date().toISOString(), error: error.message };
       saveState("STARTUP_SCAN_FAILED"); logger.error("Startup runEngineCycle failed:", error.message);
-    }), 3000);
+    }), 20000);
   });
 }

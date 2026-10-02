@@ -218,6 +218,7 @@ export function createEngineCycle(dependencies) {
         recordOrder("TRADING_FLAGS_RESET_FOR_NEW_DAY", "SYSTEM", {
           todayKey,
         });
+        await yieldToIO();
       }
       engineState.effectiveMode = effectiveMode;
       engineState.marketOpen = marketOpen;
@@ -238,6 +239,7 @@ export function createEngineCycle(dependencies) {
           preparedQuickGateCount:
             engineState.quickInstitutionalCandidates?.length || 0,
         });
+        await yieldToIO();
         await runFastRunnerEngine();
         await runQuickInstitutionalGate();
         await runFullBrainFastSync();
@@ -251,6 +253,7 @@ export function createEngineCycle(dependencies) {
           marketClosedAt: new Date(engineState.marketClosedAt).toISOString(),
           cryptoTradingStoppedForDay: false,
         });
+        await yieldToIO();
       }
       engineState.lastMarketOpen = marketOpen;
       console.log("SMART MODE:", {
@@ -340,6 +343,7 @@ export function createEngineCycle(dependencies) {
         cryptoModeEnabled,
         scannedCryptoSignals: cryptoSignals.length,
       });
+      await yieldToIO();
       engineState.marketBreadth = {
         advancing: stockSignals.filter(
           (s) => Number(s.percentChange || 0) > 0
@@ -441,6 +445,7 @@ export function createEngineCycle(dependencies) {
         approvedCount: phase42CryptoInstitutionalState.approvedCount,
         blockedCount: phase42CryptoInstitutionalState.blockedCount,
       });
+      await yieldToIO();
       const phase43CryptoCapitalRotationState =
         calculateCryptoCapitalRotation(cryptoSignals);
       cryptoSignals = applyCryptoCapitalRotationToSignals(
@@ -455,6 +460,7 @@ export function createEngineCycle(dependencies) {
         cryptoCapitalMultiplier:
           phase43CryptoCapitalRotationState.cryptoCapitalMultiplier,
       });
+      await yieldToIO();
       const phase44CryptoExecutionTimingState =
         updateCryptoExecutionTimingState(cryptoSignals);
       cryptoSignals = applyCryptoExecutionTimingToSignals(cryptoSignals);
@@ -465,6 +471,7 @@ export function createEngineCycle(dependencies) {
         avgExecutionScore:
           phase44CryptoExecutionTimingState.avgExecutionScore,
       });
+      await yieldToIO();
       const phase45CryptoPositionSizingState =
         updateCryptoPositionSizingState(cryptoSignals);
       cryptoSignals = applyCryptoPositionSizingToSignals(cryptoSignals);
@@ -474,6 +481,7 @@ export function createEngineCycle(dependencies) {
         blockedCount: phase45CryptoPositionSizingState.blockedCount,
         avgSizingScore: phase45CryptoPositionSizingState.avgSizingScore,
       });
+      await yieldToIO();
       const phase46CryptoExitParliamentState =
         updateCryptoExitStrategyState(cryptoSignals);
       cryptoSignals = applyCryptoExitStrategyToSignals(cryptoSignals);
@@ -485,6 +493,7 @@ export function createEngineCycle(dependencies) {
         avgRunnerStrength:
           phase46CryptoExitParliamentState.avgRunnerStrength,
       });
+      await yieldToIO();
       const phase47CryptoLiquiditySweepState =
         updateCryptoLiquiditySweepState(cryptoSignals);
       cryptoSignals = applyCryptoLiquiditySweepToSignals(cryptoSignals);
@@ -496,6 +505,7 @@ export function createEngineCycle(dependencies) {
           phase47CryptoLiquiditySweepState.blockedTrapCount,
         avgSweepScore: phase47CryptoLiquiditySweepState.avgSweepScore,
       });
+      await yieldToIO();
       const phase48CrossMarketCorrelationState =
         calculateCrossMarketCorrelation(stockSignals, cryptoSignals);
       cryptoSignals = applyCrossMarketCorrelationToSignals(
@@ -512,6 +522,7 @@ export function createEngineCycle(dependencies) {
         correlationScore:
           phase48CrossMarketCorrelationState.correlationScore,
       });
+      await yieldToIO();
       const phase49StablecoinFlowState =
         calculateStablecoinFlowPressure(
           cryptoSignals,
@@ -529,6 +540,7 @@ export function createEngineCycle(dependencies) {
         stablecoinDemandProxy:
           phase49StablecoinFlowState.stablecoinDemandProxy,
       });
+      await yieldToIO();
       const phase50WhaleSmartMoneyState =
         updateWhaleSmartMoneyState(cryptoSignals);
       cryptoSignals = applyWhaleSmartMoneyToSignals(cryptoSignals);
@@ -539,6 +551,7 @@ export function createEngineCycle(dependencies) {
           phase50WhaleSmartMoneyState.blockedDistributionCount,
         avgWhaleScore: phase50WhaleSmartMoneyState.avgWhaleScore,
       });
+      await yieldToIO();
       const phase51MultiTimeframeCryptoState =
         updateMultiTimeframeCryptoState(cryptoSignals);
       cryptoSignals = applyMultiTimeframeCryptoToSignals(cryptoSignals);
@@ -550,6 +563,7 @@ export function createEngineCycle(dependencies) {
         avgParliamentScore:
           phase51MultiTimeframeCryptoState.avgParliamentScore,
       });
+      await yieldToIO();
       let signals = [...stockSignals, ...cryptoSignals];
       const phase59InstitutionalOrderFlow =
         calculatePhase59InstitutionalOrderFlowIntelligence(stockSignals, cryptoSignals);
@@ -590,6 +604,7 @@ export function createEngineCycle(dependencies) {
         averageOrderFlowScore:
           phase59InstitutionalOrderFlow.state.averageOrderFlowScore,
       });
+      await yieldToIO();
       for (const signal of signals) {
         const phase60AdaptiveExecution =
           calculatePhase60AdaptiveExecutionAlgorithms(
@@ -690,6 +705,7 @@ export function createEngineCycle(dependencies) {
         averageAggressionScore:
           phase61ProfitAggression.state.averageAggressionScore,
       });
+      await yieldToIO();
       const phase62MarketPersonality =
         calculatePhase62MarketPersonalityMemory(signals);
       engineState.phase62MarketPersonalityState =
@@ -730,6 +746,7 @@ export function createEngineCycle(dependencies) {
         averagePersonalityFit:
           phase62MarketPersonality.state.averagePersonalityFit,
       });
+      await yieldToIO();
       const phase63StrategyEvolution =
         calculatePhase63StrategyEvolutionEngine(signals);
       engineState.phase63StrategyEvolutionState =
@@ -772,6 +789,7 @@ export function createEngineCycle(dependencies) {
         averageStrategyEvolution:
           phase63StrategyEvolution.state.averageStrategyEvolution,
       });
+      await yieldToIO();
       const autonomousCryptoStrategySelector =
         calculateCryptoStrategySelector(cryptoSignals);
       engineState.autonomousCryptoStrategySelectorState =
@@ -1005,6 +1023,7 @@ export function createEngineCycle(dependencies) {
         dominantSector:
           portfolioEcosystem.state.dominantSector,
       });
+      await yieldToIO();
       const liveMomentumMutation =
         calculateLiveMomentumMutation(signals);
       engineState.liveMomentumMutationState =
@@ -1064,6 +1083,7 @@ export function createEngineCycle(dependencies) {
         fadeCount: liveMomentumMutation.state.fadeCount,
         staleCount: liveMomentumMutation.state.staleCount,
       });
+      await yieldToIO();
       const dynamicCapitalParliament =
         calculateDynamicCapitalParliament(
           signals,
@@ -1119,6 +1139,7 @@ export function createEngineCycle(dependencies) {
         dominantCapitalArchetype:
           dynamicCapitalParliament.state.dominantCapitalArchetype,
       });
+      await yieldToIO();
       const liquiditySweepTrap =
         calculateLiquiditySweepTrapIntelligence(signals);
       engineState.liquiditySweepTrapState =
@@ -1168,6 +1189,7 @@ export function createEngineCycle(dependencies) {
         squeezeIgnitionCount:
           liquiditySweepTrap.state.squeezeIgnitionCount,
       });
+      await yieldToIO();
       const autonomousHedgeFundLayer =
         calculateAutonomousHedgeFundLayer(signals);
       engineState.autonomousHedgeFundLayerState =
@@ -1213,6 +1235,7 @@ export function createEngineCycle(dependencies) {
         eliteCandidateCount:
           autonomousHedgeFundLayer.state.eliteCandidateCount,
       });
+      await yieldToIO();
       const autonomousMetaReinforcement =
         calculateAutonomousMetaReinforcement(signals);
       engineState.autonomousMetaReinforcementState =
@@ -1262,6 +1285,7 @@ export function createEngineCycle(dependencies) {
         blockRate:
           autonomousMetaReinforcement.state.blockRate,
       });
+      await yieldToIO();
       [stockSignals, cryptoSignals] = await refreshCandidateQuotes(
         stockSignals, cryptoSignals, refreshStockExecutionQuotes, refreshCryptoExecutionQuotes);
       signals = [...stockSignals, ...cryptoSignals];
@@ -1302,6 +1326,7 @@ export function createEngineCycle(dependencies) {
         masterCapitalMultiplier:
           centralAutonomousDecisionCore.state.masterCapitalMultiplier,
       });
+      await yieldToIO();
       broadcastTapeEvent(
         "TOP_AI_BRAIN_UPDATE",
         {
@@ -1553,6 +1578,7 @@ export function createEngineCycle(dependencies) {
         stockSignalCount: stockSignals.length,
         cryptoSignalCount: cryptoSignals.length,
       });
+      await yieldToIO();
       engineState.marketMomentumScore =
         stockSignals.reduce(
           (sum, s) =>
@@ -1813,6 +1839,7 @@ export function createEngineCycle(dependencies) {
             0
           ) / allSignalsForAnalytics.length
           : 0;
+      await yieldToIO();
       engineState.technicalIntelligenceState = {
         updatedAt: new Date().toISOString(),
         qualifyingTechnicalSignals: technicalSignals.length,
@@ -2212,6 +2239,7 @@ export function createEngineCycle(dependencies) {
       );
       engineState.marketCycleIntelligenceHistory =
         engineState.marketCycleIntelligenceHistory.slice(0, 200);
+      await yieldToIO();
       const liquidityIntelligence =
         calculateLiquidityIntelligenceEngine(
           allSignalsForAnalytics
@@ -2380,12 +2408,14 @@ export function createEngineCycle(dependencies) {
           macroRisk: engineState.macroRiskState,
           macroProbeOverrideState: engineState.macroProbeOverrideState,
         });
+        await yieldToIO();
       }
       if (macroProbeOverrideAllowed) {
         recordOrder("MACRO_PROBE_OVERRIDE_ALLOWED", "SYSTEM", {
           macroRisk: engineState.macroRiskState,
           macroProbeOverrideState: engineState.macroProbeOverrideState,
         });
+        await yieldToIO();
       }
       engineState.sectorStrengthHistory =
         engineState.sectorStrengthHistory.slice(0, 200);
@@ -2721,6 +2751,7 @@ export function createEngineCycle(dependencies) {
         topSymbols:
           finalDashboardSignalSync.topSymbols || [],
       });
+      await yieldToIO();
       signals = signals.map((signal) => ({
         ...signal,
         score: clampScore(signal.score),
@@ -2776,6 +2807,7 @@ export function createEngineCycle(dependencies) {
             requestedCount: dueOutcomeSymbols.length,
             error: error?.message || String(error),
           });
+          await yieldToIO();
         }
       }
       const nextAttemptsBySymbol = {
@@ -2942,6 +2974,7 @@ export function createEngineCycle(dependencies) {
             effectiveMode,
             marketOpen,
           });
+          await yieldToIO();
         }
       }
       if (
@@ -2954,6 +2987,7 @@ export function createEngineCycle(dependencies) {
           message:
             "Stocks are paused until the regular market opens; crypto remains eligible 24/7.",
         });
+        await yieldToIO();
       }
       if (typeof runForexEngineCycle === "function") {
         try {

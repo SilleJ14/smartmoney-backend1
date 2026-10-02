@@ -32171,18 +32171,18 @@ function startLiveScheduler() {
     void runLiveScheduledTask(
       "runDeepIntelligenceSync",
       DEEP_INTELLIGENCE_SYNC_INTERVAL_MS,
-      () => runDeepIntelligenceSync()
+      () => process.uptime() < 20 ? undefined : runDeepIntelligenceSync()
     );
     void runLiveScheduledTask(
       "runBoundedQuietDiscoveryScan",
       5 * 60 * 1000,
-      () => runBoundedQuietDiscoveryScan()
+      () => process.uptime() < 20 ? undefined : runBoundedQuietDiscoveryScan()
     );
     if (ENABLE_MAIN_SWING_SCAN) {
       void runLiveScheduledTask(
         "runMainSwingScan",
         MAIN_SWING_SCAN_INTERVAL_MS,
-        () => runEngineCycle()
+        () => process.uptime() < 20 ? undefined : runEngineCycle()
       );
     }
   }, 1000);
