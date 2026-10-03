@@ -290,6 +290,7 @@ import { createOandaClient } from "./forex/oandaClient.js";
 import { runForexEngineCycle } from "./forex/forexEngine.js";
 import { resetForexDailyLoss, validateForexSettings } from "./forex/settingsControl.js";
 import { createForexStore } from "./forex/durableStore.js";
+import { sqliteLockStatus } from "./forex/sqliteLock.js";
 import { createForexSqliteJournal } from "./forex/sqliteJournal.js";
 import { createForexDataQualityMonitor } from "./forex/dataQualityMonitor.js";
 import { createForexProviderContextService, forexRateSeriesFromEnv } from "./forex/providerContextService.js";
@@ -3288,11 +3289,13 @@ function buildBackendHealthPayload(clock = {}) {
       candidateCount: Array.isArray(engineState.forexEngine?.candidates) ? engineState.forexEngine.candidates.length : 0,
       halt: engineState.forexEngine?.halt || "NOT_STARTED",
       lastError: engineState.forexEngine?.lastError || engineState.forexLastError?.message || null,
+      lastErrorCause: engineState.forexEngine?.lastErrorCause || null,
       lastCycleAt: engineState.forexEngine?.lastCycleAt || null,
       calendar: forexCalendarProvider?.getStatus?.() || null,
       ledger: {
         available: forexStore?.available === true,
         durable: forexStore?.isDurable?.() === true,
+        lock: sqliteLockStatus(),
       },
       calendarStore: {
         available: forexCalendarStore?.available === true,
@@ -13947,10 +13950,11 @@ const getOrders = brokerSnapshotService.getOrders;
 const getOpenOrders = brokerSnapshotService.getOpenOrders;
 const orderRiskReservations = createOrderRiskReservations({ state: engineState, persist: persistSafetyState,
   getOpenOrders, getPositions,
-  normalizeSymbol, lookupOrder: (id) => alpacaTradingRequest(`/v2/orders:by_client_order_id?client_order_id=${encodeURIComponent(id)}`) });
+  normalizeSymbol, lookupOrder: (id) => alpacaTradingRequest(`/v2/orders:by_client_order_id?client_order_id=${encodeURIComponent(id)}`,
+    { bypassRateLimitBackoff: true }) });
 const duplicateOrderGuard = createDuplicateOrderGuard({
   getOpenOrders: () => alpacaTradingRequest(
-    "/v2/orders?status=open&limit=100&direction=desc"
+    "/v2/orders?status=open&limit=100&direction=desc", { bypassRateLimitBackoff: true }
   ),
   normalizeSymbol,
   reservationTtlMs: LIVE_DUPLICATE_ORDER_WINDOW_MS,
@@ -14173,7 +14177,9 @@ const preTradeRiskGuard = {
 let protectionOwnershipOrders = null;
 let protectionOwnershipCheckedAt = 0;
 const managedExecution = createManagedExecution({
-  state: engineState, persist: persistSafetyState, request: alpacaTradingRequest,
+  state: engineState, persist: persistSafetyState,
+  // Protection and exits: never held behind the read backoff that sheds scanner traffic.
+  request: (path, options = {}) => alpacaTradingRequest(path, { ...options, bypassRateLimitBackoff: true }),
   getConfig: () => CONFIG, isCrypto,
   getManagedSymbols: async (positions) => {
     if (!protectionOwnershipOrders || Date.now() - protectionOwnershipCheckedAt > 30000) {
@@ -14294,7 +14300,17 @@ async function checkAssetEligibility(symbol) {
 }
 async function isAssetSellEligible(symbol) {
   try {
-    const asset = await getAsset(symbol);
+    // Exits re-check tradability live (never a cached negative), bypassing the
+    // read backoff; a cached positive result is the fallback if the check fails.
+    let asset;
+    try {
+      asset = await alpacaTradingRequest(`/v2/assets/${encodeURIComponent(symbol)}`, { bypassRateLimitBackoff: true });
+      rememberAssetMetadata(normalizeSymbol(symbol) || String(symbol), { asset, ttlMs: ASSET_METADATA_TTL_MS });
+    } catch (error) {
+      const cached = assetMetadataCache.get(normalizeSymbol(symbol) || String(symbol));
+      if (!cached?.asset || error?.status === 404) throw error;
+      asset = { ...cached.asset };
+    }
     if (asset.status !== "active") {
       return { ok: false, reason: "Asset is not active" };
     }
@@ -20172,6 +20188,9 @@ async function flattenStocksBeforeMarketClose(clock) {
           assetClass: "stock",
         }
       );
+      // A temporary broker limit must not leave intraday positions open overnight:
+      // retry on the next tick (each pass cancels its own pending sells first).
+      if (err?.status === 429 || err?.code === "ALPACA_RATE_LIMIT_BACKOFF") engineState.lastFlattenAllBeforeCloseAt = null;
     }
   }
   return true;

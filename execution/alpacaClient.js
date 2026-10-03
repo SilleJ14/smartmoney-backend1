@@ -46,8 +46,12 @@ export function createAlpacaClient({
       emergencyStopActive: isEmergencyStopActive(),
     });
 
+    // Exit and protection reads (order status, positions, duplicate-order checks)
+    // pass bypassRateLimitBackoff: they are few, and must not wait on scanner traffic.
+    const { bypassRateLimitBackoff = false, ...fetchOptions } = options;
+    options = fetchOptions;
     const readOnly = String(options.method || "GET").toUpperCase() === "GET" && path !== "/v2/clock";
-    if (readOnly && now() < readBlockedUntil) {
+    if (readOnly && !bypassRateLimitBackoff && now() < readBlockedUntil) {
       const error = new Error("Alpaca rate limit backoff: read request skipped");
       error.status = 429;
       error.code = "ALPACA_RATE_LIMIT_BACKOFF";
@@ -80,9 +84,11 @@ export function createAlpacaClient({
       if (retryAfter) error.retryAfterMs = /^\d+(\.\d+)?$/.test(retryAfter)
         ? Number(retryAfter) * 1000 : Math.max(0, Date.parse(retryAfter) - Date.now());
       if (response.status === 429) {
-        consecutiveRateLimits += 1;
-        const backoffMs = Math.min(60000, 15000 * 2 ** (consecutiveRateLimits - 1));
-        readBlockedUntil = Math.max(readBlockedUntil, now() + Math.max(Number(error.retryAfterMs) || 0, backoffMs));
+        // A burst of parallel 429s is one event: only a limit hit after the
+        // previous window ended escalates. Never block reads longer than 60 s.
+        if (now() >= readBlockedUntil) consecutiveRateLimits += 1;
+        const backoffMs = Math.min(60000, 15000 * 2 ** (Math.max(1, consecutiveRateLimits) - 1));
+        readBlockedUntil = Math.max(readBlockedUntil, now() + Math.min(60000, Math.max(Number(error.retryAfterMs) || 0, backoffMs)));
       }
       throw error;
     }

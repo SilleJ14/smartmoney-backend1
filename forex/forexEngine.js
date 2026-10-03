@@ -1049,6 +1049,7 @@ export async function runForexEngineCycle({
     snapshot.halt = error.halt || error.reason || "UNCERTAIN_ORDER";
     snapshot.haltState = snapshot.halt;
     snapshot.lastError = String(error.message || error);
+    snapshot.lastErrorCause = error.lockCause || null;
     blockForexCandidates(snapshot.candidates, [snapshot.halt]);
     snapshot.signals = snapshot.signals.map(signal => ({ ...signal,
       forexState: "blocked", reason: snapshot.halt,

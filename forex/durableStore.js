@@ -208,7 +208,7 @@ export function createFileStore({
     },
     async commit(mutator) {
       if (!available) throw Object.assign(new Error("DURABLE_STORAGE_UNAVAILABLE"), { reason: "DURABLE_STORAGE_UNAVAILABLE" });
-      const task = (queues.get(resolved) || Promise.resolve()).then(() => withExclusiveSqliteLock(`${resolved}.lock.db`, async () => {
+      const task = (queues.get(resolved) || Promise.resolve()).then(() => withExclusiveSqliteLock(`${resolved}.lock.db`, async ({ sqliteGuarded }) => {
         // The SQLite lock is the real mutual exclusion between processes. The
         // legacy .lock file is still honoured for an older build that may run
         // during a deploy, and still written so that build honours ours.
@@ -221,22 +221,25 @@ export function createFileStore({
             try { owner = JSON.parse(fs.readFileSync(lockPath, "utf8")); }
             catch { /* an interrupted lock write is reclaimable only after its lease expires */ }
             // A guarded lock file can only be left by a process that crashed:
-            // we hold the SQLite lock, so no live guarded owner can exist.
-            if (owner?.guardedBy !== "sqlite" && !reclaimableForexLock({ lockPath, owner, now: now(), staleLockMs })) {
+            // while we hold the SQLite lock, no live guarded owner can exist.
+            if (!(sqliteGuarded && owner?.guardedBy === "sqlite") && !reclaimableForexLock({ lockPath, owner, now: now(), staleLockMs })) {
               throw new Error("ACTIVE_OWNER");
             }
             // Safe without a race: every guarded process reclaims only while
             // holding the SQLite lock.
             fs.unlinkSync(lockPath);
             lock = fs.openSync(lockPath, "wx");
-          } catch { throw new Error("FOREX_LEDGER_LOCKED"); }
+          } catch {
+            throw Object.assign(new Error("FOREX_LEDGER_LOCKED"), {
+              lockCause: "ACTIVE_LOCK_FILE", halt: "LEDGER_LOCKED", reason: "LEDGER_LOCKED" });
+          }
         }
         try {
           fs.writeFileSync(lock, JSON.stringify({
             pid: process.pid,
             host: os.hostname(),
             acquiredAt: new Date(now()).toISOString(),
-            guardedBy: "sqlite",
+            guardedBy: sqliteGuarded ? "sqlite" : null,
           }));
           fs.fsyncSync(lock);
           const next = read();

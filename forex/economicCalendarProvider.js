@@ -238,7 +238,10 @@ export function createEconomicCalendarProvider({ apiKey, jblankedApiKey, store, 
       lastError = null; failures = 0;
       if (provider !== "jblanked") nextAttemptAt = nowFn() + (provider === "file" ? MINUTE : 5 * MINUTE);
     } catch (error) {
-      lastError = error.calendarCode || (error.name === "TimeoutError" || error.name === "AbortError" ? "CALENDAR_TIMEOUT" : "CALENDAR_NETWORK_ERROR");
+      // Storage failures are not network failures; label them so they are not misdiagnosed.
+      lastError = error.calendarCode || (error.name === "TimeoutError" || error.name === "AbortError" ? "CALENDAR_TIMEOUT"
+        : error.message === "FOREX_LEDGER_LOCKED" ? "CALENDAR_STORAGE_LOCKED"
+          : error.message === "DURABLE_STORAGE_UNAVAILABLE" ? "CALENDAR_DURABLE_CACHE_REQUIRED" : "CALENDAR_NETWORK_ERROR");
       failures++;
       const delay = ["CALENDAR_ACCESS_DENIED", "CALENDAR_MISSING_API_KEY", "CALENDAR_TIMEZONE_UNVERIFIED"].includes(lastError)
         ? 15 * MINUTE : Math.min(15 * MINUTE, MINUTE * 2 ** Math.min(failures - 1, 4));

@@ -52,3 +52,42 @@ test("another live process holding the ledger lock blocks commits; its crash rel
   await store.commit((ledger) => ledger.audits.push("after-holder-died"));
   assert.deepEqual((await store.load()).audits, ["after-holder-died"]);
 });
+
+test("a briefly busy SQLite lock is retried, a persistently busy one reports LEDGER_LOCKED with its cause", async (t) => {
+  const { withExclusiveSqliteLock } = await import("../forex/sqliteLock.js");
+  const { default: Database } = await import("better-sqlite3");
+  const { dir } = tempLedger(t);
+  const lockDb = path.join(dir, "ledger.json.lock.db");
+  const holder = new Database(lockDb);
+  holder.exec("BEGIN IMMEDIATE");
+  setTimeout(() => { holder.exec("COMMIT"); }, 60);
+  assert.equal(await withExclusiveSqliteLock(lockDb, async ({ sqliteGuarded }) => sqliteGuarded), true);
+  holder.exec("BEGIN IMMEDIATE");
+  try {
+    await assert.rejects(withExclusiveSqliteLock(lockDb, async () => "never", { attempts: 3, baseDelayMs: 5 }),
+      (error) => error.message === "FOREX_LEDGER_LOCKED" && error.halt === "LEDGER_LOCKED" && /SQLITE_BUSY/.test(error.lockCause));
+  } finally { holder.exec("COMMIT"); holder.close(); }
+});
+
+test("when SQLite locking is unusable on the volume, the ledger still commits under the file lock and says so", async (t) => {
+  const { sqliteLockStatus } = await import("../forex/sqliteLock.js");
+  const { dir, filePath } = tempLedger(t);
+  fs.mkdirSync(`${filePath}.lock.db`); // a directory where the lock database should be: SQLite cannot open it
+  const store = createFileStore({ filePath, persistentRoot: dir });
+  await store.commit((ledger) => ledger.audits.push("file-lock-only"));
+  assert.deepEqual((await store.load()).audits, ["file-lock-only"]);
+  assert.equal(sqliteLockStatus().mode, "FILE_LOCK_ONLY");
+  assert.ok(sqliteLockStatus().cause);
+  assert.equal(fs.existsSync(`${filePath}.lock`), false);
+});
+
+test("a calendar that cannot write its cache reports storage, not a network error", async () => {
+  const { createEconomicCalendarProvider } = await import("../forex/economicCalendarProvider.js");
+  let fetched = false;
+  const provider = createEconomicCalendarProvider({ provider: "jblanked", jblankedApiKey: "test-key",
+    store: { isDurable: () => true, commit: async () => { throw new Error("FOREX_LEDGER_LOCKED"); } },
+    fetchImpl: async () => { fetched = true; throw new Error("must not fetch"); } });
+  const status = await provider.refresh();
+  assert.equal(status.error, "CALENDAR_STORAGE_LOCKED");
+  assert.equal(fetched, false);
+});

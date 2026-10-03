@@ -118,3 +118,41 @@ test("after a 429, read requests wait out the backoff while orders and the clock
   limited = false;
   assert.deepEqual(await client.tradingRequest("/v2/positions"), { ok: true });
 });
+
+test("exit reads bypass the backoff, a burst counts once, and no Retry-After blocks reads for more than 60 s", async () => {
+  const { createAlpacaClient: create } = await import("../execution/alpacaClient.js");
+  let clock = 5_000_000;
+  let limited = true;
+  let retryAfter = null;
+  const calls = [];
+  const client = create({
+    getKeys: () => ({ key: "test-key", secret: "test-secret" }),
+    getTradingBaseUrl: () => "https://paper-api.alpaca.markets",
+    dataBaseUrl: "https://data.alpaca.markets",
+    now: () => clock,
+    fetchWithTimeout: async (url, options) => {
+      calls.push(new URL(url).pathname);
+      if (!limited) return new Response("{}", { status: 200 });
+      return new Response("{}", { status: 429, headers: retryAfter ? { "retry-after": retryAfter } : {} });
+    },
+  });
+  // Five parallel 429s are one event: a 15 s window, not 60 s.
+  await Promise.allSettled(Array.from({ length: 5 }, () => client.tradingRequest("/v2/positions")));
+  clock += 16_000;
+  limited = false;
+  assert.deepEqual(await client.tradingRequest("/v2/positions"), {});
+  // Protection reads still reach Alpaca during a window.
+  limited = true;
+  await assert.rejects(client.tradingRequest("/v2/account"), { status: 429 });
+  limited = false;
+  const before = calls.length;
+  assert.deepEqual(await client.tradingRequest("/v2/orders?status=open", { bypassRateLimitBackoff: true }), {});
+  assert.equal(calls.length, before + 1);
+  await assert.rejects(client.tradingRequest("/v2/account"), { code: "ALPACA_RATE_LIMIT_BACKOFF" });
+  // A huge Retry-After is capped at 60 s.
+  clock += 120_000;
+  limited = true; retryAfter = "3600";
+  await assert.rejects(client.tradingRequest("/v2/account"), { status: 429 });
+  clock += 61_000; limited = false;
+  assert.deepEqual(await client.tradingRequest("/v2/account"), {});
+});
