@@ -531,8 +531,9 @@ test("frontend AI decisions do not mistake the default no-exit label for an exit
   assert.doesNotMatch(decisionBlock, /signal\.liveExitLabel/);
   assert.doesNotMatch(decisionBlock, /signal\.portfolioManagerReason/);
   assert.match(decisionBlock, /signal\.liveExitActive === true/);
-  assert.match(decisionBlock, /isCryptoBuyableNow\(signal\)/);
-  assert.match(decisionBlock, /isStockBuyableNow\(signal\)/);
+  // Display grouping uses the backend authorization with a short refresh grace;
+  // buy actions keep the strict isCryptoBuyableNow / isStockBuyableNow checks.
+  assert.match(decisionBlock, /isShownBuyable\(signal\)/);
 });
 
 test("top-signal hydration preserves provider time and rejects invented live sources", () => {

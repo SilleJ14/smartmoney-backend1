@@ -5,6 +5,8 @@ import { availableBuyingPower } from "../risk/brokerEvidence.js";
 import { outstandingOrderNotional } from "../risk/orderRiskReservations.js";
 import { isSizingRevoked } from "./approvedSizing.js";
 
+export const CRYPTO_LOW_CONVICTION_FLOOR = 60;
+
 // The central decision runs before sizing, so an unsized coin has no notional and
 // its execution check would WAIT forever. Judge it at the smallest order this
 // allocator can place (never below $1); the allocator and the order guard
@@ -77,6 +79,8 @@ export function attachCryptoExecutableAllocation(signal = {}, {
     },
     positions: sizingPositions,
     signalScore: finalScore ?? 0,
+    // Owner policy: crypto scoring 60-64 may buy at the smallest size tier.
+    lowConvictionFloor: CRYPTO_LOW_CONVICTION_FLOOR,
     config,
     signal,
     dailyStartEquity: dailyStartEquity || account.last_equity,

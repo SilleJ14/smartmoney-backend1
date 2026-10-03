@@ -3,7 +3,7 @@ import { evaluateCryptoTradePlan } from '../scoring/cryptoTradePlan.js';
 import { assessCryptoOrderLiquidity } from '../scoring/cryptoOrderLiquidity.js';
 
 export function calculateDynamicTradeAmount({ account = {}, positions = [], signalScore = 80, config = {}, compoundingState = {}, getExposure,
-  signal = {}, dailyStartEquity, pendingNotional = 0 }) {
+  signal = {}, dailyStartEquity, pendingNotional = 0, lowConvictionFloor = null }) {
   const cash = Number(account.cash || 0);
   const equity = Number(account.equity || 0);
   const buyingPower = Number(account.buying_power ?? cash);
@@ -17,7 +17,10 @@ export function calculateDynamicTradeAmount({ account = {}, positions = [], sign
   if (!Number.isFinite(available) || available < minimum || account.stale || positions.stale) return 0;
   // Conviction determines a share of the ENTIRE remaining shared budget. These
   // are allocation fractions, not probabilities or expected returns.
-  const fraction = signalScore >= 90 ? 0.5 : signalScore >= 85 ? 0.4 : signalScore >= 78 ? 0.3 : signalScore >= 72 ? 0.2 : signalScore >= 65 ? 0.15 : 0;
+  // A caller may opt in to a smallest tier below 65 (crypto: owner chose 60-64).
+  const lowTier = lowConvictionFloor !== null && lowConvictionFloor !== undefined && lowConvictionFloor !== ""
+    && Number.isFinite(Number(lowConvictionFloor)) && signalScore >= Number(lowConvictionFloor) ? 0.1 : 0;
+  const fraction = signalScore >= 90 ? 0.5 : signalScore >= 85 ? 0.4 : signalScore >= 78 ? 0.3 : signalScore >= 72 ? 0.2 : signalScore >= 65 ? 0.15 : lowTier;
   if (!fraction) return 0;
   const lossBudget = calculateLossBudgetSizing({ account, positions, config, signal, dailyStartEquity, pendingNotional });
   let amount = Math.floor(Math.min(Math.max(minimum, available * fraction), available, lossBudget.maxNotional) * 100) / 100;

@@ -207,3 +207,18 @@ test("re-reviews size crypto with a fresh broker snapshot and a re-calculated ma
   const helper = source.slice(source.indexOf("function refreshMasterDecisionProfile("), source.indexOf("async function reviewCandidateScores("));
   assert.doesNotMatch(helper, /allocationMultiplier/);
 });
+
+test("crypto scoring 60-64 gets the smallest size tier; below 60 and stocks below 65 stay at $0", async () => {
+  const { calculateDynamicTradeAmount } = await import("../risk/positionSizing.js");
+  const { CRYPTO_LOW_CONVICTION_FLOOR } = await import("../scoring/cryptoExecutableAllocation.js");
+  const snapshotAt = Date.now();
+  const base = { account: { ...account, snapshotAt }, positions: Object.assign([], { snapshotAt }), config,
+    getExposure: () => 0, signal: {} };
+  const crypto = (score) => calculateDynamicTradeAmount({ ...base, signalScore: score, lowConvictionFloor: CRYPTO_LOW_CONVICTION_FLOOR });
+  const stock = (score) => calculateDynamicTradeAmount({ ...base, signalScore: score });
+  assert.ok(crypto(62) >= config.minCryptoTradeAmount, String(crypto(62)));
+  assert.ok(crypto(62) < crypto(66), "60-64 is smaller than the 65 tier");
+  assert.equal(crypto(58), 0);
+  assert.equal(stock(62), 0);
+  assert.ok(stock(66) > 0);
+});
