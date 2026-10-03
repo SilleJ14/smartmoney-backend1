@@ -8,11 +8,11 @@ import { fileURLToPath } from 'node:url';
 
 // Long runs are explicit opt-in; ordinary test runs still use no soak.
 const soakMs = Math.max(0, Math.min(24 * 3600000, Number(process.env.SMARTMONEY_SOAK_MS) || 0));
-const heapMb = Number(process.env.SMARTMONEY_FIXTURE_HEAP_MB) || 192;
+const heapMb = Number(process.env.SMARTMONEY_FIXTURE_HEAP_MB) || 1024;
 const rssLimitMb = Number(process.env.SMARTMONEY_FIXTURE_RSS_LIMIT_MB) || 400;
 const memoryBudgetMb = Number(process.env.SMARTMONEY_FIXTURE_MEMORY_MB) || 512;
 const scenarios = process.env.SMARTMONEY_FIXTURE_POLYGON ? [process.env.SMARTMONEY_FIXTURE_POLYGON]
-  : ['', 'healthy', 'stream-burst', 'oversized', 'stalled', 'unavailable', 'malformed', 'early-analysis', 'afterhours-analysis', 'crypto-setup', 'autopilot', 'candidate-recovery'];
+  : ['', 'healthy', 'stream-burst', 'oversized', 'stalled', 'unavailable', 'malformed', 'early-analysis', 'afterhours-analysis', 'crypto-setup', 'autopilot', 'candidate-recovery', 'tradier-primary'];
 for (const polygonFault of scenarios) {
 test(`actual server boots, serves stocks and crypto, and completes a scan without trading (Polygon: ${polygonFault || 'disabled'})`, { timeout: 80000 + soakMs }, async t => {
   const fullLoad = process.env.SMARTMONEY_FIXTURE_LOAD === 'full' || polygonFault === 'healthy';
@@ -22,6 +22,11 @@ test(`actual server boots, serves stocks and crypto, and completes a scan withou
   const directory = await fs.mkdtemp(path.join(os.tmpdir(), 'smartmoney-isolated-server-'));
   const token = 'isolated-fixture-admin-not-a-real-credential';
   const autopilot = polygonFault === 'autopilot';
+  // Tradier configured (fixture key) with a healthy Polygon behind it. The
+  // streaming session needs a POST, which the fixture forbids, so only the
+  // REST quote and history adapters run here.
+  const tradierPrimary = polygonFault === 'tradier-primary';
+  const tradierKey = 'tradier-fixture-key-not-a-real-credential';
   await fs.writeFile(path.join(directory, 'runtime-config.json'), JSON.stringify({ maxStockPrice: 1000, ...(autopilot ? { autoTradingEnabled: true } : {}) }));
   const row = symbol => ({ symbol, price: 100, current: 100, assetClass: symbol.includes('/') ? 'crypto' : 'stock',
     approved: false, backendApproved: false, qualifiedToBuy: false, autoTradeApproved: false });
@@ -36,6 +41,7 @@ test(`actual server boots, serves stocks and crypto, and completes a scan withou
     ENABLE_POLYGON: polygonFault ? 'true' : 'false', POLYGON_API_KEY: 'fixture', SMARTMONEY_FIXTURE_POLYGON: polygonFault,
     ENABLE_POLYGON_WEBSOCKET: 'false', ENABLE_FINNHUB_WEBSOCKET: streamBurst ? 'true' : 'false', ENABLE_ALPACA_CRYPTO_WEBSOCKET: 'false',
     SMARTMONEY_FIXTURE_STREAM: streamBurst ? 'finnhub' : '',
+    ...(tradierPrimary ? { TRADIER_API_KEY: tradierKey, ENABLE_TRADIER_STREAM: 'false' } : {}),
     SMARTMONEY_FIXTURE_LOAD: fullLoad ? 'full' : 'small',
     SMARTMONEY_FIXTURE_POPULATION: process.env.SMARTMONEY_FIXTURE_POPULATION || '',
     SMARTMONEY_FIXTURE_MARKET_OPEN: (earlyProbe && !afterhoursProbe) || polygonFault === 'candidate-recovery' ? 'true' : 'false',
@@ -93,7 +99,8 @@ test(`actual server boots, serves stocks and crypto, and completes a scan withou
         // Keep the original timeout a failure, but allow a blocked event loop to
         // emit its diagnostic profile before the test-only child is terminated.
         if (env.SMARTMONEY_FIXTURE_PROFILE === 'true') await new Promise(resolve => setTimeout(resolve, 5000));
-        throw new Error(`Request failed: ${route}; metrics=${JSON.stringify(metrics)}; profiles=${JSON.stringify(profiles)}\n${log.slice(-4000)}`, { cause: error });
+        // node:test does not print `cause`; surface whether it timed out or returned a bad status.
+        throw new Error(`Request failed: ${route} (${String(error?.message || error).split("\n")[0].slice(0, 160)}); metrics=${JSON.stringify(metrics)}; profiles=${JSON.stringify(profiles)}\n${log.slice(-4000)}`, { cause: error });
       }
     };
     const initial = await read('/frontend/snapshot');
@@ -135,6 +142,43 @@ test(`actual server boots, serves stocks and crypto, and completes a scan withou
     assert.ok(peakRss < rssLimitMb * 1024 * 1024, `isolated server exceeded ${rssLimitMb} MB RSS`);
     assert.equal(metrics.writes || 0, 0);
     if (polygonFault) assert.ok(metrics.polygonReads > 0, 'fixture did not exercise Polygon snapshot path');
+    // The real server's stock data routing: Tradier first, then Polygon, then
+    // Alpaca IEX, for quotes and for bars (/health reports cumulative counts).
+    if (polygonFault === 'healthy' || tradierPrimary) {
+      const routed = routing => tradierPrimary
+        ? routing?.quotes?.totals?.servedBy?.tradier > 0 && routing?.bars?.servedBy?.tradier > 0
+        : routing?.quotes?.totals?.servedBy?.polygon > 0;
+      let routingHealth = health;
+      const routingDeadline = Date.now() + 20000;
+      while (!routed(routingHealth.api?.channels?.stocks?.routing) && Date.now() < routingDeadline) {
+        await new Promise(resolve => setTimeout(resolve, 500));
+        routingHealth = await read('/health');
+      }
+      const routing = routingHealth.api?.channels?.stocks?.routing;
+      const quotes = routing?.quotes?.totals;
+      const detail = JSON.stringify(routing);
+      assert.deepEqual(routing?.quotes?.order, ['tradier', 'polygon', 'alpaca_iex'], detail);
+      if (tradierPrimary) {
+        assert.ok(quotes.servedBy.tradier > 0, `Tradier served no quotes: ${detail}`);
+        assert.equal(quotes.servedBy.polygon || 0, 0, `Polygon served quotes Tradier had: ${detail}`);
+        assert.equal(quotes.servedBy.alpaca_iex || 0, 0, `Alpaca IEX served quotes Tradier had: ${detail}`);
+        assert.deepEqual(quotes.fallbackRequested, {}, `a fallback was asked although Tradier answered: ${detail}`);
+        assert.deepEqual(routing.bars.order, ['TRADIER', 'MASSIVE', 'ALPACA'], detail);
+        assert.ok(routing.bars.servedBy.tradier > 0, `Tradier served no bars: ${detail}`);
+        assert.equal(routing.bars.servedBy.polygon, 0, detail);
+        assert.equal(routing.bars.servedBy.alpaca, 0, detail);
+        assert.equal(routingHealth.api.channels.stocks.tradier.role, 'PRIMARY');
+        assert.doesNotMatch(JSON.stringify(routingHealth), new RegExp(tradierKey), 'health must not expose the Tradier key');
+        t.diagnostic(`Tradier primary: ${detail}`);
+      } else {
+        // No Tradier key: Polygon serves the quotes and Tradier history is not wired in.
+        assert.ok(quotes.servedBy.polygon > 0, `Polygon fallback served no quotes: ${detail}`);
+        assert.equal(quotes.servedBy.tradier || 0, 0, detail);
+        assert.ok(quotes.fallbackRequested.polygon > 0, detail);
+        assert.deepEqual(routing.bars.order, ['MASSIVE', 'ALPACA'], detail);
+        assert.equal(routing.bars.servedBy.tradier, 0, detail);
+      }
+    }
     const snapshot = await read('/frontend/snapshot');
     const diagnostic = await read('/discovery/diagnostics?asset=crypto');
     assert.equal(diagnostic.ok, true);
@@ -225,12 +269,24 @@ test(`actual server boots, serves stocks and crypto, and completes a scan withou
         F: s.stockDecisionScore ?? s.cryptoDecisionScore, MD: s.multiDayContinuationScore,
         missing: s.missingEvidenceReasons?.slice(0, 8), approved: s.approved })) }));
     }
-    const trace = await read('/discovery/trace?symbol=AAPL');
-    const selected = trace.events.some(event => event.stage === 'SCAN_SELECTED');
-    if (fullLoad) assert.ok(selected, 'full-load scan did not record candidate selection');
-    if (selected) {
-      assert.ok(trace.events.some(event => event.stage === 'SCAN_SCORED' || event.stage === 'SKIPPED'),
-        'selected candidate did not record an outcome');
+    let trace = await read('/discovery/trace?symbol=AAPL');
+    // Events are newest first. Full, deep and early-analysis scans all record
+    // the outcome of each selected symbol under the selecting scan's cycle id.
+    const selection = trace.events.find(event => event.stage === 'SCAN_SELECTED');
+    if (fullLoad) assert.ok(selection, 'full-load scan did not record candidate selection');
+    if (selection) {
+      // Await the outcome of the scan that selected AAPL, which may still be
+      // running. Any other scan's outcome (or none, when a later cycle does
+      // not select AAPL) says nothing about this selection.
+      const hasOutcome = () => trace.events.some(event => event.cycle === selection.cycle &&
+        (event.stage === 'SCAN_SCORED' || event.stage === 'SKIPPED'));
+      const outcomeDeadline = Date.now() + 30000;
+      while (!hasOutcome() && Date.now() < outcomeDeadline) {
+        await new Promise(resolve => setTimeout(resolve, 500));
+        trace = await read('/discovery/trace?symbol=AAPL');
+      }
+      assert.ok(hasOutcome(), `selected candidate did not record an outcome for ${selection.cycle}: ${JSON.stringify(
+        trace.events.slice(0, 20).map(event => [event.observedAt, event.stage, event.cycle]))}`);
     }
     assert.equal(trace.lastError, null);
     const unauthorizedTrace = await fetch(`http://127.0.0.1:${port}/discovery/trace?symbol=AAPL`);

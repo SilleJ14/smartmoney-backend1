@@ -305,7 +305,9 @@ test("restart preserves forex locks, unresolved orders and candidate-to-exit his
   assert.equal(after.fills[1].exitReason,'STOP_LOSS_ORDER');assert.equal(after.fills[1].realizedPL,'-1');
   // Delete only known files created by this fixture; no recursive deletion.
   for(const name of fs.readdirSync(`${options.filePath}.archive`))fs.unlinkSync(path.join(`${options.filePath}.archive`,name));
-  fs.rmdirSync(`${options.filePath}.archive`);fs.unlinkSync(options.filePath);fs.rmdirSync(dir);
+  fs.rmdirSync(`${options.filePath}.archive`);fs.unlinkSync(options.filePath);
+  fs.unlinkSync(`${options.filePath}.lock.db`); // the cross-process SQLite ledger lock
+  fs.rmdirSync(dir);
 });
 
 test("compaction never deletes unrelated legacy fills with missing dedupe keys",()=>{

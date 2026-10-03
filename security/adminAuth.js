@@ -54,6 +54,15 @@ function passwordIsValid(password, user = {}) {
   return actual.length === expected.length && crypto.timingSafeEqual(actual, expected);
 }
 
+// Constant-time comparison for secrets of any length (hashing equalizes length).
+function secretsEqual(provided, expected) {
+  if (!expected) return false;
+  const digest = (value) => crypto.createHash("sha256").update(String(value)).digest();
+  return crypto.timingSafeEqual(digest(provided), digest(expected));
+}
+
+const STREAM_TICKET_PATHS = new Set(["/stream", "/live-signals/stream"]);
+
 function safeUsers(file) {
   try {
     const value = JSON.parse(fs.readFileSync(file, "utf8"));
@@ -122,7 +131,7 @@ export function createAdminAuth({ adminToken, sessionSecret = "", userFile = "",
   ownerEmail = "", ownerPassword = "",
   sessionTtlMs = 12 * 60 * 60 * 1000,
   allowInitialSignup = true,
-  failureWindowMs = 15 * 60 * 1000, failureLimit = 20, ticketTtlMs = 30 * 1000,
+  failureWindowMs = 15 * 60 * 1000, failureLimit = 20, accountFailureLimit = 50, ticketTtlMs = 30 * 1000,
   recoveryTtlMs = 10 * 60 * 1000, now = () => Date.now(), googleClientIds = [],
   googleTokenVerifier = verifyGoogleIdToken, appleClientIds = [],
   appleTokenVerifier = verifyAppleIdentityToken, recoveryEmailSender = null, recoveryOwnerEmail = "",
@@ -135,7 +144,7 @@ export function createAdminAuth({ adminToken, sessionSecret = "", userFile = "",
   const restoreStableOwner = (email, password) => {
     if (users.length > 0) return null;
     if (!/^\S+@\S+\.\S+$/.test(stableOwnerEmail) || stableOwnerPassword.length < 12) return null;
-    if (email !== stableOwnerEmail || password !== stableOwnerPassword) return null;
+    if (email !== stableOwnerEmail || !secretsEqual(password, stableOwnerPassword)) return null;
     const passwordRecord = passwordDigest(stableOwnerPassword);
     const user = {
       id: `owner:${crypto.createHash("sha256").update(stableOwnerEmail).digest("hex")}`,
@@ -172,7 +181,9 @@ export function createAdminAuth({ adminToken, sessionSecret = "", userFile = "",
       .slice(0, 10)
   )];
   const signingKey = crypto.createHash("sha256").update(String(sessionSecret || adminToken || "missing-admin-token")).digest();
-  const getClientIp = (req) => String(req.headers["x-forwarded-for"] || req.ip || "unknown").split(",")[0].trim();
+  // req.ip honours Express's "trust proxy" setting, so only proxy-appended
+  // X-Forwarded-For hops are used. The client-supplied first entry is not.
+  const getClientIp = (req) => String(req.ip || req.socket?.remoteAddress || "unknown");
   const publicUser = (user) => ({ id: user.id, name: user.name, email: user.email, createdAt: user.createdAt });
   const signSession = (user) => {
     const payload = encode({ sub: user.id, email: user.email, ver: user.authVersion || user.passwordChangedAt || user.createdAt,
@@ -180,7 +191,8 @@ export function createAdminAuth({ adminToken, sessionSecret = "", userFile = "",
     const signature = crypto.createHmac("sha256", signingKey).update(payload).digest("base64url");
     return `${payload}.${signature}`;
   };
-  const sessionClaims = (token) => {
+  // Claims of a token this server signed, whether or not it is still active.
+  const signedClaims = (token) => {
     try {
       const [payload, signature] = String(token || "").split(".");
       if (!payload || !signature) return null;
@@ -188,9 +200,12 @@ export function createAdminAuth({ adminToken, sessionSecret = "", userFile = "",
       const actual = Buffer.from(signature, "base64url");
       if (actual.length !== expected.length || !crypto.timingSafeEqual(actual, expected)) return null;
       const claims = JSON.parse(Buffer.from(payload, "base64url").toString("utf8"));
-      if (!claims.sub || Number(claims.exp) <= now()) return null;
-      return claims;
+      return claims?.sub ? claims : null;
     } catch { return null; }
+  };
+  const sessionClaims = (token) => {
+    const claims = signedClaims(token);
+    return claims && Number(claims.exp) > now() ? claims : null;
   };
   const sessionUser = (token) => {
     const claims = sessionClaims(token);
@@ -235,27 +250,47 @@ export function createAdminAuth({ adminToken, sessionSecret = "", userFile = "",
     }
     return true;
   };
-  const recordFailure = (req, res, message = "Invalid email or password") => {
-    const clientIp = getClientIp(req), timestamp = now();
-    const failure = failures.get(clientIp);
-    if (failure && failure.resetAt > timestamp && failure.count >= failureLimit) {
-      return res.status(429).json({ ok: false, error: "Too many authentication failures" });
+  // Failures are counted per client IP and, for password guesses, per account.
+  // The lock is checked BEFORE credentials, so a correct guess made while
+  // locked out is refused like any other.
+  const failureKeys = (req, account = "") => [`ip:${getClientIp(req)}`, ...(account ? [`account:${account}`] : [])];
+  const lockedOut = (req, account = "") => {
+    const timestamp = now();
+    return failureKeys(req, account).some((key) => {
+      const failure = failures.get(key);
+      const limit = key.startsWith("account:") ? accountFailureLimit : failureLimit;
+      return Boolean(failure && failure.resetAt > timestamp && failure.count >= limit);
+    });
+  };
+  const rejectLockedOut = (res) => res.status(429).json({ ok: false, error: "Too many authentication failures" });
+  const clearFailures = (req) => failures.delete(`ip:${getClientIp(req)}`);
+  const recordFailure = (req, res, message = "Invalid email or password", account = "") => {
+    if (lockedOut(req, account)) return rejectLockedOut(res);
+    const timestamp = now();
+    for (const key of failureKeys(req, account)) {
+      const failure = failures.get(key);
+      const active = failure && failure.resetAt > timestamp ? failure : { count: 0, resetAt: timestamp + failureWindowMs };
+      active.count += 1; failures.set(key, active);
     }
-    const active = failure && failure.resetAt > timestamp ? failure : { count: 0, resetAt: timestamp + failureWindowMs };
-    active.count += 1; failures.set(clientIp, active);
+    if (failures.size > 2000) {
+      for (const [key, record] of failures) if (record.resetAt <= timestamp) failures.delete(key);
+    }
     return res.status(401).json({ ok: false, error: message });
   };
   const requireAdmin = (req, res, next) => {
     if (!adminToken) return res.status(500).json({ ok: false, error: "ADMIN_API_TOKEN is not set on backend" });
     const bearer = bearerOf(req);
     const provided = bearer || String(req.headers["x-admin-token"] || "").trim();
-    const streamTicket = req.method === "GET" ? String(req.query?.streamTicket || "").trim() : "";
+    // Stream tickets travel in the URL, so they only open the stream routes.
+    const streamTicket = req.method === "GET" && STREAM_TICKET_PATHS.has(req.path)
+      ? String(req.query?.streamTicket || "").trim() : "";
+    if (lockedOut(req)) return rejectLockedOut(res);
     const record = streamTicket ? tickets.get(streamTicket) : null, clientIp = getClientIp(req), timestamp = now();
     const validTicket = Boolean(record && record.expiresAt > timestamp && record.ip === clientIp);
     if (validTicket) tickets.delete(streamTicket);
     const user = sessionUser(provided);
-    if (validTicket || provided === adminToken || user) {
-      failures.delete(clientIp);
+    if (validTicket || secretsEqual(provided, adminToken) || user) {
+      clearFailures(req);
       if (user) req.authUser = publicUser(user);
       return next();
     }
@@ -264,6 +299,12 @@ export function createAdminAuth({ adminToken, sessionSecret = "", userFile = "",
         ok: false,
         error: "Account storage is temporarily unavailable. Your password was not changed.",
       });
+    }
+    // Not a guess: no credential at all, or a genuine session that expired or
+    // was revoked. Counting these would let the app's own polling lock out
+    // its owner.
+    if ((!provided && !streamTicket) || signedClaims(provided)) {
+      return res.status(401).json({ ok: false, error: "Unauthorized" });
     }
     return recordFailure(req, res, "Unauthorized");
   };
@@ -283,6 +324,7 @@ export function createAdminAuth({ adminToken, sessionSecret = "", userFile = "",
     });
     app.post("/auth/login", (req, res) => {
       const email = normalizeIdentity(req.body?.email), password = String(req.body?.password || "");
+      if (lockedOut(req, email)) return rejectLockedOut(res);
       restoreStableOwner(email, password);
       if (users.length === 0) {
         return res.status(503).json({
@@ -291,14 +333,15 @@ export function createAdminAuth({ adminToken, sessionSecret = "", userFile = "",
         });
       }
       const user = users.find((candidate) => candidate.email === email);
-      if (!user || !passwordIsValid(password, user)) return recordFailure(req, res);
-      failures.delete(getClientIp(req));
+      if (!user || !passwordIsValid(password, user)) return recordFailure(req, res, undefined, email);
+      clearFailures(req);
       return res.json({ ok: true, token: signSession(user), expiresInSeconds: sessionTtlMs / 1000, user: publicUser(user) });
     });
     app.post("/auth/google", async (req, res) => {
       if (allowedGoogleClientIds.length === 0) {
         return res.status(503).json({ ok: false, error: "Google login is not configured on the server" });
       }
+      if (lockedOut(req)) return rejectLockedOut(res);
       const idToken = String(req.body?.idToken || "").trim();
       if (!idToken || idToken.length > 12000) {
         return res.status(400).json({ ok: false, error: "A valid Google identity token is required" });
@@ -317,7 +360,7 @@ export function createAdminAuth({ adminToken, sessionSecret = "", userFile = "",
           user.googleLinkedAt = new Date(now()).toISOString();
           persistUsers(userFiles, users);
         }
-        failures.delete(getClientIp(req));
+        clearFailures(req);
         return res.json({ ok: true, token: signSession(user), expiresInSeconds: sessionTtlMs / 1000, user: publicUser(user) });
       } catch {
         return recordFailure(req, res, "Google sign-in could not be verified");
@@ -327,6 +370,7 @@ export function createAdminAuth({ adminToken, sessionSecret = "", userFile = "",
       if (allowedAppleClientIds.length === 0) {
         return res.status(503).json({ ok: false, error: "Apple login is not configured on the server" });
       }
+      if (lockedOut(req)) return rejectLockedOut(res);
       const identityToken = String(req.body?.identityToken || "").trim();
       if (!identityToken || identityToken.length > 12000) {
         return res.status(400).json({ ok: false, error: "A valid Apple identity token is required" });
@@ -354,7 +398,7 @@ export function createAdminAuth({ adminToken, sessionSecret = "", userFile = "",
           user.appleLinkedAt = new Date(now()).toISOString();
           persistUsers(userFiles, users);
         }
-        failures.delete(getClientIp(req));
+        clearFailures(req);
         return res.json({ ok: true, token: signSession(user), expiresInSeconds: sessionTtlMs / 1000, user: publicUser(user) });
       } catch {
         return recordFailure(req, res, "Apple sign-in could not be verified");
@@ -443,7 +487,7 @@ export function createAdminAuth({ adminToken, sessionSecret = "", userFile = "",
       persistUsers(userFiles, users);
       const code = crypto.randomInt(0, 100000000).toString().padStart(8, "0");
       recoveryCodes.set(user.id, { digest: recoveryDigest(code), expiresAt: now() + recoveryTtlMs, attempts: 0 });
-      failures.delete(getClientIp(req));
+      clearFailures(req);
       return res.json({
         ok: true,
         repaired: true,
@@ -456,11 +500,12 @@ export function createAdminAuth({ adminToken, sessionSecret = "", userFile = "",
       const email = normalizeIdentity(req.body?.email);
       const code = String(req.body?.code || "").trim();
       const newPassword = String(req.body?.newPassword || "");
+      if (lockedOut(req, email)) return rejectLockedOut(res);
       const user = recoveryTarget(email);
       const record = user ? recoveryCodes.get(user.id) : null;
       if (!user || !recoveryCodeIsValid(code, record)) {
         if (record) record.attempts += 1;
-        return recordFailure(req, res, "Invalid or expired recovery code");
+        return recordFailure(req, res, "Invalid or expired recovery code", email);
       }
       if (newPassword.length < 12) return res.status(400).json({ ok: false, error: "New password must contain at least 12 characters" });
       const passwordRecord = passwordDigest(newPassword);
@@ -474,7 +519,7 @@ export function createAdminAuth({ adminToken, sessionSecret = "", userFile = "",
       catch { return res.status(503).json({ ok: false, error: "Account storage is unavailable. Your password was not changed; retry after storage is restored." }); }
       users = updatedUsers;
       recoveryCodes.delete(user.id);
-      failures.delete(getClientIp(req));
+      clearFailures(req);
       return res.json({ ok: true, token: signSession(updatedUser), expiresInSeconds: sessionTtlMs / 1000, user: publicUser(updatedUser) });
     });
     if (typeof app.get === "function") {
@@ -484,7 +529,8 @@ export function createAdminAuth({ adminToken, sessionSecret = "", userFile = "",
       if (!req.authUser) return res.status(403).json({ ok: false, error: "A user session is required" });
       const user = users.find((candidate) => candidate.id === req.authUser.id);
       const currentPassword = String(req.body?.currentPassword || ""), newPassword = String(req.body?.newPassword || "");
-      if (!passwordIsValid(currentPassword, user)) return recordFailure(req, res, "Current password is incorrect");
+      if (lockedOut(req, user?.email)) return rejectLockedOut(res);
+      if (!passwordIsValid(currentPassword, user)) return recordFailure(req, res, "Current password is incorrect", user?.email);
       if (newPassword.length < 12) return res.status(400).json({ ok: false, error: "New password must contain at least 12 characters" });
       const passwordRecord = passwordDigest(newPassword);
       Object.assign(user, { salt: passwordRecord.salt, passwordDigest: passwordRecord.digest,

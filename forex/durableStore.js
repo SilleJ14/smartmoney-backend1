@@ -1,6 +1,7 @@
 import fs from "node:fs";
 import path from "node:path";
 import os from "node:os";
+import { withExclusiveSqliteLock } from "./sqliteLock.js";
 
 const queues = new Map();
 const DEFAULT_STALE_LOCK_MS = 2 * 60 * 1000;
@@ -25,7 +26,12 @@ export function reclaimableForexLock({
 } = {}) {
   const ageMs = lockAgeMs(lockPath, owner, now);
   if (owner?.host === hostname && Number.isInteger(owner?.pid) && owner.pid > 0) {
-    return !processAlive(owner.pid);
+    // Our own PID means a previous incarnation with a reused PID (PID 1 after a
+    // container restart): commits within this process are already serialized.
+    if (owner.pid === process.pid) return true;
+    // No commit legitimately takes this long, so an unrelated process that
+    // reused the PID cannot hold the ledger hostage forever.
+    return !processAlive(owner.pid) || ageMs >= staleLockMs * 10;
   }
   return ageMs >= staleLockMs;
 }
@@ -202,7 +208,10 @@ export function createFileStore({
     },
     async commit(mutator) {
       if (!available) throw Object.assign(new Error("DURABLE_STORAGE_UNAVAILABLE"), { reason: "DURABLE_STORAGE_UNAVAILABLE" });
-      const task = (queues.get(resolved) || Promise.resolve()).then(async () => {
+      const task = (queues.get(resolved) || Promise.resolve()).then(() => withExclusiveSqliteLock(`${resolved}.lock.db`, async () => {
+        // The SQLite lock is the real mutual exclusion between processes. The
+        // legacy .lock file is still honoured for an older build that may run
+        // during a deploy, and still written so that build honours ours.
         const lockPath = `${resolved}.lock`;
         let lock;
         try { lock = fs.openSync(lockPath, "wx"); }
@@ -211,9 +220,13 @@ export function createFileStore({
             let owner = null;
             try { owner = JSON.parse(fs.readFileSync(lockPath, "utf8")); }
             catch { /* an interrupted lock write is reclaimable only after its lease expires */ }
-            if (!reclaimableForexLock({ lockPath, owner, now: now(), staleLockMs })) {
+            // A guarded lock file can only be left by a process that crashed:
+            // we hold the SQLite lock, so no live guarded owner can exist.
+            if (owner?.guardedBy !== "sqlite" && !reclaimableForexLock({ lockPath, owner, now: now(), staleLockMs })) {
               throw new Error("ACTIVE_OWNER");
             }
+            // Safe without a race: every guarded process reclaims only while
+            // holding the SQLite lock.
             fs.unlinkSync(lockPath);
             lock = fs.openSync(lockPath, "wx");
           } catch { throw new Error("FOREX_LEDGER_LOCKED"); }
@@ -223,6 +236,7 @@ export function createFileStore({
             pid: process.pid,
             host: os.hostname(),
             acquiredAt: new Date(now()).toISOString(),
+            guardedBy: "sqlite",
           }));
           fs.fsyncSync(lock);
           const next = read();
@@ -243,7 +257,7 @@ export function createFileStore({
           write(next);
           return result;
         } finally { fs.closeSync(lock); fs.unlinkSync(lockPath); }
-      });
+      }));
       const tail = task.catch(() => {});
       queues.set(resolved, tail);
       try { return await task; }

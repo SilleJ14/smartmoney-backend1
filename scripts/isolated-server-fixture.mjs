@@ -1,6 +1,8 @@
 // Test-only process: parent supplies an empty temporary cwd and fake credentials.
 // Never contact a provider or submit an order from this fixture.
 import http from 'node:http';
+import net from 'node:net';
+import tls from 'node:tls';
 import { Session } from 'node:inspector';
 if (process.env.SMARTMONEY_FIXTURE_PAYLOAD_PROFILE === 'true') {
   const stringify = JSON.stringify;
@@ -63,6 +65,23 @@ if (process.env.SMARTMONEY_FIXTURE_PROFILE === 'true') {
       await post('Profiler.start');
     } finally { busy = false; }
   }, 1000).unref();
+}
+// The WebSocket stub below does not cover the `ws` package, which the Alpaca
+// crypto stream uses. Refuse every non-loopback socket as an offline host
+// would, so no real provider is contacted and no result depends on the network.
+let blockedSockets = 0;
+const isLoopback = host => ['localhost', '127.0.0.1', '::1'].includes(String(host ?? 'localhost').replace(/^\[|\]$/g, ''));
+for (const [module, name] of [[tls, 'connect'], [net, 'connect'], [net, 'createConnection']]) {
+  const original = module[name];
+  module[name] = function (...args) {
+    const options = typeof args[0] === 'object' && args[0] !== null ? args[0] : null;
+    const host = options ? options.host ?? options.hostname : typeof args[1] === 'string' ? args[1] : undefined;
+    if (options?.path || isLoopback(host)) return original.apply(this, args);
+    blockedSockets++;
+    const socket = new net.Socket();
+    process.nextTick(() => socket.destroy(Object.assign(new Error(`Fixture blocks external socket to ${host}`), { code: 'ECONNREFUSED' })));
+    return socket;
+  };
 }
 const originalListen = http.Server.prototype.listen;
 http.Server.prototype.listen = function (...args) {
@@ -128,6 +147,11 @@ globalThis.fetch = async (input, options = {}) => {
     throw new Error('Fixture forbids provider mutations');
   }
   reads++;
+  // A real provider response arrives from socket I/O on a later event-loop
+  // turn. Resolving inside the caller's microtask chain fused every provider
+  // call of a scan into one synchronous block (1.5 s idle, 3 s under CPU load)
+  // that production never runs, starving the HTTP requests this test times.
+  await new Promise(resolve => setImmediate(resolve));
   const url = new URL(String(input));
   const p = url.pathname;
   const now = Date.now(), stamp = new Date(now).toISOString();
@@ -140,9 +164,35 @@ globalThis.fetch = async (input, options = {}) => {
     if (fault === 'stalled') return new Response(new ReadableStream({ start() {} }));
     if (fault === 'unavailable') return json({ error: 'fixture provider outage' }, 503);
     if (fault === 'malformed') return new Response('{invalid');
+    // Batch quote fallback (?tickers=A,B): only the requested tickers, with the
+    // documented v2 NBBO fields (p = bid, P = ask) and nanosecond SIP clocks.
+    const requested = url.searchParams.get('tickers');
+    if (requested !== null) return json({ status: 'OK', tickers: requested.split(',').filter(Boolean).slice(0, 250).map(ticker => ({
+      ticker, todaysChangePerc: 2, day: { o: 98, h: 101, l: 97, c: 100, v: 3000000 }, prevDay: { c: 98 },
+      lastTrade: { p: 100.01, s: 100, t: now * 1000000 }, lastQuote: { p: 100, P: 100.02, s: 1, S: 1, t: now * 1000000 } })) });
     return json({ tickers: marketSymbols.map(ticker => ({ ticker, todaysChangePerc: 2,
       day: { c: 100, v: 3000000 }, prevDay: { c: 98 }, lastTrade: { p: 100, t: now * 1000000 },
       lastQuote: { bp: 100, ap: 100.02, t: now * 1000000 } })) });
+  }
+  // Tradier market data (used only when a TRADIER_API_KEY is supplied; the
+  // default isolated env has none, so the adapter stays unconfigured).
+  if (url.hostname === 'api.tradier.com' || url.hostname === 'sandbox.tradier.com') {
+    const symbol = url.searchParams.get('symbol') || 'AAPL';
+    if (p === '/v1/markets/quotes') return json({ quotes: { quote: (url.searchParams.get('symbols') || '').split(',').filter(Boolean)
+      .map(s => ({ symbol: s, type: 'stock', last: 100.01, last_volume: 100, trade_date: now, bid: 100, ask: 100.02, bidsize: 1, asksize: 1,
+        bid_date: now, ask_date: now, prevclose: 98, open: 98, high: 101, low: 97, volume: 3000000, average_volume: 2000000 })) } });
+    if (p === '/v1/markets/history') return json({ history: { day: Array.from({ length: 80 }, (_, i) => ({
+      date: new Date(now - (80 - i) * 86400000).toISOString().slice(0, 10), open: 98 + i * .02, high: 99 + i * .02,
+      low: 97.9 + i * .02, close: 98.1 + i * .02, volume: 3000000 + i * 1000 })) } });
+    if (p === '/v1/markets/timesales') {
+      const step = (Number.parseInt(url.searchParams.get('interval')) || 1) * 60000;
+      return json({ series: { data: Array.from({ length: 400 }, (_, i) => {
+        const t = Math.floor(now / step) * step - (400 - i) * step;
+        return { time: new Date(t).toISOString().slice(0, 19), timestamp: t / 1000, price: 98.1 + i * .002, open: 98 + i * .002,
+          high: 99 + i * .002, low: 97.9 + i * .002, close: 98.1 + i * .002, volume: 30000 + i * 10, vwap: 98.5 };
+      }) } });
+    }
+    return json({ fault: { faultstring: `No fixture for ${p} (${symbol})` } }, 404);
   }
   const asset = symbol => ({ symbol, tradable: true, fractionable: true, status: 'active',
     class: symbol.includes('/') ? 'crypto' : 'us_equity', exchange: 'NASDAQ', marginable: true });
@@ -189,7 +239,7 @@ setInterval(() => {
   maxEventLoopDelayMs = Math.max(maxEventLoopDelayMs, now - metricAt - 1000);
   metricAt = now;
   const memory = process.memoryUsage();
-  process.send?.({ type: 'metrics', reads, writes, polygonReads, rss: memory.rss, heapUsed: memory.heapUsed, external: memory.external,
+  process.send?.({ type: 'metrics', reads, writes, polygonReads, blockedSockets, rss: memory.rss, heapUsed: memory.heapUsed, external: memory.external,
     maxEventLoopDelayMs: Math.round(maxEventLoopDelayMs) });
 }, 1000).unref();
 await import('../server.js');

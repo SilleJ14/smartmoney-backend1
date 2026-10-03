@@ -301,7 +301,7 @@ test("stale measurements rescore only while the analytical gates remain reachabl
   assert.equal(impossible.recommendedAction, "ABANDON_CURRENT_MODEL");
 });
 
-test("the stock card collects required fundamentals after F is already guaranteed", () => {
+test("optional fundamentals do not hold a guaranteed stock card in evidence collection", () => {
   const decision = buildStockDecisionScore({
     discoveryScorecard: { score: 80, buyScore: 80, coverage: 1, canonicalExtensionEvidencePass: true },
     entryQualityScorecard: { score: 80, coverage: 1, approved: true },
@@ -312,8 +312,8 @@ test("the stock card collects required fundamentals after F is already guarantee
   assert.equal(decision.score, 78.04);
   assert.equal(decision.analyticalBounds.minimumPossibleScore, 71.8);
   assert.equal(decision.analyticalBounds.finalScoreGuaranteed, true);
-  assert.equal(decision.analyticalBounds.recommendedAction, "COLLECT_EVIDENCE");
-  assert.equal(decision.analyticalBounds.actionReason, "FUNDAMENTALS_REQUIRED_BY_C");
+  assert.equal(decision.analyticalBounds.analyticalPassGuaranteed, true);
+  assert.equal(decision.analyticalBounds.recommendedAction, "EVIDENCE_SUFFICIENT");
 });
 
 test("a real rise under the completion ceiling still requests authorization", () => {

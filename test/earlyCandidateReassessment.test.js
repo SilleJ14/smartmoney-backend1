@@ -71,7 +71,8 @@ test('analysis-only branch returns before pyramid and capital allocation stages'
   const pyramid = source.indexOf('const pyramidAdds = await executePyramidScalingAdds');
   assert.ok(branch > 0 && branch < pyramid);
   const code = source.slice(branch, pyramid);
-  assert.match(code, /return normalizeSignalScoreCollection/);
+  assert.match(code, /const analyzed = normalizeSignalScoreCollection\(/);
+  assert.match(code, /return analyzed;/);
   assert.match(code, /qualifiedToBuy: false/);
   assert.match(code, /finalApprovedTradeAmount: 0/);
 });

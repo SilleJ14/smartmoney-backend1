@@ -578,6 +578,7 @@ export function evaluateCryptoTradeCandidate(
     ...(signal.riskDecision?.state === 'REJECT' ? (signal.riskDecision.reasons || ['RISK_REJECT']) : []),
     ...(signal.finalSizingReconciliation?.finalBlocked === true ? ['SIZING_BLOCKED'] : []),
     ...(signal.globalRiskOffDefense?.shouldBlock === true ? ['GLOBAL_RISK_OFF'] : []),
+    ...(signal.shouldWaitForPullback === true ? ['WAIT_FOR_PULLBACK'] : []),
     ...(signal.finalMasterDecisionProfile?.suppressEntry === true ? ['ENTRY_SUPPRESSED'] : []),
     ...(requireFreshDecision && !decisionFresh ? ["CENTRAL_DECISION_EXPIRED_OR_UNDATED"] : []),
     ...(signal.executionWaitReason === "QUOTE_UNAVAILABLE" ? ["QUOTE_UNAVAILABLE"] : []),

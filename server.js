@@ -34,9 +34,8 @@ import { createSingleFlight } from "./utils/singleFlight.js";
 import { installProcessDiagnostics } from "./bootstrap/processDiagnostics.js";
 import { ingestMixedAssetDiscoveryOutcomes } from "./scoring/mixedAssetDiscoveryOutcomes.js";
 import { takeExplorationWindow, createFairReviewQueue } from "./discovery/fairExploration.js";
-import { createStockQuoteBatch } from "./market-data/stockQuoteBatch.js";
+import { createStockQuoteRouting, createStockHistoryRouting } from "./market-data/stockDataRouting.js";
 import { createBrokerClock } from "./market-data/brokerClock.js";
-import { createStockHistory } from "./market-data/stockHistory.js";
 import { stockFeedProvenance } from "./market-data/feedContract.js";
 import { stockDataHealth } from "./market-data/providerHealth.js";
 import { invalidateAuthorizationsForConfigChange } from "./config/configAuthorization.js";
@@ -95,11 +94,12 @@ import {
   rankPolygonMovers,
   buildNormalizedSymbolList,
   buildPolygonFallbackSymbols,
+  createPolygonStockQuotes,
 } from "./providers/polygonProvider.js";
 import { canonicalizeEngineStateAliases } from "./state/canonicalizeEngineState.js";
 import { pruneEngineState } from "./state/pruneEngineState.js";
 import {
-  loadRuntimeConfig,
+  inspectRuntimeConfig,
   saveRuntimeConfig,
 } from "./state/runtimeConfig.js";
 import {
@@ -313,6 +313,7 @@ import { registerDiagnosticRoutes } from "./routes/diagnosticRoutes.js";
 import { registerQuietDiscoveryRoutes } from "./routes/quietDiscoveryRoutes.js";
 import { registerMorningStrikeRoutes } from "./routes/morningStrikeRoutes.js";
 import { registerConfigRoutes } from "./routes/configRoutes.js";
+import { redactSecrets } from "./config/redactSecrets.js";
 import { registerLiveSignalRoutes } from "./routes/liveSignalRoutes.js";
 import { registerFrontendRoutes } from "./routes/frontendRoutes.js";
 import { registerLiveMoversRoutes } from "./routes/liveMoversRoutes.js";
@@ -395,6 +396,10 @@ console.log("ENV CHECK:", {
   POLYGON_PRIMARY: process.env.POLYGON_PRIMARY !== "false",
 });
 const app = express();
+// req.ip must come from the hop our own proxy appended, never the
+// client-controlled first X-Forwarded-For entry. Render runs one proxy hop.
+app.set("trust proxy", Math.max(0, Math.trunc(Number(
+  String(process.env.TRUST_PROXY_HOPS || "").trim() || (process.env.RENDER ? 1 : 0)) || 0)));
 const ALLOWED_CORS_ORIGINS = String(
   process.env.ALLOWED_CORS_ORIGINS ||
   process.env.FRONTEND_URL ||
@@ -426,9 +431,10 @@ app.use(cors(corsOptions));
 app.use(express.json({ limit: "100kb" }));
 const adminAuth = createAdminAuth({
   adminToken: process.env.ADMIN_API_TOKEN || "",
-  // Losing an ephemeral user file must never open ownership of the live broker
-  // account to the first visitor after a deployment.
-  allowInitialSignup: !process.env.RENDER,
+  // Losing or corrupting the user file must never open ownership of the live
+  // broker account to the first visitor, on any host. First-owner signup is an
+  // explicit, temporary operator opt-in.
+  allowInitialSignup: process.env.ALLOW_INITIAL_SIGNUP === "true",
   recoveryOwnerEmail: process.env.RECOVERY_OWNER_EMAIL || process.env.OWNER_EMAIL || "",
   ownerEmail: process.env.RECOVERY_OWNER_EMAIL || process.env.OWNER_EMAIL || "",
   ownerPassword: process.env.OWNER_PASSWORD || "",
@@ -581,7 +587,12 @@ const QUICK_GATE_MAX_SPREAD_PERCENT = Number(
 );
 const QUICK_GATE_BLOCK_PANIC =
   process.env.QUICK_GATE_BLOCK_PANIC !== "false";
-let runtimeConfig = loadRuntimeConfig(CONFIG_FILE);
+const runtimeConfigInspection = inspectRuntimeConfig(CONFIG_FILE);
+const runtimeConfigWasCorrupt = runtimeConfigInspection.corrupt;
+if (runtimeConfigWasCorrupt) {
+  console.error("runtime-config.json is unreadable; starting with the emergency stop ON. The original is kept as runtime-config.json.corrupt-*.");
+}
+let runtimeConfig = runtimeConfigInspection.config;
 // One-time application of the requested $0.50 floor, preserving every other
 // saved preference. Subsequent user-selected higher floors remain persistent.
 if (Number(runtimeConfig.stockFloorPolicyVersion || 0) < 1) {
@@ -918,7 +929,8 @@ function saveRenderMemory(reason = "RENDER_MEMORY_SAVER") {
 
 function resetDailySafetyStateIfNewDay(account) {
   const todayKey = getTodayKeyET();
-  const equity = Number(account?.equity || 0);
+  // A stale snapshot may carry yesterday's equity; wait for a fresh baseline.
+  const equity = account?.stale === true ? 0 : Number(account?.equity || 0);
   const result = resetDailySafetyState(engineState, { todayKey, equity });
   if (result.reset) {
     recordOrder("DAILY_SAFETY_RESET", "ACCOUNT", {
@@ -966,15 +978,17 @@ const MAIN_SWING_SCAN_INTERVAL_MS =
   parseEnvNumber("MAIN_SWING_SCAN_INTERVAL_MS", 300000);
 let autoTradingEnabled = resolveAutoTradingEnabled(runtimeConfig);
 let forexAutoEnabled = resolveConfiguredForexAuto(runtimeConfig, process.env.FOREX_AUTO_ENABLED);
+// The emergency stop is never cleared automatically: a saved stop, the
+// EMERGENCY_STOP_ACTIVE environment switch, or an unreadable saved config
+// each keep it ON until the owner releases it.
 let emergencyStopActive =
-  runtimeConfig.emergencyStopActive === true
-    ? true
-    : parseEnvBoolean("EMERGENCY_STOP_ACTIVE", false);
+  runtimeConfig.emergencyStopActive === true ||
+  runtimeConfigWasCorrupt ||
+  parseEnvBoolean("EMERGENCY_STOP_ACTIVE", false);
 if (typeof runtimeConfig.autoTradingEnabled !== "boolean") {
-  emergencyStopActive = false;
   runtimeConfig = saveRuntimeConfig(CONFIG_FILE, {
     ...runtimeConfig,
-    emergencyStopActive: false,
+    emergencyStopActive,
     autoTradingEnabled,
   });
 }
@@ -3197,6 +3211,7 @@ function buildBackendHealthPayload(clock = {}) {
   const latestLiveQuoteUpdateAt = getLatestLiveQuoteUpdateAt();
   const processMemory = buildMemoryGuardSnapshot();
   const tradierStatus = tradierMarketData.getStatus();
+  const polygonQuoteStatus = polygonStockQuotes.getStatus();
   const alpacaHealth = engineState.apiHealth?.alpacaTrading;
   return {
     ok: true,
@@ -3313,6 +3328,7 @@ function buildBackendHealthPayload(clock = {}) {
         hasKey: Boolean(POLYGON_API_KEY),
         failures: Number(engineState.apiFailureCounts?.polygon || 0),
         cooldownUntil: engineState.apiCooldowns?.polygon || null,
+        stockQuoteFallback: polygonQuoteStatus,
       },
       finnhub: {
         hasKey: Boolean(FINNHUB_API_KEY),
@@ -3325,7 +3341,8 @@ function buildBackendHealthPayload(clock = {}) {
       },
       channels: stockDataHealth({
         tradier: { ...tradierStatus, stream: tradierQuoteStream.getStatus() },
-        massive: { delayed: streamTiming(POLYGON_WS_URL).realtime !== true },
+        massive: { delayed: streamTiming(POLYGON_WS_URL).realtime !== true, ...polygonQuoteStatus },
+        routing: { quotes: stockQuoteRouting.getStatus(), bars: stockHistory.getStatus() },
         alpaca: {
           authentication: {
             state: alpacaHealth?.ok === true
@@ -13049,11 +13066,13 @@ function calculateInstitutionalAiPortfolioOrchestrator(signal = {}) {
     0
   );
   const wealthScore = dividendScore;
-  const dcfScore = Number(
-    signal.dcfValuationScore ||
-    signal.dcfScore ||
-    0
-  );
+  // Fundamentals are optional: unvalidated or missing valuation is neutral,
+  // not a zero that drags borderline stocks toward AVOID.
+  const rawDcfScore = signal.dcfValuationScore ?? signal.dcfScore;
+  const dcfScore = signal.fundamentalDataValid === false ||
+    rawDcfScore === null || rawDcfScore === undefined || !Number.isFinite(Number(rawDcfScore))
+    ? 50
+    : Number(rawDcfScore);
   const riskScore = Number(
     signal.institutionalRiskScore ||
     signal.riskScore ||
@@ -14707,7 +14726,7 @@ async function runTradierQuoteSweep(universeSymbols = []) {
     row.executionQuoteDecision = executionQuoteDecision({
       provider: row.provider,
       feed: row.feed,
-      timing: "REALTIME",
+      timing: row.timing,
       ageMs: Number.isFinite(measuredAt) ? Math.max(0, Date.now() - measuredAt) : null,
       spreadPercent: row.spreadPercent,
     });
@@ -14751,15 +14770,28 @@ function promoteStockNews(event = {}) {
   });
   return decision;
 }
-const collectStockMarketQuotes = createStockQuoteBatch({
-  primary: (symbols) => tradierMarketData.getLatestQuotes(symbols),
-  fallback: getAlpacaLatestStockQuotes,
+// Stock quotes: Tradier is primary. Polygon (consolidated; real-time only when
+// its own clocks prove it) serves symbols Tradier missed or left stale. Alpaca
+// IEX remains the last resort for display; it is single-exchange and cannot
+// authorize a buy. All fallbacks share one bounded budget per batch.
+const polygonStockQuotes = createPolygonStockQuotes({
+  apiKey: POLYGON_API_KEY,
+  enabled: ENABLE_POLYGON,
+  isSharedCooldownActive: () => isPolygonThrottled(),
+  onRateLimited: () => throttlePolygon(2),
+});
+const stockQuoteRouting = createStockQuoteRouting({
+  tradier: tradierMarketData,
+  polygon: polygonStockQuotes,
+  alpacaIex: getAlpacaLatestStockQuotes,
+  maxFallbackMs: 3000,
   normalizeSymbol,
   onQuotes: quotes => { for (const quote of quotes) updateQuoteCache(quote.symbol, quote); },
 });
 async function getLatestStockMarketQuotes(symbols = []) {
-  const quotes = await collectStockMarketQuotes(symbols);
+  const quotes = await stockQuoteRouting.collect(symbols);
   engineState.tradierMarketData = tradierMarketData.getStatus();
+  engineState.polygonStockQuotes = polygonStockQuotes.getStatus();
   return quotes;
 }
 const refreshStockExecutionQuotes = createStockExecutionQuoteRefresher({
@@ -15152,7 +15184,10 @@ async function getStockQuote(symbol) {
   cacheStockQuote(cleanSymbol, combinedQuote);
   return combinedQuote;
 }
-const stockHistory = createStockHistory({
+// Stock bars: Tradier history/timesales first, then Polygon aggregates, then
+// Alpaca IEX. One provider per result; never spliced.
+const stockHistory = createStockHistoryRouting({
+  tradierMarketData,
   polygon: ENABLE_POLYGON && POLYGON_API_KEY ? async (symbol, timeframe, spec, options) => {
     const to = new Date().toISOString().slice(0, 10);
     const from = new Date(Date.now() - (spec.daily ? 120 : 7) * 86400000).toISOString().slice(0, 10);
@@ -20001,7 +20036,23 @@ async function flattenStocksBeforeMarketClose(clock) {
   if (engineState.lastFlattenAllBeforeCloseAt === todayKey) {
     return true;
   }
+  // Autopilot OFF means the owner manages exits; only stop new stock entries.
+  if (!autoTradingEnabled) return true;
   engineState.lastFlattenAllBeforeCloseAt = todayKey;
+  // Only flatten intraday positions the bot confirmably owns. Multi-day holds
+  // and the owner's own positions/orders in the same account are untouched.
+  let botOwnedSymbols;
+  try {
+    botOwnedSymbols = await getBotOwnedSymbols();
+  } catch (err) {
+    recordFailedOrder("FLATTEN_OWNERSHIP_UNAVAILABLE_1_HOUR_BEFORE_CLOSE", "ALL", err.message);
+    engineState.lastFlattenAllBeforeCloseAt = null;
+    return true;
+  }
+  const flattenSymbol = (symbol) =>
+    !isCrypto(symbol) &&
+    (botOwnedSymbols.has(symbol) || engineState.aiManagedSymbols?.includes(symbol)) &&
+    getStoredStockHoldCategory(symbol) === "intraday";
   try {
     const orders = await getOrders();
     const openOrders = orders.filter((order) => {
@@ -20010,7 +20061,8 @@ async function flattenStocksBeforeMarketClose(clock) {
       const cryptoOrder = isCrypto(symbol);
       return (
         !cryptoOrder &&
-        !String(order.client_order_id || '').startsWith('SM_PROTECT_') &&
+        isBotOrder(order) &&
+        (String(order.side || "").toLowerCase() === "buy" || flattenSymbol(symbol)) &&
         (status === "new" ||
           status === "accepted" ||
           status === "partially_filled" ||
@@ -20044,8 +20096,7 @@ async function flattenStocksBeforeMarketClose(clock) {
     const symbol = normalizeSymbol(pos.symbol);
     const qty = Number(pos.qty);
     if (!qty || qty <= 0) continue;
-    const cryptoPosition = isCrypto(symbol);
-    if (cryptoPosition) continue;
+    if (!flattenSymbol(symbol)) continue;
     try {
       const order = await placeMarketSell(
         symbol,
@@ -20115,17 +20166,23 @@ async function checkDailyLossAndProfitLock(account, marketOpen) {
     recordTradingModeWithoutResettingSafety(engineState, currentMode);
     saveEngineState("TRADING_MODE_CHANGED_SAFETY_LOCKS_PRESERVED");
   }
-  if (!engineState.dailyStartEquity) {
-    engineState.dailyStartEquity = equity;
-    engineState.dailyPeakEquity = equity;
-    engineState.lastMode = currentMode;
-    return false;
-  }
   if (engineState.dailyLossLocked || engineState.profitLocked) {
     // A failed/partial exit must be retried on subsequent cycles, not forgotten
     // because the lock was already set. Broker reconciliation deduplicates exits.
     await forceCloseAllPositions(engineState.dailyLossLocked ? "DAILY_LOSS_LIMIT" : "PROFIT_LOCK_EXIT", marketOpen);
     return true;
+  }
+  // A stale or fallback account (equity 0 when Alpaca is unavailable) is not
+  // evidence of a loss: never start, peak or trip a lock from it. Pause buys
+  // for this cycle instead of liquidating.
+  if (account?.stale === true || !Number.isFinite(equity) || equity <= 0) {
+    return true;
+  }
+  if (!engineState.dailyStartEquity) {
+    engineState.dailyStartEquity = equity;
+    engineState.dailyPeakEquity = equity;
+    engineState.lastMode = currentMode;
+    return false;
   }
   engineState.dailyPeakEquity = Math.max(
     Number(engineState.dailyPeakEquity || engineState.dailyStartEquity),
@@ -24565,7 +24622,7 @@ registerSystemRoutes(app, {
     app: "SmartMoney Pro Backend",
     status: "online",
     autoTradingEnabled,
-    config: CONFIG,
+    config: redactSecrets(CONFIG),
     freshness: getEngineFreshness(),
     marketStressLevel: engineState.marketStressLevel,
     apiHealth: engineState.apiHealth || {},
@@ -24614,7 +24671,7 @@ registerSystemRoutes(app, {
 registerDiagnosticRoutes(app, {
   requireAdmin,
   getState: () => engineState,
-  getConfig: () => CONFIG,
+  getConfig: () => redactSecrets(CONFIG),
   getAccount,
   getClock,
   getTopMovers,
@@ -32168,22 +32225,25 @@ function startLiveScheduler() {
       FULL_BRAIN_FAST_SYNC_INTERVAL_MS,
       () => runFullBrainFastSync()
     );
-    void runLiveScheduledTask(
-      "runDeepIntelligenceSync",
-      DEEP_INTELLIGENCE_SYNC_INTERVAL_MS,
-      () => process.uptime() < 20 ? undefined : runDeepIntelligenceSync()
-    );
-    void runLiveScheduledTask(
-      "runBoundedQuietDiscoveryScan",
-      5 * 60 * 1000,
-      () => process.uptime() < 20 ? undefined : runBoundedQuietDiscoveryScan()
-    );
-    if (ENABLE_MAIN_SWING_SCAN) {
-      void runLiveScheduledTask(
-        "runMainSwingScan",
-        MAIN_SWING_SCAN_INTERVAL_MS,
-        () => process.uptime() < 20 ? undefined : runEngineCycle()
-      );
+    // Heavy work waits out the first 20 seconds so health requests stay
+    // responsive during boot, then runs ONE job at a time in priority order;
+    // running them together stalled the event loop for 1-2 s. The checks sit
+    // outside the scheduler: a skipped call inside it would record a run and
+    // push the first real one back a whole interval (5-15 minutes).
+    if (process.uptime() >= 20) {
+      const heavyTasks = [
+        ...(ENABLE_MAIN_SWING_SCAN
+          ? [["runMainSwingScan", MAIN_SWING_SCAN_INTERVAL_MS, () => runEngineCycle()]]
+          : []),
+        ["runBoundedQuietDiscoveryScan", 5 * 60 * 1000, () => runBoundedQuietDiscoveryScan()],
+        ["runDeepIntelligenceSync", DEEP_INTELLIGENCE_SYNC_INTERVAL_MS, () => runDeepIntelligenceSync()],
+      ];
+      const heavyWorkRunning = () => engineState.running === true ||
+        heavyTasks.some(([name]) => liveTaskScheduler.isLocked(name));
+      for (const [name, intervalMs, worker] of heavyTasks) {
+        if (heavyWorkRunning()) break;
+        void runLiveScheduledTask(name, intervalMs, worker);
+      }
     }
   }, 1000);
   try {
@@ -33455,7 +33515,7 @@ registerStatusRoutes(app, {
     forexEmergencyStopActive: runtimeConfig.forexEmergencyStopActive === true,
     forexPauseEntries: runtimeConfig.forexPauseEntries === true,
     emergencyStopActive,
-    config: CONFIG,
+    config: redactSecrets(CONFIG),
   }),
   refreshAccountCache: refreshFrontendAccountCache,
   getLatestStatus: getLatestFrontendStatusSnapshot,
@@ -33721,7 +33781,7 @@ function withAutomationPreferenceRevision(updates = {}) {
 
 registerConfigRoutes(app, {
   requireAdmin,
-  getConfig: () => CONFIG,
+  getConfig: () => redactSecrets(CONFIG),
   getRuntimeConfig: () => runtimeConfig,
   isEmergencyStopped: () => emergencyStopActive,
   getControlState: () => ({
@@ -33763,8 +33823,8 @@ registerConfigRoutes(app, {
     CONFIG.minScoreToBuy = Math.max(70, Number(CONFIG.minScoreToBuy ?? 70));
     applyRuntimeLiveSettings();
     saveEngineState("MANUAL_CONFIG_UPDATED");
-    return { ok: true, permanent: true, message: "Remote config permanently updated", config: CONFIG,
-      runtimeConfig, liveSettings: { ENABLE_LIVE_STARTER_BUY, LIVE_STARTER_BUY_PERCENT,
+    return { ok: true, permanent: true, message: "Remote config permanently updated", config: redactSecrets(CONFIG),
+      runtimeConfig: redactSecrets(runtimeConfig), liveSettings: { ENABLE_LIVE_STARTER_BUY, LIVE_STARTER_BUY_PERCENT,
         LIVE_STARTER_MIN_FINAL_SCORE, LIVE_ORDER_MAX_QUOTE_AGE_SECONDS, LIVE_ORDER_MAX_SPREAD_PERCENT,
         ENABLE_LIVE_POSITION_MANAGEMENT, LIVE_HARD_STOP_PERCENT, LIVE_TRAIL_STOP_FROM_HIGH_PERCENT,
         LIVE_PROFIT_TRIM_TRIGGER_PERCENT, LIVE_PROFIT_TRIM_QTY_PERCENT, ENABLE_LIVE_SCALE_IN,
@@ -33782,7 +33842,7 @@ registerConfigRoutes(app, {
     CONFIG.minScoreToBuy = Math.max(70, Number(CONFIG.minScoreToBuy ?? 70));
     applyRuntimeLiveSettings();
     saveEngineState("MANUAL_CONFIG_UPDATED");
-    return { permanent: true, config: CONFIG, runtimeConfig, tradingMode: TRADING_MODE, effectiveMode: getEffectiveTradingMode(engineState.marketOpen),
+    return { permanent: true, config: redactSecrets(CONFIG), runtimeConfig: redactSecrets(runtimeConfig), tradingMode: TRADING_MODE, effectiveMode: getEffectiveTradingMode(engineState.marketOpen),
       tradingModeLocked, autoTradingEnabled };
   },
 });

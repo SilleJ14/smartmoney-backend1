@@ -249,7 +249,9 @@ export function evaluateStockTradeCandidate(
   const entryScore = Number(signal.entryQualityScore ?? signal.entryQualityScorecard?.score ?? 0);
   const entryCoverage = Number(signal.entryQualityScorecard?.coverage || 0);
   const decisionCoverage = Number(
+    signal.stockDecisionEvidence?.policyCoverage ??
     signal.stockDecisionEvidence?.coverage ??
+    signal.decisionScoreTelemetry?.stages?.decision?.policyCoverage ??
     signal.decisionScoreCoverage ??
     signal.decisionScoreTelemetry?.stages?.decision?.coverage ??
     0
@@ -412,7 +414,8 @@ export function evaluateStockTradeCandidate(
     signal.finalSizingReconciliation?.finalBlocked === true ||
     signal.confirmations?.fakeBreakout === true ||
     signal.confirmations?.newsRisk === true ||
-    signal.globalRiskOffDefense?.shouldBlock === true;
+    signal.globalRiskOffDefense?.shouldBlock === true ||
+    signal.shouldWaitForPullback === true;
   const reasons = [
     ...(requireCentralDecision && !structureOrScoreBuy ? researchExecutionIssues(signal,evidencePolicy('stock','order','automatic'), now) : []),
     ...(!entryApproved ? ["ENTRY_NOT_APPROVED"] : []),
@@ -1080,11 +1083,21 @@ export function buildStockDecisionScore(signal = {}) {
     alternateModels: signal.alternateSetupModels || [],
   });
   const measuredTotal = aggregated.measuredWeight;
+  // The 80% decision-coverage gates do not count optional fundamentals that
+  // were never measured. `coverage` stays the raw measured/configured ratio.
+  const unreadOptionalFundamentalsWeight =
+    STOCK_DECISION_EVIDENCE_POLICY.fundamentals === "OPTIONAL" && aggregated.evidenceBasis.fundamentals === "UNKNOWN"
+      ? Number(aggregated.components.find((item) => item.componentName === "fundamentals")?.configuredWeight || 0)
+      : 0;
+  const policyCoverageWeight = aggregated.configuredWeight - unreadOptionalFundamentalsWeight;
   const card = {
     stage: "STOCK_DECISION",
     score: aggregated.score,
     rawScore: aggregated.score,
     coverage: aggregated.coverage,
+    policyCoverage: policyCoverageWeight > 0
+      ? Number(Math.min(1, aggregated.measuredWeight / policyCoverageWeight).toFixed(4))
+      : 0,
     evidenceBasis: aggregated.evidenceBasis,
     evidenceBasisVersion: aggregated.evidenceBasisVersion,
     maximumPossibleF: analyticalBounds.maximumPossibleScore,
@@ -1128,7 +1141,7 @@ export function buildStockDecisionScore(signal = {}) {
     ...(Number.isFinite(entry.coverage) && entry.coverage >= 0.8 && entry.coverage <= 1 &&
       Number.isFinite(entry.score) && entry.score >= 0 && entry.score <= 100 ? [] : ["entryEvidence"]),
     ...(entry.approved !== true ? ["approvedEntry"] : []),
-    ...(card.coverage < 0.8 ? ["decisionCoverage"] : []),
+    ...(card.policyCoverage < 0.8 ? ["decisionCoverage"] : []),
   ];
   return {
     ...card,

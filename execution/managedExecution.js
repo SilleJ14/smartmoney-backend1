@@ -3,6 +3,7 @@ import { randomUUID } from 'node:crypto';
 const terminal = new Set(['filled', 'canceled', 'expired', 'rejected']);
 const accepted = new Set(['new', 'accepted', 'partially_filled', 'held', 'open', 'accepted_for_bidding']);
 const positive = value => value != null && value !== '' && Number.isFinite(Number(value)) && Number(value) > 0;
+export const NEVER_REACHED_BROKER_MS = 60000;
 const key = value => String(value || '').toUpperCase().replace(/[^A-Z0-9]/g, '');
 
 // One bounded, durable coordinator for broker stops, submitted exits and fill accounting.
@@ -43,6 +44,20 @@ export function createManagedExecution({ state, persist, request, getManagedSymb
     return request(row.orderId ? `/v2/orders/${encodeURIComponent(row.orderId)}`
       : `/v2/orders:by_client_order_id?client_order_id=${encodeURIComponent(row.clientId)}`);
   }
+  // A sell whose POST timed out may never have reached Alpaca. Once the broker
+  // still has no order for our client id after the grace period, the order did
+  // not exist: close the row so exits, stops and reconciliation are not blocked
+  // for that symbol forever. Rows with a broker order id are never presumed.
+  async function brokerOrder(row) {
+    try { return await lookup(row); }
+    catch (error) {
+      if (Number(error?.status || error?.statusCode) !== 404 || row.orderId ||
+        now() - Number(row.createdAt || 0) < NEVER_REACHED_BROKER_MS) throw error;
+      row.status = 'not_found'; row.done = true;
+      save();
+      return null;
+    }
+  }
   function validateOrder(order, row) {
     if (!order?.id || key(order.symbol) !== key(row.symbol) || order.side !== 'sell' ||
       order.filled_qty == null || order.filled_qty === '' || !Number.isFinite(Number(order.filled_qty)) || Number(order.filled_qty) < 0) {
@@ -78,7 +93,8 @@ export function createManagedExecution({ state, persist, request, getManagedSymb
     save();
   }
   async function cancel(row) {
-    const before = await lookup(row);
+    const before = await brokerOrder(row);
+    if (!before) return;
     recordFill(row, before);
     if (row.done) return;
     await request(`/v2/orders/${encodeURIComponent(before.id)}`, { method: 'DELETE' });
@@ -99,7 +115,8 @@ export function createManagedExecution({ state, persist, request, getManagedSymb
     for (const row of activeRows(payload.symbol)) {
       if (row.protective) await cancel(row);
       else {
-        recordFill(row, await lookup(row));
+        const order = await brokerOrder(row);
+        if (order) recordFill(row, order);
         if (!row.done) throw new Error('Previous sell is still pending');
       }
     }
@@ -204,7 +221,10 @@ export function createManagedExecution({ state, persist, request, getManagedSymb
       const uncertainSymbols = new Set();
       const open = await openOrders();
       for (const row of activeRows()) {
-        try { recordFill(row, open.find(o => o.id === row.orderId || o.client_order_id === row.clientId) || await lookup(row)); }
+        try {
+          const order = open.find(o => o.id === row.orderId || o.client_order_id === row.clientId) || await brokerOrder(row);
+          if (order) recordFill(row, order);
+        }
         catch (error) { uncertainSymbols.add(key(row.symbol)); errors.push(error); }
       }
       const current = await positions();

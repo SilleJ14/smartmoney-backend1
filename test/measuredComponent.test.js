@@ -8,7 +8,7 @@ import {
   STOCK_DECISION_EVIDENCE_POLICY,
   CRYPTO_DECISION_EVIDENCE_POLICY,
 } from "../scoring/measuredComponent.js";
-import { buildStockDecisionScore, calculateEntryQualityScore } from "../scoring/decisionScores.js";
+import { buildStockDecisionScore, calculateEntryQualityScore, evaluateStockTradeCandidate } from "../scoring/decisionScores.js";
 import { applyAnalyticalScoreUpdate, evaluateBuyable } from "../scoring/analyticalAuthorization.js";
 import { buildStockOpportunityLayers } from "../scoring/opportunityLayers.js";
 import { buildCryptoDecisionScore } from "../scoring/componentScore.js";
@@ -34,13 +34,14 @@ const measuredBook = {
   riskPortfolioScore: 70,
 };
 
-test("missing fundamentals renormalizes F and lowers coverage", () => {
+test("missing optional fundamentals renormalizes F without counting against decision coverage", () => {
   const decision = buildStockDecisionScore({ ...measuredBook, fundamentalDataValid: false });
   const fundamentals = decision.components.find((item) => item.name === "fundamentals");
   assert.equal(fundamentals.value, null);
   assert.equal(fundamentals.contribution, 0);
   assert.equal(decision.score, 78.04);
   assert.equal(decision.coverage, 0.92);
+  assert.equal(decision.policyCoverage, 1);
   assert.equal(decision.evidenceBasis.fundamentals, "UNKNOWN");
   assert.equal(decision.evidenceBasis.discovery, "PRESENT");
 });
@@ -304,7 +305,8 @@ test("a rise from 68 to 72 caused by losing evidence does not cross the buy gate
   assert.equal(update.scoreRiseReason, "SCORE_RISE_FROM_EVIDENCE_LOSS");
 });
 
-test("unknown fundamentals wait in C while F stays at the measured score", () => {
+test("unknown fundamentals are optional evidence: C passes while F stays at the measured score", () => {
+  assert.equal(STOCK_DECISION_EVIDENCE_POLICY.fundamentals, "OPTIONAL");
   const decision = buildStockDecisionScore({ ...measuredBook, fundamentalDataValid: false });
   const layers = buildStockOpportunityLayers({
     evidenceBasis: decision.evidenceBasis,
@@ -314,8 +316,9 @@ test("unknown fundamentals wait in C while F stays at the measured score", () =>
     entryQualityScore: 80,
   });
   assert.equal(decision.score, 78.04);
-  assert.equal(layers.C.state, "DATA_UNAVAILABLE");
-  assert.equal(layers.C.reasons.includes("FUNDAMENTALS_UNKNOWN"), true);
+  assert.equal(decision.evidenceBasis.fundamentals, "UNKNOWN");
+  assert.equal(layers.C.state, "PASS");
+  assert.equal(layers.C.reasons.includes("FUNDAMENTALS_UNKNOWN"), false);
   const buyable = evaluateBuyable({
     authorizedDecisionValid: true,
     authorizedDecisionScore: 80,
@@ -326,8 +329,41 @@ test("unknown fundamentals wait in C while F stays at the measured score", () =>
     S: 100,
     cReason: layers.C.reasons[0],
   });
-  assert.equal(buyable.buyable, false);
-  assert.equal(buyable.reason, "FUNDAMENTALS_UNKNOWN");
+  assert.equal(buyable.buyable, true);
+});
+
+test("partial evidence plus missing optional fundamentals still clears the 80% decision-coverage gate", () => {
+  const partial = {
+    ...measuredBook,
+    discoveryScorecard: { ...measuredBook.discoveryScorecard, coverage: 0.7 },
+    entryQualityScorecard: { ...measuredBook.entryQualityScorecard, coverage: 0.85 },
+  };
+  const without = buildStockDecisionScore({ ...partial, fundamentalDataValid: false });
+  assert.ok(without.coverage < 0.8, String(without.coverage));
+  assert.ok(without.policyCoverage >= 0.8, String(without.policyCoverage));
+  assert.equal(without.missingCriticalEvidence.includes("decisionCoverage"), false);
+  // Unmeasured required evidence still counts against coverage.
+  const noRisk = buildStockDecisionScore({ ...partial, riskPortfolioScore: undefined, riskScore: undefined, fundamentalDataValid: false });
+  assert.ok(noRisk.policyCoverage < 0.8, String(noRisk.policyCoverage));
+  assert.equal(noRisk.missingCriticalEvidence.includes("decisionCoverage"), true);
+  const gateReasons = (evidence) => evaluateStockTradeCandidate({ stockDecisionEvidence: evidence }, { requireCentralDecision: false }).reasons;
+  assert.equal(gateReasons(without).includes("DECISION_COVERAGE_BELOW_80_PERCENT"), false);
+  assert.equal(gateReasons(noRisk).includes("DECISION_COVERAGE_BELOW_80_PERCENT"), true);
+});
+
+test("required stock evidence other than fundamentals still blocks C", () => {
+  const decision = buildStockDecisionScore({ ...measuredBook, riskPortfolioScore: undefined, riskScore: undefined, fundamentalDataValid: false });
+  const layers = buildStockOpportunityLayers({
+    evidenceBasis: decision.evidenceBasis,
+    currentAnalyticalScore: decision.score,
+    stockDecisionScore: decision.score,
+    discoveryScore: 80,
+    entryQualityScore: 80,
+  });
+  assert.equal(decision.evidenceBasis.riskPortfolio, "UNKNOWN");
+  assert.equal(layers.C.state, "DATA_UNAVAILABLE");
+  assert.ok(layers.C.reasons.includes("RISK_UNKNOWN"), JSON.stringify(layers.C.reasons));
+  assert.equal(layers.C.reasons.includes("FUNDAMENTALS_UNKNOWN"), false);
 });
 
 test("equal F with thinner coverage gets evidence-acquisition priority", () => {

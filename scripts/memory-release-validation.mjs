@@ -54,7 +54,7 @@ try {
     SMARTMONEY_FIXTURE_POLYGON: 'healthy', SMARTMONEY_FIXTURE_LOAD: 'full',
     SMARTMONEY_SOAK_MS: String(6 * 60000), SMARTMONEY_FIXTURE_MEMORY_MB: '2048',
     SMARTMONEY_MAX_FEED: 'true',
-    SMARTMONEY_FIXTURE_HEAP_MB: '192', SMARTMONEY_FIXTURE_RSS_LIMIT_MB: String(800_000_000 / 1048576),
+    SMARTMONEY_FIXTURE_HEAP_MB: '1024', SMARTMONEY_FIXTURE_RSS_LIMIT_MB: String(800_000_000 / 1048576),
   });
   update({ stage: 'PASSED', completedAt: new Date().toISOString(),
     note: 'Local simulated-provider validation only; deployment and live verification remain separate.' });

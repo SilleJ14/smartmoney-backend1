@@ -138,6 +138,23 @@ test('calculated stock and crypto scores can pass the approval boundary with ris
   }
 });
 
+test("final stock and crypto gates reject a candidate the central core says should wait for a pullback", async () => {
+  const stockGate = signal => evaluateStockTradeCandidate(signal,
+    { now, requireCentralDecision: true, requireFreshDecision: true, requireExplicitApproval: true });
+  const s = stock();
+  assert.equal(stockGate(s).approved, true);
+  const waitingStock = stockGate({ ...s, shouldWaitForPullback: true });
+  assert.equal(waitingStock.approved, false);
+  assert.ok(waitingStock.reasons.includes("BLOCKING_RISK_STATE"), JSON.stringify(waitingStock.reasons));
+  const c = crypto();
+  installCentralDecision(c, decisionFor(c), { crypto: true, now });
+  const [row] = await cryptoRefresh([c]);
+  assert.equal(evaluateCryptoTradeCandidate(row, { now }).approved, true);
+  const waitingCrypto = evaluateCryptoTradeCandidate({ ...row, shouldWaitForPullback: true }, { now });
+  assert.equal(waitingCrypto.approved, false);
+  assert.ok(waitingCrypto.reasons.includes("WAIT_FOR_PULLBACK"), JSON.stringify(waitingCrypto.reasons));
+});
+
 test("a 0.9% spread does not pull Entry under 75 or replace the authorized score", async () => {
   const signal = stock();
   assert.equal(evaluateStockTradeCandidate(signal, { requireCentralDecision: true, requireFreshDecision: true, requireExplicitApproval: true, now }).approved, true);

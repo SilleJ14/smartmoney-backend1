@@ -16,6 +16,10 @@ export function createOandaStreamSupervisor({
   onPrice,
   onTransaction,
   onHealth,
+  // A connection must stay up this long before backoff resets, so a stream
+  // that connects, heartbeats once and drops cannot retry every 250 ms.
+  stableConnectionMs = 60000,
+  random = Math.random,
 } = {}) {
   let generation = 0;
   let controller = null;
@@ -36,13 +40,14 @@ export function createOandaStreamSupervisor({
         health[lane].connected = true;
         health[lane].error = null;
         publish();
+        const connectedAt = now();
         for await (const event of source(signal)) {
           if (signal.aborted || currentGeneration !== generation) break;
           const timestamp = new Date(now()).toISOString();
           health[lane].lastMessageAt = timestamp;
           if (event?.type === "HEARTBEAT") health[lane].lastHeartbeatAt = event.time || timestamp;
           await handle(event);
-          attempt = 0;
+          if (now() - connectedAt >= stableConnectionMs) attempt = 0;
           publish();
         }
         if (!signal.aborted) throw new Error("OANDA_STREAM_ENDED");
@@ -52,7 +57,10 @@ export function createOandaStreamSupervisor({
         health[lane].error = String(error?.message || error);
         health[lane].reconnects += 1;
         publish();
-        await sleep(oandaReconnectDelay(attempt++), signal);
+        // Jitter (50-100% of the backoff) keeps both lanes and restarts from
+        // reconnecting in lockstep.
+        const delay = oandaReconnectDelay(attempt++);
+        await sleep(Math.round(delay * (0.5 + 0.5 * random())), signal);
       }
     }
     health[lane].connected = false;

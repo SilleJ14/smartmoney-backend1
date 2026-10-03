@@ -41,6 +41,24 @@ test('actual daily-loss and profit handlers preserve ON while locking buys and r
   }
 });
 
+test('a stale or fallback account never trips the daily lock or liquidates', async () => {
+  for (const account of [{ equity: 0, stale: true }, { equity: 500, stale: true }, { equity: 'NaN' }, {}]) {
+    const state = { lastMode: 'smart', dailyStartEquity: 1000, dailyPeakEquity: 1000, profitLockFloorEquity: null };
+    const exits = [], saves = [];
+    const check = new Function('engineState', 'CONFIG', 'forceCloseAllPositions', 'saveEngineState',
+      'recordTradingModeWithoutResettingSafety', `let autoTradingEnabled = true; const TRADING_MODE = 'smart';
+      const recordOrder = () => {}; ${actualDailyCheck}
+      return account => checkDailyLossAndProfitLock(account, true);`)(
+      state, { dailyLossLimitPercent: 2, profitLockTriggerPercent: 5, profitLockProtectPercent: 50 },
+      async reason => exits.push(reason), reason => saves.push(reason), recordTradingModeWithoutResettingSafety);
+    assert.equal(await check(account), true, 'untrusted equity pauses buys for the cycle');
+    assert.equal(state.dailyLossLocked, undefined);
+    assert.equal(exits.length, 0, 'untrusted equity must not liquidate');
+    assert.equal(state.dailyStartEquity, 1000);
+    assert.equal(state.dailyPeakEquity, 1000);
+  }
+});
+
 test('ON and explicit OFF survive settings saves and reloads without environment overrides', () => {
   const directory = fs.mkdtempSync(path.join(os.tmpdir(), 'smartmoney-autopilot-test-'));
   try {
@@ -103,4 +121,27 @@ test('order service buys only while enabled, allows exits through risk pauses, a
   await assert.rejects(service.cryptoMarketBuy({ symbol: 'BTC/USD', dollars: 25 }), /disabled/);
   await service.cryptoMarketSell({ symbol: 'BTC/USD', qty: .1 });
   assert.deepEqual(calls.map(call => call.side), ['buy', 'sell', 'buy', 'sell']);
+});
+
+test('an unreadable runtime config is reported as corrupt and kept instead of overwritten', async () => {
+  const { inspectRuntimeConfig } = await import('../state/runtimeConfig.js');
+  const directory = fs.mkdtempSync(path.join(os.tmpdir(), 'smartmoney-corrupt-config-'));
+  try {
+    const file = path.join(directory, 'runtime-config.json');
+    assert.deepEqual(inspectRuntimeConfig(file), { config: {}, corrupt: false }, 'missing is not corrupt');
+    fs.writeFileSync(file, '{"emergencyStopActive": true, "autoTrad');
+    assert.equal(inspectRuntimeConfig(file).corrupt, true);
+    saveRuntimeConfig(file, { autoTradingEnabled: false });
+    const kept = fs.readdirSync(directory).filter(name => name.startsWith('runtime-config.json.corrupt-'));
+    assert.equal(kept.length, 1, 'the original bytes are preserved for the owner');
+    assert.equal(fs.readFileSync(path.join(directory, kept[0]), 'utf8'), '{"emergencyStopActive": true, "autoTrad');
+    assert.equal(loadRuntimeConfig(file).autoTradingEnabled, false);
+  } finally { fs.rmSync(directory, { recursive: true, force: true }); }
+});
+
+test('startup never clears the emergency stop and turns it ON for an unreadable config', () => {
+  const block = source.slice(source.indexOf('let emergencyStopActive ='), source.indexOf('const AI_ORDER_PREFIX'));
+  assert.doesNotMatch(block, /emergencyStopActive\s*=\s*false/);
+  assert.match(block, /runtimeConfigWasCorrupt/);
+  assert.match(block, /parseEnvBoolean\("EMERGENCY_STOP_ACTIVE"/);
 });

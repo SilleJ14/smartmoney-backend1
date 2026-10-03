@@ -110,22 +110,32 @@ export function createCandidateTraceStore(directory, options = {}) {
     try {
       await initialize();
       while (queue.length) {
-        const row = JSON.parse(queue[0]);
-        if (row.symbol) {
-          const first = journeys.get(row.symbol) || row.journey;
-          row.journey = { ...first,
-            elapsedSeconds: Math.max(0, (Date.parse(row.observedAt) - Date.parse(first.firstObservedAt)) / 1000),
-            scope: 'First observed in retained history; unrecorded or evicted history is unknown' };
+        // One append per batch that fits the current file. Appending line by line
+        // let a busy scan keep trace reads (which await this worker) waiting for
+        // seconds behind dozens of sequential disk writes.
+        let chunk = '', chunkBytes = 0, taken = 0;
+        while (taken < queue.length) {
+          const row = JSON.parse(queue[taken]);
+          if (row.symbol) {
+            const first = journeys.get(row.symbol) || row.journey;
+            row.journey = { ...first,
+              elapsedSeconds: Math.max(0, (Date.parse(row.observedAt) - Date.parse(first.firstObservedAt)) / 1000),
+              scope: 'First observed in retained history; unrecorded or evicted history is unknown' };
+          }
+          const line = JSON.stringify(row) + '\n', bytes = Buffer.byteLength(line);
+          if (bytes > fileBytes) { queue.splice(taken, 1); dropped++; markLoss(); continue; }
+          if (size + chunkBytes + bytes > fileBytes) break;
+          chunk += line; chunkBytes += bytes; taken++;
         }
-        const line = JSON.stringify(row) + '\n', bytes = Buffer.byteLength(line);
-        if (bytes > fileBytes) { queue.shift(); dropped++; markLoss(); continue; }
-        if (size + bytes > fileBytes) {
+        if (!taken) {
+          if (!queue.length) break;
           slot = (slot + 1) % fileCount;
           await fs.writeFile(file(slot), '', { mode: 0o600 });
           size = 0;
+          continue;
         }
-        await fs.appendFile(file(slot), line, { mode: 0o600 });
-        size += bytes; queue.shift(); written++;
+        await fs.appendFile(file(slot), chunk, { mode: 0o600 });
+        size += chunkBytes; queue.splice(0, taken); written += taken;
       }
       lastError = null;
     } catch (error) {

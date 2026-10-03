@@ -1,17 +1,29 @@
 import fs from "fs";
 import path from "path";
 
-export function loadRuntimeConfig(configFile) {
+// Distinguishes "never saved" from "saved but unreadable": an unreadable file
+// may have held the owner's emergency stop or Autopilot OFF choice.
+export function inspectRuntimeConfig(configFile) {
+  if (!fs.existsSync(configFile)) return { config: {}, corrupt: false };
   try {
-    if (!fs.existsSync(configFile)) return {};
-    return JSON.parse(fs.readFileSync(configFile, "utf8"));
+    const parsed = JSON.parse(fs.readFileSync(configFile, "utf8"));
+    if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) throw new Error("not an object");
+    return { config: parsed, corrupt: false };
   } catch {
-    return {};
+    return { config: {}, corrupt: true };
   }
 }
 
+export function loadRuntimeConfig(configFile) {
+  return inspectRuntimeConfig(configFile).config;
+}
+
 export function saveRuntimeConfig(configFile, updates = {}) {
-  const current = loadRuntimeConfig(configFile);
+  const { config: current, corrupt } = inspectRuntimeConfig(configFile);
+  if (corrupt) {
+    // Keep the unreadable original for the owner instead of overwriting it.
+    try { fs.copyFileSync(configFile, `${configFile}.corrupt-${Date.now()}`); } catch { }
+  }
 
   const next = {
     ...current,

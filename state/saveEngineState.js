@@ -22,6 +22,7 @@ export function createEngineStateSaver({
   let stateWritePromise = null;
   let lastWriteError = null;
   let completedWriteCount = 0;
+  let lastSafetyJournalError = null;
 
   function flushEngineStateSave() {
     if (engineStateSaveTimer) {
@@ -750,10 +751,18 @@ export function createEngineStateSaver({
   }
 
   function saveEngineState(reason = "STATE_UPDATE") {
+    // Safety journal remains synchronous; only the larger coalesced snapshot
+    // is deferred. A journal failure (e.g. capacity exceeded) is reported but
+    // must not stop the snapshot, which also carries the safety state.
     try {
-      // Safety journal remains synchronous; only the larger coalesced snapshot
-      // is deferred. Repeated requests retain a closure, not discarded copies.
       writeSafetyState();
+      lastSafetyJournalError = null;
+    } catch (err) {
+      lastSafetyJournalError = err?.message || String(err);
+      console.error("Could not write safety journal:", lastSafetyJournalError);
+    }
+    try {
+      // Repeated requests retain a closure, not discarded copies.
       const snapshot = deferSnapshot ? () => buildSnapshot(reason) : buildSnapshot(reason);
       pendingEngineStateSnapshot = snapshot;
       pendingEngineStateReason = reason;
@@ -783,6 +792,7 @@ export function createEngineStateSaver({
       pendingSnapshot: Boolean(pendingEngineStateSnapshot),
       completedWriteCount,
       lastWriteError,
+      lastSafetyJournalError,
     }),
   };
 }

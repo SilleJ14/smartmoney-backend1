@@ -223,9 +223,16 @@ export function registerOperationalControlRoutes(app, dependencies) {
   });
 
   app.post("/forex-credentials", requireAdmin, (req, res) => {
+    // Only fields actually supplied are updated; an empty or partial body must
+    // not silently erase stored credentials.
+    const accountId = String(req.body?.accountId || req.body?.oandaAccountId || "").trim();
+    const token = String(req.body?.token || req.body?.oandaPracticeToken || "").trim();
+    if (!accountId && !token) {
+      return res.status(400).json({ ok: false, error: "Provide an OANDA practice account ID and/or token" });
+    }
     const nextState = updateControlState({
-      oandaAccountId: String(req.body?.accountId || req.body?.oandaAccountId || "").trim(),
-      oandaPracticeToken: String(req.body?.token || req.body?.oandaPracticeToken || "").trim(),
+      ...(accountId ? { oandaAccountId: accountId } : {}),
+      ...(token ? { oandaPracticeToken: token } : {}),
     });
     saveEngineState("FOREX_CREDENTIALS_UPDATED");
     res.json({

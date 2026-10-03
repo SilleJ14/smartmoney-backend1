@@ -26,9 +26,27 @@ export function validCompletedStockBars(rows, spec, now = Date.now()) {
   }).sort((a, b) => a.t - b.t).slice(-spec.limit);
 }
 
-export function createStockHistory({ polygon, alpaca, now = Date.now, onEvidence = () => {}, maxEntries = 240 }) {
+// Provider order is the data policy: Tradier (consolidated, primary), then
+// Polygon/Massive (consolidated), then Alpaca IEX (single exchange, last resort).
+const PROVIDER_FEEDS = Object.freeze({
+  tradier: Object.freeze({ provider: "TRADIER", feed: "CONSOLIDATED" }),
+  polygon: Object.freeze({ provider: "MASSIVE", feed: "CONSOLIDATED" }),
+  alpaca: Object.freeze({ provider: "ALPACA", feed: "IEX" }),
+});
+
+function providerErrorCode(error) {
+  if (error?.status) return error.status;
+  // Local skip reasons (LOCAL_RATE_BUDGET, PROVIDER_BACKOFF, ...) are safe to report.
+  return typeof error?.code === "string" && /^[A-Z][A-Z0-9_]{0,40}$/.test(error.code) ? error.code : 'UNAVAILABLE';
+}
+
+export function createStockHistory({ tradier = null, tradierDelayed = false, polygon, alpaca, now = Date.now,
+  onEvidence = () => {}, maxEntries = 240 }) {
   const cache = new Map(), pending = new Map();
   const providerCooldown = new Map();
+  const providers = [['tradier', tradier], ['polygon', polygon], ['alpaca', alpaca]];
+  const servedBy = { tradier: 0, polygon: 0, alpaca: 0, none: 0 };
+  let last = null;
   async function get(symbol, timeframe = '5Min', count = 30, options = {}) {
     const spec = stockHistoryRequest(timeframe, count);
     const key = `${symbol}:${timeframe}:${spec.limit}`;
@@ -40,30 +58,36 @@ export function createStockHistory({ polygon, alpaca, now = Date.now, onEvidence
     const job = (async () => {
       let best = [], source = null;
       const errors = [];
-      for (const [name, fetcher] of [['polygon', polygon], ['alpaca', alpaca]]) {
+      for (const [name, fetcher] of providers) {
         if (!fetcher) continue;
         if (now() < (providerCooldown.get(name) || 0)) { errors.push(`${name}:COOLDOWN`); continue; }
         try {
           const bars = validCompletedStockBars(await fetcher(symbol, timeframe, spec, {
             ...options, timeoutMs: 3500,
           }), spec, now());
+          // Strictly more bars is required to replace an earlier provider, so a
+          // tie keeps the higher-priority provider.
           if (bars.length > best.length) { best = bars; source = name; }
           if (best.length >= spec.limit) break;
         } catch (error) {
-          errors.push(`${name}:${error?.status || 'UNAVAILABLE'}`);
+          errors.push(`${name}:${providerErrorCode(error)}`);
           if ([401, 403, 429].includes(error?.status)) providerCooldown.set(name, now() + 60000);
         }
       }
-      // Never discard useful Polygon history just because fallback failed or
-      // returned fewer bars. Never splice providers with different adjustments.
-      const provenance = source === "polygon"
-        ? stockFeedProvenance({ provider: "MASSIVE", feed: "CONSOLIDATED", timeframe })
-        : source === "alpaca"
-          ? stockFeedProvenance({ provider: "ALPACA", feed: "IEX", timeframe })
-          : null;
+      // Never discard useful earlier-provider history just because a fallback
+      // failed or returned fewer bars. Never splice providers with different
+      // adjustments or tapes: the result comes from exactly one provider.
+      const feed = source ? PROVIDER_FEEDS[source] : null;
+      const delayed = source === 'tradier' && tradierDelayed === true;
+      const provenance = feed
+        ? { ...stockFeedProvenance({ ...feed, timeframe }), ...(delayed ? { timing: "DELAYED" } : {}) }
+        : null;
       const stamped = provenance ? best.map((bar) => ({ ...bar, provenance })) : best;
+      const checkedAt = new Date(now()).toISOString();
+      servedBy[source || 'none'] += 1;
+      last = { source: provenance?.provider || null, feed: provenance?.feed || null, timeframe, checkedAt, delayed };
       onEvidence({ symbol, timeframe, requested: spec.limit, completed: stamped.length,
-        source: provenance?.provider || source, feed: provenance?.feed || null, errors, checkedAt: new Date(now()).toISOString(),
+        source: provenance?.provider || source, feed: provenance?.feed || null, delayed, errors, checkedAt,
         newestBarAt: stamped.length ? new Date(stamped.at(-1).t).toISOString() : null });
       const ttl = best.length >= spec.limit ? (spec.daily ? 1800000 : 45000) : 15000;
       cache.delete(key);
@@ -74,5 +98,15 @@ export function createStockHistory({ polygon, alpaca, now = Date.now, onEvidence
     pending.set(key, job);
     return job;
   }
-  return { get };
+  function getStatus() {
+    const cooldowns = {};
+    for (const [name, until] of providerCooldown) {
+      if (until > now()) cooldowns[name] = new Date(until).toISOString();
+    }
+    return {
+      order: providers.filter(([, fetcher]) => Boolean(fetcher)).map(([name]) => PROVIDER_FEEDS[name].provider),
+      servedBy: { ...servedBy }, last, cooldowns, cacheEntries: cache.size, pending: pending.size,
+    };
+  }
+  return { get, getStatus };
 }

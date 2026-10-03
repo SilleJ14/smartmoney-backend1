@@ -1,3 +1,4 @@
+import { NEVER_REACHED_BROKER_MS } from '../execution/managedExecution.js';
 // Kept independently of the large, deferred analytics snapshot. Unknown order
 // outcomes remain reserved until the broker confirms their terminal state.
 export function outstandingOrderNotional(entry, positions = [], normalizeSymbol = value => String(value).replace('/', '').toUpperCase()) {
@@ -77,7 +78,16 @@ export function createOrderRiskReservations({ state, persist, lookupOrder, getOp
             entry.filledAt ||= Date.parse(order.updated_at) || null;
             entry.notional = entry.filledQty * Number(order.filled_avg_price || entry.referencePrice);
           }
-        } catch { /* ambiguity is not permission to reuse capital */ }
+        } catch (error) {
+          // Ambiguity is not permission to reuse capital, except a client id the
+          // broker still does not know after the grace period: the POST never
+          // reached Alpaca, so nothing was bought and the symbol is not blocked.
+          if (Number(error?.status || error?.statusCode) === 404 && !(Number(entry.filledQty) > 0) &&
+            now() - Number(entry.createdAt || 0) >= NEVER_REACHED_BROKER_MS) {
+            entry.status = 'not_found';
+            releaseEntry(entry);
+          }
+        }
       }));
     }
     // Read positions AFTER terminal-order confirmation. This captures a fill
@@ -155,10 +165,11 @@ export function createOrderRiskReservations({ state, persist, lookupOrder, getOp
         recordOwnership(entry);
       }
       entry.filledAt = Date.parse(result?.filled_at) || entry.filledAt || null;
-      // HTTP rejection is definitive. Timeouts, duplicate-id errors and network
-      // failures are ambiguous and must be looked up at the broker.
+      // HTTP rejection (including Alpaca's 422 invalid order) is definitive.
+      // Timeouts, duplicate-id errors and network failures are ambiguous and
+      // must be looked up at the broker.
       const identityConflict = /duplicate|client.?order.?id.*(unique|exist|used)/i.test(String(error?.message || ''));
-      if (notSubmitted || (!identityConflict && [400, 401, 403].includes(error?.status))) releaseEntry(entry);
+      if (notSubmitted || (!identityConflict && [400, 401, 403, 422].includes(error?.status))) releaseEntry(entry);
       persist();
     } };
   }

@@ -4,6 +4,9 @@ const LIVE_QUOTE_SOURCE_REGISTRY = Object.freeze({
   polygon_ws_quote: { provider: "polygon", assets: ["stock"], connection: "polygon" },
   polygon_ws_second_aggregate: { provider: "polygon", assets: ["stock"], connection: "polygon" },
   polygon_rest_quote: { provider: "polygon", assets: ["stock"] },
+  // Real-time only: the normalizer labels any delayed/old snapshot
+  // "polygon_delayed_snapshot", which is deliberately not registered here.
+  polygon_stock_snapshot: { provider: "polygon", assets: ["stock"] },
   finnhub_ws: { provider: "finnhub", assets: ["stock", "crypto"], connection: "finnhub" },
   finnhub_ws_trade: { provider: "finnhub", assets: ["stock", "crypto"], connection: "finnhub" },
   finnhub_rest_quote: { provider: "finnhub", assets: ["stock"] },

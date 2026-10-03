@@ -10,21 +10,82 @@ test("admin auth accepts token and one-use same-IP stream tickets", () => {
   auth.registerRoutes({ post: (_path, _guard, route) => { handler = route; } });
   handler({ headers: {}, ip: "1", body: {} }, { json: (body) => { issued = body; } });
   const makeRes = () => ({ status(code) { this.code = code; return this; }, json(body) { this.body = body; } });
-  let passed = false; auth.requireAdmin({ method: "GET", headers: {}, ip: "1", query: { streamTicket: issued.ticket } }, makeRes(), () => { passed = true; });
+  const elsewhere = makeRes(); auth.requireAdmin({ method: "GET", path: "/config", headers: {}, ip: "1", query: { streamTicket: issued.ticket } }, elsewhere, () => {});
+  assert.equal(elsewhere.code, 401, "a URL ticket never opens non-stream routes");
+  let passed = false; auth.requireAdmin({ method: "GET", path: "/stream", headers: {}, ip: "1", query: { streamTicket: issued.ticket } }, makeRes(), () => { passed = true; });
   assert.equal(passed, true);
-  const reused = makeRes(); auth.requireAdmin({ method: "GET", headers: {}, ip: "1", query: { streamTicket: issued.ticket } }, reused, () => {});
+  const reused = makeRes(); auth.requireAdmin({ method: "GET", path: "/stream", headers: {}, ip: "1", query: { streamTicket: issued.ticket } }, reused, () => {});
   assert.equal(reused.code, 401);
 });
 
-test("a valid admin token immediately recovers after repeated failures", () => {
+test("requests without credentials never lock out the owner's valid token", () => {
   const auth = createAdminAuth({ adminToken: "secret", failureLimit: 2, now: () => 1000 });
   const response = () => ({ status(code) { this.code = code; return this; }, json(body) { this.body = body; return this; } });
   const invalidRequest = { method: "GET", headers: {}, ip: "same-ip", query: {} };
-  auth.requireAdmin(invalidRequest, response(), () => {});
-  auth.requireAdmin(invalidRequest, response(), () => {});
+  for (let i = 0; i < 5; i++) auth.requireAdmin(invalidRequest, response(), () => {});
   let passed = false;
   auth.requireAdmin({ ...invalidRequest, headers: { authorization: "Bearer secret" } }, response(), () => { passed = true; });
   assert.equal(passed, true);
+});
+
+test("once locked out, even the correct admin token is refused until the window passes", () => {
+  let clock = 1000;
+  const auth = createAdminAuth({ adminToken: "secret", failureLimit: 2, now: () => clock });
+  const response = () => ({ status(code) { this.code = code; return this; }, json(body) { this.body = body; return this; } });
+  const guess = { method: "GET", headers: { authorization: "Bearer wrong" }, ip: "attacker", query: {} };
+  auth.requireAdmin(guess, response(), () => {});
+  auth.requireAdmin(guess, response(), () => {});
+  let passed = false;
+  const locked = response();
+  auth.requireAdmin({ ...guess, headers: { authorization: "Bearer secret" } }, locked, () => { passed = true; });
+  assert.equal(passed, false);
+  assert.equal(locked.code, 429);
+  clock += 16 * 60 * 1000;
+  auth.requireAdmin({ ...guess, headers: { authorization: "Bearer secret" } }, response(), () => { passed = true; });
+  assert.equal(passed, true);
+});
+
+test("the client IP ignores a spoofed X-Forwarded-For header", () => {
+  const auth = createAdminAuth({ adminToken: "secret", failureLimit: 1, now: () => 1000 });
+  const response = () => ({ status(code) { this.code = code; return this; }, json(body) { this.body = body; return this; } });
+  auth.requireAdmin({ method: "GET", headers: { authorization: "Bearer wrong", "x-forwarded-for": "1.1.1.1" }, ip: "real", query: {} }, response(), () => {});
+  const rotated = response();
+  auth.requireAdmin({ method: "GET", headers: { authorization: "Bearer wrong", "x-forwarded-for": "2.2.2.2" }, ip: "real", query: {} }, rotated, () => {});
+  assert.equal(rotated.code, 429, "rotating the header does not reset the lock");
+  assert.equal(auth.getClientIp({ headers: { "x-forwarded-for": "9.9.9.9" }, ip: "real" }), "real");
+});
+
+test("an expired genuine session is not counted as a guess", () => {
+  let clock = 1000;
+  const auth = createAdminAuth({ adminToken: "secret", failureLimit: 1, sessionTtlMs: 1000, now: () => clock });
+  const routes = new Map();
+  auth.registerRoutes({ post: (route, ...handlers) => routes.set(route, handlers.at(-1)), get() {} });
+  const response = () => ({ status(code) { this.code = code; return this; }, json(body) { this.body = body; return this; } });
+  const signup = response();
+  routes.get("/auth/signup")({ headers: {}, ip: "1", body: { email: "owner@example.com", password: "twelve-chars!", name: "Owner" } }, signup);
+  clock += 5000;
+  for (let i = 0; i < 3; i++) {
+    const expired = response();
+    auth.requireAdmin({ method: "GET", headers: { authorization: `Bearer ${signup.body.token}` }, ip: "1", query: {} }, expired, () => {});
+    assert.equal(expired.code, 401);
+  }
+  const login = response();
+  routes.get("/auth/login")({ headers: {}, ip: "1", body: { email: "owner@example.com", password: "twelve-chars!" } }, login);
+  assert.equal(login.body.ok, true, "the owner can still sign in again");
+});
+
+test("password guesses are limited per account across rotating IPs", () => {
+  const auth = createAdminAuth({ adminToken: "secret", failureLimit: 100, accountFailureLimit: 3, now: () => 1000 });
+  const routes = new Map();
+  auth.registerRoutes({ post: (route, ...handlers) => routes.set(route, handlers.at(-1)), get() {} });
+  const response = () => ({ status(code) { this.code = code; return this; }, json(body) { this.body = body; return this; } });
+  routes.get("/auth/signup")({ headers: {}, ip: "1", body: { email: "owner@example.com", password: "twelve-chars!", name: "Owner" } }, response());
+  for (let i = 0; i < 3; i++) {
+    routes.get("/auth/login")({ headers: {}, ip: `guess-${i}`, body: { email: "owner@example.com", password: `wrong-guess-${i}!!` } }, response());
+  }
+  const correct = response();
+  routes.get("/auth/login")({ headers: {}, ip: "fresh-ip", body: { email: "owner@example.com", password: "twelve-chars!" } }, correct);
+  assert.equal(correct.code, 429, "a correct guess after the account limit is refused");
 });
 
 test("server-backed signup, login and session validation use persisted password hashes", () => {

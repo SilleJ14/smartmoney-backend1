@@ -1,6 +1,26 @@
 # Backend memory budget
 
-## October 2, 2026: 0.8 GB target
+## October 2, 2026 (later): one model for a 2 GB container
+
+The previous section's 0.8 GB RSS target was superseded the same day (commit
+dfbfc21): the RSS working budget is now the container limit itself. Heavy
+discovery pauses at 60% of it (about 1.2 GB in a 2 GB container) and reports
+critical pressure at 75% (about 1.5 GB).
+
+With the old 192 MiB V8 old-space limit, the heap ran out long before either
+RSS threshold, so the process could crash on heap exhaustion with most of the
+container unused. `npm start` now uses `--max-old-space-size=1024`. The heap
+guard (elevated at 50%, critical at 65% of `heap_size_limit`, i.e. roughly
+0.55 GB and 0.7 GB) therefore engages before RSS pressure, which is the
+intended order.
+
+Measured on the full-load fixture (60 stocks, 73 crypto), the heap size did
+not change event-loop stalls: worst case 431-878 ms at 1024 MiB versus
+741-812 ms at 192 MiB over three runs each. Raising the heap is for headroom,
+not latency. The release-load fixture and validation script now default to
+the production 1024 MiB setting.
+
+## October 2, 2026: 0.8 GB target (superseded)
 
 The RSS working budget is the smaller of the container limit and 800,000,000
 bytes (0.8 decimal GB / 762.94 MiB). Heavy discovery pauses at 60% of that
@@ -10,11 +30,12 @@ thresholds later. Smaller containers retain their smaller budget.
 
 Health distinguishes `containerLimitMb` from effective `limitMb` and reports
 `hardCapEnforced: false`. Admission control cannot guarantee maximum RSS.
-The release-load test uses the production 192 MiB old-space setting and fails
-at 800,000,000 bytes RSS instead of the previous 1536 MiB ceiling.
+The release-load test used the then-production 192 MiB old-space setting and
+failed at 800,000,000 bytes RSS instead of the previous 1536 MiB ceiling.
 These changes do not deploy or change platform settings.
 
-`npm start` runs Node with `--max-old-space-size=192 --max-semi-space-size=16`.
+`npm start` ran Node with `--max-old-space-size=192 --max-semi-space-size=16`
+(1024 since the section above).
 These bound old-space and young-generation allocation space, not total process
 RSS. Buffers, native allocations, code and other heap
 regions still need headroom. A custom deployment command of `node server.js`

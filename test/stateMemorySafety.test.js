@@ -303,3 +303,17 @@ test("memory guard pauses on heap soft limit independently of RSS", () => {
   assert.equal(paused.shouldPauseHeavyWork, true);
   assert.ok(["elevated", "critical"].includes(paused.pressure));
 });
+
+test('a safety journal failure is reported but still schedules the engine-state snapshot', async () => {
+  const written = [];
+  const saver = createEngineStateSaver({
+    ENGINE_STATE_FILE: 'unused.json', engineState: {}, getEffectiveTradingMode: () => 'smart',
+    writeSafetyState: () => { throw new Error('Safety journal capacity exceeded'); },
+    writeState: async (_file, snapshot) => written.push(snapshot), saveDelayMs: 60000,
+  });
+  assert.notEqual(saver.saveEngineState('DAILY_LOSS_LOCKED'), null);
+  assert.equal(saver.getSaveStatus().saveScheduled, true);
+  assert.equal(saver.getSaveStatus().lastSafetyJournalError, 'Safety journal capacity exceeded');
+  await saver.flushEngineStateSave();
+  assert.equal(written.length, 1, 'the snapshot (which also carries safety state) is still written');
+});

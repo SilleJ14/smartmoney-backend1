@@ -1,5 +1,6 @@
 // Broad universe comes from historical and reference data.
-// Tradier real-time quotes rank who is worth watching.
+// Tradier real-time quotes rank who is worth watching; a real-time Polygon
+// (Massive) quote stands in only for symbols Tradier did not serve.
 // Deep D/E/F runs on the priority queue, not on a fixed short list.
 // A delayed Massive price never satisfies an execution quote.
 
@@ -70,25 +71,53 @@ export function rotateSweep(symbols = [], cursor = 0, size = STOCK_PIPELINE_CAPA
   return { symbols: selected, nextCursor: (start + count) % list.length };
 }
 
+// Massive/Polygon evidence older than this cannot be told apart from a
+// delayed entitlement (same rule as the snapshot normalizer).
+const MASSIVE_REALTIME_MAX_AGE_MS = 60 * 1000;
+
 function quoteIsTradier(quote = {}) {
   const source = String(quote.liveQuoteSource || quote.source || quote.provider || "").toUpperCase();
   return source.includes("TRADIER");
 }
 
-function quoteIsDelayed(quote = {}) {
-  const feed = String(quote.feed || quote.timing || "").toUpperCase();
-  const provider = String(quote.provider || "").toUpperCase();
-  return quote.delayed === true || quote.timing === "DELAYED" || feed === "DELAYED" || provider === "MASSIVE" || provider === "POLYGON";
+function quoteIsMassive(quote = {}) {
+  const provider = String(quote.provider || quote.provenance?.provider || "").toUpperCase();
+  const source = String(quote.liveQuoteSource || quote.source || "").toLowerCase();
+  return provider === "MASSIVE" || provider === "POLYGON" || source.startsWith("polygon");
 }
 
-export function rankTradierSweep(quotes = [], { volumeBaselines = {} } = {}) {
+// The plan may be real-time or delayed, so the provider name proves nothing.
+// A Massive quote counts as real-time only with an explicit REALTIME verdict
+// from the normalizer AND a recent provider timestamp; anything missing => delayed.
+function quoteIsDelayed(quote = {}, now = Date.now()) {
+  const feed = String(quote.feed || quote.timing || "").toUpperCase();
+  if (quote.delayed === true || quote.timing === "DELAYED" || feed === "DELAYED") return true;
+  if (!quoteIsMassive(quote)) return false;
+  if (quote.delayed !== false || quote.timing !== "REALTIME") return true;
+  const measuredAt = Date.parse(quote.liveQuoteUpdatedAt || "");
+  if (!Number.isFinite(measuredAt)) return true;
+  const ageMs = Number(now) - measuredAt;
+  return ageMs > MASSIVE_REALTIME_MAX_AGE_MS || ageMs < -5000;
+}
+
+// The sweep ranks consolidated real-time quotes: Tradier first, and a
+// real-time Polygon fallback quote when Tradier did not serve the symbol.
+function sweepQuoteProvider(quote = {}) {
+  if (quoteIsTradier(quote)) return "TRADIER";
+  if (quoteIsMassive(quote) && quote.provenance?.isConsolidated === true) return "MASSIVE";
+  return null;
+}
+
+export function rankTradierSweep(quotes = [], { volumeBaselines = {}, now = Date.now() } = {}) {
   const ranked = [];
   const rejections = [];
   for (const quote of Array.isArray(quotes) ? quotes : []) {
     const symbol = symbolOf(quote);
     if (!symbol) continue;
-    if (quoteIsDelayed(quote) || !quoteIsTradier(quote)) {
-      rejections.push({ symbol, reason: quoteIsDelayed(quote) ? "DELAYED_FEED" : "NO_TRADIER_QUOTE" });
+    const delayed = quoteIsDelayed(quote, now);
+    const provider = sweepQuoteProvider(quote);
+    if (delayed || !provider) {
+      rejections.push({ symbol, reason: delayed ? "DELAYED_FEED" : "NO_TRADIER_QUOTE" });
       continue;
     }
     const price = finite(quote.price ?? quote.current ?? quote.last);
@@ -122,12 +151,13 @@ export function rankTradierSweep(quotes = [], { volumeBaselines = {} } = {}) {
       volume: volumeComparable ? volume : null,
       volumeComparable,
       cheapMoveScore,
-      provider: "TRADIER",
+      provider,
       feed: "REALTIME_CONSOLIDATED",
+      timing: "REALTIME",
       liveQuoteSource: quote.liveQuoteSource || quote.source || "tradier_stock_quote",
       liveQuoteUpdatedAt: quote.liveQuoteUpdatedAt || null,
       priceIsLive: quote.priceIsLive === true,
-      candidateSource: "TRADIER_QUOTE_SWEEP",
+      candidateSource: provider === "TRADIER" ? "TRADIER_QUOTE_SWEEP" : "POLYGON_QUOTE_FALLBACK",
       qualifiedToBuy: false,
       assetClass: "stock",
     });
@@ -155,7 +185,10 @@ export function executionQuoteDecision({
 } = {}) {
   const name = String(provider || "").toUpperCase();
   const tape = String(feed || "").toUpperCase();
-  const delayed = timing === "DELAYED" || tape === "DELAYED" || name === "MASSIVE" || name === "POLYGON";
+  const massive = name === "MASSIVE" || name === "POLYGON";
+  // Massive is delayed unless the caller proved REALTIME from provider clocks;
+  // the 5 s age, spread and consolidated rules below still apply in full.
+  const delayed = timing === "DELAYED" || tape === "DELAYED" || (massive && timing !== "REALTIME");
   if (delayed) {
     return { state: "WAIT", reason: "DELAYED_FEED", satisfiesExecution: false, changesFinalScore: false, marketDataQuality: "DELAYED" };
   }
@@ -192,7 +225,7 @@ export function executionQuoteDecision({
     reason: null,
     satisfiesExecution: true,
     changesFinalScore: false,
-    provider: "TRADIER",
+    provider: massive ? "MASSIVE" : "TRADIER",
     feed: "REALTIME_CONSOLIDATED",
   };
 }

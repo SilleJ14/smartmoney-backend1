@@ -177,5 +177,31 @@ test('legacy sell paths no longer close journals or clear positions on submissio
   assert.match(server, /confidenceBands \|\|\s*typeof engineState\.reinforcementWeightState\.confidenceBands !== "object"/);
   assert.match(server, /reconcileManagedExecution/);
   assert.match(server, /if \(exit\.fillConfirmed !== true \|\| !exit\.executionId\) return/);
-  assert.match(server, /!String\(order\.client_order_id \|\| ''\)\.startsWith\('SM_PROTECT_'\)/);
+  // The pre-close flatten cancels only SM_AI bot orders, never SM_PROTECT_ stops
+  // (behaviour covered in preCloseFlatten.test.js).
+  assert.match(server, /!cryptoOrder &&\s*isBotOrder\(order\) &&/);
+  assert.equal('SM_PROTECT_x'.startsWith('SM_AI'), false);
+});
+
+test('a timed-out sell the broker never received stops blocking exits after the grace period', async () => {
+  const f = fixture({ qty: 10, managed: [] });
+  let clock = 1_000_000;
+  const life = createManagedExecution({ state: f.state, persist() {}, request: async (path, options) => {
+    if (path === '/v2/positions') return [{ symbol: 'ABC', qty: '10', avg_entry_price: '100' }];
+    if (path.includes('?status=open')) return [];
+    if (path.includes('by_client_order_id')) throw Object.assign(new Error('Order not found'), { status: 404 });
+    throw new Error(`unexpected ${path} ${options?.method || ''}`);
+  }, getManagedSymbols: async () => [], getConfig: () => ({}), isCrypto: () => false, now: () => clock });
+  const payload = { symbol: 'ABC', side: 'sell', qty: '10', client_order_id: 'SM_AI_SELL_ABC_1' };
+  await life.beforeSubmit(payload);
+  life.submitting(payload, {}, { avg_entry_price: '100' });
+  life.failed({ payload, error: Object.assign(new Error('timeout'), { status: 504 }), submitted: true });
+  assert.equal(f.state.managedExecution.orders[payload.client_order_id].status, 'uncertain');
+  const next = { symbol: 'ABC', side: 'sell', qty: '10', client_order_id: 'SM_AI_SELL_ABC_2' };
+  await assert.rejects(life.beforeSubmit({ ...next }), /not found/, 'inside the grace period the outcome stays unknown');
+  clock += 61_000;
+  await life.beforeSubmit({ ...next });
+  assert.equal(f.state.managedExecution.orders[payload.client_order_id].status, 'not_found');
+  await life.reconcile();
+  assert.doesNotThrow(life.assertReady);
 });

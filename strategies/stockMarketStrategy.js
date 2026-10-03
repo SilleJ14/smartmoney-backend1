@@ -1556,7 +1556,7 @@ export function createStockMarketStrategy(dependencies) {
       if (analysisOnly) {
         // A bounded research pass shares the real evidence pipeline but cannot
         // reach pyramid buys, allocation mutations or any submission path.
-        return normalizeSignalScoreCollection(results.map(signal => ({
+        const analyzed = normalizeSignalScoreCollection(results.map(signal => ({
           ...signal, stockDecisionScore: signal.decisionScoreTelemetry.scores.decision,
           stockDecisionEvidence: signal.decisionScoreTelemetry.stages.decision,
           stockDecisionScoreAvailable: signal.decisionScoreTelemetry.stages.decision.analysisEvidencePass === true,
@@ -1567,6 +1567,17 @@ export function createStockMarketStrategy(dependencies) {
           buyableNow: false, recommendedTradeAmount: 0, finalApprovedTradeAmount: 0, finalTradeAmount: 0,
           executionEligibility: { approved: false, reasons: ['CENTRAL_RISK_AND_SIZING_REVIEW_REQUIRED'] },
         })));
+        // Close every SCAN_SELECTED this pass recorded under its own cycle, as
+        // full stock scans and crypto analysis passes do; otherwise the trace
+        // shows a selection with no outcome for that scan.
+        const analyzedBySymbol = new Map(analyzed.map(signal => [signal.symbol, signal]));
+        for (const symbol of limitedSymbols) {
+          const signal = analyzedBySymbol.get(symbol);
+          recordCandidateEvent({ ...(signal || {}), symbol, cycle: scanCycleId,
+            stage: signal ? 'SCAN_SCORED' : 'SCAN_NO_RESULT',
+            reasons: signal ? signal.entryQualityScorecard?.gates || [] : ['STOCK_SCAN_NO_USABLE_RESULT'] });
+        }
+        return analyzed;
       }
       try {
         const latestAccountForPyramids = await getAccount();

@@ -121,25 +121,40 @@ export function providerFailureDoesNotScore() {
   return { discovery: null, entry: null, final: null, state: "DATA_UNAVAILABLE", deteriorated: false };
 }
 
-export function stockDataHealth({ tradier = {}, massive = {}, alpaca = {} } = {}) {
+export function stockDataHealth({ tradier = {}, massive = {}, alpaca = {}, routing = {} } = {}) {
   return {
     stocks: {
+      // Quotes and bars: Tradier primary, Massive (Polygon) fallback, Alpaca IEX last.
+      routing: {
+        quoteOrder: ["TRADIER", "MASSIVE", "ALPACA_IEX"],
+        barOrder: ["TRADIER", "MASSIVE", "ALPACA_IEX"],
+        quotes: routing?.quotes || null,
+        bars: routing?.bars || null,
+      },
       tradier: {
         provider: "TRADIER",
+        role: "PRIMARY",
         authentication: tradier.authentication || {
           state: tradier.authenticated === true ? "PASS" : tradier.authenticated === false ? "FAIL" : "UNKNOWN",
         },
         entitlement: tradier.entitlement || { marketData: "UNKNOWN" },
         stream: tradier.stream || { state: "UNKNOWN" },
         quote: tradier.quote || { state: "UNKNOWN" },
+        history: tradier.history || { state: "UNKNOWN" },
         errors: tradier.errors || { recentCount: 0, lastError: null },
         throttling: tradier.throttling || { state: "CLEAR", retryAfter: null },
       },
       massive: {
         provider: "MASSIVE",
+        role: "FALLBACK",
+        // `feed` describes the websocket; REST quote timing is measured per quote.
         feed: massive.delayed ? "DELAYED" : "REALTIME",
         websocket: massive.websocket || { state: "UNKNOWN" },
         bars: massive.bars || { state: "UNKNOWN" },
+        quote: massive.quote || { state: "UNKNOWN" },
+        quoteEntitlement: massive.entitlement || { marketData: "UNKNOWN" },
+        quoteError: massive.lastError || null,
+        quoteSkipReason: massive.lastSkipReason || null,
       },
       alpaca: {
         provider: "ALPACA",

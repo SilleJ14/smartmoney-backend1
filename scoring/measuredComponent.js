@@ -27,7 +27,9 @@ export const STOCK_DECISION_EVIDENCE_POLICY = Object.freeze({
   entry: "REQUIRED",
   marketContext: "OPTIONAL",
   riskPortfolio: "REQUIRED",
-  fundamentals: "REQUIRED",
+  // No production provider supplies validated fundamentals, so requiring them
+  // blocked every stock. They still raise or lower F when present.
+  fundamentals: "OPTIONAL",
   news: "REQUIRED_WHEN_CATALYST",
   executionQuote: "REQUIRED",
 });

@@ -84,34 +84,52 @@ export function createOandaClient({
   } = {}) {
     assertPracticeStreamHost();
     if (!token) throw Object.assign(new Error("MISSING_OANDA_TOKEN"), { halt: "MISSING_CREDENTIALS" });
-    const response = await (fetchImpl || httpFetch)(`${String(streamBaseUrl).replace(/\/$/, "")}${path}`, {
-      headers: { Authorization: `Bearer ${token}`, Accept: "application/json" },
-      signal,
-    });
-    if (!response.ok || !response.body) {
-      throw Object.assign(new Error(`OANDA STREAM ${response.status}`), { status: response.status });
-    }
-    const parser = createChunkedLineParser({ maxLineBytes });
-    let lastMessageAt = now();
-    const iterator = response.body[Symbol.asyncIterator]();
-    while (true) {
-      let timer;
-      const timeout = new Promise((_, reject) => {
-        timer = setTimeout(() => reject(new Error("OANDA_STREAM_HEARTBEAT_TIMEOUT")), heartbeatTimeoutMs);
-        timer.unref?.();
+    // Each connection gets its own controller: a stalled stream is closed when
+    // this generator exits, instead of staying open until the whole supervisor
+    // stops (OANDA limits concurrent streams per account).
+    const connection = new AbortController();
+    const abortConnection = () => connection.abort(signal?.reason);
+    if (signal?.aborted) abortConnection();
+    else signal?.addEventListener?.("abort", abortConnection, { once: true });
+    let iterator;
+    try {
+      const response = await (fetchImpl || httpFetch)(`${String(streamBaseUrl).replace(/\/$/, "")}${path}`, {
+        headers: { Authorization: `Bearer ${token}`, Accept: "application/json" },
+        signal: connection.signal,
       });
-      let result;
-      try { result = await Promise.race([iterator.next(), timeout]); }
-      finally { clearTimeout(timer); }
-      if (result.done) break;
-      const chunk = result.value;
-      if (now() - lastMessageAt > heartbeatTimeoutMs) throw new Error("OANDA_STREAM_HEARTBEAT_TIMEOUT");
-      for (const row of parser.push(chunk)) {
-        lastMessageAt = now();
-        yield row;
+      if (!response.ok || !response.body) {
+        throw Object.assign(new Error(`OANDA STREAM ${response.status}`), { status: response.status });
       }
+      const parser = createChunkedLineParser({ maxLineBytes });
+      let lastMessageAt = now();
+      iterator = response.body[Symbol.asyncIterator]();
+      while (true) {
+        let timer;
+        const timeout = new Promise((_, reject) => {
+          timer = setTimeout(() => reject(new Error("OANDA_STREAM_HEARTBEAT_TIMEOUT")), heartbeatTimeoutMs);
+          timer.unref?.();
+        });
+        // A read that loses the race rejects once the connection is aborted;
+        // it must not surface as an unhandled rejection.
+        const read = iterator.next();
+        read.catch(() => {});
+        let result;
+        try { result = await Promise.race([read, timeout]); }
+        finally { clearTimeout(timer); }
+        if (result.done) break;
+        const chunk = result.value;
+        if (now() - lastMessageAt > heartbeatTimeoutMs) throw new Error("OANDA_STREAM_HEARTBEAT_TIMEOUT");
+        for (const row of parser.push(chunk)) {
+          lastMessageAt = now();
+          yield row;
+        }
+      }
+      for (const row of parser.finish()) yield row;
+    } finally {
+      signal?.removeEventListener?.("abort", abortConnection);
+      connection.abort();
+      Promise.resolve().then(() => iterator?.return?.()).catch(() => {});
     }
-    for (const row of parser.finish()) yield row;
   }
 
   async function request(method, path, body) {
@@ -280,16 +298,16 @@ export function createOandaClient({
     async replaceTradeDependentOrders(tradeId, { stopLossPrice, takeProfitPrice } = {}) {
       if (liveHost) throw Object.assign(new Error("LIVE_FOREX_ORDERS_NOT_AUTHORIZED"), { halt: "LIVE_BLOCKED" });
       const id = await resolveAccountId();
-      const dependent = (price) => price == null
-        ? null
-        : { price: String(price), timeInForce: "GTC" };
+      // OANDA treats an explicit null as "cancel this dependent order", so a
+      // price that was not supplied is omitted and the existing order is kept.
+      const body = {};
+      if (stopLossPrice != null) body.stopLoss = { price: String(stopLossPrice), timeInForce: "GTC" };
+      if (takeProfitPrice != null) body.takeProfit = { price: String(takeProfitPrice), timeInForce: "GTC" };
+      if (!Object.keys(body).length) throw new Error("OANDA_DEPENDENT_ORDER_PRICE_REQUIRED");
       return request(
         "PUT",
         `/v3/accounts/${encodeURIComponent(id)}/trades/${encodeURIComponent(tradeId)}/orders`,
-        {
-          stopLoss: dependent(stopLossPrice),
-          takeProfit: dependent(takeProfitPrice),
-        }
+        body
       );
     },
     async getOpenTrades() {
