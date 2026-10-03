@@ -95,6 +95,55 @@ export function createForexSqliteJournal({
     database.pragma(`user_version = ${SCHEMA_VERSION}`);
   }
 
+  // Retention: analysis records (snapshots, decisions, observations) are pruned
+  // past maxAgeMs or above maxBytes, a small batch per call so the event loop is
+  // never held. Order, fill, management and outcome records are kept.
+  const PRUNABLE_EVENT_TYPES = ["PROVIDER_OBSERVATION", "FEATURE_SNAPSHOT", "DECISION", "DATA_QUALITY"];
+  const prunable = PRUNABLE_EVENT_TYPES.map((type) => `'${type}'`).join(",");
+  const pruneEventsBefore = readonly ? null : database.prepare(
+    `DELETE FROM forex_events WHERE rowid IN (SELECT rowid FROM forex_events WHERE occurred_at < @cutoff AND event_type IN (${prunable}) LIMIT @limit)`);
+  // Evidence referenced by kept order/fill/management/outcome records is never
+  // pruned. The (rare) references are loaded once and tracked on append, so a
+  // prune never scans the whole event table.
+  const KEPT_EVENT_TYPES = new Set(["ORDER_INTENT", "FILL", "MANAGEMENT_ACTION", "OUTCOME"]);
+  const referencedSnapshots = new Set(database.prepare(
+    "SELECT DISTINCT snapshot_id FROM forex_events WHERE snapshot_id IS NOT NULL AND event_type IN ('ORDER_INTENT','FILL','MANAGEMENT_ACTION','OUTCOME')"
+  ).pluck().all());
+  const oldestSnapshotRows = readonly ? null : database.prepare(
+    "SELECT rowid AS id, snapshot_id AS snapshotId FROM forex_snapshots ORDER BY rowid LIMIT @limit");
+  const oldSnapshotRows = readonly ? null : database.prepare(
+    "SELECT rowid AS id, snapshot_id AS snapshotId FROM forex_snapshots WHERE decision_at < @cutoff LIMIT @limit");
+  const deleteSnapshotRow = readonly ? null : database.prepare("DELETE FROM forex_snapshots WHERE rowid = ?");
+  const deleteSnapshots = (rows) => {
+    const removable = rows.filter((row) => !referencedSnapshots.has(row.snapshotId));
+    if (removable.length) database.transaction(() => { for (const row of removable) deleteSnapshotRow.run(row.id); })();
+    return removable.length;
+  };
+  const pruneOldestEvents = readonly ? null : database.prepare(
+    `DELETE FROM forex_events WHERE rowid IN (SELECT rowid FROM forex_events WHERE event_type IN (${prunable}) ORDER BY rowid LIMIT @limit)`);
+  // The full integrity check is O(file size) and blocked the event loop on every
+  // cycle and request as the journal grew; run it once at open and cache it.
+  const integrityOk = database.pragma("quick_check", { simple: true }) === "ok";
+  const counts = {
+    events: database.prepare("SELECT COUNT(*) AS count FROM forex_events").get().count,
+    snapshots: database.prepare("SELECT COUNT(*) AS count FROM forex_snapshots").get().count,
+  };
+  let lastWriteError = null;
+  const usedBytes = () => {
+    const pageSize = database.pragma("page_size", { simple: true });
+    return (database.pragma("page_count", { simple: true }) - database.pragma("freelist_count", { simple: true })) * pageSize;
+  };
+  function write(statement, row) {
+    try {
+      const result = statement.run(row);
+      lastWriteError = null;
+      return result;
+    } catch (error) {
+      lastWriteError = String(error?.code || error?.message || error).slice(0, 120);
+      throw error;
+    }
+  }
+
   const insertEvent = database.prepare(`
     INSERT INTO forex_events (
       event_id, event_type, occurred_at, entity_id, snapshot_id,
@@ -132,7 +181,9 @@ export function createForexSqliteJournal({
       payloadJson,
       payloadHash: sha256(payloadJson),
     };
-    insertEvent.run(row);
+    write(insertEvent, row);
+    counts.events += 1;
+    if (row.snapshotId && KEPT_EVENT_TYPES.has(row.eventType)) referencedSnapshots.add(row.snapshotId);
     return Object.freeze({ ...row, payload: event.payload ?? null });
   }
 
@@ -144,7 +195,7 @@ export function createForexSqliteJournal({
     const payloadJson = json(snapshot.payload ?? null);
     const payloadHash = sha256(payloadJson);
     const snapshotId = snapshot.snapshotId || `fxs-${payloadHash}`;
-    insertSnapshot.run({
+    write(insertSnapshot, {
       snapshotId,
       observedAt,
       decisionAt,
@@ -154,6 +205,7 @@ export function createForexSqliteJournal({
       payloadJson,
       payloadHash,
     });
+    counts.snapshots += 1;
     append({
       type: "FEATURE_SNAPSHOT",
       occurredAt: decisionAt,
@@ -172,7 +224,10 @@ export function createForexSqliteJournal({
     isDurable: () => !readonly && (!root || resolved.startsWith(`${root}${path.sep}`)),
     append,
     recordSnapshot,
-    transaction: (worker) => database.transaction(worker)(),
+    transaction: (worker) => {
+      try { return database.transaction(worker)(); }
+      catch (error) { lastWriteError = String(error?.code || error?.message || error).slice(0, 120); throw error; }
+    },
     getSnapshot(snapshotId) {
       const row = database.prepare("SELECT * FROM forex_snapshots WHERE snapshot_id = ?").get(snapshotId);
       return row ? { ...row, payload: JSON.parse(row.payload_json) } : null;
@@ -189,14 +244,30 @@ export function createForexSqliteJournal({
       ).all(params).map(row => ({ ...row, payload: JSON.parse(row.payload_json) }));
     },
     health() {
-      const result = database.pragma("integrity_check", { simple: true });
       return {
-        ok: result === "ok",
+        ok: integrityOk && !lastWriteError,
         kind: "sqlite-wal",
         schemaVersion: database.pragma("user_version", { simple: true }),
-        eventCount: database.prepare("SELECT COUNT(*) AS count FROM forex_events").get().count,
-        snapshotCount: database.prepare("SELECT COUNT(*) AS count FROM forex_snapshots").get().count,
+        eventCount: counts.events,
+        snapshotCount: counts.snapshots,
+        usedBytes: usedBytes(),
+        lastWriteError,
       };
+    },
+    prune({ maxAgeMs = 14 * 86400000, maxBytes = 1024 * 1048576, batchSize = 500, now = Date.now() } = {}) {
+      if (readonly) return { snapshots: 0, events: 0, usedBytes: usedBytes() };
+      const cutoff = new Date(now - maxAgeMs).toISOString();
+      const scan = batchSize + referencedSnapshots.size;
+      let snapshots = deleteSnapshots(oldSnapshotRows.all({ cutoff, limit: scan }));
+      let events = pruneEventsBefore.run({ cutoff, limit: batchSize }).changes;
+      if (usedBytes() > maxBytes) {
+        snapshots += deleteSnapshots(oldestSnapshotRows.all({ limit: scan }));
+        events += pruneOldestEvents.run({ limit: batchSize }).changes;
+      }
+      counts.snapshots = Math.max(0, counts.snapshots - snapshots);
+      counts.events = Math.max(0, counts.events - events);
+      if (snapshots || events) database.pragma("wal_checkpoint(PASSIVE)");
+      return { snapshots, events, usedBytes: usedBytes() };
     },
     close: () => database.close(),
   };

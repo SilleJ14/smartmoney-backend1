@@ -106,7 +106,8 @@ function actualWorker({ invalidSetup = false } = {}) {
     buildMemoryGuardSnapshot: () => ({ shouldPauseHeavyWork: false }), isCrypto: s => s.includes('/'),
     canRefreshStockQuotes: () => true, getMarketSession: () => 'regular', normalizeSymbol: s => s,
     mergeLiveQuoteIntoSignal: row => ({ ...row, setupRevalidationRequired: invalidSetup }),
-    applyCrossAssetCryptoContext: () => {},
+    applyCrossAssetCryptoContext: () => {}, refreshMasterDecisionProfile: () => {},
+    brokerSizingSnapshot: () => ({ account: engineState.cachedAccount || {}, positions: engineState.cachedPositions || [] }),
     calculateCentralAutonomousDecisionCore: (stocks, crypto) => { centralCalls++; return { rankedDecisions: [...stocks, ...crypto].map(r => ({ symbol: r.symbol })) }; },
     installCentralDecision: row => { row.masterFinalScore = 65; }, normalizeSignalScoreCompleteness: row => row,
     pushLiveSignalUpdate: () => { pushes++; }, buildLiveSignalPushPayload: () => ({}) });

@@ -290,6 +290,7 @@ import { createOandaClient } from "./forex/oandaClient.js";
 import { runForexEngineCycle } from "./forex/forexEngine.js";
 import { resetForexDailyLoss, validateForexSettings } from "./forex/settingsControl.js";
 import { createForexStore } from "./forex/durableStore.js";
+import { applyMasterConsumption } from "./scoring/downstreamScoreBoundary.js";
 import { sqliteLockStatus } from "./forex/sqliteLock.js";
 import { createForexSqliteJournal } from "./forex/sqliteJournal.js";
 import { createForexDataQualityMonitor } from "./forex/dataQualityMonitor.js";
@@ -3290,6 +3291,7 @@ function buildBackendHealthPayload(clock = {}) {
       halt: engineState.forexEngine?.halt || "NOT_STARTED",
       lastError: engineState.forexEngine?.lastError || engineState.forexLastError?.message || null,
       lastErrorCause: engineState.forexEngine?.lastErrorCause || null,
+      journalRetention: engineState.forexJournalRetention || null,
       lastCycleAt: engineState.forexEngine?.lastCycleAt || null,
       calendar: forexCalendarProvider?.getStatus?.() || null,
       ledger: {
@@ -32010,19 +32012,57 @@ function requestFastRunnerRefresh() {
     console.error("FAST_RUNNER_REFRESH_FAILED", engineState.fastRunnerRefreshError.message);
   });
 }
+// Crypto trades 24/7 and the sizer refuses account/position evidence older than
+// 10 s, but only the 5-minute engine cycle refreshed it, so re-reviewed coins
+// were sized at $0. Keep the snapshot fresh (two reads, coalesced, reused < 4 s).
+let brokerSnapshotRefresh = null;
+function refreshBrokerSnapshot(maxAgeMs = 4000) {
+  const fresh = (snapshot) => Number.isFinite(snapshot?.snapshotAt) && snapshot.stale !== true &&
+    Date.now() - snapshot.snapshotAt <= maxAgeMs;
+  if (fresh(engineState.cachedAccount) && fresh(engineState.cachedPositions)) return Promise.resolve();
+  brokerSnapshotRefresh ||= Promise.all([getAccount(), getPositions()])
+    .catch(() => {}).finally(() => { brokerSnapshotRefresh = null; });
+  return brokerSnapshotRefresh;
+}
+// Positions that were never loaded (no snapshotAt) are not "no positions": mark
+// them stale so the sizer returns $0 instead of ignoring existing holdings.
+function brokerSizingSnapshot() {
+  const positions = engineState.cachedPositions;
+  return {
+    account: engineState.cachedAccount || {},
+    positions: Array.isArray(positions) && Number.isFinite(positions.snapshotAt)
+      ? positions : Object.assign([], { stale: true, snapshotAt: null }),
+  };
+}
+// Only the engine cycle recalculated the master profile, so a coin it suppressed
+// stayed ENTRY_SUPPRESSED for up to 5 minutes after a newer central ALLOW.
+// Mirrors the engine's profile fields (not its cumulative allocationMultiplier).
+function refreshMasterDecisionProfile(signal, decision) {
+  signal.riskDecision = decision?.riskDecision || signal.riskDecision || null;
+  const profile = calculateFinalMasterDecisionProfile(signal);
+  signal.finalMasterDecisionProfile = applyMasterConsumption(signal, {
+    ...profile, riskDecision: signal.riskDecision,
+  }).finalMasterDecisionProfile;
+  signal.masterFinalSizingMultiplier = profile.finalSizingMultiplier;
+  signal.masterExecutionDecision = profile.executionDecision;
+  signal.finalExitProfile = profile.finalExitProfile;
+}
 async function reviewCandidateScores(rows, crypto = false) {
-  const fresh = await (crypto ? refreshCryptoExecutionQuotes(rows) : refreshStockExecutionQuotes(rows));
+  const freshRows = (crypto ? refreshCryptoExecutionQuotes(rows) : refreshStockExecutionQuotes(rows));
+  const [fresh] = await Promise.all([freshRows, refreshBrokerSnapshot()]);
   if (crypto) applyCrossAssetCryptoContext(fresh, engineState);
   const central = calculateCentralAutonomousDecisionCore(crypto ? [] : fresh, crypto ? fresh : []);
   return fresh.map(row => {
     const reviewingMove = row.rescoreStatus === "QUEUED" || row.rescoreStatus === "RUNNING";
     if (reviewingMove) row.rescoreStatus = "RUNNING";
     const decision = central.rankedDecisions.find(item => normalizeSymbol(item.symbol) === normalizeSymbol(row.symbol));
-    if (decision) installCentralDecision(row, decision, { crypto });
+    if (decision) {
+      installCentralDecision(row, decision, { crypto });
+      refreshMasterDecisionProfile(row, decision);
+    }
     if (reviewingMove && row.rescoreStatus === "RUNNING") row.rescoreStatus = "QUEUED";
     const allocation = {
-      account: engineState.cachedAccount || {},
-      positions: engineState.cachedPositions || [],
+      ...brokerSizingSnapshot(),
       config: CONFIG,
       reservations: engineState.orderRiskReservations || {},
       dailyStartEquity: engineState.dailyStartEquity,
@@ -32147,10 +32187,12 @@ const incrementalResearch = createIncrementalResearch({
     if (crypto) applyCrossAssetCryptoContext([current], engineState);
     const central = calculateCentralAutonomousDecisionCore(crypto ? [] : [current], crypto ? [current] : []);
     const decision = central.rankedDecisions.find(item => normalizeSymbol(item.symbol) === normalizeSymbol(current.symbol));
-    if (decision) installCentralDecision(current, decision, { crypto });
+    if (decision) {
+      installCentralDecision(current, decision, { crypto });
+      refreshMasterDecisionProfile(current, decision);
+    }
     const allocation = {
-      account: engineState.cachedAccount || {},
-      positions: engineState.cachedPositions || [],
+      ...brokerSizingSnapshot(),
       config: CONFIG,
       reservations: engineState.orderRiskReservations || {},
       dailyStartEquity: engineState.dailyStartEquity,
@@ -32210,6 +32252,16 @@ function startLiveScheduler() {
     void runLiveScheduledTask('forexProtection', 5000, () => forexScheduler.protect());
     void runLiveScheduledTask('forexDiscovery', 15000, () => forexScheduler.scan());
     void runLiveScheduledTask('refreshBrokerClock', 5000, () => getClock());
+    void runLiveScheduledTask('refreshBrokerSnapshot', 5000, () => refreshBrokerSnapshot(4000));
+    // Bounded forex journal: 14 days or FOREX_JOURNAL_MAX_MB (default 1024 = 1 GB), whichever is smaller.
+    void runLiveScheduledTask('pruneForexJournal', 30000, async () => {
+      try {
+        engineState.forexJournalRetention = { ...forexJournal?.prune?.({
+          maxBytes: Math.max(32, Number(process.env.FOREX_JOURNAL_MAX_MB) || 1024) * 1048576 }), at: new Date().toISOString() };
+      } catch (error) {
+        engineState.forexJournalRetention = { error: String(error?.code || error?.message || error).slice(0, 120), at: new Date().toISOString() };
+      }
+    });
     void runLiveScheduledTask('refreshTopCryptoOrderbooks', 3000, () => refreshTopCryptoOrderbooks(
       [...(engineState.lastCryptoSignals || []), ...(engineState.topCryptoSignals || [])],
       [engineState.lastCryptoSignals, engineState.topCryptoSignals, engineState.lastSignals, engineState.topSignals]));

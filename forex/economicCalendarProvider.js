@@ -240,6 +240,7 @@ export function createEconomicCalendarProvider({ apiKey, jblankedApiKey, store, 
     } catch (error) {
       // Storage failures are not network failures; label them so they are not misdiagnosed.
       lastError = error.calendarCode || (error.name === "TimeoutError" || error.name === "AbortError" ? "CALENDAR_TIMEOUT"
+        : /ENOSPC|SQLITE_FULL|no space left|disk is full/i.test(`${error?.code || ""} ${error?.message || ""}`) ? "CALENDAR_STORAGE_FULL"
         : error.message === "FOREX_LEDGER_LOCKED" ? "CALENDAR_STORAGE_LOCKED"
           : error.message === "DURABLE_STORAGE_UNAVAILABLE" ? "CALENDAR_DURABLE_CACHE_REQUIRED" : "CALENDAR_NETWORK_ERROR");
       failures++;

@@ -101,6 +101,8 @@ test('actual fast score review refreshes evidence and never grants stale approva
     engineState: {}, CONFIG: {}, attachCryptoExecutableAllocation, attachStockExecutableAllocation,
     applyCrossAssetCryptoContext: () => {},
     refreshCryptoExecutionQuotes: async rows => { refreshed = true; return rows; },
+    refreshBrokerSnapshot: async () => {}, refreshMasterDecisionProfile: () => {},
+    brokerSizingSnapshot: () => ({ account: {}, positions: [] }),
     normalizeSymbol: s => s, installCentralDecision, normalizeSignalScoreCompleteness: s => s,
     calculateCentralAutonomousDecisionCore: (_stocks, crypto) => {
       assert.equal(refreshed, true);

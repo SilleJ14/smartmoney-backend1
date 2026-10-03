@@ -1046,10 +1046,12 @@ export async function runForexEngineCycle({
     });
     snapshot.executionReady = false;
     snapshot.autoTradingAuthorized = false;
-    snapshot.halt = error.halt || error.reason || "UNCERTAIN_ORDER";
+    // A full disk is not an uncertain order; say what it is.
+    const storageFull = /ENOSPC|SQLITE_FULL|no space left|disk is full/i.test(`${error?.code || ""} ${error?.message || ""}`);
+    snapshot.halt = error.halt || error.reason || (storageFull ? "STORAGE_FULL" : "UNCERTAIN_ORDER");
     snapshot.haltState = snapshot.halt;
     snapshot.lastError = String(error.message || error);
-    snapshot.lastErrorCause = error.lockCause || null;
+    snapshot.lastErrorCause = error.lockCause || (storageFull ? String(error.code || "STORAGE_FULL") : null);
     blockForexCandidates(snapshot.candidates, [snapshot.halt]);
     snapshot.signals = snapshot.signals.map(signal => ({ ...signal,
       forexState: "blocked", reason: snapshot.halt,

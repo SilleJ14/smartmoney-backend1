@@ -191,3 +191,19 @@ test("the allocator re-sizes over its own $0 block but respects other sizing blo
   assert.equal(getApprovedTradeAmount(blocked), 0);
   assert.ok(blocked.executionEligibility.reasons.includes("SIZING_BLOCKED"), JSON.stringify(blocked.executionEligibility.reasons));
 });
+
+test("re-reviews size crypto with a fresh broker snapshot and a re-calculated master profile", async () => {
+  const fs = await import("node:fs");
+  const source = fs.readFileSync(new URL("../server.js", import.meta.url), "utf8");
+  // The sizer refuses account/position evidence older than 10 s: keep it fresh.
+  assert.ok(source.includes("runLiveScheduledTask('refreshBrokerSnapshot', 5000, () => refreshBrokerSnapshot(4000))"));
+  const review = source.slice(source.indexOf("async function reviewCandidateScores("), source.indexOf("const earlyCandidateReassessment"));
+  assert.match(review, /Promise\.all\(\[freshRows, refreshBrokerSnapshot\(\)\]\)/);
+  assert.match(review, /installCentralDecision\(row, decision, \{ crypto \}\);\s*refreshMasterDecisionProfile\(row, decision\);/);
+  const incrementalStart = source.indexOf("const incrementalResearch = createIncrementalResearch(");
+  const incremental = source.slice(incrementalStart, source.indexOf("publish: rows =>", incrementalStart));
+  assert.match(incremental, /installCentralDecision\(current, decision, \{ crypto \}\);\s*refreshMasterDecisionProfile\(current, decision\);/);
+  // The profile refresh must not compound the engine's cumulative allocation multiplier.
+  const helper = source.slice(source.indexOf("function refreshMasterDecisionProfile("), source.indexOf("async function reviewCandidateScores("));
+  assert.doesNotMatch(helper, /allocationMultiplier/);
+});
