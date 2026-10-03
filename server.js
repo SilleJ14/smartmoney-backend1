@@ -110,6 +110,7 @@ import {
 import { normalizeAlpacaStockBook } from "./market-data/normalizedQuote.js";
 import { annotateFillExecution, spreadWideningRiskFromQuote } from "./scoring/executionEconomics.js";
 import { attachCryptoExecutionShadow } from "./scoring/cryptoExecutionEconomics.js";
+import { createCryptoOrderbookRefresher } from "./market-data/cryptoOrderbookRefresh.js";
 import { assessShareVolume, liquidityFromShareVolume } from "./scoring/evidenceState.js";
 import {
   calculateSpread,
@@ -18318,7 +18319,32 @@ function getFreshLiveCryptoQuote(symbol, maxAgeSeconds = 8) {
 async function getCryptoLatestQuote(symbol) {
   return alpacaCryptoMarketData.getLatestQuote(symbol);
 }
-const refreshCryptoExecutionQuotes = createCryptoExecutionQuoteRefresher({
+const refreshTopCryptoOrderbooks = createCryptoOrderbookRefresher({
+  getLatestOrderbooks: (symbols) => alpacaCryptoMarketData.getLatestOrderbooks(symbols),
+  normalizeSymbol,
+  isCrypto,
+  getCanonicalFinalScore,
+  attachShadow: (signal) => attachCryptoExecutionShadow(signal),
+  onError: (error, { failures, retryInMs }) =>
+    console.warn(`Alpaca crypto order book refresh failed (${failures}x, retry in ${Math.round(retryInMs / 1000)}s):`, error.message),
+});
+// Quotes and books are refreshed right before the central decision and sizing,
+// so neither step judges a coin on a book from an earlier scan. They are fetched
+// in parallel: fresh prices (stock or crypto) never wait behind a book request.
+async function refreshCryptoExecutionQuotes(signals = []) {
+  const [refreshed, books] = await Promise.all([
+    refreshCryptoExecutionQuotesOnly(signals),
+    refreshTopCryptoOrderbooks.fetchBooks(signals),
+  ]);
+  // The quote refresh built the analytical shadow from the previous book;
+  // rebuild it from the fresh one so the auto-buy permission check sees it.
+  refreshTopCryptoOrderbooks.attachBooks(books, [refreshed], (signal) => {
+    attachCryptoExecutionShadow(signal);
+    signal.cryptoAnalyticalShadow = buildCryptoDecisionScore(signal).cryptoAnalyticalShadow || signal.cryptoAnalyticalShadow;
+  });
+  return refreshed;
+}
+const refreshCryptoExecutionQuotesOnly = createCryptoExecutionQuoteRefresher({
   getLatestQuotes: (symbols) => alpacaCryptoMarketData.getLatestQuotes(symbols),
   normalizeSymbol,
   updateQuoteCache,
@@ -32138,6 +32164,9 @@ function startLiveScheduler() {
     void runLiveScheduledTask('forexProtection', 5000, () => forexScheduler.protect());
     void runLiveScheduledTask('forexDiscovery', 15000, () => forexScheduler.scan());
     void runLiveScheduledTask('refreshBrokerClock', 5000, () => getClock());
+    void runLiveScheduledTask('refreshTopCryptoOrderbooks', 2000, () => refreshTopCryptoOrderbooks(
+      [...(engineState.lastCryptoSignals || []), ...(engineState.topCryptoSignals || [])],
+      [engineState.lastCryptoSignals, engineState.topCryptoSignals, engineState.lastSignals, engineState.topSignals]));
     void runLiveScheduledTask('refreshIndependentMarketRegime', 30000, () => refreshIndependentMarketRegime());
     void runLiveScheduledTask('refreshCandidateNews', 5000, async () => {
       if (engineState.running || buildMemoryGuardSnapshot().shouldPauseHeavyWork) return;
