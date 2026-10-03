@@ -400,3 +400,24 @@ test("routing: bar route uses configured Tradier history first; unconfigured Tra
   const delayed = await sandbox.get("AAPL", "5Min", 20);
   assert.ok(delayed.every((bar) => bar.provenance.provider === "TRADIER" && bar.provenance.timing === "DELAYED"));
 });
+
+test("with the stock market closed, fallbacks only cover symbols Tradier returned nothing for", async () => {
+  const { createStockQuoteRouting: routing } = await import("../market-data/stockDataRouting.js");
+  const old = new Date(Date.now() - 20 * 3600000).toISOString();
+  const row = (symbol, source) => ({ symbol, price: 10, bid: 9.99, ask: 10.01, spreadAvailable: true,
+    liveQuoteUpdatedAt: old, spreadUpdatedAt: old, liveQuoteSource: source, source });
+  const asked = { polygon: [], alpaca: [] };
+  let open = false;
+  const collect = routing({
+    tradier: { getLatestQuotes: async (symbols) => symbols.filter((s) => s !== "MISS").map((s) => row(s, "tradier_stock_quote")) },
+    polygon: { getLatestQuotes: async (symbols) => { asked.polygon.push(...symbols); return []; } },
+    alpacaIex: async (symbols) => { asked.alpaca.push(...symbols); return []; },
+    normalizeSymbol: (s) => String(s).toUpperCase(),
+    fallbackForStale: () => open,
+  }).collect;
+  await collect(["AAPL", "MSFT", "MISS"]);
+  assert.deepEqual(asked, { polygon: ["MISS"], alpaca: ["MISS"] });
+  open = true; asked.polygon = []; asked.alpaca = [];
+  await collect(["AAPL", "MISS"]);
+  assert.deepEqual(asked.polygon.sort(), ["AAPL", "MISS"], "market open: stale Tradier quotes still get a fallback");
+});

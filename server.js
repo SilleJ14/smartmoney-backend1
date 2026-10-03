@@ -14232,8 +14232,32 @@ function isValidStockSymbol(symbol) {
   // Security type is checked using asset metadata, not ambiguous suffixes.
   return /^[A-Z]{1,5}(?:[.-][A-Z])?$/.test(s);
 }
+// Asset metadata (active, tradable, class) rarely changes. One Alpaca lookup per
+// symbol every few hours, instead of every scan, keeps the account under its
+// per-minute request limit as the Tradier sweep widens the scanned universe.
+const ASSET_METADATA_TTL_MS = 6 * 3600000;
+const ASSET_NOT_FOUND_TTL_MS = 3600000;
+const assetMetadataCache = new Map();
+function rememberAssetMetadata(key, entry) {
+  assetMetadataCache.delete(key);
+  assetMetadataCache.set(key, { ...entry, savedAt: Date.now() });
+  if (assetMetadataCache.size > 3000) assetMetadataCache.delete(assetMetadataCache.keys().next().value);
+}
 async function getAsset(symbol) {
-  return alpacaTradingRequest(`/v2/assets/${encodeURIComponent(symbol)}`);
+  const key = normalizeSymbol(symbol) || String(symbol);
+  const cached = assetMetadataCache.get(key);
+  if (cached && Date.now() - cached.savedAt < cached.ttlMs) {
+    if (cached.error) throw cached.error;
+    return { ...cached.asset };
+  }
+  try {
+    const asset = await alpacaTradingRequest(`/v2/assets/${encodeURIComponent(symbol)}`);
+    rememberAssetMetadata(key, { asset, ttlMs: ASSET_METADATA_TTL_MS });
+    return { ...asset };
+  } catch (error) {
+    if (error?.status === 404) rememberAssetMetadata(key, { error, ttlMs: ASSET_NOT_FOUND_TTL_MS });
+    throw error;
+  }
 }
 async function checkAssetEligibility(symbol) {
   try {
@@ -14786,6 +14810,9 @@ const stockQuoteRouting = createStockQuoteRouting({
   polygon: polygonStockQuotes,
   alpacaIex: getAlpacaLatestStockQuotes,
   maxFallbackMs: 3000,
+  // Overnight/weekend every quote is old; back-fill only symbols Tradier missed.
+  fallbackForStale: () => canRefreshStockQuotes({ marketOpen: engineState.marketOpen === true,
+    marketSession: getMarketSession({ is_open: engineState.marketOpen === true }) }),
   normalizeSymbol,
   onQuotes: quotes => { for (const quote of quotes) updateQuoteCache(quote.symbol, quote); },
 });
@@ -32164,7 +32191,7 @@ function startLiveScheduler() {
     void runLiveScheduledTask('forexProtection', 5000, () => forexScheduler.protect());
     void runLiveScheduledTask('forexDiscovery', 15000, () => forexScheduler.scan());
     void runLiveScheduledTask('refreshBrokerClock', 5000, () => getClock());
-    void runLiveScheduledTask('refreshTopCryptoOrderbooks', 2000, () => refreshTopCryptoOrderbooks(
+    void runLiveScheduledTask('refreshTopCryptoOrderbooks', 3000, () => refreshTopCryptoOrderbooks(
       [...(engineState.lastCryptoSignals || []), ...(engineState.topCryptoSignals || [])],
       [engineState.lastCryptoSignals, engineState.topCryptoSignals, engineState.lastSignals, engineState.topSignals]));
     void runLiveScheduledTask('refreshIndependentMarketRegime', 30000, () => refreshIndependentMarketRegime());

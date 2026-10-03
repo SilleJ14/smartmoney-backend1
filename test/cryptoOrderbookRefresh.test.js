@@ -106,5 +106,5 @@ test("the bot cycle fetches books in parallel with prices and rebuilds the permi
   const body = source.slice(source.indexOf("async function refreshCryptoExecutionQuotes("), source.indexOf("const refreshCryptoExecutionQuotesOnly"));
   assert.match(body, /Promise\.all\(\[\s*refreshCryptoExecutionQuotesOnly\(signals\),\s*refreshTopCryptoOrderbooks\.fetchBooks\(signals\),/);
   assert.match(body, /signal\.cryptoAnalyticalShadow = buildCryptoDecisionScore\(signal\)\.cryptoAnalyticalShadow/);
-  assert.ok(source.includes("runLiveScheduledTask('refreshTopCryptoOrderbooks', 2000"));
+  assert.ok(source.includes("runLiveScheduledTask('refreshTopCryptoOrderbooks', 3000"));
 });

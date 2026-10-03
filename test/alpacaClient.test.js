@@ -79,3 +79,42 @@ test("records broker failures and reports API health", async () => {
   assert.deepEqual(failures, ["order rejected"]);
   assert.deepEqual(health, [["alpacaTrading", false, "order rejected"]]);
 });
+
+test("after a 429, read requests wait out the backoff while orders and the clock still go through", async () => {
+  const { createAlpacaClient: create } = await import("../execution/alpacaClient.js");
+  let clock = 1_000_000;
+  const calls = [];
+  let limited = true;
+  const client = create({
+    getKeys: () => ({ key: "test-key", secret: "test-secret" }),
+    getTradingBaseUrl: () => "https://paper-api.alpaca.markets",
+    dataBaseUrl: "https://data.alpaca.markets",
+    now: () => clock,
+    fetchWithTimeout: async (url, options) => {
+      calls.push(`${options.method || "GET"} ${new URL(url).pathname}`);
+      return limited
+        ? new Response(JSON.stringify({ message: "rate limit exceeded" }), { status: 429 })
+        : new Response(JSON.stringify({ ok: true }), { status: 200 });
+    },
+  });
+  await assert.rejects(client.tradingRequest("/v2/positions"), { status: 429 });
+  assert.equal(calls.length, 1);
+  await assert.rejects(client.tradingRequest("/v2/account"), { code: "ALPACA_RATE_LIMIT_BACKOFF" });
+  assert.equal(calls.length, 1, "a read inside the backoff never reaches Alpaca");
+  limited = false;
+  await client.tradingRequest("/v2/orders", { method: "POST", body: JSON.stringify({ symbol: "AAPL", qty: "1", side: "sell", type: "market", time_in_force: "day" }) });
+  await client.tradingRequest("/v2/clock");
+  assert.deepEqual(calls.slice(1), ["POST /v2/orders", "GET /v2/clock"]);
+  clock += 16_000;
+  assert.deepEqual(await client.tradingRequest("/v2/account"), { ok: true });
+  // A second limit in a row doubles the wait (15 s -> 30 s).
+  limited = true;
+  await assert.rejects(client.tradingRequest("/v2/positions"), { status: 429 });
+  clock += 16_000;
+  await assert.rejects(client.tradingRequest("/v2/positions"), { status: 429 });
+  clock += 16_000;
+  await assert.rejects(client.tradingRequest("/v2/positions"), { code: "ALPACA_RATE_LIMIT_BACKOFF" });
+  clock += 15_000;
+  limited = false;
+  assert.deepEqual(await client.tradingRequest("/v2/positions"), { ok: true });
+});

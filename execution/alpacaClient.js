@@ -22,7 +22,13 @@ export function createAlpacaClient({
   isEmergencyStopActive = () => false,
   onTradingFailure = () => {},
   onApiHealth = () => {},
+  now = Date.now,
 }) {
+  // Alpaca's request limit is per account. After a 429, read-only calls wait out
+  // the window instead of retrying into it (which keeps the account limited).
+  // Orders and cancels are never held here; the broker clock keeps its cadence.
+  let readBlockedUntil = 0;
+  let consecutiveRateLimits = 0;
   function headers() {
     const { key, secret } = getKeys();
     return {
@@ -40,6 +46,14 @@ export function createAlpacaClient({
       emergencyStopActive: isEmergencyStopActive(),
     });
 
+    const readOnly = String(options.method || "GET").toUpperCase() === "GET" && path !== "/v2/clock";
+    if (readOnly && now() < readBlockedUntil) {
+      const error = new Error("Alpaca rate limit backoff: read request skipped");
+      error.status = 429;
+      error.code = "ALPACA_RATE_LIMIT_BACKOFF";
+      error.retryAfterMs = readBlockedUntil - now();
+      throw error;
+    }
     const { maxResponseBytes = 4 * 1024 * 1024, timeoutMs = 12000, ...requestOptions } = options;
     const response = await fetchWithTimeout(`${getTradingBaseUrl()}${path}`, {
       ...requestOptions,
@@ -65,9 +79,15 @@ export function createAlpacaClient({
       const retryAfter = response.headers?.get?.('retry-after');
       if (retryAfter) error.retryAfterMs = /^\d+(\.\d+)?$/.test(retryAfter)
         ? Number(retryAfter) * 1000 : Math.max(0, Date.parse(retryAfter) - Date.now());
+      if (response.status === 429) {
+        consecutiveRateLimits += 1;
+        const backoffMs = Math.min(60000, 15000 * 2 ** (consecutiveRateLimits - 1));
+        readBlockedUntil = Math.max(readBlockedUntil, now() + Math.max(Number(error.retryAfterMs) || 0, backoffMs));
+      }
       throw error;
     }
 
+    consecutiveRateLimits = 0;
     onApiHealth(healthName, true);
     return data;
   }

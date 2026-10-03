@@ -19,7 +19,7 @@ function addCounts(target, counts) {
 }
 
 export function createStockQuoteRouting({ tradier, polygon = null, alpacaIex = null, normalizeSymbol,
-  now = Date.now, maxFallbackMs = 3000, onQuotes = () => {}, onServed = () => {} } = {}) {
+  now = Date.now, maxFallbackMs = 3000, onQuotes = () => {}, onServed = () => {}, fallbackForStale = () => true } = {}) {
   if (typeof tradier?.getLatestQuotes !== "function") throw new Error("Tradier quote source required");
   const totals = { batches: 0, requested: 0, servedBy: {}, fallbackRequested: {} };
   let last = null;
@@ -36,6 +36,7 @@ export function createStockQuoteRouting({ tradier, polygon = null, alpacaIex = n
     maxFallbackMs,
     normalizeSymbol,
     now,
+    fallbackForStale,
     onQuotes,
     onServed: (summary) => {
       last = summary;

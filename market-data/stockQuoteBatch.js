@@ -23,8 +23,12 @@ async function runStage(stage, symbols, windowMs) {
 
 // Primary first; each fallback stage only sees symbols still lacking a fresh
 // quote+spread pair, in order, inside ONE bounded fallback budget.
+// When `fallbackForStale()` is false (stock market closed), every quote is old by
+// definition and no fallback can be fresher, so fallbacks only cover symbols the
+// primary returned nothing for.
 export function createStockQuoteBatch({ primary, fallback, fallbacks = null, normalizeSymbol, now = Date.now,
-  maxFallbackMs = 2000, onQuotes = () => {}, onServed = () => {}, primaryName = "primary" }) {
+  maxFallbackMs = 2000, onQuotes = () => {}, onServed = () => {}, primaryName = "primary",
+  fallbackForStale = () => true }) {
   const stages = stageList(fallbacks, fallback);
   return async (symbols = []) => {
     const fresh = (q) => {
@@ -33,7 +37,7 @@ export function createStockQuoteBatch({ primary, fallback, fallbacks = null, nor
     };
     const rows = await primary(symbols).catch(() => []);
     const primaryFresh = rows.filter(fresh);
-    const present = new Set(primaryFresh.map((q) => normalizeSymbol(q.symbol)));
+    const present = new Set((fallbackForStale() === false ? rows : primaryFresh).map((q) => normalizeSymbol(q.symbol)));
     onQuotes(primaryFresh);
     const bySymbol = new Map(rows.map((q) => [normalizeSymbol(q.symbol), q]));
     const servedBy = new Map(rows.map((q) => [normalizeSymbol(q.symbol), primaryName]));
