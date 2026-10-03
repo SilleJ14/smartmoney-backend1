@@ -131,3 +131,63 @@ test("incremental research keeps a live crypto size instead of wiping it", () =>
   assert.ok(published[0].finalApprovedTradeAmount >= 25);
   assert.equal(published[0].researchOnly, false);
 });
+
+test("an unsized coin is judged at the minimum order size, not stuck waiting for a size", async () => {
+  const { buildCryptoDecisionScore } = await import("../scoring/componentScore.js");
+  const { liveCryptoPermission } = await import("../scoring/cryptoAnalyticalShadow.js");
+  const { cryptoDecisionInput } = await import("../scoring/cryptoExecutableAllocation.js");
+  const now = Date.now();
+  const unsized = liveBtc(now, { intendedNotional: null, finalApprovedTradeAmount: null, recommendedTradeAmount: null });
+  const withoutSize = liveCryptoPermission(buildCryptoDecisionScore(unsized, { now }).cryptoAnalyticalShadow);
+  assert.equal(withoutSize.allowed, false);
+  assert.ok(withoutSize.reasons.includes("INTENDED_NOTIONAL_UNKNOWN"), JSON.stringify(withoutSize.reasons));
+  const decision = cryptoDecisionInput(unsized, config);
+  assert.equal(decision.provisionalNotional, config.minCryptoTradeAmount);
+  assert.equal(unsized.intendedNotional, null, "the live signal is never given the provisional size");
+  const atMinimum = liveCryptoPermission(buildCryptoDecisionScore(decision.input, { now }).cryptoAnalyticalShadow);
+  assert.equal(atMinimum.allowed, true, JSON.stringify(atMinimum.reasons));
+  // A $0 minimum must not bring the deadlock back.
+  const zeroMinimum = cryptoDecisionInput(unsized, { ...config, minCryptoTradeAmount: 0 });
+  assert.equal(zeroMinimum.provisionalNotional, 1);
+  assert.equal(liveCryptoPermission(buildCryptoDecisionScore(zeroMinimum.input, { now }).cryptoAnalyticalShadow).allowed, true);
+  assert.equal(cryptoDecisionInput(unsized, {}).provisionalNotional, 25);
+  // An already sized coin is judged at its own size.
+  const sizedCoin = liveBtc(now, { intendedNotional: 400 });
+  assert.equal(cryptoDecisionInput(sizedCoin, config).input, sizedCoin);
+  assert.equal(cryptoDecisionInput(sizedCoin, config).provisionalNotional, null);
+  const fs = await import("node:fs");
+  assert.ok(fs.readFileSync(new URL("../server.js", import.meta.url), "utf8").includes("cryptoDecisionInput(signal, CONFIG)"),
+    "the central decision must use cryptoDecisionInput");
+});
+
+test("a size from an earlier decision does not stop the coin being sized for the new one", () => {
+  const first = Date.now() - 30_000;
+  const sized = attachCryptoExecutableAllocation(liveBtc(first), { now: first, account, positions: [], config });
+  assert.ok(getApprovedTradeAmount(sized) > 0);
+  // Next cycle: a new central decision is installed; the old size keeps its old stamp.
+  const now = Date.now();
+  sized.decisionUpdatedAt = new Date(now).toISOString();
+  Object.assign(sized, { liveQuoteUpdatedAt: sized.decisionUpdatedAt, spreadUpdatedAt: sized.decisionUpdatedAt });
+  sized.cryptoOrderbook = { ...sized.cryptoOrderbook, updatedAt: sized.decisionUpdatedAt };
+  assert.equal(isSizingRevoked(sized), true);
+  const resized = attachCryptoExecutableAllocation(sized, { now, account, positions: [], config });
+  assert.equal(isSizingRevoked(resized), false);
+  assert.ok(getApprovedTradeAmount(resized) > 0, JSON.stringify(resized.executionEligibility?.reasons));
+  assert.equal(resized.buyableNow, true);
+});
+
+test("the allocator re-sizes over its own $0 block but respects other sizing blocks", () => {
+  const now = Date.now();
+  const ownBlock = liveBtc(now, { finalApprovedTradeAmount: 0, finalTradeAmount: 0, recommendedTradeAmount: 0,
+    sizingDecisionUpdatedAt: new Date(now).toISOString(),
+    finalSizingReconciliation: { finalTradeAmount: 0, finalBlocked: true, basis: "CRYPTO_ANALYTICAL_XRS_LIVE_QUOTE" } });
+  ownBlock.sizingDecisionUpdatedAt = ownBlock.decisionUpdatedAt;
+  const resized = attachCryptoExecutableAllocation(ownBlock, { now, account, positions: [], config });
+  assert.ok(getApprovedTradeAmount(resized) > 0, JSON.stringify(resized.executionEligibility?.reasons));
+  const externalBlock = liveBtc(now, {
+    finalSizingReconciliation: { finalTradeAmount: 0, finalBlocked: true, basis: "PORTFOLIO_GOVERNOR" } });
+  const blocked = attachCryptoExecutableAllocation(externalBlock, { now, account, positions: [], config });
+  assert.equal(blocked.buyableNow, false);
+  assert.equal(getApprovedTradeAmount(blocked), 0);
+  assert.ok(blocked.executionEligibility.reasons.includes("SIZING_BLOCKED"), JSON.stringify(blocked.executionEligibility.reasons));
+});

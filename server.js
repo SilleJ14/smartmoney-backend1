@@ -180,7 +180,7 @@ import {
   calculateTrendQualityHoldDuration as calculateTrendQualityHoldDurationCore,
 } from "./risk/exitRiskEngine.js";
 import { calculateDynamicTradeAmount } from "./risk/positionSizing.js";
-import { attachCryptoExecutableAllocation } from "./scoring/cryptoExecutableAllocation.js";
+import { attachCryptoExecutableAllocation, cryptoDecisionInput } from "./scoring/cryptoExecutableAllocation.js";
 import { attachStockExecutableAllocation } from "./scoring/stockExecutableAllocation.js";
 import { calculateLossBudgetSizing } from "./risk/lossBudgetSizing.js";
 import { confirmedBotOwnedSymbols } from "./execution/confirmedOwnership.js";
@@ -27604,9 +27604,14 @@ function calculateCentralAutonomousDecisionCore(stockSignals = [], cryptoSignals
     signal = snapshot.input;
     engineState.decisionRevision = Math.max(Number(engineState.decisionRevision || 0) + 1, Date.now() * 1000);
     const decisionRevision = engineState.decisionRevision;
+    const cryptoDecision = isCryptoSignal ? cryptoDecisionInput(signal, CONFIG) : null;
     const cryptoDecisionEvidence = isCryptoSignal
-      ? buildCryptoDecisionScore(signal)
+      ? buildCryptoDecisionScore(cryptoDecision.input)
       : null;
+    // Label the provisional size so audits and the UI never read it as the order size.
+    if (cryptoDecisionEvidence && Object.isExtensible(cryptoDecisionEvidence)) {
+      cryptoDecisionEvidence.provisionalNotional = cryptoDecision.provisionalNotional;
+    }
     const stockDecisionEvidence = isCryptoSignal
       ? null
       : buildStockDecisionScore(signal);

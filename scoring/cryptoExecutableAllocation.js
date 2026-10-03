@@ -3,6 +3,18 @@ import { getCanonicalFinalScore } from "./canonicalSignalRank.js";
 import { calculateDynamicTradeAmount } from "../risk/positionSizing.js";
 import { availableBuyingPower } from "../risk/brokerEvidence.js";
 import { outstandingOrderNotional } from "../risk/orderRiskReservations.js";
+import { isSizingRevoked } from "./approvedSizing.js";
+
+// The central decision runs before sizing, so an unsized coin has no notional and
+// its execution check would WAIT forever. Judge it at the smallest order this
+// allocator can place (never below $1); the allocator and the order guard
+// re-check depth and slippage at the real size.
+export function cryptoDecisionInput(signal = {}, config = {}) {
+  const sized = Number(signal.intendedNotional ?? signal.finalApprovedTradeAmount ?? signal.recommendedTradeAmount) > 0;
+  if (sized) return { input: signal, provisionalNotional: null };
+  const provisionalNotional = Math.max(1, Number(config.minCryptoTradeAmount ?? 25) || 0);
+  return { input: { ...signal, intendedNotional: provisionalNotional }, provisionalNotional };
+}
 
 // Measured analytical F plus a valid setup and live Alpaca execution evidence
 // can receive a size. There is no inherited legacy F65 threshold.
@@ -14,6 +26,15 @@ export function attachCryptoExecutableAllocation(signal = {}, {
   reservations = {},
   dailyStartEquity,
 } = {}) {
+  // This allocator is the crypto sizing authority. Its own earlier result (a size
+  // stamped for an older decision, or a $0 block from an earlier pass) must not
+  // stop it sizing the current decision. Other sizing blocks are left in place.
+  if (isSizingRevoked(signal) || signal.finalSizingReconciliation?.basis === "CRYPTO_ANALYTICAL_XRS_LIVE_QUOTE") {
+    Object.assign(signal, {
+      sizingDecisionUpdatedAt: null, finalSizingReconciliation: null, intendedNotional: null,
+      finalApprovedTradeAmount: null, finalTradeAmount: null, recommendedTradeAmount: null, displayTradeAmount: null,
+    });
+  }
   const preflight = evaluateCryptoTradeCandidate(signal, { now, requireExplicitApproval: false });
   signal.cryptoAnalyticalShadow = preflight.evidence?.cryptoAnalyticalShadow || null;
   signal.currentAnalyticalSnapshot = preflight.evidence?.currentAnalyticalSnapshot || null;
