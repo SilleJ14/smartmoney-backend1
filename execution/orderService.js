@@ -1,4 +1,5 @@
 import { randomUUID } from 'node:crypto';
+import { assertCryptoLimitBuyPayload } from './cryptoLimitOrder.js';
 function confirmationIdentity(value) {
   if (value != null && !/^[a-f0-9-]{36}$/i.test(value)) throw new Error('Invalid confirmation identity');
   return value || randomUUID();
@@ -54,6 +55,11 @@ export function createOrderService({
       const authorization = preTradeRiskGuard ? await preTradeRiskGuard.assertAllowed(payload, options) : null;
       if (payload.side === 'buy' && reserveRisk) riskReservation = await reserveRisk(payload, options);
       authorization?.assertCurrent?.();
+      // Crypto buys are price-protected limits priced by the final guard from
+      // the Alpaca ask it verified. Without that pricing nothing is sent.
+      if (payload.side === 'buy' && options.cryptoPriceProtectedBuy === true) {
+        payload = assertCryptoLimitBuyPayload(payload, authorization?.cryptoLimitOrder);
+      }
       executionLifecycle?.submitting(payload, options, position);
       submitted = true;
       const result = await tradingRequest("/v2/orders", {
@@ -75,6 +81,10 @@ export function createOrderService({
     }
   }
 
+  // Automated and manual crypto buys. The submitted intent carries the
+  // approved dollar amount only; the final pre-trade guard converts it into a
+  // qty-based marketable LIMIT (IOC) capped above the Alpaca ask it verified.
+  // A notional market order is never sent for a crypto buy.
   function cryptoMarketBuy({ symbol, dollars, allowExistingOpenOrder = false, manual = false, confirmationId }) {
     const cleanSymbol = normalizeSymbol(symbol);
     const amount = positiveNumber(dollars, "crypto buy amount");
@@ -82,10 +92,9 @@ export function createOrderService({
       symbol: cleanSymbol,
       notional: Math.floor(amount * 100 + 1e-8) / 100,
       side: "buy",
-      type: "market",
-      time_in_force: "gtc",
       client_order_id: manual || confirmationId ? `${clientOrderPrefix}_C_${confirmationIdentity(confirmationId)}` : `${clientOrderPrefix}_CRYPTO_BUY_${cleanSymbol}_${now()}`,
     }, { allowExistingOpenOrder, holdCategory: "crypto", automated: !manual,
+      cryptoPriceProtectedBuy: true,
       maximumConfirmedAmount: confirmationId || manual ? amount : undefined });
   }
 

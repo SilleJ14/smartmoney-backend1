@@ -16,6 +16,9 @@ export function createManagedExecution({ state, persist, request, getManagedSymb
   let lastChecked = 0;
   let ready = false;
   const increments = new Map();
+  // Symbols holding a broker position at the last reconciliation (which every
+  // automated buy runs immediately before submitting).
+  let reconciledPositionSymbols = new Set();
   const prefix = 'SM_PROTECT_';
   function exclusive(fn) {
     if (queued >= 32) return Promise.reject(new Error('Execution reconciliation busy; retry later'));
@@ -133,16 +136,85 @@ export function createManagedExecution({ state, persist, request, getManagedSymb
     await reconcileNow();
     if (!ready) throw new Error('Position protection not reconciled; new buys paused');
   }
+  function planWithoutHistory(plan) {
+    if (!plan || typeof plan !== 'object') return null;
+    const { previousPlan, ...rest } = plan;
+    return rest;
+  }
   function submitting(payload, options, position) {
     if (payload.side === 'sell') track(payload, position, options.reason || 'MANUAL_OR_AI_EXIT');
     if (payload.side === 'buy' && isCrypto(payload.symbol) && options.cryptoTradePlan) {
       ledger.buyPlans ||= {};
-      if (Object.keys(ledger.buyPlans).length >= 64 && !ledger.buyPlans[key(payload.symbol)]) throw new Error('Crypto protection plan capacity reached');
-      const previous = ledger.buyPlans[key(payload.symbol)];
-      ledger.buyPlans[key(payload.symbol)] = { ...options.cryptoTradePlan,
-        stopPrice: Math.max(previous?.stopPrice || 0, options.cryptoTradePlan.stopPrice),
-        clientId: payload.client_order_id, symbol: payload.symbol };
+      const symbol = key(payload.symbol);
+      if (Object.keys(ledger.buyPlans).length >= 64 && !ledger.buyPlans[symbol]) throw new Error('Crypto protection plan capacity reached');
+      const previous = ledger.buyPlans[symbol];
+      // A plan protects an actual position. With no position, a previous plan
+      // belongs to an order that never filled (e.g. an unfilled IOC limit):
+      // replace it instead of carrying its stop into this entry. Only a
+      // scale-in into an existing position merges (keeps the higher stop).
+      const positionAtSubmit = Number(options.riskBaseQty) > 0 || reconciledPositionSymbols.has(symbol);
+      const merge = Boolean(positionAtSubmit && previous && typeof previous === 'object');
+      ledger.buyPlans[symbol] = { ...options.cryptoTradePlan,
+        stopPrice: merge ? Math.max(Number(previous.stopPrice) || 0, options.cryptoTradePlan.stopPrice) : options.cryptoTradePlan.stopPrice,
+        clientId: payload.client_order_id, symbol: payload.symbol, submittedAt: now(),
+        requestedQty: positive(payload.qty) ? Number(payload.qty) : null, positionAtSubmit,
+        // Restored if this order ends unfilled, so a scale-in that never
+        // filled cannot leave its stop on the existing position.
+        ...(merge ? { previousPlan: planWithoutHistory(previous) } : {}) };
       save(); // Durable before POST, including uncertain/partial fills.
+    }
+  }
+  // A crypto buy that ended with nothing filled: its plan protects nothing, and
+  // any position in the symbol is not from this order. Drop the plan (fresh
+  // entry), or restore the plan that was in force before a scale-in attempt.
+  function settleUnfilledBuyPlan(symbol, plan) {
+    if (!ledger.buyPlans || ledger.buyPlans[symbol] !== plan) return;
+    if (plan.previousPlan && typeof plan.previousPlan === 'object') ledger.buyPlans[symbol] = plan.previousPlan;
+    else delete ledger.buyPlans[symbol];
+    save();
+  }
+  // Reconcile each plan with the actual outcome of the buy that wrote it.
+  async function settleBuyPlans(current, open) {
+    for (const [symbol, plan] of Object.entries(ledger.buyPlans || {})) {
+      if (plan?.buyTerminal === true) {
+        // The position this filled plan protected was closed outside the
+        // managed ledger (seen flat for a full grace period): drop the plan so
+        // a later entry (e.g. a manual buy, which writes no plan) cannot inherit its stop.
+        if (!current.some(p => key(p.symbol) === symbol) && now() - Number(plan.settledAt || 0) >= NEVER_REACHED_BROKER_MS) {
+          delete ledger.buyPlans[symbol];
+          save();
+        }
+        continue;
+      }
+      if (!plan || typeof plan !== 'object' || !plan.clientId) continue;
+      let order = open.find(o => o.client_order_id === plan.clientId) || null;
+      if (!order) {
+        try {
+          order = await request(`/v2/orders:by_client_order_id?client_order_id=${encodeURIComponent(plan.clientId)}`);
+        } catch (error) {
+          if (Number(error?.status || error?.statusCode) !== 404) continue; // Unknown: keep, retry next cycle.
+          if (plan.submittedAt != null) {
+            // The broker never received this buy (POST lost) after the grace period.
+            if (now() - Number(plan.submittedAt) >= NEVER_REACHED_BROKER_MS) settleUnfilledBuyPlan(symbol, plan);
+          } else if (!current.some(p => key(p.symbol) === symbol)) {
+            settleUnfilledBuyPlan(symbol, plan); // Legacy plan, untraceable order, nothing to protect.
+          } else {
+            Object.assign(plan, { buyTerminal: true, buyStatus: 'not_found', settledAt: now() }); // Legacy: keep, stop polling.
+            save();
+          }
+          continue;
+        }
+      }
+      if (!order || order.side !== 'buy' || key(order.symbol) !== symbol || !terminal.has(order.status)) continue;
+      if (order.filled_qty == null || order.filled_qty === '' || !Number.isFinite(Number(order.filled_qty)) || Number(order.filled_qty) < 0) continue;
+      const filledQty = Number(order.filled_qty);
+      if (filledQty === 0) { settleUnfilledBuyPlan(symbol, plan); continue; }
+      // Filled (fully or partly, e.g. IOC canceled after a partial fill): keep
+      // the plan, sized to what actually filled; protection covers the position.
+      const { previousPlan, ...settled } = plan;
+      ledger.buyPlans[symbol] = { ...settled, buyTerminal: true, buyStatus: order.status, orderId: order.id || plan.orderId || null,
+        filledQty, settledAt: now() };
+      save();
     }
   }
   async function submitted({ payload, result }) {
@@ -152,16 +224,32 @@ export function createManagedExecution({ state, persist, request, getManagedSymb
       save();
       if (result?.id) recordFill(row, result);
     }
+    const plan = payload.side === 'buy' ? ledger.buyPlans?.[key(payload.symbol)] : null;
+    if (plan && plan.clientId === payload.client_order_id && result?.id) { plan.orderId = result.id; save(); }
     ready = false;
     state.positionProtection = { ok: false, checkedAt: new Date(now()).toISOString(), reason: 'Order submitted; awaiting updated fills and protection' };
     // The next independent cycle refreshes positions and protects actual fills.
   }
-  function failed({ payload, error, submitted: sent }) {
-    const row = ledger.orders[payload.client_order_id];
-    if (!row) return;
+  // Not sent, or a broker 4xx rejection (not a timeout/rate limit, not an
+  // identity conflict that may mean the first POST succeeded): never filled.
+  function definitivelyNotFilled(error, sent) {
     const status = Number(error?.statusCode || error?.status || 0);
     const identityConflict = /duplicate|client.?order.?id.*(unique|exist|used)/i.test(String(error?.message || ''));
-    if (!sent || (!identityConflict && status >= 400 && status < 500 && ![408, 429].includes(status))) {
+    return !sent || (!identityConflict && status >= 400 && status < 500 && ![408, 429].includes(status));
+  }
+  function failed({ payload, error, submitted: sent }) {
+    if (payload?.side === 'buy') {
+      const symbol = key(payload.symbol);
+      const plan = ledger.buyPlans?.[symbol];
+      // Only the plan this very order wrote; an uncertain outcome keeps it.
+      if (plan && plan.clientId === payload.client_order_id && definitivelyNotFilled(error, sent)) {
+        settleUnfilledBuyPlan(symbol, plan);
+      }
+      return;
+    }
+    const row = ledger.orders[payload.client_order_id];
+    if (!row) return;
+    if (definitivelyNotFilled(error, sent)) {
       row.status = 'rejected'; row.done = true;
     } else row.status = 'uncertain';
     ready = false;
@@ -172,7 +260,9 @@ export function createManagedExecution({ state, persist, request, getManagedSymb
     const rows = activeRows(symbol);
     const pendingSellQty = rows.filter(r => !r.protective).reduce((sum, r) => sum + r.qty - r.filledQty, 0);
     const crypto = isCrypto(symbol);
-    const qty = Number((Number(position.qty) - pendingSellQty).toFixed(8));
+    // Floor at Alpaca's 9-decimal quantity precision: rounding (toFixed(8))
+    // could put the stop above the held quantity and get it rejected.
+    const qty = Math.floor((Number(position.qty) - pendingSellQty) * 1e9 + 1e-3) / 1e9;
     if (qty <= 0) return; // The working market exit covers the entire remaining position.
     const config = getConfig();
     const distance = Math.max(6, Math.abs(Number(config.stopLossPercent) || 2), Math.abs(Number(config.liveHardStopPercent) || 3.5));
@@ -228,6 +318,7 @@ export function createManagedExecution({ state, persist, request, getManagedSymb
         catch (error) { uncertainSymbols.add(key(row.symbol)); errors.push(error); }
       }
       const current = await positions();
+      reconciledPositionSymbols = new Set(current.map(p => key(p.symbol)));
       const managed = new Set(Array.from(await getManagedSymbols(current)).map(key));
       // Broker-side fills survive process outages through the durable order IDs above.
       for (const [symbol, total] of Object.entries(ledger.realized)) {
@@ -242,6 +333,8 @@ export function createManagedExecution({ state, persist, request, getManagedSymb
         if (ledger.buyPlans) delete ledger.buyPlans[symbol];
         save();
       }
+      // Before any stop is placed: drop plans of buys that never filled.
+      try { await settleBuyPlans(current, open); } catch (error) { errors.push(error); }
       for (const position of current) if (managed.has(key(position.symbol)) && !uncertainSymbols.has(key(position.symbol))) {
         try { await protect(position, open); } catch (error) { errors.push(error); }
       }

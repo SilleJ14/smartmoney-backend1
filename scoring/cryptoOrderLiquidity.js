@@ -1,10 +1,18 @@
+import { cryptoBookTop, effectiveCryptoEvidenceAgeMs } from './cryptoReferenceVerification.js';
+
 // Simulate crossing a bounded execution-venue book, on both sides. Depth is a
 // snapshot, not a fill promise; all checks run again immediately before submit.
+// `referenceVerification` (crypto reference check covering this book's exact
+// provider time) may supply the effective age of a quiet, unchanged book.
 export function assessCryptoOrderLiquidity(book, { symbol, notional, now = Date.now(), maxAgeMs = 5000,
-  feePercentPerSide = .25, maxSlippagePercent = .5, depthParticipation = .1 } = {}) {
+  feePercentPerSide = .25, maxSlippagePercent = .5, depthParticipation = .1, referenceVerification = null } = {}) {
   const fail = reason => ({ available: false, approved: false, reasons: [reason], maxNotional: 0 });
   if (!book || book.source !== 'alpaca_crypto_orderbook' || book.location !== 'us' || book.symbol !== symbol) return fail('EXECUTION_VENUE_ORDERBOOK_UNAVAILABLE');
-  const age = now - Date.parse(book.updatedAt || '');
+  const bookProviderAt = Date.parse(book.updatedAt || '');
+  const age = Number.isFinite(bookProviderAt)
+    ? effectiveCryptoEvidenceAgeMs({ providerAtMs: bookProviderAt, verification: referenceVerification, now, symbol,
+      ...cryptoBookTop(book), kind: 'book' })
+    : NaN;
   if (!Number.isFinite(age) || age < 0 || age > Math.min(5000, maxAgeMs)) return fail('CRYPTO_ORDERBOOK_STALE');
   if (![notional, feePercentPerSide, maxSlippagePercent, depthParticipation].every(Number.isFinite) || notional <= 0 ||
     feePercentPerSide < 0 || feePercentPerSide > 2 || maxSlippagePercent <= 0 || maxSlippagePercent > 1 || depthParticipation <= 0 || depthParticipation > .25) return fail('INVALID_CRYPTO_LIQUIDITY_POLICY');

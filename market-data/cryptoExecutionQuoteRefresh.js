@@ -6,6 +6,9 @@ export function createCryptoExecutionQuoteRefresher({
   normalizeSymbol,
   updateQuoteCache,
   getCachedQuote = () => null,
+  // Optional crypto reference check, computed here (a decision/sizing
+  // boundary) and attached as a separate field. Never re-stamps Alpaca times.
+  verifyReference = null,
   onError = () => {},
 } = {}) {
   return async function refreshCryptoExecutionQuotes(signals = []) {
@@ -83,6 +86,11 @@ export function createCryptoExecutionQuoteRefresher({
         },
         ...percentPatch,
       };
+      if (typeof verifyReference === "function") {
+        let verification = null;
+        try { verification = verifyReference(refreshed) || null; } catch { verification = null; }
+        refreshed.cryptoReferenceVerification = verification;
+      }
       return revalidateCandidate(signal, refreshed);
       }));
     }

@@ -27,6 +27,12 @@ import {
   mergeLiveQuoteEvidence,
   mergeMeasuredPercentChange,
 } from "../live/liveQuoteCache.js";
+import {
+  cryptoBookTop,
+  cryptoReferenceCovers,
+  effectiveCryptoEvidenceAgeMs,
+  verifyCryptoQuoteCurrent,
+} from "../scoring/cryptoReferenceVerification.js";
 
 function asArray(value) {
   return Array.isArray(value) ? value : [];
@@ -154,6 +160,8 @@ export function buildLiveMovers({
   mergeLiveQuote,
   isCrypto,
   now = () => new Date(),
+  // Crypto display only: independent reference trade lookup (null = none).
+  getCryptoReference = () => null,
 }) {
   // Collapse duplicate/raw candidates before running the relatively expensive
   // live score refresh.  In particular, a raw early-mover placeholder must not
@@ -323,17 +331,52 @@ export function buildLiveMovers({
     const spreadAgeSeconds = Number.isFinite(spreadTimestamp)
       ? (scoringNow.getTime() - spreadTimestamp) / 1000
       : null;
+    // Crypto only: verify the (possibly quiet) Alpaca quote against a fresh
+    // reference trade at this display build. Provider times are unchanged.
+    let cryptoReferenceVerification = null;
+    if (cryptoAsset) {
+      let reference = null;
+      try { reference = getCryptoReference(symbol) || null; } catch { reference = null; }
+      const book = merged.cryptoOrderbook && typeof merged.cryptoOrderbook === "object" ? merged.cryptoOrderbook : null;
+      const bookAt = book ? (book.updatedAt ?? NaN) : undefined;
+      const bookTop = cryptoBookTop(book);
+      cryptoReferenceVerification = verifyCryptoQuoteCurrent({
+        symbol,
+        bid,
+        ask,
+        quoteProviderAtMs: liveQuoteTimestamp,
+        spreadProviderAtMs: Number.isFinite(spreadTimestamp) ? spreadTimestamp : undefined,
+        bookProviderAtMs: bookAt,
+        bookBid: bookTop.bid,
+        bookAsk: bookTop.ask,
+        reference,
+        now: scoringNow.getTime(),
+      });
+    }
+    // Coverage is bound to the same bid/ask that was verified above.
+    const quoteCoverage = { providerAtMs: liveQuoteTimestamp, verification: cryptoReferenceVerification,
+      now: scoringNow.getTime(), symbol, bid, ask, kind: "quote" };
+    const spreadCoverage = { ...quoteCoverage, providerAtMs: spreadTimestamp, kind: "spread" };
+    const cryptoQuoteVerified = cryptoAsset && cryptoReferenceCovers(quoteCoverage);
+    const cryptoSpreadVerified = cryptoAsset && cryptoReferenceCovers(spreadCoverage);
+    const effectiveQuoteAgeSeconds = cryptoQuoteVerified
+      ? effectiveCryptoEvidenceAgeMs(quoteCoverage) / 1000
+      : liveQuoteAgeSeconds;
+    const effectiveSpreadAgeSeconds = cryptoSpreadVerified
+      ? effectiveCryptoEvidenceAgeMs(spreadCoverage) / 1000
+      : spreadAgeSeconds;
     const liveQuoteFresh =
-      priceIsLive &&
-      liveQuoteAgeSeconds !== null &&
-      liveQuoteAgeSeconds >= -5 &&
-      liveQuoteAgeSeconds <= 5;
+      (priceIsLive || (cryptoQuoteVerified && Boolean(liveQuoteUpdatedAt) &&
+        isLiveQuoteSource(liveQuoteSource, "crypto"))) &&
+      effectiveQuoteAgeSeconds !== null &&
+      effectiveQuoteAgeSeconds >= -5 &&
+      effectiveQuoteAgeSeconds <= 5;
     const liveSpreadFresh =
       spreadAvailable &&
       isLiveQuoteSource(spreadSource, cryptoAsset ? "crypto" : "stock") &&
-      spreadAgeSeconds !== null &&
-      spreadAgeSeconds >= -5 &&
-      spreadAgeSeconds <= 5;
+      effectiveSpreadAgeSeconds !== null &&
+      effectiveSpreadAgeSeconds >= -5 &&
+      effectiveSpreadAgeSeconds <= 5;
     const scoringSignal = {
       ...merged,
       ...(cryptoAsset ? { cryptoRealism: { ...(merged.cryptoRealism || {}), spreadAvailable, spreadPercent } } : {}),
@@ -359,6 +402,7 @@ export function buildLiveMovers({
       liveQuoteUpdatedAt,
       liveQuoteSource,
       priceIsLive,
+      ...(cryptoAsset ? { cryptoReferenceVerification } : {}),
     };
     const stockDiscovery = cryptoAsset
       ? null
@@ -543,6 +587,16 @@ export function buildLiveMovers({
         : Number(liveQuoteAgeSeconds.toFixed(2)),
       liveQuoteFresh,
       priceIsLive,
+      ...(cryptoAsset ? {
+        cryptoReferenceVerification,
+        liveQuoteReferenceVerified: cryptoQuoteVerified,
+        liveQuoteEffectiveAgeSeconds: effectiveQuoteAgeSeconds === null
+          ? null
+          : Number(effectiveQuoteAgeSeconds.toFixed(2)),
+        spreadEffectiveAgeSeconds: effectiveSpreadAgeSeconds === null
+          ? null
+          : Number(effectiveSpreadAgeSeconds.toFixed(2)),
+      } : {}),
       score: displayScore,
       institutionalScore: displayScore,
       aiConfidence: displayScore,

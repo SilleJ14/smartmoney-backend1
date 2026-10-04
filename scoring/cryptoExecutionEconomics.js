@@ -1,5 +1,6 @@
 import { CRYPTO_MAX_ENTRY_SPREAD_PERCENT, resolveCryptoLiquidityEvidence } from "./cryptoScoring.js";
 import { dominantState } from "./evidenceState.js";
+import { cryptoBookTop, effectiveCryptoEvidenceAgeMs } from "./cryptoReferenceVerification.js";
 
 // Shadow execution economics for one crypto order. This does not feed F.
 // The 0.85% quoted-spread gate stays a separate coarse check.
@@ -274,7 +275,13 @@ export function buildCryptoExecutionEconomics(signal = {}, {
   if (book.symbol && signal.symbol && book.symbol !== signal.symbol) findings.push({ state: "REJECT", reason: "BOOK_SYMBOL_MISMATCH" });
   if (!bookVenue) findings.push({ state: "DATA_UNAVAILABLE", reason: "BOOK_VENUE_UNKNOWN" });
   else if (bookVenue !== executionVenue && allowCrossVenue !== true) findings.push({ state: "REJECT", reason: "BOOK_VENUE_MISMATCH" });
-  const age = now - Date.parse(book.updatedAt || "");
+  // Provider time of the book; a covering reference verification (crypto only)
+  // supplies the effective age of a quiet, unchanged book.
+  const bookProviderAt = Date.parse(book.updatedAt || "");
+  const age = Number.isFinite(bookProviderAt)
+    ? effectiveCryptoEvidenceAgeMs({ providerAtMs: bookProviderAt, verification: signal.cryptoReferenceVerification,
+      now, symbol: signal.symbol || book.symbol, ...cryptoBookTop(book), kind: "book" })
+    : NaN;
   if (!Number.isFinite(age) || age < 0 || age > CRYPTO_BOOK_DEPTH_POLICY.maxBookAgeMs) {
     findings.push({ state: "WAIT", reason: "ORDER_BOOK_STALE" });
   }

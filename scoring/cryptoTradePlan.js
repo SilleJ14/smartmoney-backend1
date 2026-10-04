@@ -5,6 +5,7 @@ import { attachCryptoExecutionShadow } from './cryptoExecutionEconomics.js';
 export function evaluateCryptoTradePlan(signal, { now = Date.now(), notional, feePercentPerSide = .25, manual = false } = {}) {
   const liquidity = assessCryptoOrderLiquidity(signal.cryptoOrderbook, {
     symbol: signal.symbol, notional, now, feePercentPerSide,
+    referenceVerification: signal.cryptoReferenceVerification || null,
   });
   const referencePrice = Number(signal.price ?? signal.current);
   const matchingPrice = liquidity.available && referencePrice > 0 &&

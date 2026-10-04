@@ -17,6 +17,7 @@ import { recentBarVolumeEvidence } from '../market-data/volumeEvidence.js';
 import { normalizeCryptoVolume } from '../market-data/normalizeCryptoVolume.js';
 import { immutableBarHistory } from '../market-data/barSnapshot.js';
 import { attachCryptoExecutionShadow } from '../scoring/cryptoExecutionEconomics.js';
+import { effectiveCryptoEvidenceAgeMs, verifyCryptoQuoteCurrent } from '../scoring/cryptoReferenceVerification.js';
 import { cryptoRiskEvidence } from '../scoring/decisionGateRegistry.js';
 
 export async function mapWithConcurrency(items = [], concurrency = 4, worker) {
@@ -107,8 +108,24 @@ function cryptoQuoteTimestampMs(quote = {}) {
 export function mergeLatestCryptoPriceWithAlpacaSpread(
   priceQuote = null,
   alpacaQuote = null,
-  { now = Date.now(), maxSpreadAgeSeconds = 5 } = {}
+  { now = Date.now(), maxSpreadAgeSeconds = 5, symbol = null, reference = null } = {}
 ) {
+  // Spread age in seconds. Crypto only: when a fresh Coinbase reference trade
+  // verifies this quiet Alpaca bid/ask (same check as every other crypto gate),
+  // the age is the time since verification. Provider timestamps are kept.
+  const spreadAge = (quote) => {
+    const at = Date.parse(String(quote?.spreadUpdatedAt || quote?.bidAskUpdatedAt || ''));
+    if (!Number.isFinite(at)) return null;
+    const providerAge = (Number(now) - at) / 1000;
+    if (!reference || !symbol) return providerAge;
+    const bid = Number(quote?.bid);
+    const ask = Number(quote?.ask);
+    const verification = verifyCryptoQuoteCurrent({ symbol, bid, ask,
+      quoteProviderAtMs: at, spreadProviderAtMs: at, reference, now: Number(now) });
+    return verification.verified
+      ? effectiveCryptoEvidenceAgeMs({ providerAtMs: at, verification, now: Number(now), symbol, bid, ask, kind: "spread" }) / 1000
+      : providerAge;
+  };
   const priceTimestamp = cryptoQuoteTimestampMs(priceQuote || {});
   const alpacaTimestamp = cryptoQuoteTimestampMs(alpacaQuote || {});
   const latestPriceQuote = !priceQuote
@@ -123,7 +140,8 @@ export function mergeLatestCryptoPriceWithAlpacaSpread(
 
   // A current execution-venue stream quote must not be discarded in favour
   // of an older REST pair. A Finnhub trade is never eligible as bid/ask.
-  const streamAge = Number(now) - Date.parse(priceQuote?.spreadUpdatedAt || priceQuote?.bidAskUpdatedAt || '');
+  const streamAgeSeconds = spreadAge(priceQuote);
+  const streamAge = streamAgeSeconds === null ? NaN : streamAgeSeconds * 1000;
   const streamPair = ['alpaca_crypto_ws', 'alpaca_crypto_latest', 'alpaca_crypto_orderbook'].includes(priceQuote?.spreadSource) &&
     streamAge >= -5000 && streamAge <= Math.max(1, Number(maxSpreadAgeSeconds) || 5) * 1000 &&
     Number(priceQuote?.bid) > 0 && Number(priceQuote?.ask) >= Number(priceQuote?.bid)
@@ -132,12 +150,7 @@ export function mergeLatestCryptoPriceWithAlpacaSpread(
   const spreadQuote = streamPair && pairTime(streamPair) > pairTime(alpacaQuote) ? streamPair : alpacaQuote;
   const bid = Number(spreadQuote?.bid || 0);
   const ask = Number(spreadQuote?.ask || 0);
-  const spreadTimestamp = Date.parse(String(
-    spreadQuote?.spreadUpdatedAt || spreadQuote?.bidAskUpdatedAt || ""
-  ));
-  const spreadAgeSeconds = Number.isFinite(spreadTimestamp)
-    ? (Number(now) - spreadTimestamp) / 1000
-    : null;
+  const spreadAgeSeconds = spreadAge(spreadQuote);
   const spreadAvailable =
     bid > 0 &&
     ask >= bid &&
@@ -183,6 +196,8 @@ export function createCryptoMarketScanner(dependencies) {
     getCryptoLatestQuotes,
     getCryptoOrderbooks,
     getFreshLiveCryptoQuote,
+    // Optional crypto reference trade lookup (market data only).
+    getCryptoReference = () => null,
     isCrypto,
     recordSkippedSymbol,
     updateQuoteCache,
@@ -197,6 +212,10 @@ export function createCryptoMarketScanner(dependencies) {
       if (Number.isFinite(parsed) && parsed > 0) return parsed;
     }
     return 0;
+  }
+
+  function referenceFor(symbol) {
+    try { return getCryptoReference(symbol) || null; } catch { return null; }
   }
 
   function boundedCenteredScore(value, pointsPerPercent, maxMovePercent) {
@@ -631,7 +650,7 @@ export function createCryptoMarketScanner(dependencies) {
         const quote = mergeLatestCryptoPriceWithAlpacaSpread(
           liveCryptoQuote,
           initialAlpacaQuote,
-          { maxSpreadAgeSeconds: 5 }
+          { maxSpreadAgeSeconds: 5, symbol, reference: referenceFor(symbol) }
         ) || (
           typeof getCryptoLatestQuotes === "function"
             ? null
@@ -1031,7 +1050,7 @@ export function createCryptoMarketScanner(dependencies) {
           const executionQuote = mergeLatestCryptoPriceWithAlpacaSpread(
             signal,
             alpacaQuote,
-            { now: refreshedAt, maxSpreadAgeSeconds: 5 }
+            { now: refreshedAt, maxSpreadAgeSeconds: 5, symbol: signal.symbol, reference: referenceFor(signal.symbol) }
           );
           if (!executionQuote) continue;
           const refreshedPrice = firstPositiveNumber(

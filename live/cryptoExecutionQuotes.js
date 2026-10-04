@@ -1,4 +1,5 @@
-import { isFreshMeasuredSpread } from "./liveQuoteCache.js";
+import { getSpreadTimestamp, isFreshMeasuredSpread } from "./liveQuoteCache.js";
+import { cryptoQuoteTop, cryptoReferenceCovers, effectiveCryptoEvidenceAgeMs } from "../scoring/cryptoReferenceVerification.js";
 
 export const ALPACA_CRYPTO_EXECUTION_SOURCES = Object.freeze([
   "alpaca_crypto_ws",
@@ -48,11 +49,21 @@ export function isTradeOnlyQuoteTick(quote = {}) {
 export function cryptoQuoteHasFreshAlpacaBook(quote = {}, {
   now = Date.now(),
   maxAgeSeconds = 5,
+  verification = null,
 } = {}) {
   if (!quote || quote.spreadAvailable !== true) return false;
   const source = quote.spreadSource || quote.liveQuoteSource || quote.source;
-  return isAlpacaCryptoExecutionSource(source)
-    && isFreshMeasuredSpread(quote, { maxAgeSeconds, now });
+  if (!isAlpacaCryptoExecutionSource(source)) return false;
+  const spreadAt = getSpreadTimestamp(quote);
+  // A fresh reference verification covering this exact provider timestamp
+  // and this exact bid/ask makes a quiet, unchanged Alpaca bid/ask current.
+  const top = cryptoQuoteTop(quote);
+  const covered = { providerAtMs: spreadAt, verification, now, symbol: quote.symbol || null, ...top, kind: "spread" };
+  if (verification && cryptoReferenceCovers(covered)) {
+    const ageSeconds = effectiveCryptoEvidenceAgeMs(covered) / 1000;
+    return top.bid > 0 && top.ask >= top.bid && ageSeconds >= -5 && ageSeconds <= Number(maxAgeSeconds || 5);
+  }
+  return isFreshMeasuredSpread(quote, { maxAgeSeconds, now });
 }
 
 export function applyTradeTickWithoutClearingAlpacaBook(previous = {}, incoming = {}) {

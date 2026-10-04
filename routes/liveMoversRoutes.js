@@ -33,6 +33,7 @@ export function registerLiveMoversRoutes(app, dependencies) {
     isCrypto,
     refreshQuotes,
     getRuntimeStatus,
+    getCryptoReference = () => null,
   } = dependencies;
   const cacheTtlMs = 1500;
   let cachedSnapshot = null;
@@ -65,6 +66,7 @@ export function registerLiveMoversRoutes(app, dependencies) {
           normalizeSymbol,
           mergeLiveQuote,
           isCrypto,
+          getCryptoReference,
         }).sort(compareCanonicalSignals);
         activeQuoteRefresh = await refreshQuotes(
           refreshCandidates.map((candidate) => candidate.symbol)
@@ -87,11 +89,14 @@ export function registerLiveMoversRoutes(app, dependencies) {
             normalizeSymbol,
             mergeLiveQuote,
             isCrypto,
+            getCryptoReference,
           }),
         };
         cachedSnapshot.expiresAt = Math.min(nowMs + cacheTtlMs,
           ...cachedSnapshot.items.flatMap(s => [s.liveQuoteUpdatedAt, s.spreadUpdatedAt]
-            .map(t => Date.parse(t) + 5000).filter(t => Number.isFinite(t) && t > nowMs)));
+            .map(t => Date.parse(t) + 5000).filter(t => Number.isFinite(t) && t > nowMs)),
+          ...cachedSnapshot.items.map(s => Number(s.cryptoReferenceVerification?.verifiedAtMs) + 5000)
+            .filter(t => Number.isFinite(t) && t > nowMs));
       }
       const movers = cachedSnapshot.items.slice(0, limit);
       const runtime = getRuntimeStatus();

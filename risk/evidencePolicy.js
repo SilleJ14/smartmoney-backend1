@@ -1,5 +1,6 @@
 // Policy declarations are shared by authorization and diagnostic consumers.
 import { assessSnapshotTimes, SNAPSHOT_TIME_POLICY_VERSION, SNAPSHOT_TIME_RULES } from './snapshotTimePolicy.js';
+import { cryptoQuoteTop, effectiveCryptoEvidenceAtMs } from '../scoring/cryptoReferenceVerification.js';
 // Research thresholds remain owned by the existing scorers (no new denominator).
 export const EVIDENCE_POLICY_VERSION = 'EVIDENCE_V1';
 const roles = Object.freeze({ REQUIRED: 'REQUIRED', OPTIONAL: 'OPTIONAL', AUTHORIZATION: 'AUTHORIZATION_ONLY', NONE: 'NOT_APPLICABLE' });
@@ -74,7 +75,13 @@ export function researchExecutionIssues(signal, policy, now = Date.now()) {
   const crypto=policy.assetClass==='crypto';
   const temporal = signal.decisionProvenance?.temporalPolicyVersion === SNAPSHOT_TIME_POLICY_VERSION
     ? assessSnapshotTimes(signal, { crypto, now }).blockers : [];
-  const priceAt=Date.parse(signal.liveQuoteUpdatedAt || '');
+  const providerPriceAt=Date.parse(signal.liveQuoteUpdatedAt || '');
+  // Crypto only: a covering reference verification dates the quiet price at
+  // verifiedAt; otherwise this is the unchanged provider time.
+  const priceAt=crypto && Number.isFinite(providerPriceAt)
+    ? effectiveCryptoEvidenceAtMs({ providerAtMs: providerPriceAt, verification: signal.cryptoReferenceVerification, now, symbol: signal.symbol,
+      ...cryptoQuoteTop(signal), kind: 'quote' })
+    : providerPriceAt;
   const interval=crypto ? Number(signal.cryptoSetup?.timeframeMinutes)*60000 : Number(signal.technicals?.intervalMs);
   const last=Date.parse(crypto ? signal.cryptoSetup?.barUpdatedAt || '' : signal.technicals?.lastBarAt || '');
   if(!Number.isFinite(priceAt)||!Number.isFinite(last)||!policy.researchTime.allowedIntervalsMs.includes(interval))return [...temporal, 'TECHNICAL_EXECUTION_TIME_UNAVAILABLE'];

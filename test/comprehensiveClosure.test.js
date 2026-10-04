@@ -6,6 +6,7 @@ import path from 'node:path';
 import { calculateDynamicTradeAmount } from '../risk/positionSizing.js';
 import { createOrderRiskReservations } from '../risk/orderRiskReservations.js';
 import { createOrderService } from '../execution/orderService.js';
+import { testCryptoLimitOrder } from './fixtures/cryptoLimitPricing.js';
 import { evaluatePreTradeRisk } from '../risk/preTradeRiskGate.js';
 import { evaluateLiveTradeLimits } from '../risk/liveTradeLimits.js';
 import { createSafetyJournal, readSafetyJournal } from '../state/safetyJournal.js';
@@ -98,7 +99,9 @@ test('an uncertain purchase blocks a new identity for the same symbol until reco
 test('buy submissions serialize guard+reservation+POST and cannot POST if durable reservation fails', async () => {
   const events = []; let busy = 0;
   const service = createOrderService({ normalizeSymbol: String,
-    preTradeRiskGuard: { async assertAllowed(order) { assert.equal(busy, 0); busy++; events.push('guard:' + order.symbol); } },
+    // EXPECTED_CHANGE: crypto buys need the guard's price-protected limit.
+    preTradeRiskGuard: { async assertAllowed(order) { assert.equal(busy, 0); busy++; events.push('guard:' + order.symbol);
+      return { cryptoLimitOrder: testCryptoLimitOrder(order) }; } },
     reserveRisk: async order => { events.push('reserve:' + order.symbol); return { settle() { busy--; } }; },
     tradingRequest: async (_, options) => { const order = JSON.parse(options.body); events.push('post:' + order.symbol); await Promise.resolve(); return { id: order.symbol }; },
   });

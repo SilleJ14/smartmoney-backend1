@@ -3,6 +3,7 @@ import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import vm from 'node:vm';
 import { createOrderService } from '../execution/orderService.js';
+import { testCryptoLimitOrder } from './fixtures/cryptoLimitPricing.js';
 import { assertPreTradeRisk } from '../risk/preTradeRiskGate.js';
 import { evaluateCryptoTradePlan } from '../scoring/cryptoTradePlan.js';
 import { registerManualExecutionRoutes } from '../routes/manualExecutionRoutes.js';
@@ -42,7 +43,9 @@ for (const crypto of [false, true]) test(`manual ${crypto ? 'crypto' : 'stock'} 
   const service = createOrderService({ normalizeSymbol: s => s, tradingRequest: async () => { calls++; return { id: 'mock' }; },
     preTradeRiskGuard: { assertAllowed(order, options) {
       if (options.automated !== false || options.requireCandidateDecision) throw new Error('Canonical score/entry required');
-      return assertPreTradeRisk({ order, options, context: { ...context(), isCrypto: crypto, ...overrides } });
+      // EXPECTED_CHANGE: manual crypto buys are also guard-priced IOC limits.
+      return { ...assertPreTradeRisk({ order, options, context: { ...context(), isCrypto: crypto, ...overrides } }),
+        cryptoLimitOrder: testCryptoLimitOrder(order) };
     } } });
   const buy = () => crypto ? service.cryptoMarketBuy({ symbol: 'BTCUSD', dollars: 25, manual: true })
     : service.manualStockBuy({ symbol: 'AAPL', dollars: 25, marketOpen: true, fractionable: true, holdCategory: 'intraday' });

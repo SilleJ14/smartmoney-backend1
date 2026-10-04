@@ -28,7 +28,8 @@ export function calculateDynamicTradeAmount({ account = {}, positions = [], sign
     const existing = positions.some(p => String(p.symbol).replaceAll('/', '') === String(signal.symbol).replaceAll('/', ''));
     // A starter is half of the allocation, not half of the whole account.
     if (!existing) amount = Math.min(amount, Math.max(minimum, Math.floor(amount * .5 * 100) / 100));
-    const depth = assessCryptoOrderLiquidity(signal.cryptoOrderbook, { symbol: signal.symbol, notional: Math.max(minimum, amount) });
+    const depth = assessCryptoOrderLiquidity(signal.cryptoOrderbook, { symbol: signal.symbol, notional: Math.max(minimum, amount),
+      referenceVerification: signal.cryptoReferenceVerification || null });
     amount = Math.min(amount, depth.maxNotional);
     const plan = evaluateCryptoTradePlan(signal, { notional: amount });
     signal.cryptoTradePlan = plan;

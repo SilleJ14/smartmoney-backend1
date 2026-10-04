@@ -1,5 +1,7 @@
 import { createHash } from 'node:crypto';
 import { getApprovedTradeAmount } from './approvedSizing.js';
+import { isCryptoSignal } from './canonicalSignalRank.js';
+import { cryptoQuoteTop, effectiveCryptoEvidenceAtMs } from './cryptoReferenceVerification.js';
 
 // A projection of the current canonical gate, never an independent scoring rule.
 export function decisionAuthorization(signal, gate, now = Date.now()) {
@@ -8,7 +10,19 @@ export function decisionAuthorization(signal, gate, now = Date.now()) {
   const spreadAt = at(signal.spreadUpdatedAt || signal.bidAskUpdatedAt);
   const decisionAt = at(signal.decisionUpdatedAt);
   const datesValid = [priceAt, spreadAt, decisionAt].every(n => Number.isFinite(n) && n <= now + 5000);
-  const expiresMs = datesValid ? Math.min(priceAt + 5000, spreadAt + 5000, decisionAt + 300000) : NaN;
+  // Crypto only: a quiet quote verified current by a fresh reference trade
+  // expires 5 s after verification instead of 5 s after its provider time.
+  const crypto = isCryptoSignal(signal);
+  const top = crypto ? cryptoQuoteTop(signal) : null;
+  const evidenceAt = (providerAt, kind) => crypto && Number.isFinite(providerAt)
+    ? effectiveCryptoEvidenceAtMs({ providerAtMs: providerAt, verification: signal.cryptoReferenceVerification, now, symbol: signal.symbol,
+      ...top, kind })
+    : providerAt;
+  const priceEvidenceAt = evidenceAt(priceAt, 'quote');
+  const spreadEvidenceAt = evidenceAt(spreadAt, 'spread');
+  const expiresMs = datesValid ? Math.min(priceEvidenceAt + 5000, spreadEvidenceAt + 5000, decisionAt + 300000) : NaN;
+  const referenceVerifiedAt = crypto && datesValid && (priceEvidenceAt !== priceAt || spreadEvidenceAt !== spreadAt)
+    ? new Date(Math.min(priceEvidenceAt, spreadEvidenceAt)).toISOString() : null;
   const amount = getApprovedTradeAmount(signal);
   const reasons = [...(gate.reasons || [])];
   if (signal.currentRiskPolicyVersion && signal.riskPolicyVersion !== signal.currentRiskPolicyVersion) {
@@ -27,6 +41,7 @@ export function decisionAuthorization(signal, gate, now = Date.now()) {
     sizingAt: signal.sizingDecisionUpdatedAt || signal.decisionUpdatedAt || null,
     priceAt: Number.isFinite(priceAt) ? new Date(priceAt).toISOString() : null,
     spreadAt: Number.isFinite(spreadAt) ? new Date(spreadAt).toISOString() : null,
+    ...(referenceVerifiedAt ? { referenceVerifiedAt } : {}),
     expiresAt: Number.isFinite(expiresMs) ? new Date(expiresMs).toISOString() : null };
   return { ...record, decisionVersion: createHash('sha256').update(JSON.stringify(record)).digest('hex').slice(0, 24) };
 }

@@ -18,6 +18,18 @@ import { createQuoteRefreshCoordinator } from './market-data/quoteRefreshCoordin
 import { evaluateCryptoTradePlan } from './scoring/cryptoTradePlan.js';
 import { createCryptoIntradayBars } from './market-data/cryptoIntradayBars.js';
 import { createAlpacaCryptoStream } from './live/alpacaCryptoStream.js';
+import { createCoinbaseReferenceStream } from './live/coinbaseReferenceStream.js';
+import {
+  assessCryptoQuoteSupersession,
+  cryptoPriceLiveOrVerified,
+  cryptoQuoteTop,
+  cryptoReferenceCovers,
+  effectiveCryptoEvidenceAgeMs,
+  effectiveCryptoEvidenceAtMs,
+  referenceTimeMs,
+  verifyCryptoSignalAgainstReference,
+} from './scoring/cryptoReferenceVerification.js';
+import { buildCryptoLimitBuyOrder } from './execution/cryptoLimitOrder.js';
 import {
   applyTradeTickWithoutClearingAlpacaBook,
   isAlpacaCryptoExecutionSource,
@@ -354,6 +366,10 @@ import {
   toFinnhubStreamSymbol,
 } from "./live/finnhubStreamSymbols.js";
 dotenv.config({ path: path.resolve(process.cwd(), ".env") });
+// Coinbase public trades: an independent crypto reference (market data only).
+// Assigned where the Alpaca crypto stream is created; null means no reference,
+// which fails every crypto reference verification closed.
+let coinbaseReferenceStream = null;
 const DATA_DIR = resolveDataDir();
 const processDiagnostics = installProcessDiagnostics({ directory: path.resolve(DATA_DIR, "process-diagnostics") });
 if (process.env.RENDER && path.resolve(DATA_DIR) === path.resolve(process.cwd())) {
@@ -3315,6 +3331,7 @@ function buildBackendHealthPayload(clock = {}) {
       lastQuoteUpdateAt: latestLiveQuoteUpdateAt,
       liveQuoteStreamState: engineState.liveQuoteStreamState || null,
       alpacaCryptoStreamState: engineState.alpacaCryptoStreamState || null,
+      coinbaseReferenceStreamState: engineState.coinbaseReferenceStreamState || null,
       polygonLiveStreamState: engineState.polygonLiveStreamState || null,
       liveEarlyMoverSymbols: engineState.liveEarlyMoverSymbols || [],
       liveEarlyMoverRefreshState: engineState.liveEarlyMoverRefreshState || null,
@@ -13971,11 +13988,16 @@ const preTradeRiskGuard = {
     const cryptoAsset = isCrypto(symbol);
     let purchase = purchasePolicy(options, cryptoAsset);
     if (isDiscretionaryManualPurchase(options)) {
-      return assertPreTradeRisk({
+      const manualResult = assertPreTradeRisk({
         order,
         options,
         context: { isCrypto: cryptoAsset },
       });
+      if (!cryptoAsset || options.cryptoPriceProtectedBuy !== true) return manualResult;
+      // Discretionary crypto buys skip strategy/evidence gates, never price
+      // protection: cap the limit above the current Alpaca ask fetched now.
+      const manualAsk = await resolveManualCryptoLimitAsk(symbol);
+      return { ...manualResult, cryptoLimitOrder: await priceCryptoLimitBuy(order, manualAsk) };
     }
     managedExecution.assertReady();
     const [account, positions, botOwnedSymbols, clock] = await Promise.all([
@@ -13994,6 +14016,9 @@ const preTradeRiskGuard = {
     const referencePrice = Number(quote.price || quote.current || 0);
     const notional = Number(order.notional || Number(order.qty || 0) * referencePrice);
     let sizingSignal = { symbol, price: referencePrice };
+    // Alpaca price_increment, read only when a quote relies on a reference
+    // verification (supersession check); reused by the final check below.
+    let cryptoPriceIncrement = null;
     options.riskNotional = notional;
     if (options.maximumConfirmedAmount != null && notional > options.maximumConfirmedAmount + 0.005) {
       throw new Error('Price changed: order exceeds the confirmed amount; review again');
@@ -14017,7 +14042,10 @@ const preTradeRiskGuard = {
       ]);
       const previous = candidates.find((candidate) => normalizeSymbol(candidate.symbol) === symbol);
       if (!previous) throw new Error(`No current canonical decision for ${symbol}`);
-      const candidate = revalidateCandidate(previous, { ...previous, ...quote });
+      // Crypto: the reference check is made now, for this quote and the
+      // candidate's book; Alpaca provider timestamps are left unchanged.
+      const candidate = revalidateCandidate(previous, { ...previous, ...quote,
+        ...(cryptoAsset ? { cryptoReferenceVerification: verifyCryptoEvidenceNow({ ...previous, ...quote, symbol }) } : {}) });
       assertRiskPolicyVersion(candidate.riskPolicyVersion, currentRiskPolicyVersion());
       sizingSignal = { ...candidate, symbol, price: referencePrice };
       const coherenceIssues = researchExecutionIssues(sizingSignal, purchase);
@@ -14037,6 +14065,15 @@ const preTradeRiskGuard = {
       // this final guard. Never trust a cached depth/sizing approval.
       const books = await alpacaCryptoMarketData.getLatestOrderbooks([symbol]);
       sizingSignal.cryptoOrderbook = books.find(b => b.symbol === symbol) || null;
+      // A quote that is current only through a reference verification must
+      // still be Alpaca's latest: this fresh book may not supersede it.
+      if (cryptoQuoteReliesOnReference(quote)) {
+        cryptoPriceIncrement = await getAsset(symbol).then((asset) => asset?.price_increment ?? null, () => null);
+      }
+      assertCryptoQuoteNotSuperseded({ symbol, quote, book: sizingSignal.cryptoOrderbook, priceIncrement: cryptoPriceIncrement });
+      // The fresh book is new evidence: verify quote and book against a
+      // reference trade read now (separate field; no timestamp re-stamping).
+      sizingSignal.cryptoReferenceVerification = verifyCryptoEvidenceNow({ ...sizingSignal, ...pickQuoteEvidence(quote), symbol });
       const manual = options.automated === false && options.requireCandidateDecision !== true;
       const plan = evaluateCryptoTradePlan(sizingSignal, { notional, manual });
       if (!plan.approved) throw new Error(`Crypto trade plan rejected: ${plan.reasons.join('; ')}`);
@@ -14074,11 +14111,23 @@ const preTradeRiskGuard = {
       spreadSource,
       cryptoAsset
     );
-    const priceTimestamp = getProviderQuoteTimestampMs(quote);
-    const priceAgeSeconds = priceTimestamp === null ? Infinity : (Date.now() - priceTimestamp) / 1000;
-    const spreadAgeSeconds = getSpreadAgeSeconds(quote);
+    // Crypto: effective ages from a reference check made now (provider age
+    // when unverified). Stocks keep provider ages exactly as before.
+    const evidenceCheckedAt = Date.now();
+    const quoteReferenceVerification = cryptoAsset
+      ? verifyCryptoEvidenceNow({ ...quote, symbol }, { includeBook: false, now: evidenceCheckedAt })
+      : null;
+    const cryptoAges = cryptoAsset
+      ? cryptoEvidenceAges({ ...quote, symbol }, quoteReferenceVerification, evidenceCheckedAt)
+      : null;
+    const priceTimestamp = cryptoAsset ? cryptoAges.priceAt : getProviderQuoteTimestampMs(quote);
+    const priceAgeSeconds = cryptoAsset
+      ? cryptoAges.priceAgeSeconds
+      : priceTimestamp === null ? Infinity : (Date.now() - priceTimestamp) / 1000;
+    const spreadAgeSeconds = cryptoAsset ? cryptoAges.spreadAgeSeconds : getSpreadAgeSeconds(quote);
     const temporalIssues = executionEvidenceIssues({ priceAt: priceTimestamp,
-      spreadAt: spreadAgeSeconds === null ? null : Date.now() - spreadAgeSeconds * 1000,
+      spreadAt: cryptoAsset ? cryptoAges.spreadAt : spreadAgeSeconds === null ? null : Date.now() - spreadAgeSeconds * 1000,
+      ...(cryptoAsset ? { now: evidenceCheckedAt } : {}),
       policy: purchase });
     if (temporalIssues.length) throw new Error(temporalIssues.join('; '));
     const riskInput = {
@@ -14111,7 +14160,9 @@ const preTradeRiskGuard = {
           ? Number(quote.spreadPercent)
           : null,
         spreadAvailable: quote.spreadAvailable === true,
-        quoteIsLive: quote.priceIsLive === true && isLiveQuoteSource(quoteSource),
+        quoteIsLive: (cryptoAsset
+          ? cryptoPriceLiveOrVerified({ ...quote, symbol }, { now: evidenceCheckedAt, verification: quoteReferenceVerification })
+          : quote.priceIsLive === true) && isLiveQuoteSource(quoteSource),
         requireLiveProvider: LIVE_ORDER_REQUIRE_POLYGON_CONNECTED,
         liveProviderConnected:
           liveProviderEvidence.connected && spreadProviderEvidence.connected,
@@ -14136,18 +14187,51 @@ const preTradeRiskGuard = {
       },
     };
     const result = assertPreTradeRisk(riskInput);
-    return { ...result, assertCurrent() {
+    let cryptoLimitOrder = null;
+    if (cryptoAsset && options.cryptoPriceProtectedBuy === true) {
+      // Marketable LIMIT capped 0.5% above the Alpaca ask this guard verified,
+      // priced only after every risk check passed. The reservation holds the
+      // worst-case spend (qty x limit), never above the approved amount.
+      cryptoLimitOrder = await priceCryptoLimitBuy(order, Number(quote.ask || quote.ap || 0));
+      options.riskNotional = cryptoLimitOrder.maxSpend;
+      options.riskReferencePrice = cryptoLimitOrder.limitPrice;
+    }
+    return { ...result, cryptoLimitOrder, assertCurrent() {
       if (!isPreTradeQuoteReady(quote, cryptoAsset)) {
         throw new Error(`QUOTE_VERIFICATION_EXPIRED: ${symbol} price or spread is no longer verified`);
       }
+      // The quote may have come to rely on the reference since the guard ran:
+      // the fresh Alpaca book read above still may not supersede it.
       if (cryptoAsset) {
-        const plan = evaluateCryptoTradePlan(sizingSignal, { notional,
+        assertCryptoQuoteNotSuperseded({ symbol, quote, book: sizingSignal.cryptoOrderbook,
+          priceIncrement: cryptoPriceIncrement ?? cryptoLimitOrder?.priceIncrement ?? null });
+      }
+      // Final pre-submit check: crypto re-reads the reference at this moment
+      // (isPreTradeQuoteReady above did too) for every remaining age check.
+      const finalCheckAt = Date.now();
+      const finalVerification = cryptoAsset
+        ? verifyCryptoEvidenceNow({ ...quote, symbol }, { includeBook: false, now: finalCheckAt })
+        : undefined;
+      if (cryptoAsset) {
+        sizingSignal.cryptoReferenceVerification = verifyCryptoEvidenceNow({ ...sizingSignal, ...pickQuoteEvidence(quote), symbol },
+          { now: finalCheckAt });
+        const plan = evaluateCryptoTradePlan(sizingSignal, { notional, now: finalCheckAt,
           manual: options.automated === false && options.requireCandidateDecision !== true });
         if (!plan.approved) throw new Error(`Crypto evidence expired before submission: ${plan.reasons.join('; ')}`);
       }
       const elapsed = (Date.now() - Date.parse(result.checkedAt)) / 1000;
+      const finalCryptoAges = cryptoAsset ? cryptoEvidenceAges({ ...quote, symbol }, finalVerification, finalCheckAt) : null;
       assertPreTradeRisk({ ...riskInput, context: { ...riskInput.context,
-        quoteAgeSeconds: riskInput.context.quoteAgeSeconds + elapsed,
+        quoteAgeSeconds: cryptoAsset
+          ? (finalCryptoAges.spreadAgeSeconds === null
+            ? finalCryptoAges.priceAgeSeconds
+            : Math.max(finalCryptoAges.priceAgeSeconds, finalCryptoAges.spreadAgeSeconds))
+          : riskInput.context.quoteAgeSeconds + elapsed,
+        ...(cryptoAsset ? {
+          spreadAgeSeconds: finalCryptoAges.spreadAgeSeconds,
+          quoteIsLive: cryptoPriceLiveOrVerified({ ...quote, symbol }, { now: finalCheckAt, verification: finalVerification }) &&
+            isLiveQuoteSource(quoteSource),
+        } : {}),
         emergencyStopActive, autoTradingEnabled,
         maxExposurePercent: CONFIG.maxBotExposurePercent, maxOpenTrades: CONFIG.maxOpenTrades,
         maxAccountExposurePercent: CONFIG.maxAccountExposurePercent ?? 100,
@@ -14165,7 +14249,8 @@ const preTradeRiskGuard = {
         if (!current || current.decisionUpdatedAt !== options.riskDecisionVersion) throw new Error('Canonical decision changed before submission');
         if ((current.decisionRevision ?? null) !== options.riskDecisionRevision) throw new Error('Canonical decision revision changed before submission');
         assertRiskPolicyVersion(current.riskPolicyVersion, currentRiskPolicyVersion());
-        const candidate = revalidateCandidate(current, { ...current, ...quote });
+        const candidate = revalidateCandidate(current, { ...current, ...quote,
+          ...(cryptoAsset ? { cryptoReferenceVerification: verifyCryptoEvidenceNow({ ...current, ...quote, symbol }) } : {}) });
         const gate = cryptoAsset ? evaluateCryptoTradeCandidate(candidate) : evaluateStockTradeCandidate(candidate,
           { requireCentralDecision: true, requireFreshDecision: true, requireExplicitApproval: true });
         assertAuthorizationUnchanged(options.authorizationFingerprint, authorizationFingerprint(candidate));
@@ -14176,6 +14261,54 @@ const preTradeRiskGuard = {
     } };
   },
 };
+// Crypto only: true when the quote is NOT current by its own provider time
+// (not provider-marked live, or price/bid-ask older than the live limit), so
+// any approval of it rests on a reference verification.
+function cryptoQuoteReliesOnReference(quote = {}, now = Date.now()) {
+  return !(quote.priceIsLive === true && isFreshLiveQuote(quote) &&
+    isFreshMeasuredSpread(quote, { maxAgeSeconds: LIVE_ORDER_MAX_QUOTE_AGE_SECONDS, now }));
+}
+// A cached Alpaca quote that only a reference verification calls current is
+// still Alpaca's latest only if the order book the guard just fetched from
+// Alpaca does not supersede it (book not newer than the quote's bid/ask, or
+// the same top within one price_increment). Otherwise fail closed.
+function assertCryptoQuoteNotSuperseded({ symbol, quote = {}, book = null, priceIncrement = null, now = Date.now() } = {}) {
+  if (!cryptoQuoteReliesOnReference(quote, now)) return null;
+  const check = assessCryptoQuoteSupersession({ quote, book, priceIncrement });
+  if (check.superseded) {
+    const at = (ms) => (Number.isFinite(ms) ? new Date(ms).toISOString() : "unknown");
+    throw new Error(`ALPACA_QUOTE_SUPERSEDED: ${symbol} ${check.reason}; verified quote ${check.quoteBid}/${check.quoteAsk} ` +
+      `at ${at(check.quoteAtMs)}, fresh Alpaca book ${check.bookBid}/${check.bookAsk} at ${at(check.bookAtMs)}`);
+  }
+  return check;
+}
+// The Alpaca quote fields a reference verification binds to.
+function pickQuoteEvidence(quote = {}) {
+  return { bid: quote.bid, ask: quote.ask, bp: quote.bp, ap: quote.ap,
+    liveQuoteUpdatedAt: quote.liveQuoteUpdatedAt, spreadUpdatedAt: quote.spreadUpdatedAt,
+    bidAskUpdatedAt: quote.bidAskUpdatedAt };
+}
+async function priceCryptoLimitBuy(order = {}, ask) {
+  const symbol = normalizeSymbol(order.symbol);
+  const asset = await getAsset(symbol);
+  const priced = buildCryptoLimitBuyOrder({ symbol, notional: Number(order.notional), ask,
+    asset, clientOrderId: order.client_order_id });
+  if (!priced.ok) throw new Error(`CRYPTO_LIMIT_ORDER_REJECTED: ${priced.reasons.join('; ')}`);
+  return priced;
+}
+// Manual (discretionary) crypto buys: the current Alpaca bid/ask fetched now.
+// An unchanged quiet quote is still the current book top; fail closed without one.
+async function resolveManualCryptoLimitAsk(symbol) {
+  const quote = await alpacaCryptoMarketData.getLatestQuote(symbol).catch(() => null);
+  const bid = Number(quote?.bid || 0);
+  const ask = Number(quote?.ask || 0);
+  const source = quote?.spreadSource || quote?.liveQuoteSource || quote?.source;
+  if (!(bid > 0 && ask >= bid) || !isAlpacaCryptoExecutionSource(source)) {
+    throw new Error(`CRYPTO_LIMIT_ORDER_REJECTED: CRYPTO_LIMIT_ASK_UNAVAILABLE for ${symbol}`);
+  }
+  updateQuoteCache(symbol, quote);
+  return ask;
+}
 let protectionOwnershipOrders = null;
 let protectionOwnershipCheckedAt = 0;
 const managedExecution = createManagedExecution({
@@ -18369,7 +18502,11 @@ const refreshTopCryptoOrderbooks = createCryptoOrderbookRefresher({
   normalizeSymbol,
   isCrypto,
   getCanonicalFinalScore,
-  attachShadow: (signal) => attachCryptoExecutionShadow(signal),
+  attachShadow: (signal) => {
+    // A new book is new evidence: re-check it (and the signal's quote) now.
+    signal.cryptoReferenceVerification = verifyCryptoEvidenceNow(signal);
+    attachCryptoExecutionShadow(signal);
+  },
   onError: (error, { failures, retryInMs }) =>
     console.warn(`Alpaca crypto order book refresh failed (${failures}x, retry in ${Math.round(retryInMs / 1000)}s):`, error.message),
 });
@@ -18384,6 +18521,7 @@ async function refreshCryptoExecutionQuotes(signals = []) {
   // The quote refresh built the analytical shadow from the previous book;
   // rebuild it from the fresh one so the auto-buy permission check sees it.
   refreshTopCryptoOrderbooks.attachBooks(books, [refreshed], (signal) => {
+    signal.cryptoReferenceVerification = verifyCryptoEvidenceNow(signal);
     attachCryptoExecutionShadow(signal);
     signal.cryptoAnalyticalShadow = buildCryptoDecisionScore(signal).cryptoAnalyticalShadow || signal.cryptoAnalyticalShadow;
   });
@@ -18394,6 +18532,7 @@ const refreshCryptoExecutionQuotesOnly = createCryptoExecutionQuoteRefresher({
   normalizeSymbol,
   updateQuoteCache,
   getCachedQuote: getAuthoritativeLiveQuote,
+  verifyReference: (signal) => verifyCryptoEvidenceNow(signal),
   onError: (error) => {
     console.warn("Alpaca crypto execution quote refresh failed:", error.message);
   },
@@ -18424,6 +18563,7 @@ const { scoreCrypto, calculateCryptoInstitutionalQualification, scanCryptoMarket
     alpacaCryptoMarketData.getLatestQuotes(symbols),
   getCryptoOrderbooks: symbols => alpacaCryptoMarketData.getLatestOrderbooks(symbols),
   getFreshLiveCryptoQuote,
+  getCryptoReference,
   isCrypto,
   recordSkippedSymbol,
   updateQuoteCache,
@@ -19834,10 +19974,12 @@ async function executeAdaptiveBuyOrder({
   if (!canonicalOrder.allowed) {
     throw new Error(`Canonical pipeline blocked ${symbol}: ${canonicalOrder.blocker}`);
   }
-  const liveQuoteFreshness = isLiveQuoteFresh(
-    symbol,
-    LIVE_ORDER_MAX_QUOTE_AGE_SECONDS
-  );
+  const liveQuoteFreshness = isCryptoExecution
+    ? isCryptoLiveQuoteFreshOrReferenceVerified(symbol, LIVE_ORDER_MAX_QUOTE_AGE_SECONDS)
+    : isLiveQuoteFresh(
+      symbol,
+      LIVE_ORDER_MAX_QUOTE_AGE_SECONDS
+    );
   if (!liveQuoteFreshness.fresh) {
     throw new Error(
       `Live quote stale for ${symbol}; adaptive buy blocked. ${liveQuoteFreshness.reason}`
@@ -23879,6 +24021,38 @@ const { autoBuySignals, autoBuyCryptoSignals } = createAutoBuyStrategies({
   getTradingMode: () => TRADING_MODE,
 });
 
+function getCryptoReference(symbol) {
+  if (!coinbaseReferenceStream) return null;
+  try { return coinbaseReferenceStream.getReference(normalizeSymbol(symbol)) || null; } catch { return null; }
+}
+// Crypto only. Checks Alpaca evidence (quote, spread and, unless excluded, the
+// attached order book) against a Coinbase reference trade read at this moment.
+// The result is a separate record; Alpaca provider timestamps never change.
+function verifyCryptoEvidenceNow(evidence = {}, { symbol = evidence?.symbol, includeBook = true, now = Date.now() } = {}) {
+  const cleanSymbol = normalizeSymbol(symbol);
+  if (!cleanSymbol || !isCrypto(cleanSymbol)) return null;
+  return verifyCryptoSignalAgainstReference(evidence, getCryptoReference(cleanSymbol), { now, includeBook, symbol: cleanSymbol });
+}
+// Effective crypto price/spread ages: time since a covering verification, or
+// the provider age when there is none.
+function cryptoEvidenceAges(quote = {}, verification = null, now = Date.now()) {
+  const symbol = normalizeSymbol(quote.symbol);
+  const top = cryptoQuoteTop(quote);
+  const priceProviderAt = getLiveQuoteTimestampMs(quote);
+  const spreadProviderAt = referenceTimeMs(quote.spreadUpdatedAt || quote.bidAskUpdatedAt);
+  const priceAgeMs = priceProviderAt === null
+    ? null
+    : effectiveCryptoEvidenceAgeMs({ providerAtMs: priceProviderAt, verification, now, symbol, ...top, kind: "quote" });
+  const spreadAgeMs = Number.isFinite(spreadProviderAt)
+    ? effectiveCryptoEvidenceAgeMs({ providerAtMs: spreadProviderAt, verification, now, symbol, ...top, kind: "spread" })
+    : null;
+  return {
+    priceAt: priceAgeMs === null ? null : now - priceAgeMs,
+    spreadAt: spreadAgeMs === null ? null : now - spreadAgeMs,
+    priceAgeSeconds: priceAgeMs === null ? Infinity : priceAgeMs / 1000,
+    spreadAgeSeconds: spreadAgeMs === null ? null : spreadAgeMs / 1000,
+  };
+}
 function hydrateCryptoExecutionCandidate(candidate = {}) {
   const symbol = normalizeSymbol(candidate.symbol);
   if (!isCrypto(symbol)) return candidate;
@@ -23949,8 +24123,17 @@ function hydrateCryptoExecutionCandidate(candidate = {}) {
     spreadUpdatedAt: quote.spreadUpdatedAt || quote.bidAskUpdatedAt,
     bidAskUpdatedAt: quote.bidAskUpdatedAt || quote.spreadUpdatedAt,
   };
-  const alpacaBookReady = cryptoQuoteHasFreshAlpacaBook(mergedForBook, {
+  const hydratedBook = ({ ...candidate, ...finalized, ...(candidateIsNewer ? candidate : {}) }).cryptoOrderbook;
+  const cryptoReferenceVerification = verifyCryptoEvidenceNow({
+    symbol, bid, ask,
+    liveQuoteUpdatedAt: quoteUpdatedAt,
+    spreadUpdatedAt: mergedForBook.spreadUpdatedAt,
+    bidAskUpdatedAt: mergedForBook.bidAskUpdatedAt,
+    cryptoOrderbook: hydratedBook,
+  }, { symbol });
+  const alpacaBookReady = cryptoQuoteHasFreshAlpacaBook({ ...mergedForBook, symbol }, {
     maxAgeSeconds: LIVE_ORDER_MAX_QUOTE_AGE_SECONDS,
+    verification: cryptoReferenceVerification,
   });
   const priceIsLive = alpacaBookReady;
 
@@ -23998,6 +24181,7 @@ function hydrateCryptoExecutionCandidate(candidate = {}) {
     quoteFetchedAt: quoteUpdatedAt,
     liveQuoteSource: quoteSource,
     liveQuote: { ...quote, updatedAt: quoteUpdatedAt },
+    cryptoReferenceVerification,
   };
 }
 
@@ -24106,6 +24290,20 @@ async function rotateWeakCryptoIfBetter(signals, positions) {
         blockReasons: replacementBuyPreflight.blockReasons,
       }
     );
+    return false;
+  }
+  // Rotation sells first. Only sell when the replacement's own Alpaca bid/ask is
+  // provider-fresh: a reference-verified quiet quote can still be rejected at the
+  // final guard (superseded, or an unfilled IOC), which would leave cash instead.
+  const replacementSymbol = normalizeSymbol(topCandidate.symbol);
+  const replacementQuote = engineState.liveQuoteCache?.[replacementSymbol];
+  if (!cryptoQuoteHasFreshAlpacaBook({ ...(replacementQuote || {}), symbol: replacementSymbol }, {
+    maxAgeSeconds: LIVE_ORDER_MAX_QUOTE_AGE_SECONDS,
+  })) {
+    recordOrder("CRYPTO_ROTATION_SKIPPED_QUOTE_NOT_PROVIDER_FRESH", weakest.symbol, {
+      replacementSymbol,
+      reason: "Rotation sells only when the replacement's Alpaca bid/ask is provider-fresh.",
+    });
     return false;
   }
   const weakestQty = Number(weakest.qty);
@@ -28767,6 +28965,25 @@ function isLiveQuoteFresh(symbol, maxAgeSeconds = 90) {
           : `Live quote stale: ${ageSeconds}s old.`,
   };
 }
+// Crypto only: the provider-age check above, or a reference check made now
+// that covers the cached quote's exact provider timestamp.
+function isCryptoLiveQuoteFreshOrReferenceVerified(symbol, maxAgeSeconds = 90) {
+  const base = isLiveQuoteFresh(symbol, maxAgeSeconds);
+  const cleanSymbol = normalizeSymbol(symbol);
+  if (base.fresh || !isCrypto(cleanSymbol) || !base.quote) return base;
+  const now = Date.now();
+  const quote = base.quote;
+  const verification = verifyCryptoEvidenceNow({ ...quote, symbol: cleanSymbol }, { includeBook: false, now });
+  const coverage = { providerAtMs: quote.updatedAt, verification, now, symbol: cleanSymbol, ...cryptoQuoteTop(quote), kind: "quote" };
+  if (!cryptoReferenceCovers(coverage)) return base;
+  const ageSeconds = effectiveCryptoEvidenceAgeMs(coverage) / 1000;
+  const fresh = isLiveQuoteSource(quote.liveQuoteSource || quote.source || "") &&
+    ageSeconds >= -5 && ageSeconds <= maxAgeSeconds;
+  return fresh
+    ? { ...base, fresh: true, ageSeconds: Math.round(ageSeconds), providerAgeSeconds: base.ageSeconds,
+      referenceVerification: verification, reason: "Live quote verified current by a fresh reference trade." }
+    : base;
+}
 let lastLiveSignalPushAt = 0;
 const pendingLiveSignalPushes = createLiveSignalPushQueue();
 let liveSignalPushTimer = null;
@@ -28864,9 +29081,14 @@ function mergeLiveQuoteIntoSignal(signal = {}) {
     for (const old of keys.slice(0, Math.max(0, keys.length - 500))) delete engineState.measuredStockScoreHistory[old];
   }
   const liveQuote = engineState.liveQuoteCache?.[symbol];
-  const cryptoQuoteReady = isCrypto(symbol)
+  const cryptoSymbol = isCrypto(symbol);
+  const cryptoReferenceVerification = cryptoSymbol && liveQuote
+    ? verifyCryptoEvidenceNow({ ...liveQuote, symbol, cryptoOrderbook: signal.cryptoOrderbook }, { symbol })
+    : null;
+  const cryptoQuoteReady = cryptoSymbol
     ? cryptoQuoteHasFreshAlpacaBook(liveQuote, {
       maxAgeSeconds: LIVE_ORDER_MAX_QUOTE_AGE_SECONDS,
+      verification: cryptoReferenceVerification,
     })
     : isFreshLiveQuote(liveQuote);
   if (!symbol || !liveQuote?.price || !cryptoQuoteReady) {
@@ -28939,6 +29161,7 @@ function mergeLiveQuoteIntoSignal(signal = {}) {
       liveQuote.liquidityPressure ?? signal.liquidityPressure,
     priceStale:
       liveQuote.priceIsLive !== true,
+    ...(cryptoSymbol ? { cryptoReferenceVerification } : {}),
   };
   return normalizeSignalScoreCompleteness(revalidateCandidate(signal, refreshed));
 }
@@ -32450,7 +32673,7 @@ function getLiveProviderEvidence(quoteSource, cryptoAsset = false) {
     finnhubConnected: isFinnhubLiveConnected(),
   });
 }
-function isPreTradeQuoteReady(quote = {}, cryptoAsset = false) {
+function isPreTradeQuoteReady(quote = {}, cryptoAsset = false, { verification, now } = {}) {
   const quoteSource = quote.liveQuoteSource || quote.source || "";
   const spreadSource = quote.spreadSource || quoteSource;
   const providerEvidence = getLiveProviderEvidence(
@@ -32466,13 +32689,45 @@ function isPreTradeQuoteReady(quote = {}, cryptoAsset = false) {
       isAlpacaCryptoExecutionSource(quoteSource)
       && isAlpacaCryptoExecutionSource(spreadSource)
     );
+  if (cryptoAsset !== true) {
+    return (
+      cryptoExecutionReady &&
+      quote.priceIsLive === true &&
+      isFreshLiveQuote(quote) &&
+      isFreshMeasuredSpread(quote, {
+        maxAgeSeconds: LIVE_ORDER_MAX_QUOTE_AGE_SECONDS,
+      }) &&
+      providerEvidence.connected === true &&
+      spreadProviderEvidence.connected === true
+    );
+  }
+  // Crypto: a quiet quote is ready only if its exact provider timestamps are
+  // covered by a reference check made at this moment (or it is fresh itself).
+  const checkedAt = Number.isFinite(now) ? now : Date.now();
+  const symbol = normalizeSymbol(quote.symbol);
+  const referenceVerification = verification !== undefined
+    ? verification
+    : verifyCryptoEvidenceNow(quote, { includeBook: false, now: checkedAt });
+  const spreadAt = referenceTimeMs(quote.spreadUpdatedAt || quote.bidAskUpdatedAt);
+  const top = cryptoQuoteTop(quote);
+  const quoteVerified = cryptoReferenceCovers({ providerAtMs: getLiveQuoteTimestampMs(quote),
+    verification: referenceVerification, now: checkedAt, symbol, ...top, kind: "quote" });
+  const spreadVerified = cryptoReferenceCovers({ providerAtMs: spreadAt,
+    verification: referenceVerification, now: checkedAt, symbol, ...top, kind: "spread" });
+  const ages = cryptoEvidenceAges(quote, referenceVerification, checkedAt);
+  const bid = Number(top.bid || 0);
+  const ask = Number(top.ask || 0);
+  const quoteFresh = quoteVerified
+    ? isLiveQuoteSource(quoteSource) && ages.priceAgeSeconds >= -5 && ages.priceAgeSeconds <= LIVE_ORDER_MAX_QUOTE_AGE_SECONDS
+    : quote.priceIsLive === true && isFreshLiveQuote(quote);
+  const spreadFresh = spreadVerified
+    ? quote.spreadAvailable === true && bid > 0 && ask >= bid &&
+      ages.spreadAgeSeconds !== null && ages.spreadAgeSeconds >= -5 && ages.spreadAgeSeconds <= LIVE_ORDER_MAX_QUOTE_AGE_SECONDS
+    : isFreshMeasuredSpread(quote, { maxAgeSeconds: LIVE_ORDER_MAX_QUOTE_AGE_SECONDS });
   return (
     cryptoExecutionReady &&
-    quote.priceIsLive === true &&
-    isFreshLiveQuote(quote) &&
-    isFreshMeasuredSpread(quote, {
-      maxAgeSeconds: LIVE_ORDER_MAX_QUOTE_AGE_SECONDS,
-    }) &&
+    quoteFresh &&
+    spreadFresh &&
     providerEvidence.connected === true &&
     spreadProviderEvidence.connected === true
   );
@@ -32482,9 +32737,9 @@ async function resolveVerifiedPreTradeQuote(symbol, cryptoAsset = false) {
     engineState.liveQuoteCache?.[symbol] ||
     engineState.liveMarketMemory?.[symbol] ||
     null;
-  return resolvePreTradeQuote({
+  const resolution = await resolvePreTradeQuote({
     cachedQuote,
-    isQuoteReady: (quote) => isPreTradeQuoteReady(quote, cryptoAsset),
+    isQuoteReady: (quote) => isPreTradeQuoteReady(cryptoAsset && quote && !quote.symbol ? { ...quote, symbol } : quote, cryptoAsset),
     fetchFallback: () => cryptoAsset
       ? alpacaCryptoMarketData.getLatestQuote(symbol)
       : getLatestStockMarketQuotes([symbol]).then((quotes) => quotes[0] || null),
@@ -32492,6 +32747,11 @@ async function resolveVerifiedPreTradeQuote(symbol, cryptoAsset = false) {
     maxFallbackAttempts: 3,
     retryDelayMs: 2_000,
   });
+  if (!cryptoAsset || !resolution?.quote || typeof resolution.quote !== "object") return resolution;
+  // A copy carries the reference check made now; the cache entry is untouched.
+  const quote = { ...resolution.quote, symbol: resolution.quote.symbol || symbol };
+  const referenceVerification = verifyCryptoEvidenceNow(quote, { includeBook: false });
+  return { ...resolution, referenceVerification, quote: { ...quote, referenceVerification } };
 }
 
 function getProviderQuoteTimestampMs(quote = {}) {
@@ -32766,15 +33026,30 @@ function validateLiveOrder(symbol, side = "BUY") {
     Number(quote.ask || 0) >= Number(quote.bid || 0)
   );
   const spreadPercent = spreadAvailable ? Number(quote.spreadPercent) : null;
-  const priceAgeSeconds = getLiveQuoteAgeSeconds(cleanSymbol);
-  const spreadAgeSeconds = getSpreadAgeSeconds(quote);
+  // Crypto only: a quiet quote verified now against a reference trade uses
+  // its effective age (time since verification). Stocks are unchanged.
+  const checkedAt = Date.now();
+  const referenceVerification = cryptoAsset
+    ? verifyCryptoEvidenceNow({ ...quote, symbol: cleanSymbol }, { includeBook: false, now: checkedAt })
+    : null;
+  const cryptoAges = cryptoAsset
+    ? cryptoEvidenceAges({ ...quote, symbol: cleanSymbol }, referenceVerification, checkedAt)
+    : null;
+  const providerPriceAgeSeconds = getLiveQuoteAgeSeconds(cleanSymbol);
+  const priceAgeSeconds = cryptoAsset && cryptoReferenceCovers({ providerAtMs: getLiveQuoteTimestampMs(quote),
+    verification: referenceVerification, now: checkedAt, symbol: cleanSymbol, ...cryptoQuoteTop(quote), kind: "quote" })
+    ? cryptoAges.priceAgeSeconds
+    : providerPriceAgeSeconds;
+  const spreadAgeSeconds = cryptoAsset ? cryptoAges.spreadAgeSeconds : getSpreadAgeSeconds(quote);
   const quoteAgeSeconds = spreadAvailable && spreadAgeSeconds !== null
     ? Math.max(priceAgeSeconds, spreadAgeSeconds)
     : priceAgeSeconds;
   const quoteSource = quote.liveQuoteSource || quote.source || "";
   const spreadSource = quote.spreadSource || quoteSource;
   const quoteIsLive =
-    quote.priceIsLive === true &&
+    (cryptoAsset
+      ? cryptoPriceLiveOrVerified({ ...quote, symbol: cleanSymbol }, { now: checkedAt, verification: referenceVerification })
+      : quote.priceIsLive === true) &&
     isLiveQuoteSource(quoteSource);
 
   const requireLiveProvider = LIVE_ORDER_REQUIRE_POLYGON_CONNECTED;
@@ -32828,6 +33103,7 @@ function validateLiveOrder(symbol, side = "BUY") {
     quoteAgeSeconds,
     priceAgeSeconds,
     spreadAgeSeconds,
+    ...(cryptoAsset ? { providerPriceAgeSeconds, referenceVerified: referenceVerification?.verified === true } : {}),
     quoteSource,
     spreadSource,
     quoteIsLive,
@@ -33589,6 +33865,7 @@ registerLiveMoversRoutes(app, {
   normalizeSymbol,
   mergeLiveQuote: mergeLiveQuoteIntoSignal,
   isCrypto,
+  getCryptoReference,
   refreshQuotes: refreshActiveCandidateQuotes,
   getRuntimeStatus: () => ({
     autoTradingEnabled,
@@ -33853,6 +34130,7 @@ registerManualExecutionRoutes(app, {
   getStockQuote,
   getVerifiedStockQuote: (symbol) => resolveVerifiedPreTradeQuote(symbol, false),
   getVerifiedCryptoQuote: (symbol) => resolveVerifiedPreTradeQuote(symbol, true),
+  verifyCryptoEvidence: (evidence) => verifyCryptoEvidenceNow(evidence),
   manualStockBuy: (input) => orderService.manualStockBuy(input),
   manualCryptoBuy: (input) => placeCryptoMarketBuy(input.symbol, input.dollars, {
     source: "MANUAL_VERIFIED_CRYPTO_ROUTE",
@@ -34020,6 +34298,44 @@ alpacaCryptoStream = createAlpacaCryptoStream({
 });
 engineState.alpacaCryptoStreamState = alpacaCryptoStream.getStatus();
 
+// Independent crypto reference: Coinbase public trades (market data only, no
+// auth, never orders). Used solely to verify that a quiet Alpaca quote is
+// still current. ENABLE_COINBASE_REFERENCE=false disables it, and every crypto
+// freshness gate then falls back to Alpaca provider time alone.
+const ENABLE_COINBASE_REFERENCE = parseEnvBoolean("ENABLE_COINBASE_REFERENCE", true);
+function coinbaseReferenceSymbols() {
+  const signals = [...(engineState.lastCryptoSignals || []), ...(engineState.topCryptoSignals || [])];
+  return selectAlpacaCryptoStreamSymbols({
+    symbols: [
+      ...FALLBACK_ALPACA_CRYPTO_USD_PAIRS,
+      ...(engineState.cachedPositions || []).map((item) => item.symbol),
+      ...signals.map((item) => item.symbol),
+    ].map((symbol) => normalizeSymbol(symbol)),
+    supportedSymbols: getAlpacaExecutableCryptoSymbols(),
+    // Rank by held position, priority pairs and score only; book freshness
+    // must not churn the reference subscription set.
+    quotes: {},
+    scores: Object.fromEntries(signals.map((item) => [normalizeSymbol(item.symbol), Number(getCanonicalFinalScore(item) || 0)])),
+    heldSymbols: (engineState.cachedPositions || [])
+      .map((item) => normalizeSymbol(item.symbol))
+      .filter((symbol) => isCrypto(symbol)),
+    pinnedSymbols: (engineState.coinbaseReferenceStreamState?.subscribedProducts || [])
+      .map((product) => String(product).replace("-", "/")),
+    limit: 40,
+  });
+}
+coinbaseReferenceStream = ENABLE_COINBASE_REFERENCE
+  ? createCoinbaseReferenceStream({
+    WebSocket: TradierWebSocket,
+    getSymbols: coinbaseReferenceSymbols,
+    maxProducts: 40,
+    onStatus: (status) => { engineState.coinbaseReferenceStreamState = status; },
+  })
+  : null;
+engineState.coinbaseReferenceStreamState = coinbaseReferenceStream
+  ? coinbaseReferenceStream.getStatus()
+  : { enabled: false, reason: "ENABLE_COINBASE_REFERENCE=false" };
+
 startServerLifecycle({
   app,
   diagnostics: processDiagnostics,
@@ -34032,6 +34348,7 @@ startServerLifecycle({
   saveState: saveEngineState,
     flushState: async () => {
       alpacaCryptoStream.stop();
+      coinbaseReferenceStream?.stop();
       tradierQuoteStream.stop();
       forexStreams.stop();
       await candidateTraceStore.flush();
@@ -34046,6 +34363,8 @@ startServerLifecycle({
     // This is a market-data-only stream. Credential checks inside start() are
     // the safety boundary; an unrelated deployment flag must not disable books.
     () => alpacaCryptoStream.start(),
+    // Public market-data reference feed; never places orders.
+    () => coinbaseReferenceStream?.start(),
     startFinnhubStream,
     startLiveScheduler,
     startPolygonStockStream,

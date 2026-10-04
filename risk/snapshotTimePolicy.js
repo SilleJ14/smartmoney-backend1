@@ -1,3 +1,4 @@
+import { cryptoQuoteTop, effectiveCryptoEvidenceAtMs } from '../scoring/cryptoReferenceVerification.js';
 // Authorization coherence, not a replacement score formula. Slow evidence has
 // its own clock; a receipt timestamp never substitutes for a provider quote.
 export const SNAPSHOT_TIME_POLICY_VERSION = 'SNAPSHOT_TIME_V1';
@@ -17,18 +18,35 @@ const timestamp = value => {
 };
 export function assessSnapshotTimes(signal, { crypto = false, now = Date.now() } = {}) {
   const fields = {}, blockers = [];
-  const priceAt = timestamp(signal.liveQuoteUpdatedAt);
-  function assess(name, raw, used, rule) {
-    const at = timestamp(raw), ageMs = now - at;
+  // Crypto only: a fresh reference verification covering the exact Alpaca
+  // provider time proves a quiet price/spread is current as of verifiedAt.
+  // The provider time is still reported; only the evaluated time changes.
+  // Coverage is bound to the signal's own bid/ask, and the evaluated time is
+  // never older than the provider time itself.
+  const verification = crypto ? signal.cryptoReferenceVerification : null;
+  const top = cryptoQuoteTop(signal);
+  const effective = (raw, kind) => {
+    const at = timestamp(raw);
+    return crypto && Number.isFinite(at)
+      ? effectiveCryptoEvidenceAtMs({ providerAtMs: at, verification, now, symbol: signal.symbol, ...top, kind })
+      : at;
+  };
+  const priceAt = effective(signal.liveQuoteUpdatedAt, 'quote');
+  function assess(name, raw, used, rule, evaluatedAt = timestamp(raw)) {
+    const at = evaluatedAt, ageMs = now - at;
     const skewMs = Number.isFinite(priceAt) && Number.isFinite(at) ? priceAt - at : null;
     const status = !Number.isFinite(at) ? 'UNAVAILABLE' : ageMs < -rule.maxFutureMs ? 'FUTURE'
       : ageMs > rule.maxAgeMs ? 'STALE' : skewMs !== null && (skewMs > rule.maxAgeMs || skewMs < -rule.maxFutureMs) ? 'INCOHERENT' : 'COHERENT';
-    fields[name] = { status, used, observedAt: Number.isFinite(at) ? new Date(at).toISOString() : null,
-      ageMs: Number.isFinite(ageMs) ? ageMs : null, skewFromPriceMs: skewMs, ...rule };
+    const providerAt = timestamp(raw);
+    fields[name] = { status, used, observedAt: Number.isFinite(providerAt) ? new Date(providerAt).toISOString() : null,
+      ageMs: Number.isFinite(ageMs) ? ageMs : null, skewFromPriceMs: skewMs, ...rule,
+      ...(Number.isFinite(at) && Number.isFinite(providerAt) && at !== providerAt
+        ? { referenceVerifiedAt: new Date(at).toISOString() } : {}) };
     if (used && status !== 'COHERENT') blockers.push(`${name.toUpperCase()}_EVIDENCE_${status}`);
   }
-  assess('price', signal.liveQuoteUpdatedAt, true, SNAPSHOT_TIME_RULES.price);
-  assess('spread', signal.spreadUpdatedAt ?? signal.bidAskUpdatedAt, true, SNAPSHOT_TIME_RULES.spread);
+  assess('price', signal.liveQuoteUpdatedAt, true, SNAPSHOT_TIME_RULES.price, priceAt);
+  const spreadRaw = signal.spreadUpdatedAt ?? signal.bidAskUpdatedAt;
+  assess('spread', spreadRaw, true, SNAPSHOT_TIME_RULES.spread, effective(spreadRaw, 'spread'));
   const confirmations = signal.confirmations || {};
   assess('newsReview', confirmations.newsReviewedAt ?? confirmations.newsReviewCoverage?.checkedAt ?? signal.newsRiskCheckedAt,
     signal.requireNewsRiskForEntry === true && confirmations.newsRiskAvailable === true, SNAPSHOT_TIME_RULES.newsReview);

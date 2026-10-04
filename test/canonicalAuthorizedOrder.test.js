@@ -3,6 +3,7 @@ import assert from 'node:assert/strict';
 import { eligibleDecisionFixture } from './fixtures/eligibleDecisionFixture.js';
 import { buildCurrentDecisionView } from '../scoring/currentDecisionView.js';
 import { createOrderService } from '../execution/orderService.js';
+import { testCryptoLimitOrder } from './fixtures/cryptoLimitPricing.js';
 import { assertVerifiedQuote } from '../live/quoteAuthorization.js';
 import { assertPreTradeRisk } from '../risk/preTradeRiskGate.js';
 
@@ -27,7 +28,8 @@ for (const symbol of ['AAPL', 'BTC/USD']) test(`${symbol}: canonical decision an
   };
   const service = createOrderService({ normalizeSymbol: String,
     tradingRequest: async () => { posts++; return { id: 'mock-only' }; },
-    preTradeRiskGuard: { assertAllowed: async () => { check(); return { assertCurrent: check }; } } });
+    // EXPECTED_CHANGE: crypto buys need the guard's price-protected limit.
+    preTradeRiskGuard: { assertAllowed: async (order) => { check(); return { assertCurrent: check, cryptoLimitOrder: testCryptoLimitOrder(order) }; } } });
   const buy = () => symbol.includes('/') ? service.cryptoMarketBuy({ symbol, dollars: 25 })
     : service.stockBuy({ symbol, dollars: 25, fractionable: true, marketOpen: true, holdCategory: 'intraday', referencePrice: 100 });
   await buy(); assert.equal(posts, 1);

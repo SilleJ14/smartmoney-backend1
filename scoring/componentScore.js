@@ -16,6 +16,7 @@ import { aggregateMeasuredComponents, buildMeasuredComponent, COMPONENT_PUBLISH_
 import { buildCryptoAnalyticalShadow, liveCryptoPermission } from './cryptoAnalyticalShadow.js';
 import { CRYPTO_BREADTH_RANGE } from './cryptoContext.js';
 import { buildCurrentAnalyticalSnapshot } from './analyticalSnapshot.js';
+import { cryptoQuoteTop, cryptoReferenceCovers, effectiveCryptoEvidenceAgeMs } from './cryptoReferenceVerification.js';
 
 // Immediate-entry F uses independent discovery, execution and context evidence.
 // Multi-day continuation remains separate telemetry (and an acceleration gate),
@@ -200,6 +201,20 @@ export function buildCryptoDecisionScore(
   const quoteAgeSeconds = Number.isFinite(quoteTimestamp)
     ? (Number(now) - quoteTimestamp) / 1000
     : null;
+  // A quiet Alpaca quote keeps its provider time. A fresh, close reference
+  // trade covering that exact timestamp makes its effective age the time since
+  // verification; provider timestamps themselves are never changed.
+  // Coverage is bound to this signal's own bid/ask as well as the timestamp.
+  const referenceVerification = signal.cryptoReferenceVerification || null;
+  const quoteTop = cryptoQuoteTop(signal);
+  const quoteCoverage = { providerAtMs: quoteTimestamp, verification: referenceVerification, now, symbol: signal.symbol,
+    ...quoteTop, kind: "quote" };
+  const quoteReferenceVerified = Number.isFinite(quoteTimestamp) && cryptoReferenceCovers(quoteCoverage);
+  const quoteEffectiveAgeMs = Number.isFinite(quoteTimestamp)
+    ? effectiveCryptoEvidenceAgeMs(quoteCoverage)
+    : null;
+  const quoteEffectiveAgeSeconds = quoteEffectiveAgeMs === null ? null : quoteEffectiveAgeMs / 1000;
+  const quotePriceLive = signal.priceIsLive === true || quoteReferenceVerified;
   const quoteSource =
     signal.liveQuoteSource ||
     signal.liveQuote?.source ||
@@ -207,11 +222,11 @@ export function buildCryptoDecisionScore(
     "";
   const quoteSourceApproved = isAlpacaCryptoExecutionSource(quoteSource);
   const quoteFresh =
-    signal.priceIsLive === true &&
+    quotePriceLive &&
     quoteSourceApproved &&
-    quoteAgeSeconds !== null &&
-    quoteAgeSeconds >= -5 &&
-    quoteAgeSeconds <= effectiveMaxQuoteAgeSeconds;
+    quoteEffectiveAgeSeconds !== null &&
+    quoteEffectiveAgeSeconds >= -5 &&
+    quoteEffectiveAgeSeconds <= effectiveMaxQuoteAgeSeconds;
   const spread = calculateMeasuredSpread(signal);
   const spreadTimestampRaw =
     signal.spreadUpdatedAt ??
@@ -224,14 +239,21 @@ export function buildCryptoDecisionScore(
   const spreadAgeSeconds = Number.isFinite(spreadTimestamp)
     ? (Number(now) - spreadTimestamp) / 1000
     : null;
+  const spreadCoverage = { providerAtMs: spreadTimestamp, verification: referenceVerification, now, symbol: signal.symbol,
+    ...quoteTop, kind: "spread" };
+  const spreadReferenceVerified = Number.isFinite(spreadTimestamp) && cryptoReferenceCovers(spreadCoverage);
+  const spreadEffectiveAgeMs = Number.isFinite(spreadTimestamp)
+    ? effectiveCryptoEvidenceAgeMs(spreadCoverage)
+    : null;
+  const spreadEffectiveAgeSeconds = spreadEffectiveAgeMs === null ? null : spreadEffectiveAgeMs / 1000;
   const spreadSource = signal.spreadSource || quoteSource;
   const spreadSourceApproved = isAlpacaCryptoExecutionSource(spreadSource);
   const spreadFresh =
     spread.measured &&
     spreadSourceApproved &&
-    spreadAgeSeconds !== null &&
-    spreadAgeSeconds >= -5 &&
-    spreadAgeSeconds <= effectiveMaxQuoteAgeSeconds;
+    spreadEffectiveAgeSeconds !== null &&
+    spreadEffectiveAgeSeconds >= -5 &&
+    spreadEffectiveAgeSeconds <= effectiveMaxQuoteAgeSeconds;
   const liquidity = resolveCryptoLiquidityEvidence(signal);
   const measuredEntryQuality = calculateCryptoEntryQualityFromEvidence({
     spreadAvailable: spread.measured,
@@ -421,9 +443,9 @@ export function buildCryptoDecisionScore(
     },
     quote: {
       fresh: quoteFresh,
-      ageSeconds: quoteAgeSeconds,
+      ageSeconds: quoteEffectiveAgeSeconds,
       sourceApproved: quoteSourceApproved,
-      priceIsLive: signal.priceIsLive === true,
+      priceIsLive: quotePriceLive,
     },
     spread: { ...spread, fresh: spreadFresh },
     notional: signal.intendedNotional ?? signal.finalApprovedTradeAmount ?? signal.recommendedTradeAmount ?? null,
@@ -510,6 +532,10 @@ export function buildCryptoDecisionScore(
         : Number(quoteAgeSeconds.toFixed(2)),
       maximumAgeSeconds: effectiveMaxQuoteAgeSeconds,
       priceIsLive: signal.priceIsLive === true,
+      effectiveAgeSeconds: quoteEffectiveAgeSeconds === null
+        ? null
+        : Number(quoteEffectiveAgeSeconds.toFixed(2)),
+      referenceVerified: quoteReferenceVerified,
       source: quoteSource,
       sourceApproved: quoteSourceApproved,
       fresh: quoteFresh,
@@ -521,6 +547,10 @@ export function buildCryptoDecisionScore(
       ageSeconds: spreadAgeSeconds === null
         ? null
         : Number(spreadAgeSeconds.toFixed(2)),
+      effectiveAgeSeconds: spreadEffectiveAgeSeconds === null
+        ? null
+        : Number(spreadEffectiveAgeSeconds.toFixed(2)),
+      referenceVerified: spreadReferenceVerified,
       source: spreadSource,
       sourceApproved: spreadSourceApproved,
       fresh: spreadFresh,

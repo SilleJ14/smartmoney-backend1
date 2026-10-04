@@ -2,6 +2,7 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import { assertVerifiedQuote } from '../live/quoteAuthorization.js';
 import { createOrderService } from '../execution/orderService.js';
+import { testCryptoLimitOrder } from './fixtures/cryptoLimitPricing.js';
 
 for (const method of ['manualStockBuy','stockBuy','cryptoMarketBuy']) {
   test(`${method}: failed verification sends zero orders; valid verification reaches mocked broker`, async () => {
@@ -9,7 +10,9 @@ for (const method of ['manualStockBuy','stockBuy','cryptoMarketBuy']) {
     const service = createOrderService({ normalizeSymbol: s => s, tradingRequest: async () => {calls++;return {id:'mock'};},
       preTradeRiskGuard: { assertAllowed: async payload => {
         assertVerifiedQuote({quoteReady:ready,quote:{price:100}},payload.symbol);
-        return { assertCurrent() { assertVerifiedQuote({quoteReady:ready,quote:{}},payload.symbol); } };
+        // EXPECTED_CHANGE: crypto buys need the guard's price-protected limit.
+        return { assertCurrent() { assertVerifiedQuote({quoteReady:ready,quote:{}},payload.symbol); },
+          cryptoLimitOrder: testCryptoLimitOrder(payload) };
       }} });
     const input = { symbol:method==='cryptoMarketBuy'?'BTC/USD':'AAPL', dollars:25, score:100,
       fractionable:true,marketOpen:true,holdCategory:'intraday',buyMode:'dollars',referencePrice:100 };

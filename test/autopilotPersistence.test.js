@@ -8,6 +8,7 @@ import { resolveAutoTradingEnabled } from '../config/runtimePolicy.js';
 import { resetDailySafetyState, recordTradingModeWithoutResettingSafety } from '../state/dailySafetyState.js';
 import { assertPreTradeRisk } from '../risk/preTradeRiskGate.js';
 import { createOrderService } from '../execution/orderService.js';
+import { testCryptoLimitOrder } from './fixtures/cryptoLimitPricing.js';
 
 const source = fs.readFileSync(new URL('../server.js', import.meta.url), 'utf8');
 const start = source.indexOf('async function checkDailyLossAndProfitLock(');
@@ -105,7 +106,8 @@ test('order service buys only while enabled, allows exits through risk pauses, a
     },
     preTradeRiskGuard: { assertAllowed: async (order, options) => {
       const check = () => assertPreTradeRisk({ order, options, context });
-      check(); return { assertCurrent: check };
+      // EXPECTED_CHANGE: crypto buys need the guard's price-protected limit.
+      check(); return { assertCurrent: check, cryptoLimitOrder: testCryptoLimitOrder(order) };
     } },
   });
   await service.cryptoMarketBuy({ symbol: 'BTC/USD', dollars: 25 });

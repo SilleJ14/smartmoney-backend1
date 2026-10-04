@@ -11,11 +11,14 @@ export function registerManualExecutionRoutes(app, dependencies) {
     markManagedSymbol, getState, closePosition, recordOrder, recordFailedOrder,
     getMarketOpen = async () => false,
     isCryptoSymbol = (symbol) => String(symbol || "").includes("/") || String(symbol || "").endsWith("USD"),
+    // Crypto only: checks the hydrated quote (and the candidate's book) against
+    // a fresh independent reference trade at this moment.
+    verifyCryptoEvidence = null,
     now = () => new Date(), logger = console } = dependencies;
   const hydrateWithVerifiedQuote = (candidate, resolution) => {
     const quote = resolution?.quote || {};
     const updatedAt = quote.liveQuoteUpdatedAt || quote.updatedAt || null;
-    return revalidateCandidate(candidate, {
+    const next = {
       ...candidate,
       current: Number(quote.current || quote.price || candidate?.current || candidate?.price || 0),
       price: Number(quote.price || quote.current || candidate?.price || candidate?.current || 0),
@@ -30,7 +33,13 @@ export function registerManualExecutionRoutes(app, dependencies) {
       quoteFetchedAt: updatedAt,
       liveQuote: { ...quote, updatedAt },
       liveQuoteSource: quote.liveQuoteSource || quote.source || null,
-    });
+    };
+    if (isCryptoSymbol(candidate?.symbol) && typeof verifyCryptoEvidence === "function") {
+      let verification = null;
+      try { verification = verifyCryptoEvidence(next) || null; } catch { verification = null; }
+      next.cryptoReferenceVerification = verification;
+    }
+    return revalidateCandidate(candidate, next);
   };
   app.post("/manual-buy-stock", requireAdmin, async (req, res) => {
     try {
@@ -202,7 +211,7 @@ export function registerManualExecutionRoutes(app, dependencies) {
           error: `Crypto decision no longer passes: ${(decision?.reasons || ["incomplete evidence"]).join("; ")}`,
         });
       }
-      if (candidate.qualifiedToBuy !== true || verifiedCandidate.priceIsLive !== true || verifiedCandidate.spreadAvailable !== true) {
+      if (candidate.qualifiedToBuy !== true || !cryptoPriceLiveOrVerified(verifiedCandidate) || verifiedCandidate.spreadAvailable !== true) {
         return res.status(409).json({ ok: false, error: "Crypto candidate no longer passes entry and live-spread gates" });
       }
       const sizingLimit = getApprovedTradeAmount(verifiedCandidate);
@@ -238,4 +247,5 @@ export function registerManualExecutionRoutes(app, dependencies) {
   });
 }
 import { getApprovedTradeAmount } from '../scoring/approvedSizing.js';
+import { cryptoPriceLiveOrVerified } from '../scoring/cryptoReferenceVerification.js';
 import { revalidateCandidate } from '../scoring/revalidateCandidate.js';

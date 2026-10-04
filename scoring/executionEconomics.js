@@ -117,6 +117,7 @@ export function buildExecutionEconomicsShadow(signal = {}, {
       symbol: signal.symbol,
       notional: intendedOrderDollars,
       now: finite(signal.now) ?? Date.now(),
+      referenceVerification: signal.cryptoReferenceVerification || null,
     });
     if (walked.available && Number.isFinite(walked.buySlippagePercent)) {
       depthSlippagePct = round(walked.buySlippagePercent);

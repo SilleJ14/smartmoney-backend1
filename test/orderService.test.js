@@ -2,6 +2,7 @@ import test from "node:test";
 import assert from "node:assert/strict";
 
 import { createOrderService } from "../execution/orderService.js";
+import { testCryptoLimitOrder } from './fixtures/cryptoLimitPricing.js';
 
 function harness() {
   const requests = [];
@@ -142,15 +143,37 @@ test("manual dollar buys still submit when the regular market is closed", async 
   assert.equal(requests[0].body.notional, 50);
 });
 
-test("builds crypto orders with GTC time in force", async () => {
-  const { service, requests } = harness();
+// EXPECTED_CHANGE: crypto buys are qty-based IOC limits priced by the final
+// guard (capped 0.5% above its verified ask); crypto sells stay GTC market.
+test("builds crypto buys as guard-priced IOC limits and sells as GTC market orders", async () => {
+  const requests = [];
+  const service = createOrderService({
+    tradingRequest: async (path, options) => {
+      requests.push({ path, options, body: options.body ? JSON.parse(options.body) : null });
+      return { id: "order-1" };
+    },
+    normalizeSymbol: (symbol) => String(symbol || "").trim().toUpperCase(),
+    clientOrderPrefix: "TEST",
+    now: () => 123456,
+    preTradeRiskGuard: { assertAllowed: async (order) => ({ cryptoLimitOrder: testCryptoLimitOrder(order, { ask: 100 }) }) },
+  });
   await service.cryptoMarketBuy({ symbol: "btc/usd", dollars: 25 });
   await service.cryptoMarketSell({ symbol: "btc/usd", qty: 0.01 });
-  assert.equal(requests[0].body.time_in_force, "gtc");
-  assert.equal(requests[0].body.side, "buy");
+  assert.deepEqual(requests[0].body, {
+    symbol: "BTC/USD", qty: "0.248756218", side: "buy", type: "limit",
+    limit_price: "100.50", time_in_force: "ioc", client_order_id: "TEST_CRYPTO_BUY_BTC/USD_123456",
+  });
+  assert.equal(requests[0].body.notional, undefined);
   assert.equal(requests[1].body.time_in_force, "gtc");
+  assert.equal(requests[1].body.type, "market");
   assert.equal(requests[1].body.side, "sell");
   assert.equal(requests.some((request) => request.body?.extended_hours === true), false);
+});
+
+test("a crypto buy without guard pricing is never sent", async () => {
+  const { service, requests } = harness();
+  await assert.rejects(service.cryptoMarketBuy({ symbol: "btc/usd", dollars: 25 }), /CRYPTO_LIMIT_ORDER_REJECTED/);
+  assert.equal(requests.length, 0);
 });
 
 test("close position encodes the normalized symbol", async () => {

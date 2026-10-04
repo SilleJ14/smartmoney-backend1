@@ -3,14 +3,16 @@ import assert from 'node:assert/strict';
 import { createManagedExecution } from '../execution/managedExecution.js';
 import { createOrderService } from '../execution/orderService.js';
 import { readFileSync } from 'node:fs';
+import { testCryptoLimitOrder } from './fixtures/cryptoLimitPricing.js';
 
-function fixture({ qty = 10, symbol = 'ABC', state = {}, managed = [symbol] } = {}) {
+function fixture({ qty = 10, symbol = 'ABC', state = {}, managed = [symbol], guard = null, serviceNow = undefined } = {}) {
   let current = qty ? [{ symbol, qty: String(qty), avg_entry_price: '100', current_price: '105' }] : [];
   const orders = new Map(); const calls = []; const fills = []; const flats = []; const snapshots = [];
-  let cancelStatus = 'canceled'; let failure = null;
+  let cancelStatus = 'canceled'; let failure = null; let postFailure = null;
   const request = async (path, options = {}) => {
     calls.push({ path, ...options });
     if (failure) throw failure;
+    if (postFailure && path === '/v2/orders' && options.method === 'POST') throw postFailure;
     if (path === '/v2/positions') return structuredClone(current);
     if (path.startsWith('/v2/assets/')) return { price_increment: '.01' };
     if (path.includes('?status=open')) return [...orders.values()].filter(o => !['filled', 'canceled', 'expired', 'rejected'].includes(o.status)).map(o => ({ ...o }));
@@ -30,11 +32,124 @@ function fixture({ qty = 10, symbol = 'ABC', state = {}, managed = [symbol] } = 
     getManagedSymbols: async () => managed, getConfig: () => ({}), isCrypto: s => s.includes('USD'),
     onFill: e => fills.push(e), onFlat: e => flats.push(e) });
   const life = build();
-  const service = createOrderService({ tradingRequest: request, normalizeSymbol: s => s, executionLifecycle: life,
-    isCrypto: s => s.includes('USD'), preTradeRiskGuard: { assertAllowed: async () => ({ assertCurrent() {} }) } });
+  const service = createOrderService({ tradingRequest: request, normalizeSymbol: s => s, executionLifecycle: life, now: serviceNow,
+    isCrypto: s => s.includes('USD'), preTradeRiskGuard: guard || { assertAllowed: async () => ({ assertCurrent() {} }) } });
   return { state, life, build, service, orders, calls, fills, flats, snapshots,
-    positions: value => { current = value; }, cancel: value => { cancelStatus = value; }, fail: value => { failure = value; } };
+    positions: value => { current = value; }, cancel: value => { cancelStatus = value; }, fail: value => { failure = value; },
+    failPost: value => { postFailure = value; } };
 }
+
+// The production guard's crypto contract, reduced to what the plan lifecycle
+// needs: the verified setup's stop, the broker position it saw, and the IOC
+// limit it priced (qty-based, capped 0.5% above a $100 ask).
+function cryptoPlanFixture() {
+  const plan = { stopPrice: 99 };
+  const guard = { assertAllowed: async (order, options) => {
+    options.cryptoTradePlan = { stopPrice: plan.stopPrice, targetPrice: 110, source: 'CRYPTO_SETUP_V1' };
+    options.riskBaseQty = Number(plan.positionQty || 0);
+    return { assertCurrent() {}, cryptoLimitOrder: testCryptoLimitOrder(order, { ask: 100 }) };
+  } };
+  // Distinct client order ids for buys submitted within the same millisecond.
+  let clientClock = Date.now();
+  const f = fixture({ symbol: 'BTCUSD', qty: 0, guard, serviceNow: () => ++clientClock });
+  const buy = async (stopPrice) => {
+    plan.stopPrice = stopPrice;
+    return f.service.cryptoMarketBuy({ symbol: 'BTCUSD', dollars: 25 });
+  };
+  const brokerOrder = (id) => f.orders.get(id);
+  const stops = () => [...f.orders.values()].filter(o => o.side === 'sell' && o.type === 'stop_limit');
+  return { f, plan, buy, brokerOrder, stops, plans: () => f.state.managedExecution.buyPlans || {} };
+}
+
+test('an unfilled IOC crypto buy leaves no plan; a later buy of the same coin uses only its new plan', async () => {
+  const { f, buy, brokerOrder, stops, plans } = cryptoPlanFixture();
+  const first = await buy(99.5); // a stale setup whose stop sits just under the price
+  assert.equal(first.type, 'limit'); assert.equal(first.time_in_force, 'ioc');
+  assert.equal(plans().BTCUSD.stopPrice, 99.5);
+  Object.assign(brokerOrder(first.id), { status: 'canceled', filled_qty: '0' }); // IOC: nothing at or below the cap
+  await f.life.reconcile();
+  assert.equal(plans().BTCUSD, undefined, 'a terminal zero-fill buy with no position removes its plan');
+  const second = await buy(96);
+  assert.equal(plans().BTCUSD.stopPrice, 96, 'never max-merged with the unfilled order\'s 99.5 stop');
+  Object.assign(brokerOrder(second.id), { status: 'filled', filled_qty: second.qty, filled_avg_price: '100' });
+  f.positions([{ symbol: 'BTCUSD', qty: second.qty, avg_entry_price: '100', current_price: '100' }]);
+  await f.life.reconcile();
+  const [stop] = stops();
+  assert.equal(stop.stop_price, '96');
+  assert.equal(stop.qty, second.qty);
+  assert.equal(plans().BTCUSD.filledQty, Number(second.qty));
+});
+
+test('a buy submitted while no position exists replaces a plan whose order has not settled yet', async () => {
+  const { f, buy, brokerOrder, stops, plans } = cryptoPlanFixture();
+  const first = await buy(99.5); // still "new" at the broker when the next buy is submitted
+  const second = await buy(96);
+  assert.equal(plans().BTCUSD.stopPrice, 96);
+  assert.equal(plans().BTCUSD.clientId, second.client_order_id);
+  assert.equal('previousPlan' in plans().BTCUSD, false);
+  Object.assign(brokerOrder(first.id), { status: 'canceled', filled_qty: '0' });
+  Object.assign(brokerOrder(second.id), { status: 'filled', filled_qty: second.qty, filled_avg_price: '100' });
+  f.positions([{ symbol: 'BTCUSD', qty: second.qty, avg_entry_price: '100', current_price: '100' }]);
+  await f.life.reconcile();
+  assert.equal(stops()[0].stop_price, '96');
+});
+
+test('a partially filled IOC keeps its plan, sized to the filled qty, and protects only what filled', async () => {
+  const { f, buy, brokerOrder, stops, plans } = cryptoPlanFixture();
+  const order = await buy(96);
+  assert.equal(plans().BTCUSD.requestedQty, Number(order.qty));
+  Object.assign(brokerOrder(order.id), { status: 'canceled', filled_qty: '0.1', filled_avg_price: '100.2' });
+  f.positions([{ symbol: 'BTCUSD', qty: '0.1', avg_entry_price: '100.2', current_price: '100.2' }]);
+  await f.life.reconcile();
+  const kept = plans().BTCUSD;
+  assert.equal(kept.stopPrice, 96);
+  assert.equal(kept.filledQty, 0.1);
+  assert.equal(kept.buyStatus, 'canceled');
+  const [stop] = stops();
+  assert.equal(stop.qty, '0.1');
+  assert.equal(stop.stop_price, '96');
+});
+
+test('a scale-in IOC that never fills restores the plan that protected the existing position', async () => {
+  const { f, plan, buy, brokerOrder, plans } = cryptoPlanFixture();
+  const entry = await buy(96);
+  Object.assign(brokerOrder(entry.id), { status: 'filled', filled_qty: entry.qty, filled_avg_price: '100' });
+  f.positions([{ symbol: 'BTCUSD', qty: entry.qty, avg_entry_price: '100', current_price: '103' }]);
+  await f.life.reconcile();
+  plan.positionQty = entry.qty;
+  const scaleIn = await buy(98);
+  assert.equal(plans().BTCUSD.stopPrice, 98, 'a scale-in into an existing position keeps the higher stop');
+  Object.assign(brokerOrder(scaleIn.id), { status: 'expired', filled_qty: '0' });
+  await f.life.reconcile();
+  assert.equal(plans().BTCUSD.stopPrice, 96);
+  assert.equal(plans().BTCUSD.clientId, entry.client_order_id);
+});
+
+test('a definitively rejected crypto buy removes its plan; an uncertain outcome keeps it', async () => {
+  const { f, buy, plans } = cryptoPlanFixture();
+  f.failPost(Object.assign(new Error('insufficient balance'), { status: 403 }));
+  await assert.rejects(buy(99.5), /insufficient/);
+  assert.equal(plans().BTCUSD, undefined);
+  f.failPost(Object.assign(new Error('gateway timeout'), { status: 504 }));
+  await assert.rejects(buy(97), /timeout/);
+  assert.equal(plans().BTCUSD.stopPrice, 97, 'the POST may have reached Alpaca; keep the plan until reconciled');
+});
+
+test('a filled plan whose position was closed outside the ledger is dropped after the grace period', async () => {
+  let clock = 1_000_000;
+  const state = { managedExecution: { version: 1, orders: {}, realized: {}, completed: [], buyPlans: {
+    BTCUSD: { stopPrice: 99, clientId: 'old-buy', symbol: 'BTCUSD', buyTerminal: true, filledQty: 0.1, settledAt: clock } } } };
+  const life = createManagedExecution({ state, persist() {}, request: async (path) => {
+    if (path === '/v2/positions') return [];
+    if (path.includes('?status=open')) return [];
+    throw new Error(`unexpected ${path}`);
+  }, getManagedSymbols: async () => ['BTCUSD'], getConfig: () => ({}), isCrypto: s => s.includes('USD'), now: () => clock });
+  await life.reconcile();
+  assert.equal(state.managedExecution.buyPlans.BTCUSD.stopPrice, 99, 'a fill not yet visible as a position keeps its plan');
+  clock += 60_000;
+  await life.reconcile();
+  assert.equal(state.managedExecution.buyPlans.BTCUSD, undefined, 'a later (e.g. manual) entry cannot inherit the stale stop');
+});
 
 test('whole shares receive GTC stops; fractional shares receive DAY stops', async () => {
   for (const qty of [10, .4]) {
